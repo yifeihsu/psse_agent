@@ -45,7 +45,8 @@ from psse_env.oracle.recovery_expert import RecoveryExpert
 from psse_env.oracle.termination_expert import TerminationExpert
 from psse_env.oracle.hif_continuation import hif_meter_route_ready, recovery_signatures
 from psse_env.oracle.topology_expert import TopologyExpert
-from psse_env.evidence_profile import is_scada_only
+from psse_env.actions import diagnostic_tool_permitted
+from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary
 from psse_env.state_store import (
     SYNTHETIC_TERMINAL_COMPATIBILITY_KEY,
     OracleState,
@@ -149,16 +150,18 @@ class ExpertPolicyOracle:
             policy, context.history
         )
 
-        # Strict SCADA episodes establish their own current balanced solve
-        # before any terminal claim, context, learned screen or correction.
+        # Strict-boundary episodes (scada_only and wls_gated_diagnostics)
+        # establish their own current balanced solve before any terminal
+        # claim, context, auxiliary request, learned screen or correction.
         # Initial labels, prior diagnostic records and score fields cannot
         # select a different opening action.
-        if is_scada_only(policy) and not self._get(policy, "has_open_candidate", False) and not successful_current_wls(policy, context.history):
+        if is_strict_boundary(policy) and not self._get(policy, "has_open_candidate", False) and not successful_current_wls(policy, context.history):
             active_id = self._get(policy, "active_state_id")
             baseline = [ExpertActionProposal(
                 action={"tool": RUN_WLS, "arguments": {"state_id": active_id}},
                 source_expert="diagnostic_baseline", confidence=1.0,
-                evidence_codes=["scada_only_current_balanced_wls_required"], admissible=active_id is not None,
+                evidence_codes=["scada_only_current_balanced_wls_required", "strict_profile_current_balanced_wls_required"],
+                admissible=active_id is not None,
             )]
             return self._rank_and_filter(baseline, policy, seen_signatures=seen_signatures,
                 blocked_correction_tools=blocked_correction_tools, mandatory=True)
@@ -182,7 +185,9 @@ class ExpertPolicyOracle:
         # is a read-only evidence action and returns nothing while a
         # transaction is open, so lifecycle recovery still comes first then.
         # The residual breadth of the current WLS decides which request goes
-        # first; the other follows only if the first returns nothing.
+        # first; the other follows only if the first returns nothing.  Under
+        # the WLS-gated profile every alarm is narrow, so phasors are asked
+        # for first and spectra only once they come back unavailable.
         stages = (
             self.diagnostics_expert.harmonic_screening_proposals,
             self.diagnostics_expert.three_phase_screening_proposals,
@@ -343,7 +348,8 @@ class ExpertPolicyOracle:
         # Their proposals would only be context requests and WLS repeats that
         # teach a student to chase the waveform event as a meter or branch
         # fault, so the combined stage keeps the diagnostics expert alone.
-        if not is_scada_only(policy) and waveform_anomaly_signatures(
+        # (Only profiles with diagnostics can hold a waveform signature.)
+        if allows_diagnostic_tools(policy) and waveform_anomaly_signatures(
             self._get(policy, "unresolved_signatures", []) or []
         ):
             proposals = [
@@ -602,7 +608,7 @@ class ExpertPolicyOracle:
             policy["candidate_assessment"] = dict(state.candidate_assessment)
             if (
                 policy.get("accepted_corrections")
-                and not is_scada_only(policy)
+                and not is_strict_boundary(policy)
                 and state.hidden_truth.get("oracle_terminal_eligible") is True
             ):
                 # This private expert-only view preserves legacy synthetic
@@ -657,10 +663,11 @@ class ExpertPolicyOracle:
             policy = dict(policy)
             if policy.get("has_unverified_candidate") or policy.get("has_verified_candidate"):
                 policy["has_open_candidate"] = True
-        if is_scada_only(policy):
+        if is_strict_boundary(policy):
             # The strict teacher may label only the same observable route as
             # the learner. Even an OracleState supplies no private family or
-            # scenario-authored correction hint to this controller profile.
+            # scenario-authored correction hint to this controller profile
+            # (scada_only and wls_gated_diagnostics alike).
             hints = []
             fault_families = set()
         if history is None:
@@ -869,6 +876,18 @@ class ExpertPolicyOracle:
         blocked_correction_tools: set[str],
         mandatory: bool,
     ) -> list[ExpertActionProposal]:
+        # Profile boundary, applied once for every stage: disabled tools and
+        # operator requests are never labelled, and under the WLS-gated
+        # profile an auxiliary diagnostic is labelled only while the active
+        # state's current balanced WLS alarms (the environment gate refuses
+        # it otherwise with ``diagnostics_require_wls_alarm``).
+        proposals = [
+            proposal for proposal in proposals
+            if diagnostic_tool_permitted(
+                policy, safe_normalize_action(proposal.action)["tool"],
+                safe_normalize_action(proposal.action)["arguments"].get("request"),
+            )
+        ]
         assessed: list[tuple[int, ExpertActionProposal, str]] = []
         for index, proposal in enumerate(proposals):
             normalized = safe_normalize_action(proposal.action)
@@ -1097,7 +1116,7 @@ class ExpertPolicyOracle:
                 evidence_codes=[
                     "observable_recovery_options_exhausted",
                     ("unresolved_balanced_model_discrepancy_requires_operator_handoff"
-                     if is_scada_only(policy) else "unresolved_anomaly_requires_operator_handoff"),
+                     if is_strict_boundary(policy) else "unresolved_anomaly_requires_operator_handoff"),
                 ],
                 admissible=True,
                 estimated_immediate_risk=0.0,

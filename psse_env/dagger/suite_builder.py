@@ -42,7 +42,8 @@ from psse_env.actions import (
 )
 from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
 from psse_env.evidence_profile import (
-    DEFAULT_EVIDENCE_PROFILE, validate_evidence_profile, sanitize_scada_execution, sanitize_scada_metadata,
+    DEFAULT_EVIDENCE_PROFILE, EVIDENCE_PROFILES, is_scada_only, is_wls_gated,
+    validate_evidence_profile, sanitize_scada_execution, sanitize_scada_metadata,
 )
 from psse_env.providers.scenario_generator import (
     DEFAULT_BALANCED_ARTIFACT_DIR,
@@ -51,6 +52,7 @@ from psse_env.providers.scenario_generator import (
     DEFAULT_IMBALANCE_SAMPLE_PATH,
     Round0ScenarioGenerator,
     ScenarioRejected,
+    wls_gated_execution_metadata,
 )
 from psse_env.sft.provenance import file_sha256, stable_json_sha256
 
@@ -564,8 +566,12 @@ def _execution_metadata(scenario: Mapping[str, Any]) -> dict[str, Any] | None:
     rename_reference_role_description(metadata)
     profile = validate_evidence_profile(metadata.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE))
     metadata["evidence_profile"] = profile
-    if profile == "scada_only":
+    if is_scada_only(profile):
         return sanitize_scada_metadata(metadata)
+    if is_wls_gated(profile):
+        # Measured auxiliary streams stay (gated at runtime behind the WLS
+        # alarm); cached diagnoses, clean copies and labels never ship.
+        return wls_gated_execution_metadata(metadata)
 
     scan_window = metadata.get("hif_scan_window")
     if isinstance(scan_window, Mapping):
@@ -616,8 +622,15 @@ def partition_release_scenario_v1(
     ):
         if key in scenario:
             execution[key] = _json_native(scenario[key])
-    if (execution.get("metadata") or {}).get("evidence_profile", DEFAULT_EVIDENCE_PROFILE) == "scada_only":
+    execution_profile = (execution.get("metadata") or {}).get("evidence_profile", DEFAULT_EVIDENCE_PROFILE)
+    if is_scada_only(execution_profile):
         execution = sanitize_scada_execution(execution)
+    elif is_wls_gated(execution_profile):
+        # Strict boundary: no seeded sensor signature reaches execution.
+        execution.pop("unresolved_signatures", None)
+        provenance = execution.get("semantic_field_provenance")
+        if isinstance(provenance, dict):
+            provenance.pop("unresolved_signatures", None)
 
     truth = _truth_payload(scenario)
     audit: dict[str, Any] = {
@@ -983,7 +996,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_PATH))
     parser.add_argument("--check", action="store_true")
-    parser.add_argument("--evidence-profile", choices=("scada_only", "auxiliary_diagnostics"), default=DEFAULT_EVIDENCE_PROFILE)
+    parser.add_argument("--evidence-profile", choices=EVIDENCE_PROFILES, default=DEFAULT_EVIDENCE_PROFILE)
     parser.add_argument(
         "--skip-physics-validation",
         action="store_true",

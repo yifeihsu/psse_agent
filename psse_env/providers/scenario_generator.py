@@ -56,8 +56,9 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 from psse_env.evidence_profile import (
-    DEFAULT_EVIDENCE_PROFILE, AUXILIARY_EVIDENCE_PROFILE,
-    validate_evidence_profile, sanitize_scada_execution,
+    DEFAULT_EVIDENCE_PROFILE, AUXILIARY_EVIDENCE_PROFILE, PRECOMPUTED_DIAGNOSIS_FIELDS,
+    allows_diagnostic_tools, is_scada_only, is_strict_boundary, is_wls_gated,
+    validate_evidence_profile, sanitize_scada_execution, sanitize_scada_metadata,
 )
 
 from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
@@ -201,9 +202,27 @@ CURRENT_TELEMETRY_HIF_SAMPLE_PATHS = (
     / "samples.jsonl",
 )
 # Physical-ohm corpora are opt-in; historical telemetry paths retain replay identity.
+# PMU phasor precision of the wls_gated_diagnostics study (2026-09-23): the HIF corpora are
+# regenerated with three-phase voltage and branch-current phasor noise of 1e-4 pu per
+# rectangular component (the 2026-09-19/21/23 corpora used 5e-3 / 1e-3).  The SCADA draws
+# are unchanged by the phasor sigma, so the WLS-admitted window set and row ids equal the
+# 20260923 regeneration (27 + 8 + 77 + 19 windows).
+PMU_PHASOR_SIGMA_PU = 1e-4
+PHYSICAL_HIF_CORPUS_TAG = "20260923pmu"
+# TODO(20260923pmu): the corpora below are PENDING regeneration on the corrected reactive-limit
+# physics (scripts/regenerate_hif_physical_corpora.py --tag 20260923pmu --three-phase-noise-pu 1e-4
+# --branch-current-noise-pu 1e-4); until they exist, pass explicit hif_sample_paths.
 PHYSICAL_HIF_SAMPLE_PATHS = tuple(_REPO_ROOT / "artifacts" / "measurements" / name / "samples.jsonl" for name in (
-    # Detectable subsets (discovered-mode WLS admission, margin 1.25) of the 2026-09-19/21 physical
-    # 69 kV 100-1000 ohm corpora; the full corpora carry the same names without "_detectable".
+    # Detectable subsets (discovered-mode WLS admission, margin 1.25) of the physical 69 kV
+    # 100-1000 ohm corpora at PMU sigma 1e-4; the full corpora carry the same names without
+    # "_detectable" (84 + 21 + 252 + 63 windows).
+    f"hif_physical69_main_train_detectable_27x10_{PHYSICAL_HIF_CORPUS_TAG}",
+    f"hif_physical69_main_valid_detectable_8x10_{PHYSICAL_HIF_CORPUS_TAG}",
+    f"hif_physical69_main_train_extra_detectable_77x10_{PHYSICAL_HIF_CORPUS_TAG}",
+    f"hif_physical69_main_valid_extra_detectable_19x10_{PHYSICAL_HIF_CORPUS_TAG}"))
+# The 2026-09-21 detectable subsets (5e-3 / 1e-3 phasor sigma, pre-fix reactive limits) that
+# the 2026-09-21 cell ran on; kept for replay identity of that cell only.
+PHYSICAL_HIF_SAMPLE_PATHS_20260921 = tuple(_REPO_ROOT / "artifacts" / "measurements" / name / "samples.jsonl" for name in (
     "hif_physical69_main_train_detectable_25x10_20260921", "hif_physical69_main_valid_detectable_7x10_20260921",
     "hif_physical69_main_train_extra_detectable_69x10_20260921", "hif_physical69_main_valid_extra_detectable_17x10_20260921"))
 PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical69_detection_limit_21x10_20260919/samples.jsonl"
@@ -371,6 +390,81 @@ def _canonicalize_synthesized_measurement_vector(
             normalized = float(quantized)
             canonical.append(0.0 if normalized == 0.0 else normalized)
     return canonical
+
+
+# Truth-side values a strict root must not carry in its execution metadata
+# under wls_gated_diagnostics: precomputed diagnoses and model handles
+# (recomputed by the tools), and simulator-truth descriptors of the root
+# itself.  The auxiliary streams the ground truth generated (phasors,
+# spectra, breaker telemetry, scan windows with their scan operating points)
+# stay; the environment gates them behind the balanced WLS alarm.
+WLS_GATED_PRIVATE_METADATA_FIELDS = frozenset(PRECOMPUTED_DIAGNOSIS_FIELDS) | frozenset({
+    "op_point", "load_scale", "label", "labels", "initial_states", "load_profile", "load_profiles",
+    "family_hint", "correction_hint", "scenario_family", "true_measurement_errors",
+    "true_parameter_errors", "true_topology_errors", "hidden_truth",
+})
+_WLS_GATED_SCAN_PRIVATE_FIELDS = frozenset({
+    "z_clean", "three_phase_voltages_clean", "three_phase_branch_currents_clean", "label",
+})
+
+
+def wls_gated_execution_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Execution metadata of a root under ``wls_gated_diagnostics``.
+
+    Keeps every measured channel and its declared noise (balanced SCADA and
+    its covariance, three-phase PMU voltages and branch currents with their
+    per-component sigmas, harmonic spectra, substation telemetry, the HIF
+    scan window and runtime binding, repeated SCADA scans) and removes what
+    only the truth side may hold: cached diagnoses, model handles, clean
+    copies, labels and root-level simulator operating points.  Repeated SCADA
+    scans keep the fields the balanced estimator reads, exactly as under
+    ``scada_only``.
+    """
+    metadata = dict(copy.deepcopy(dict(metadata or {})))
+    for key in list(metadata):
+        if key in WLS_GATED_PRIVATE_METADATA_FIELDS:
+            metadata.pop(key, None)
+    if "parameter_scans" in metadata:
+        scans = sanitize_scada_metadata({"parameter_scans": metadata["parameter_scans"]}).get("parameter_scans")
+        if scans is None:
+            metadata.pop("parameter_scans", None)
+        else:
+            metadata["parameter_scans"] = scans
+    window = metadata.get("hif_scan_window")
+    if isinstance(window, dict):
+        window.pop("window_metadata", None)
+        window.pop("pristine_model_dir", None)
+        window.pop("faulted_model_dir", None)
+        scans = window.get("scans")
+        if isinstance(scans, list):
+            for scan in scans:
+                if isinstance(scan, dict):
+                    for key in _WLS_GATED_SCAN_PRIVATE_FIELDS:
+                        scan.pop(key, None)
+    runtime = metadata.get("hif_runtime")
+    if isinstance(runtime, dict):
+        for key in PRECOMPUTED_DIAGNOSIS_FIELDS | {"pristine_model_dir", "label"}:
+            runtime.pop(key, None)
+    metadata["evidence_profile"] = "wls_gated_diagnostics"
+    return metadata
+
+
+def apply_wls_gated_execution_boundary(scenario: dict[str, Any]) -> dict[str, Any]:
+    """Apply the strict wls_gated boundary to a generated root in place.
+
+    Runtime fields are replaced; generator-only truth and grouping fields
+    (``hidden_truth``, ``release_audit``, ``true_*_errors``, ``clean_*``) are
+    left for the later execution/audit partition, as under ``scada_only``.
+    No seeded sensor signature survives: the strict profiles never flag.
+    """
+    scenario["metadata"] = wls_gated_execution_metadata(scenario.get("metadata"))
+    scenario.pop("unresolved_signatures", None)
+    provenance = scenario.get("semantic_field_provenance")
+    if isinstance(provenance, dict):
+        provenance.pop("unresolved_signatures", None)
+    for key in ("family_hint", "correction_hint", "expected_actions", "hint"):
+        scenario.pop(key, None)
+    return scenario
 
 
 def _canonicalize_telemetry(telemetry: Mapping[str, Any]) -> dict[str, Any]:
@@ -573,7 +667,10 @@ class Round0ScenarioGenerator:
                 )
             modes[family] = str(mode)
         self.waveform_signature_mode = modes
-        if self.evidence_profile == "scada_only" and any(mode == "flagged" for mode in modes.values()):
+        # Every strict-boundary profile (scada_only, wls_gated_diagnostics)
+        # withholds the sensor flag: the first observable evidence is the
+        # balanced WLS alarm.  Seeded signatures are historical reproduction.
+        if is_strict_boundary(self.evidence_profile) and any(mode == "flagged" for mode in modes.values()):
             raise ValueError("flagged waveform signatures require evidence_profile='auxiliary_diagnostics'")
         # The frozen evaluation suite deliberately preserves its previously
         # approved physical roots, including hard/ambiguous parameter cases.
@@ -2050,7 +2147,9 @@ class Round0ScenarioGenerator:
     def _harmonic_scenario(self, row: Mapping[str, Any], index: int) -> dict[str, Any]:
         label = dict(row.get("label") or {})
         harmonic_measurements = row.get("harmonic_measurements")
-        if not harmonic_measurements and self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE:
+        # Profiles that can request spectra after a WLS alarm need the
+        # spectrum the ground truth generated; scada_only strips it anyway.
+        if not harmonic_measurements and allows_diagnostic_tools(self.evidence_profile):
             raise ScenarioRejected("harmonic_measurements_missing", str(row.get("id")))
         harmonic_measurements = copy.deepcopy(harmonic_measurements or [])
         for item in harmonic_measurements:
@@ -2114,9 +2213,12 @@ class Round0ScenarioGenerator:
         label = dict(row.get("label") or {})
         diagnostic = row.get("nlm_diagnostic")
         scans = row.get("scans")
+        # Only the historical auxiliary profile hands the corpus's cached NLM
+        # diagnosis to the runtime; strict profiles recompute from the
+        # phasors, so admission does not depend on it.
         if self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE and (not isinstance(diagnostic, Mapping) or not diagnostic.get("success")):
             raise ScenarioRejected("nlm_diagnostic_missing", str(row.get("id")))
-        if self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE and not scans:
+        if allows_diagnostic_tools(self.evidence_profile) and not scans:
             raise ScenarioRejected("hif_scans_missing", str(row.get("id")))
         diagnostic = diagnostic if isinstance(diagnostic, Mapping) else {}
         scans = list(scans or [])
@@ -2143,7 +2245,7 @@ class Round0ScenarioGenerator:
             scenario["semantic_field_provenance"]["unresolved_signatures"] = (
                 _WAVEFORM_PROVENANCE
             )
-        if self.evidence_profile == "scada_only":
+        if is_scada_only(self.evidence_profile):
             if row.get("noise_contract") is not None:
                 scenario["metadata"]["noise_contract"] = copy.deepcopy(row["noise_contract"])
             if row.get("measurement_convention") is not None:
@@ -2152,10 +2254,24 @@ class Round0ScenarioGenerator:
             scenario["release_audit"] = {**copy.deepcopy(_EXPLANATION_ONLY_RELEASE_AUDIT),
                 "signature_mode": hif_mode, "sensor_signatures_withheld": [HIF_SIGNATURE]}
             return scenario
-        scenario["metadata"]["nlm_diagnostic"] = {
-            key: copy.deepcopy(diagnostic[key])
-            for key in ("success", "converged", "method", "backend", "top_hif_groups") if key in diagnostic
-        }
+        strict = is_strict_boundary(self.evidence_profile)
+        if not strict:
+            # Historical reproduction only: the corpus's cached diagnosis.
+            scenario["metadata"]["nlm_diagnostic"] = {
+                key: copy.deepcopy(diagnostic[key])
+                for key in ("success", "converged", "method", "backend", "top_hif_groups") if key in diagnostic
+            }
+        else:
+            # wls_gated_diagnostics: the three-phase PMU phasors the ground
+            # truth generated for this window, at the corpus's declared
+            # per-component sigma, as a top-level channel like the unbalance
+            # roots carry.  No precomputed diagnosis and no clean copies.
+            voltages = row.get("three_phase_voltages")
+            if not voltages and scans:
+                voltages = scans[0].get("three_phase_voltages")
+            if not isinstance(voltages, Sequence) or not voltages:
+                raise ScenarioRejected("three_phase_voltages_missing", str(row.get("id")))
+            scenario["metadata"]["three_phase_voltages"] = copy.deepcopy(list(voltages))
         scenario["metadata"]["three_phase_sigma"] = float(row["three_phase_sigma"])
         if row.get("noise_contract") is not None:
             scenario["metadata"]["noise_contract"] = copy.deepcopy(row["noise_contract"])
@@ -2171,15 +2287,21 @@ class Round0ScenarioGenerator:
         runtime_scans = [self._observable_waveform_scan(scan) for scan in scans]
         window_meta = row.get("window_metadata") or {}
         scenario["metadata"]["hif_scan_window"] = {
-            "scan_window_path": str(row.get("id") or scenario["scenario_id"]),
+            # Strict profiles key the window by the opaque root id: the corpus
+            # row id names the family, and nothing consumes it as a path when
+            # the scans are supplied inline.
+            "scan_window_path": scenario["scenario_id"] if strict else str(row.get("id") or scenario["scenario_id"]),
             "scans": copy.deepcopy(runtime_scans),
             "sigma_z": copy.deepcopy(row["sigma_z"]),
             "three_phase_sigma": float(row["three_phase_sigma"]),
-            "window_metadata": {
+        }
+        if not strict:
+            # Simulator provenance of the window (source kind, operating-point
+            # mode) is historical-reproduction metadata; no provider reads it.
+            scenario["metadata"]["hif_scan_window"]["window_metadata"] = {
                 key: copy.deepcopy(window_meta[key]) for key in ("source_kind", "operating_point_mode")
                 if key in window_meta
-            },
-        }
+            }
         if row.get("measurement_convention") is not None:
             declaration = copy.deepcopy(row["measurement_convention"])
             scenario["metadata"]["measurement_convention"] = declaration
@@ -2284,10 +2406,14 @@ class Round0ScenarioGenerator:
         row = self._aligned_waveform_row(row, "three_phase_unbalance")
         label = copy.deepcopy(dict(row.get("label") or {}))
         voltages = row.get("three_phase_voltages")
-        if self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE and (not isinstance(voltages, Sequence) or not voltages):
+        # A profile whose diagnostics can be requested after the WLS alarm
+        # needs the phasors and an unbalance the telemetry actually shows;
+        # scada_only never sees them, so admission there is WLS-only.
+        diagnostics_available = allows_diagnostic_tools(self.evidence_profile)
+        if diagnostics_available and (not isinstance(voltages, Sequence) or not voltages):
             raise ScenarioRejected("three_phase_voltages_missing", str(row.get("id")))
-        signatures = self._observable_unbalance_signatures(row) if self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE else []
-        if self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE and not signatures:
+        signatures = self._observable_unbalance_signatures(row) if diagnostics_available else []
+        if diagnostics_available and not signatures:
             raise ScenarioRejected("unbalance_not_observable", str(row.get("id")))
         z_obs = [float(value) for value in row["z_obs"]]
         mode = self.waveform_signature_mode["three_phase_unbalance"]
@@ -2311,7 +2437,7 @@ class Round0ScenarioGenerator:
             scenario["semantic_field_provenance"]["unresolved_signatures"] = (
                 _WAVEFORM_PROVENANCE
             )
-        if self.evidence_profile == AUXILIARY_EVIDENCE_PROFILE:
+        if diagnostics_available:
             scenario["metadata"]["three_phase_voltages"] = copy.deepcopy(list(voltages))
             scenario["metadata"]["three_phase_sigma"] = float(row["three_phase_sigma"])
         if row.get("noise_contract") is not None:
@@ -3658,7 +3784,7 @@ class Round0ScenarioGenerator:
             scenario["source_tier"] = source_tier
             if scenario.get("source_realization_id"):
                 scenario["source_tier"] = "physics_synthesized_balanced"
-            if self.evidence_profile == "scada_only":
+            if is_scada_only(self.evidence_profile):
                 strict = sanitize_scada_execution(scenario)
                 # Keep generator-only truth/grouping fields for the later
                 # execution/audit partition; replace only runtime fields.
@@ -3668,6 +3794,8 @@ class Round0ScenarioGenerator:
                         scenario[key] = strict[key]
                     else:
                         scenario.pop(key, None)
+            elif is_wls_gated(self.evidence_profile):
+                apply_wls_gated_execution_boundary(scenario)
             self.manifest.append(
                 {
                     "scenario_id": scenario["scenario_id"],
@@ -3879,6 +4007,12 @@ __all__ = [
     "LEGACY_IMBALANCE_SAMPLE_PATH",
     "CURRENT_TELEMETRY_HIF_SAMPLE_PATHS",
     "PHYSICAL_HIF_SAMPLE_PATHS",
+    "PHYSICAL_HIF_SAMPLE_PATHS_20260921",
+    "PHYSICAL_HIF_CORPUS_TAG",
+    "PMU_PHASOR_SIGMA_PU",
+    "WLS_GATED_PRIVATE_METADATA_FIELDS",
+    "wls_gated_execution_metadata",
+    "apply_wls_gated_execution_boundary",
     "PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH",
     "PHYSICAL_HIF_SWEEP_SAMPLE_PATH",
     "PHYSICAL_IMBALANCE_SAMPLE_PATH",

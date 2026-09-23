@@ -11,15 +11,21 @@ import math
 
 from psse_env.actions import ANOMALY_FAMILY_MARKERS, unexplained_signatures, waveform_anomaly_signatures
 from psse_env.oracle.expert_types import matching_evidence_codes, policy_state_view, state_value
-from psse_env.evidence_profile import is_scada_only
+from psse_env.evidence_profile import allows_diagnostic_tools
 
 
 HIF_CONDITIONING_METHOD = "paired_opendss_effect_compensation"
 
 
 def accepted_hif_explanation(state: Any) -> bool:
+    """An HIF explanation is recorded and the profile can act on it.
+
+    ``scada_only`` has no HIF diagnostics, so no explanation can open the
+    conditioned route or close a signature there; the WLS-gated and
+    auxiliary profiles both honour a recorded acceptance.
+    """
     state = policy_state_view(state)
-    if is_scada_only(state):
+    if not allows_diagnostic_tools(state):
         return False
     return any(
         isinstance(record, Mapping) and (

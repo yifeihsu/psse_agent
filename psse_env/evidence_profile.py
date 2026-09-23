@@ -102,6 +102,51 @@ _AUXILIARY_FIELDS = frozenset({
     "diagnostic_acceptance", "physical_fault_still_present", "conditional_meter_scores",
     "op_point", "initial_states", "load_profile", "load_profiles", "label", "labels",
 })
+#: Execution metadata a wls_gated_diagnostics root may carry: balanced SCADA
+#: declarations, the auxiliary measurement streams with their declared sigmas,
+#: node/breaker telemetry, and the shared forward-model handle.  Precomputed
+#: diagnoses, faulted models, labels and operating-point truth are absent.
+_GATED_METADATA_FIELDS = frozenset({
+    "sigma_z", "measurement_covariance", "structural_zero_indices", "slack_bus",
+    "three_phase_voltages", "three_phase_branch_currents", "three_phase_sigma",
+    "branch_current_sigma_pu", "harmonic_measurements", "harmonic_orders",
+    "substation_telemetry", "reported_breaker_status", "operator_layout",
+    "operator_voltage_meter_nodes", "topology_model_id", "topology_model_fingerprint",
+    "last_topology_correction", "pristine_model_dir",
+})
+_GATED_STRUCTURED_METADATA_FIELDS = frozenset({
+    "parameter_scans", "operator_noise", "noise_contract", "measurement_convention",
+    "hif_runtime", "hif_scan_window",
+})
+_GATED_RUNTIME_FIELDS = frozenset({
+    "scan_index", "time_tag", "op_point", "load_scale", "z_obs", "sigma_z",
+    "three_phase_voltages", "three_phase_branch_currents", "three_phase_sigma",
+    "branch_current_sigma_pu", "pristine_model_dir", "measurement_convention",
+    "noise_contract", "topology_id",
+})
+_GATED_SCAN_FIELDS = frozenset({
+    "scan_index", "time_tag", "z_obs", "z", "sigma_z", "op_point", "topology_id",
+    "three_phase_voltages", "three_phase_branch_currents", "three_phase_sigma",
+    "branch_current_sigma_pu", "noise_contract", "measurement_convention",
+})
+_GATED_WINDOW_FIELDS = frozenset({
+    "scan_window_path", "sigma_z", "three_phase_sigma", "branch_current_sigma_pu",
+    "pristine_model_dir", "measurement_convention", "noise_contract", "op_point",
+    "topology_id",
+})
+_MEASUREMENT_CONVENTION_FIELDS = frozenset({"schema", "shunt_convention", "wls_model_convention"})
+#: Truth, labels and precomputed diagnoses that never enter a
+#: wls_gated_diagnostics observation or provider payload.  Diagnostic outputs
+#: the agent earned through an admitted tool (nlm_summary, explanations,
+#: conditioning ledgers, minted signatures) are deliberately kept.
+_GATED_OBSERVATION_DENYLIST = frozenset({
+    "hidden_truth", "label", "labels", "scenario_family", "family_hint",
+    "oracle_action_hints", "suggested_actions", "nlm_diagnostic", "faulted_model_dir",
+    "initial_states", "load_profile", "load_profiles", "op_point", "load_scale",
+    "gnn_screen", "hif_runtime", "hif_scan_window", "window_metadata", "release_audit",
+    "topology_ranking", "clean_case", "clean_measurements", "clean_parameter_values",
+    "z_true", "z_clean", "three_phase_voltages_clean", "three_phase_branch_currents_clean",
+})
 
 
 def validate_evidence_profile(value: Any = DEFAULT_EVIDENCE_PROFILE) -> str:
@@ -246,3 +291,140 @@ def sanitize_scada_execution(scenario: Mapping[str, Any]) -> dict[str, Any]:
         result["policy_observation"]["evidence_profile"] = SCADA_ONLY_PROFILE
     result["evidence_profile"] = SCADA_ONLY_PROFILE
     return result
+
+
+def _sanitize_noise_contract(raw: Any) -> Any:
+    contract = _selected(raw, _NOISE_FIELDS)
+    if isinstance(raw, Mapping):
+        channels = raw.get("channels")
+        if isinstance(channels, Mapping):
+            contract["channels"] = {
+                str(name): _selected(channel, _NOISE_CHANNEL_FIELDS)
+                for name, channel in channels.items()
+            }
+    return contract
+
+
+def _sanitize_scan_window(raw: Any) -> Any:
+    if not isinstance(raw, Mapping):
+        return deepcopy(raw)
+    window = _selected(raw, _GATED_WINDOW_FIELDS)
+    if "noise_contract" in raw:
+        window["noise_contract"] = _sanitize_noise_contract(raw["noise_contract"])
+    if "measurement_convention" in raw:
+        window["measurement_convention"] = _selected(raw["measurement_convention"], _MEASUREMENT_CONVENTION_FIELDS)
+    scans = raw.get("scans")
+    if isinstance(scans, (list, tuple)):
+        cleaned = []
+        for scan in scans:
+            item = _selected(scan, _GATED_SCAN_FIELDS)
+            if isinstance(scan, Mapping):
+                if "noise_contract" in scan:
+                    item["noise_contract"] = _sanitize_noise_contract(scan["noise_contract"])
+                if "measurement_convention" in scan:
+                    item["measurement_convention"] = _selected(scan["measurement_convention"], _MEASUREMENT_CONVENTION_FIELDS)
+            cleaned.append(item)
+        window["scans"] = cleaned
+    elif "scans" in raw:
+        window["scans"] = deepcopy(scans)
+    return window
+
+
+def sanitize_gated_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Execution metadata for wls_gated_diagnostics.
+
+    Keeps the balanced SCADA declarations and the full auxiliary measurement
+    streams (three-phase phasors with their declared sigmas, spectra, breaker
+    telemetry, repeated scans, the HIF acquisition and its scan window) so the
+    admitted diagnostics can compute from measurements.  Drops seeded
+    signatures, hidden truth, labels, family and scenario hints and every
+    precomputed diagnosis or truth-side model handle.
+    """
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    result = _selected(metadata, _GATED_METADATA_FIELDS)
+    if "parameter_scans" in metadata:
+        result["parameter_scans"] = _selected(metadata["parameter_scans"], _PARAMETER_SCAN_FIELDS)
+    if "operator_noise" in metadata:
+        result["operator_noise"] = _selected(metadata["operator_noise"], _OPERATOR_NOISE_FIELDS)
+    if "noise_contract" in metadata:
+        result["noise_contract"] = _sanitize_noise_contract(metadata["noise_contract"])
+    if "measurement_convention" in metadata:
+        result["measurement_convention"] = _selected(metadata["measurement_convention"], _MEASUREMENT_CONVENTION_FIELDS)
+    if "hif_runtime" in metadata:
+        raw = metadata["hif_runtime"]
+        runtime = _selected(raw, _GATED_RUNTIME_FIELDS)
+        if isinstance(raw, Mapping):
+            if "noise_contract" in raw:
+                runtime["noise_contract"] = _sanitize_noise_contract(raw["noise_contract"])
+            if "measurement_convention" in raw:
+                runtime["measurement_convention"] = _selected(raw["measurement_convention"], _MEASUREMENT_CONVENTION_FIELDS)
+        result["hif_runtime"] = runtime
+    if "hif_scan_window" in metadata:
+        result["hif_scan_window"] = _sanitize_scan_window(metadata["hif_scan_window"])
+    for key in PRECOMPUTED_DIAGNOSIS_FIELDS:
+        result.pop(key, None)
+    result["evidence_profile"] = WLS_GATED_PROFILE
+    return result
+
+
+def sanitize_gated_observation(value: Any) -> Any:
+    """Drop truth, labels and precomputed diagnoses; keep earned diagnostics.
+
+    Unlike the SCADA sanitizer this keeps every unresolved signature (the
+    environment mints waveform signatures only from admitted diagnostics),
+    the explained-anomaly ledger, the three-phase, harmonic and conditioning
+    request ledgers and the diagnostic summaries the tools returned.
+    """
+    if isinstance(value, Mapping):
+        result = {}
+        for key, item in value.items():
+            text = str(key)
+            if text in _GATED_OBSERVATION_DENYLIST or text.startswith("true_"):
+                continue
+            if text in {"semantic_field_provenance", "policy_field_provenance", "policy_provenance"}:
+                result[text] = deepcopy(item)
+            else:
+                result[text] = sanitize_gated_observation(item)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [sanitize_gated_observation(item) for item in value]
+    return deepcopy(value)
+
+
+def sanitize_gated_execution(scenario: Mapping[str, Any]) -> dict[str, Any]:
+    """Return execution data for wls_gated_diagnostics; audit truth is absent.
+
+    Seeded ``unresolved_signatures`` and their waveform provenance, anomaly
+    scores, hints and hidden truth are not execution fields and are dropped;
+    the metadata keeps the auxiliary streams through ``sanitize_gated_metadata``.
+    """
+    result = _selected(scenario, _EXECUTION_FIELDS)
+    result["metadata"] = sanitize_gated_metadata(scenario.get("metadata"))
+    for key in ("noise_contract", "operator_noise", "parameter_scans", "measurement_convention"):
+        if key in scenario:
+            result[key] = sanitize_gated_metadata({key: scenario[key]})[key]
+    if isinstance(scenario.get("policy_observation"), Mapping):
+        result["policy_observation"] = sanitize_gated_observation(scenario["policy_observation"])
+        result["policy_observation"]["evidence_profile"] = WLS_GATED_PROFILE
+    result["evidence_profile"] = WLS_GATED_PROFILE
+    return result
+
+
+def sanitize_execution_for_profile(scenario: Mapping[str, Any], profile: Any = None) -> dict[str, Any]:
+    """Dispatch the execution sanitizer on the strict profile; permissive profiles copy."""
+    resolved = resolve_evidence_profile(profile)
+    if resolved == SCADA_ONLY_PROFILE:
+        return sanitize_scada_execution(scenario)
+    if resolved == WLS_GATED_PROFILE:
+        return sanitize_gated_execution(scenario)
+    return deepcopy(dict(scenario))
+
+
+def sanitize_observation_for_profile(value: Any, profile: Any = None) -> Any:
+    """Dispatch the observation sanitizer on the strict profile; permissive profiles copy."""
+    resolved = resolve_evidence_profile(profile)
+    if resolved == SCADA_ONLY_PROFILE:
+        return sanitize_scada_observation(value)
+    if resolved == WLS_GATED_PROFILE:
+        return sanitize_gated_observation(value)
+    return deepcopy(value)

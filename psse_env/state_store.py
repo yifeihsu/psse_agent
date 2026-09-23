@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any, Mapping
 
 from .actions import action_signature
+from .evidence_profile import SCADA_ONLY_PROFILE
 
 
 SYNTHETIC_TERMINAL_COMPATIBILITY_KEY = "_synthetic_terminal_compatibility"
@@ -128,7 +129,9 @@ def find_forbidden_policy_paths(value: Any, prefix: str = "$") -> list[str]:
 @dataclass(frozen=True)
 class PolicyObservation:
     active_state_id: str
-    evidence_profile: str = "scada_only"
+    # An observation built without a declared profile is read fail-closed
+    # (balanced SCADA only); the environment always stamps its own profile.
+    evidence_profile: str = SCADA_ONLY_PROFILE
     candidate_state_id: str | None = None
     candidate_status: str | None = None
     last_tool: str | None = None
@@ -731,7 +734,7 @@ class PowerSystemStateStore:
         lifecycle = candidate.candidate_lifecycle if candidate else CandidateLifecycle.NO_CANDIDATE
         return {
             "episode_id": active.episode_id,
-            "evidence_profile": str(flags.get("evidence_profile") or "scada_only"),
+            "evidence_profile": str(flags.get("evidence_profile") or SCADA_ONLY_PROFILE),
             "active_state_id": active.state_id,
             "candidate_state_id": candidate.state_id if candidate else None,
             "candidate_parent_id": candidate.parent_state_id if candidate else None,

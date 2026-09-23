@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from mcp_server.matpower_server import _load_python_case
+from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE, SCADA_ONLY_PROFILE, WLS_GATED_PROFILE
 from psse_env.providers.matpower import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import build_measurement_vector
 
@@ -33,7 +34,7 @@ def snapshot():
 
 
 def test_wls_is_invariant_to_every_auxiliary_stream_and_does_not_compensate(monkeypatch):
-    provider = MatpowerDeploymentProviders(normalized_residual_threshold=4.)
+    provider = MatpowerDeploymentProviders(evidence_profile=SCADA_ONLY_PROFILE, normalized_residual_threshold=4.)
     state = snapshot()
     original = copy.deepcopy(state)
     def forbidden(*args, **kwargs):
@@ -56,18 +57,33 @@ def test_wls_is_invariant_to_every_auxiliary_stream_and_does_not_compensate(monk
                                    "run_three_phase_nlm", "estimate_hif", "estimate_hif_multiscan"])
 def test_unavailable_auxiliary_tools_never_consume_hidden_data(method):
     state = snapshot()
-    result = getattr(MatpowerDeploymentProviders(), method)(state, {"arguments": {"candidate_branch_row0": 2}})
+    provider = MatpowerDeploymentProviders(evidence_profile=SCADA_ONLY_PROFILE)
+    result = getattr(provider, method)(state, {"arguments": {"candidate_branch_row0": 2}})
     assert result["execution_status"] == "failure"
     assert result["error_code"] == "evidence_unavailable_in_scada_only_profile"
     assert "anomaly_explanation" not in result
 
 
-def test_auxiliary_provider_cannot_override_strict_controller():
+@pytest.mark.parametrize("method", ["get_three_phase_context", "get_harmonic_context", "run_hse",
+                                   "run_three_phase_nlm", "estimate_hif", "estimate_hif_multiscan"])
+def test_gated_default_refuses_auxiliary_tools_without_a_wls_alarm(method):
+    state = snapshot()
+    provider = MatpowerDeploymentProviders()
+    assert provider.evidence_profile == WLS_GATED_PROFILE
+    result = getattr(provider, method)(state, {"arguments": {"candidate_branch_row0": 2}})
+    assert result["execution_status"] == "failure"
+    assert result["error_code"] == "diagnostics_require_wls_alarm"
+    assert "anomaly_explanation" not in result
+
+
+@pytest.mark.parametrize("controller_profile", [SCADA_ONLY_PROFILE, WLS_GATED_PROFILE])
+def test_auxiliary_provider_cannot_override_strict_controller(controller_profile):
     provider = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics")
     state = snapshot()
-    state["evidence_profile"] = "scada_only"
+    state["evidence_profile"] = controller_profile
     result = provider.estimate_hif_multiscan(state, {"arguments": {"candidate_branch_row0": 2}})
     assert result["execution_status"] == "failure"
+    assert result["error_code"] in {"evidence_unavailable_in_scada_only_profile", "diagnostics_require_wls_alarm"}
 
 
 def test_scada_parameter_solver_receives_only_observed_history(monkeypatch):
@@ -84,7 +100,7 @@ def test_scada_parameter_solver_receives_only_observed_history(monkeypatch):
         captured.update(scans=scans, initial_states=initial_states, kwargs=kwargs)
         return {"success": False, "error": "fixture_no_mutation"}
     monkeypatch.setattr("psse_env.providers.matpower._param_correction_json", solver)
-    provider = MatpowerDeploymentProviders()
+    provider = MatpowerDeploymentProviders(evidence_profile=SCADA_ONLY_PROFILE)
     result = provider.correct_parameters(state, {"arguments": {"line_index": 1}})
     assert result["execution_status"] == "failure"
     assert captured["scans"] == state["metadata"]["parameter_scans"]["z_scans"]
@@ -92,8 +108,11 @@ def test_scada_parameter_solver_receives_only_observed_history(monkeypatch):
     assert "op_point" not in captured["kwargs"]
 
 
-def test_env_bundle_declares_scada_only_by_default():
+def test_env_bundle_declares_the_gated_research_default_and_honours_scada_only():
     provider = MatpowerDeploymentProviders()
-    assert provider.env_kwargs()["evidence_profile"] == "scada_only"
+    assert DEFAULT_EVIDENCE_PROFILE == WLS_GATED_PROFILE
+    assert provider.env_kwargs()["evidence_profile"] == WLS_GATED_PROFILE
+    strict = MatpowerDeploymentProviders(evidence_profile=SCADA_ONLY_PROFILE)
+    assert strict.env_kwargs()["evidence_profile"] == "scada_only"
     with pytest.raises(ValueError, match="evidence_profile"):
         MatpowerDeploymentProviders(evidence_profile="flagged")

@@ -68,10 +68,12 @@ from .oracle.process_validity import ProcessValidityOracle
 from .private_target_matching import correction_family
 from .episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, validate_episode_action_limit
 from .evidence_profile import (
-    DEFAULT_EVIDENCE_PROFILE, SCADA_DISABLED_TOOLS, SCADA_DISABLED_REQUESTS,
-    is_scada_only, validate_evidence_profile, sanitize_scada_metadata,
-    sanitize_scada_execution, sanitize_scada_observation, scada_signatures,
+    DEFAULT_EVIDENCE_PROFILE, GATED_DIAGNOSTIC_TOOLS, allows_diagnostic_tools,
+    disabled_requests, disabled_tools, is_scada_only, is_strict_boundary, is_wls_gated,
+    requires_wls_alarm_for_diagnostics, sanitize_execution_for_profile,
+    sanitize_observation_for_profile, scada_signatures, validate_evidence_profile,
 )
+from .oracle.process_validity import current_wls_alarm
 from .state_store import (
     CandidateLifecycle,
     FORBIDDEN_POLICY_KEYS,
@@ -530,7 +532,13 @@ class TransactionalPSSEEnv:
         self._episode_counter += 1
 
         private_metadata = dict(scenario.get("metadata") or {})
-        observable_scenario = sanitize_scada_execution(scenario) if is_scada_only(self.evidence_profile) else scenario
+        # Strict profiles execute on sanitized data only: scada_only keeps the
+        # balanced SCADA, wls_gated_diagnostics also keeps the auxiliary
+        # streams but never seeded signatures, hints or precomputed diagnoses.
+        observable_scenario = (
+            sanitize_execution_for_profile(scenario, self.evidence_profile)
+            if is_strict_boundary(self.evidence_profile) else scenario
+        )
         raw_metadata = dict(observable_scenario.get("metadata") or {})
         raw_semantic_provenance = observable_scenario.get(
             "semantic_field_provenance",
@@ -541,7 +549,7 @@ class TransactionalPSSEEnv:
         if not isinstance(raw_semantic_provenance, Mapping):
             raise ValueError("semantic_field_provenance must be a mapping.")
         hidden_input = scenario.get("hidden_truth")
-        if self.production_dataset_mode and not is_scada_only(self.evidence_profile) and isinstance(hidden_input, Mapping):
+        if self.production_dataset_mode and not is_strict_boundary(self.evidence_profile) and isinstance(hidden_input, Mapping):
             leaked = sorted(set(hidden_input) & set(_SEMANTIC_POLICY_FIELDS))
             if leaked:
                 raise ValueError(
@@ -654,7 +662,7 @@ class TransactionalPSSEEnv:
                     raise ValueError(f"Conflicting root and metadata {key}")
                 metadata[key] = copy.deepcopy(observable_scenario[key])
         metadata["evidence_profile"] = self.evidence_profile
-        if not is_scada_only(self.evidence_profile):
+        if not is_strict_boundary(self.evidence_profile):
             metadata.setdefault("scenario_id", scenario_id)
         root_id = self.store.create_root(
             case=observable_scenario.get("case", observable_scenario.get("case_path")),
@@ -741,9 +749,9 @@ class TransactionalPSSEEnv:
         active_id = str(self.store.active_state_id)
         active_hash = str(self.store.state_hash(active_id))
         self.context_flags["evidence_profile"] = self.evidence_profile
-        if is_scada_only(self.evidence_profile):
-            self.context_flags = sanitize_scada_observation(self.context_flags)
-        else:
+        if is_strict_boundary(self.evidence_profile):
+            self.context_flags = self._sanitize_observation(self.context_flags)
+        if allows_diagnostic_tools(self.evidence_profile):
             self._rebind_telemetry_requests(active_id, active_hash)
         summary = self.store.decision_summary(
             candidate_state_id=self.current_candidate_id,
@@ -784,7 +792,15 @@ class TransactionalPSSEEnv:
             ):
                 if key in wls:
                     contexts["wls"][key] = wls[key]
-        return sanitize_scada_observation(summary) if is_scada_only(self.evidence_profile) else summary
+        return self._sanitize_observation(summary) if is_strict_boundary(self.evidence_profile) else summary
+
+    def _sanitize_observation(self, value: Any) -> Any:
+        """Apply the configured profile's observation sanitizer (identity when permissive)."""
+        return sanitize_observation_for_profile(value, self.evidence_profile)
+
+    def _current_wls_alarm(self, target_id: str | None = None) -> bool:
+        """Current chi-square or normalized-residual alarm bound to the target state."""
+        return current_wls_alarm(self.current_state(), target_id)
 
     def _current_hif_conditioning_evidence(self, active_id: str, active_hash: str) -> dict[str, Any] | None:
         """Retain the latest bound provider check, including conditioning failure.
@@ -793,7 +809,7 @@ class TransactionalPSSEEnv:
         invalidates an earlier check even if the physical state did not change;
         candidate verification is reusable only after that exact state commits.
         """
-        if is_scada_only(self.evidence_profile) or not accepted_hif_explanation(self.context_flags):
+        if not allows_diagnostic_tools(self.evidence_profile) or not accepted_hif_explanation(self.context_flags):
             return None
         for event in reversed(self.history):
             action = safe_normalize_action(event.get("action") or {})
@@ -857,13 +873,12 @@ class TransactionalPSSEEnv:
         if is_scada_only(self.evidence_profile):
             # The presence of a temporal window is not a family cue before
             # the operator has actually investigated this state.
-            if not (
-                self.context_flags.get("has_fresh_parameter_context")
-                and str(self.context_flags.get("parameter_context_state_id")) == str(self.store.active_state_id)
-            ):
+            if not self._fresh_balanced_context("parameter"):
                 return []
             metadata = self.store.get_state(str(self.store.active_state_id)).get("metadata") or {}
             return ["parameter_scans"] if metadata.get("parameter_scans") else []
+        if is_wls_gated(self.evidence_profile):
+            return self._gated_evidence_channels()
         try:
             payload = self.store.get_state(str(self.store.active_state_id))
         except Exception:
@@ -896,6 +911,46 @@ class TransactionalPSSEEnv:
         ) if three_phase is not None and three_phase.get("three_phase_context_status") == "available" else set()
         for key in ("three_phase_voltages", "three_phase_branch_currents"):
             if key in acquired or (legacy_flagged and metadata.get(key)):
+                channels.append(key)
+        return channels
+
+    def _fresh_balanced_context(self, family: str) -> bool:
+        return bool(
+            self.context_flags.get(f"has_fresh_{family}_context")
+            and str(self.context_flags.get(f"{family}_context_state_id")) == str(self.store.active_state_id)
+        )
+
+    def _gated_evidence_channels(self) -> list[str]:
+        """wls_gated_diagnostics: nothing is listed before it was acquired.
+
+        Metadata-key presence never appears (a scan window, a stored
+        diagnostic or an HIF runtime block would name the family).  Repeated
+        SCADA scans and breaker telemetry are listed after the matching
+        balanced context on the active state; phasors and spectra only after
+        a successful bound acquisition returned them.
+        """
+        channels: list[str] = []
+        try:
+            metadata = self.store.get_state(str(self.store.active_state_id)).get("metadata") or {}
+        except Exception:
+            metadata = {}
+        if not isinstance(metadata, Mapping):
+            metadata = {}
+        if self._fresh_balanced_context("parameter") and metadata.get("parameter_scans"):
+            channels.append("parameter_scans")
+        if self._fresh_balanced_context("topology") and metadata.get("substation_telemetry"):
+            channels.append("substation_telemetry")
+        harmonic = self._latest_bound_successful_tool_metrics(GET_HARMONIC_CONTEXT)
+        if harmonic is not None and "harmonic_measurements" in (
+            harmonic.get("available_evidence_channels") or []
+        ):
+            channels.append("harmonic_measurements")
+        three_phase = self._latest_bound_successful_tool_metrics(GET_THREE_PHASE_CONTEXT)
+        acquired = set(
+            three_phase.get("available_evidence_channels") or []
+        ) if three_phase is not None and three_phase.get("three_phase_context_status") == "available" else set()
+        for key in ("three_phase_voltages", "three_phase_branch_currents"):
+            if key in acquired:
                 channels.append(key)
         return channels
 
@@ -1105,7 +1160,7 @@ class TransactionalPSSEEnv:
         # Synthetic pilot mode may use a private terminal fixture.  Deployment
         # training must never consume that oracle-only bit as a legality
         # bypass; its finalization labels require public evidence below.
-        if not self.production_dataset_mode and not is_scada_only(self.evidence_profile):
+        if not self.production_dataset_mode and not is_strict_boundary(self.evidence_profile):
             validity_state["oracle_terminal_eligible"] = bool(
                 self._oracle_payload.get("oracle_terminal_eligible", False)
             )
@@ -1177,14 +1232,23 @@ class TransactionalPSSEEnv:
     def dispatch_valid_action(self, action: dict[str, Any]) -> dict[str, Any]:
         tool = action["tool"]
         args = action["arguments"]
-        if is_scada_only(self.evidence_profile) and (
-            tool in SCADA_DISABLED_TOOLS or args.get("request") in SCADA_DISABLED_REQUESTS
-        ):
+        if tool in disabled_tools(self.evidence_profile) or args.get("request") in disabled_requests(self.evidence_profile):
             return self._standard_output(
                 execution_status="failure", error_code="evidence_profile_tool_unavailable",
-                error_detail="scada_only permits balanced SCADA evidence only",
+                error_detail=f"{self.evidence_profile} does not provide {tool}",
                 state_mutated=False,
             )
+        if requires_wls_alarm_for_diagnostics(self.evidence_profile) and tool in GATED_DIAGNOSTIC_TOOLS:
+            # Defence in depth behind the process oracle: an auxiliary stream
+            # or diagnostic is dispatched only behind a current balanced
+            # alarm on the target state.
+            target_id = str(args.get("state_id") or self.current_candidate_id or self.store.active_state_id)
+            if not self._current_wls_alarm(target_id):
+                return self._standard_output(
+                    execution_status="failure", error_code="diagnostics_require_wls_alarm",
+                    error_detail=f"{tool} requires a current balanced WLS alarm on {target_id}",
+                    state_mutated=False,
+                )
         if tool in CORRECTION_TOOLS:
             return self._step_correction(action)
         if tool in {RUN_WLS, VERIFY_CANDIDATE}:
@@ -1319,6 +1383,15 @@ class TransactionalPSSEEnv:
                     error_detail=tool,
                     valid_next_actions=[],
                 )
+            if provider is None and tool in DIAGNOSTIC_TOOLS and is_strict_boundary(self.evidence_profile):
+                # A strict profile never answers an admitted diagnostic with a
+                # synthetic placeholder; like WLS and contexts it fails closed.
+                return self.record_noop_failure(
+                    action=action,
+                    error_code="evidence_provider_missing",
+                    error_detail=tool,
+                    valid_next_actions=[],
+                )
             if provider is None:
                 metrics = {
                     "evidence_requested": tool,
@@ -1331,8 +1404,8 @@ class TransactionalPSSEEnv:
                 metrics = dict(provider(copy.deepcopy(provider_state), copy.deepcopy(action)))
             else:
                 metrics = dict(provider(copy.deepcopy(provider_state)))
-            if is_scada_only(self.evidence_profile):
-                metrics = sanitize_scada_observation(metrics)
+            if is_strict_boundary(self.evidence_profile):
+                metrics = self._sanitize_observation(metrics)
             status = str(metrics.pop("execution_status", "success"))
             if status != "success":
                 return self._standard_output(
@@ -1857,11 +1930,11 @@ class TransactionalPSSEEnv:
         estimator.
         """
         normalized = safe_normalize_action(action)
-        if is_scada_only(self.evidence_profile) and (
-            normalized["tool"] in SCADA_DISABLED_TOOLS
-            or normalized["arguments"].get("request") in SCADA_DISABLED_REQUESTS
+        if (
+            normalized["tool"] in disabled_tools(self.evidence_profile)
+            or normalized["arguments"].get("request") in disabled_requests(self.evidence_profile)
         ):
-            raise ValueError("Training action is unavailable under evidence_profile=scada_only")
+            raise ValueError(f"Training action is unavailable under evidence_profile={self.evidence_profile}")
         arguments = normalized["arguments"]
         if arguments.get("request") == HIF_CONDITIONING_UNAVAILABLE_REQUEST:
             return self._hif_conditioning_unavailable_audit(normalized, provider_metrics)
@@ -3270,7 +3343,10 @@ class TransactionalPSSEEnv:
 
     def _provider_state(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Enforce the configured sensor boundary before every provider call."""
-        result = sanitize_scada_execution(payload) if is_scada_only(self.evidence_profile) else copy.deepcopy(dict(payload))
+        result = (
+            sanitize_execution_for_profile(payload, self.evidence_profile)
+            if is_strict_boundary(self.evidence_profile) else copy.deepcopy(dict(payload))
+        )
         result["evidence_profile"] = self.evidence_profile
         return result
 
@@ -3280,7 +3356,7 @@ class TransactionalPSSEEnv:
         parent_payload = self.store.get_state(parent_state_id)
         executor = self.correction_executors.get(action["tool"])
         executor_metrics: dict[str, Any] = {}
-        if executor is None and is_scada_only(self.evidence_profile):
+        if executor is None and is_strict_boundary(self.evidence_profile):
             return self._standard_output(execution_status="failure", error_code="correction_executor_missing", state_mutated=False)
         if executor is not None:
             executor_payload = copy.deepcopy(parent_payload)
@@ -3291,8 +3367,8 @@ class TransactionalPSSEEnv:
             if not isinstance(raw_result, Mapping):
                 raise TypeError("Correction executor must return a mapping.")
             result = dict(copy.deepcopy(raw_result))
-            if is_scada_only(self.evidence_profile):
-                result = sanitize_scada_observation(result)
+            if is_strict_boundary(self.evidence_profile):
+                result = self._sanitize_observation(result)
             status = str(result.pop("execution_status", "success"))
             if status != "success":
                 error_code = str(
@@ -3385,7 +3461,7 @@ class TransactionalPSSEEnv:
         args = action["arguments"]
         state_id = str(args.get("state_id") or self.current_candidate_id or self.store.active_state_id)
         state_payload = self.store.get_state(state_id)
-        if self.wls_runner is None and is_scada_only(self.evidence_profile):
+        if self.wls_runner is None and is_strict_boundary(self.evidence_profile):
             return self._standard_output(execution_status="failure", error_code="wls_provider_missing", state_mutated=False)
         if self.wls_runner is None:
             metrics: dict[str, Any] = {
@@ -3401,8 +3477,8 @@ class TransactionalPSSEEnv:
             # same deployment-safe observation the other providers already get.
             runner_payload["policy_observation"] = self.get_policy_observation().as_dict()
             metrics = dict(self.wls_runner(self._provider_state(runner_payload)))
-        if is_scada_only(self.evidence_profile):
-            metrics = sanitize_scada_observation(metrics)
+        if is_strict_boundary(self.evidence_profile):
+            metrics = self._sanitize_observation(metrics)
         # This proof is minted only by the controller after comparing stored
         # states. A provider-supplied copy is never authoritative.
         metrics.pop("hif_meter_nonregression", None)
@@ -3616,7 +3692,7 @@ class TransactionalPSSEEnv:
                 metrics["measurement_branch_routes_closed"] = (
                     self._measurement_branch_routes_closed()
                 )
-            truth = self.get_oracle_state().truth_dict() if self._oracle_payload.get("truth_complete") and not is_scada_only(self.evidence_profile) else None
+            truth = self.get_oracle_state().truth_dict() if self._oracle_payload.get("truth_complete") and not is_strict_boundary(self.evidence_profile) else None
             assessment = self.candidate_quality_oracle.label_candidate(
                 parent_state=parent_payload,
                 source_action=source_action,
@@ -3698,7 +3774,7 @@ class TransactionalPSSEEnv:
     def _step_context(self, action: dict[str, Any]) -> dict[str, Any]:
         tool = action["tool"]
         provider = self.context_providers.get(tool)
-        if provider is None and is_scada_only(self.evidence_profile):
+        if provider is None and is_strict_boundary(self.evidence_profile):
             return self._standard_output(execution_status="failure", error_code="context_provider_missing", state_mutated=False)
         state = self.current_state()
         active_payload = self.store.get_state(str(state["active_state_id"]))
@@ -3708,8 +3784,8 @@ class TransactionalPSSEEnv:
             if provider
             else {"context_tool": tool, "evidence_source": "synthetic_placeholder"}
         )
-        if is_scada_only(self.evidence_profile):
-            metrics = sanitize_scada_observation(metrics)
+        if is_strict_boundary(self.evidence_profile):
+            metrics = self._sanitize_observation(metrics)
         status = metrics.pop("execution_status", "success")
         if status != "success":
             return self._standard_output(
@@ -4089,7 +4165,7 @@ class TransactionalPSSEEnv:
         markers match that family.  Fully explained signatures satisfy the
         terminal condition without a physical correction.
         """
-        if is_scada_only(self.evidence_profile):
+        if not allows_diagnostic_tools(self.evidence_profile):
             return
         explanation = metrics.get("anomaly_explanation")
         if not isinstance(explanation, Mapping):
@@ -4339,7 +4415,7 @@ class TransactionalPSSEEnv:
         The HIF stays present: this permits only partial meter recovery, with
         unchanged pre-existing voltage violations and mandatory operator review.
         """
-        if is_scada_only(self.evidence_profile):
+        if not allows_diagnostic_tools(self.evidence_profile):
             return False
         if (assessment.get("disposition") != CandidateDisposition.ACCEPT_PARTIAL.value
             or assessment.get("progress_class") != "meter_repaired_preexisting_hif_voltage_violation"

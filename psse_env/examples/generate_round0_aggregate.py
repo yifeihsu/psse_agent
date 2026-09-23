@@ -102,6 +102,7 @@ from psse_env.dagger.splits import (
     stratified_grouped_scenario_split,
 )
 from psse_env.dagger.suite_builder import validate_builder_environment
+from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE, EVIDENCE_PROFILES
 from psse_env.oracle import ExpertPolicyOracle
 from psse_env.providers import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import Round0ScenarioGenerator
@@ -436,7 +437,7 @@ class ObservableBaselinePolicy:
 
 def build_environment(args: argparse.Namespace) -> tuple[TransactionalPSSEEnv, ExpertPolicyOracle]:
     providers = MatpowerDeploymentProviders(
-        evidence_profile=getattr(args, "evidence_profile", "scada_only"),
+        evidence_profile=getattr(args, "evidence_profile", DEFAULT_EVIDENCE_PROFILE),
         chi2_alpha=args.chi2_alpha,
         # None keeps the chi-square-only detector; the IEEE 57 runtime pins
         # the normalized-residual test too (psse_env.dagger.ieee57_runtime).
@@ -1983,7 +1984,7 @@ def _generation_descriptor(
         "evaluation_holdout": evaluation_holdout,
         "evaluation_policy": evaluation_policy,
         "generation_config": {
-            "evidence_profile": getattr(args, "evidence_profile", "scada_only"),
+            "evidence_profile": getattr(args, "evidence_profile", DEFAULT_EVIDENCE_PROFILE),
             "hif_signature_mode": getattr(args, "hif_signature_mode", "discovered"),
             "seed": args.seed,
             "source_partition": BC0_AGGREGATE_SOURCE_PARTITION,
@@ -2838,7 +2839,7 @@ def _scenario_generator_kwargs(
     """Round0ScenarioGenerator arguments for the selected system."""
     spec = _validate_plan_for_system(args, plan)
     kwargs: dict[str, Any] = {
-        "evidence_profile": getattr(args, "evidence_profile", "scada_only"),
+        "evidence_profile": getattr(args, "evidence_profile", DEFAULT_EVIDENCE_PROFILE),
         "system": spec.case_id,
         "admission_mode": _admission_mode(args),
         "corpus_path": configured_corpora["measurement_corpus"],
@@ -3482,7 +3483,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         / "round0_aggregate_release",
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--evidence-profile", choices=("scada_only", "auxiliary_diagnostics"), default="scada_only")
+    parser.add_argument("--evidence-profile", choices=EVIDENCE_PROFILES, default=DEFAULT_EVIDENCE_PROFILE)
     parser.add_argument("--hif-signature-mode", choices=("discovered", "flagged"), default="discovered")
     parser.add_argument("--scale", type=int, default=1, help="Multiply the default plan.")
     parser.add_argument("--plan", type=str, default=None, help="JSON plan or path to one.")

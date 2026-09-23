@@ -8,12 +8,19 @@ from psse_env.actions import (
     harmonic_screening_pending, three_phase_acquisition_pending, three_phase_screening_pending,
     gnn_investigation_pending, successful_current_wls,
 )
-from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE, AUXILIARY_EVIDENCE_PROFILE
+from psse_env.evidence_profile import (
+    AUXILIARY_EVIDENCE_PROFILE, DEFAULT_EVIDENCE_PROFILE, SCADA_ONLY_PROFILE, WLS_GATED_PROFILE,
+    is_strict_boundary,
+)
 from psse_env.oracle import DiagnosticsExpert, ExpertPolicyOracle, ProcessValidityOracle
 from psse_env.oracle.termination_expert import TerminationExpert
 
 
-def _state(*, solved=True, alarm=True, profile=DEFAULT_EVIDENCE_PROFILE):
+# These invariants describe the literal scada_only profile.  The research
+# default moved to wls_gated_diagnostics on 2026-09-23, so the profile is
+# named explicitly here; the shared strict-boundary invariants (WLS first, no
+# hints, no synthetic closure) are checked for both strict profiles below.
+def _state(*, solved=True, alarm=True, profile=SCADA_ONLY_PROFILE):
     active = "strict:s0"
     return {"evidence_profile": profile, "active_state_id": active, "has_open_candidate": False,
         "remaining_budget": 40, "remaining_anomaly_score": (2.0 if alarm else .5) if solved else None,
@@ -44,23 +51,32 @@ def _oracle():
     return ExpertPolicyOracle(process_oracle=ProcessValidityOracle(executor_hydrated_corrections=True))
 
 
+@pytest.mark.parametrize("profile", [SCADA_ONLY_PROFILE, WLS_GATED_PROFILE])
 @pytest.mark.parametrize("fields", [
     {}, {"unresolved_signatures": ["hif_suspected_zero_sequence"], "available_evidence": ["hif_scan_window", "nlm_diagnostic"]},
     {"unresolved_signatures": ["harmonic_distortion_detected"], "available_evidence": ["harmonic_measurements"]},
     {"unresolved_signatures": ["three_phase_unbalance"], "available_evidence": ["three_phase_voltages"]},
     {"no_material_anomaly_remaining": True, "remaining_anomaly_score": 0., "oracle_terminal_eligible": True},
 ])
-def test_strict_opening_is_wls_even_with_legacy_flags_or_quiet_claim(fields):
-    state = _state(solved=False)
+def test_strict_opening_is_wls_even_with_legacy_flags_or_quiet_claim(fields, profile):
+    state = _state(solved=False, profile=profile)
     state.update(fields)
+    assert is_strict_boundary(state)
     assert _oracle().next_actions(state, [])[0] == {"tool": RUN_WLS, "arguments": {"state_id": state["active_state_id"]}}
-    assert DiagnosticsExpert().propose(state, [], harmonic_fault_present=True, hif_fault_present=True) == []
+    proposals = DiagnosticsExpert().propose(state, [], harmonic_fault_present=True, hif_fault_present=True)
+    if profile == SCADA_ONLY_PROFILE:
+        assert proposals == []
+    else:
+        # The WLS-gated ladder may only ask for the missing balanced baseline.
+        assert all(proposal.action["tool"] == RUN_WLS for proposal in proposals)
     assert TerminationExpert().propose(state, []) == []
 
 
-def test_missing_profile_defaults_to_scada_only():
+def test_missing_profile_defaults_to_a_strict_wls_first_profile():
     state = _state(solved=False)
     state.pop("evidence_profile")
+    assert DEFAULT_EVIDENCE_PROFILE == WLS_GATED_PROFILE
+    assert is_strict_boundary(state)
     state.update(unresolved_signatures=["hif_suspected_zero_sequence"], available_evidence=["nlm_diagnostic"])
     assert _oracle().next_actions(state, [])[0]["tool"] == RUN_WLS
 
@@ -178,9 +194,12 @@ def test_same_scada_gnn_phase_score_can_request_only_balanced_contexts():
 
 def test_auxiliary_acquisition_predicates_are_explicitly_opt_in():
     arguments = {"unresolved": ["wls_residual_outlier index=26"], "tried_action_signatures": [], "active_state_id": "episode:s0"}
-    assert not harmonic_screening_pending(**arguments)
-    assert not three_phase_acquisition_pending(**arguments)
-    assert not three_phase_screening_pending(**arguments, available_evidence=["three_phase_voltages"])
+    for profile in (SCADA_ONLY_PROFILE, WLS_GATED_PROFILE):
+        # scada_only never acquires; the WLS-gated profile needs the current
+        # alarm from the ledger, which this compact fixture does not carry.
+        assert not harmonic_screening_pending(**arguments, evidence_profile=profile)
+        assert not three_phase_acquisition_pending(**arguments, evidence_profile=profile)
+        assert not three_phase_screening_pending(**arguments, available_evidence=["three_phase_voltages"], evidence_profile=profile)
     assert harmonic_screening_pending(**arguments, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
     assert three_phase_acquisition_pending(**arguments, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
 

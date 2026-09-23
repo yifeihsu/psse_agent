@@ -1047,11 +1047,6 @@ def _run_three_phase_nlm_logic(
             terminal_current_hif_localization_multiscan,
         )
 
-        sigma = (
-            float(branch_current_sigma_pu)
-            if branch_current_sigma_pu is not None and float(branch_current_sigma_pu) > 0.0
-            else DEFAULT_BRANCH_CURRENT_SIGMA_PU
-        )
         current_scans = [
             scan
             for scan in (scans or [])
@@ -1059,6 +1054,25 @@ def _run_three_phase_nlm_logic(
             and scan.get("three_phase_voltages")
             and scan.get(BRANCH_CURRENT_CHANNEL)
         ]
+        has_currents = bool(current_scans) or bool(three_phase_voltages and three_phase_branch_currents)
+        sigma = (
+            float(branch_current_sigma_pu)
+            if branch_current_sigma_pu is not None and float(branch_current_sigma_pu) > 0.0
+            else None
+        )
+        if has_currents and sigma is None:
+            # The differential floor is 6*sqrt(2)*sigma: the declared sensor
+            # sigma of the acquired phasors decides detection, so no nominal
+            # accuracy is substituted for it.
+            return {
+                "success": False,
+                "error": (
+                    "branch_current_sigma_pu must be declared for per-phase branch-current "
+                    "phasors; the runtime supplies the acquisition's per-component sigma"
+                ),
+            }
+        if sigma is None:
+            sigma = DEFAULT_BRANCH_CURRENT_SIGMA_PU  # no phasors: value is unused
         localized = None
         if len(current_scans) >= 2:
             localized = terminal_current_hif_localization_multiscan(
@@ -1111,7 +1125,7 @@ def _estimate_hif_location_magnitude_logic(
     three_phase_branch_currents: List[Dict[str, Any]] | None = None,
     branch_current_sigma_pu: float | None = None,
     sigma_z: List[float] | None = None,
-    three_phase_sigma: float = 5e-3,
+    three_phase_sigma: float | None = None,
 ) -> Dict[str, Any]:
     try:
         import sys as _sys
@@ -1122,10 +1136,26 @@ def _estimate_hif_location_magnitude_logic(
         from three_phase_nlm.branch_current_analysis import DEFAULT_BRANCH_CURRENT_SIGMA_PU  # type: ignore
         from three_phase_nlm.hif_parameter_estimator import estimate_hif_location_magnitude  # type: ignore
 
+        # The weighted residuals use the sigma the acquisition declares; the
+        # runtime hydrates it from the row (three_phase_sigma,
+        # branch_current_sigma_pu or the noise contract).  No nominal 5e-3 /
+        # 1e-3 accuracy is substituted for a missing declaration.
+        if three_phase_sigma is None or not float(three_phase_sigma) > 0.0:
+            return {
+                "success": False,
+                "error": "three_phase_sigma must be declared for the acquired three-phase voltage phasors",
+            }
+        if three_phase_branch_currents and (
+            branch_current_sigma_pu is None or not float(branch_current_sigma_pu) > 0.0
+        ):
+            return {
+                "success": False,
+                "error": "branch_current_sigma_pu must be declared for the acquired branch-current phasors",
+            }
         sigma = (
             float(branch_current_sigma_pu)
             if branch_current_sigma_pu is not None and float(branch_current_sigma_pu) > 0.0
-            else DEFAULT_BRANCH_CURRENT_SIGMA_PU
+            else DEFAULT_BRANCH_CURRENT_SIGMA_PU  # no current phasors: value is unused
         )
         return estimate_hif_location_magnitude(
             case_path=case_path,
@@ -1148,7 +1178,7 @@ def _estimate_hif_location_magnitude_logic(
             three_phase_branch_currents=three_phase_branch_currents,
             branch_current_sigma=sigma,
             sigma_z=sigma_z,
-            three_phase_sigma=three_phase_sigma,
+            three_phase_sigma=float(three_phase_sigma),
         )
     except Exception as e:
         return {"success": False, "error": f"HIF parameter estimator failed for {case_path}: {e}"}
@@ -1179,6 +1209,7 @@ def _estimate_hif_location_magnitude_multiscan_logic(
     robust_loss: str = "soft_l1",
     smoothness_lambda: float = 0.10,
     branch_current_sigma_pu: float | None = None,
+    require_declared_sigmas: bool = False,
 ) -> Dict[str, Any]:
     try:
         import sys as _sys
@@ -1227,6 +1258,7 @@ def _estimate_hif_location_magnitude_multiscan_logic(
             resistance_search=resistance_search,
             robust_loss=robust_loss,
             smoothness_lambda=float(smoothness_lambda),
+            require_declared_sigmas=bool(require_declared_sigmas),
         )
     except Exception as e:
         return {"success": False, "error": f"Multi-scan HIF parameter estimator failed: {e}"}
@@ -1367,16 +1399,19 @@ def estimate_hif_location_magnitude_from_path(
     three_phase_branch_currents: List[Dict[str, Any]] | None = None,
     branch_current_sigma_pu: float | None = None,
     sigma_z: List[float] | None = None,
-    three_phase_sigma: float = 5e-3,
+    three_phase_sigma: float | None = None,
 ) -> Dict[str, Any]:
     """
     Estimate HIF position and magnitude on a suspected IEEE-14 Line.* branch.
 
     The trace runtime hydrates `z_obs`, optional three-phase voltages and
-    per-phase branch currents, and the pristine OpenDSS model context. The
-    model should only pass the visible suspected branch selected by the
-    line-level NLM tool.  Branch currents add a two-terminal closed-form seed
-    and a current residual block to the model search.
+    per-phase branch currents, the declared phasor sigmas and the pristine
+    OpenDSS model context. The model should only pass the visible suspected
+    branch selected by the line-level NLM tool.  Branch currents add a
+    two-terminal closed-form seed and a current residual block to the model
+    search.  ``three_phase_sigma`` (and ``branch_current_sigma_pu`` when
+    currents are supplied) must be the acquisition's declared per-component
+    sigma; the estimator applies no nominal default.
     """
     return _estimate_hif_location_magnitude_logic(
         case_path=case_path,

@@ -298,12 +298,19 @@ def _load_window_payload(scan_window_path: str | Path) -> Mapping[str, Any] | Se
     return payload
 
 
+#: Historical per-component phasor sigma applied when a legacy window declares
+#: none.  Strict evidence profiles pass ``require_declared_sigmas=True`` and
+#: never reach it.
+LEGACY_THREE_PHASE_SIGMA_PU = 5e-3
+
+
 def _parse_scans(
     *,
     scans: Sequence[Mapping[str, Any]] | None,
     scan_window_path: str | Path | None,
     default_sigma_z: Sequence[float] | None = None,
     shunt_convention: str | None = None,
+    require_declared_sigmas: bool = False,
 ) -> tuple[list[HIFScan], dict[str, Any]]:
     window: Mapping[str, Any] = {}
     raw_scans: Any = scans
@@ -353,22 +360,27 @@ def _parse_scans(
         topology_id = item.get("topology_id", window.get("topology_id"))
         if topology_id is not None:
             topology_ids.add(str(topology_id))
-        three_phase_sigma = _finite_float(
-            item.get("three_phase_sigma", window.get("three_phase_sigma", 5e-3)),
-            field=f"scan {position} three_phase_sigma",
-        )
+        declared_voltage_sigma = item.get("three_phase_sigma", window.get("three_phase_sigma"))
+        if declared_voltage_sigma is None:
+            if require_declared_sigmas:
+                raise ValueError(f"scan {position} declares no three_phase_sigma; strict profiles apply no default")
+            declared_voltage_sigma = LEGACY_THREE_PHASE_SIGMA_PU
+        three_phase_sigma = _finite_float(declared_voltage_sigma, field=f"scan {position} three_phase_sigma")
         if three_phase_sigma <= 0.0:
             raise ValueError("three_phase_sigma must be positive")
+        branch_currents = item.get(BRANCH_CURRENT_CHANNEL)
+        declared_current_sigma = item.get(BRANCH_CURRENT_SIGMA_KEY, window.get(BRANCH_CURRENT_SIGMA_KEY))
+        if declared_current_sigma is None:
+            if require_declared_sigmas and branch_currents:
+                raise ValueError(
+                    f"scan {position} declares no {BRANCH_CURRENT_SIGMA_KEY}; strict profiles apply no default"
+                )
+            declared_current_sigma = DEFAULT_BRANCH_CURRENT_SIGMA_PU
         branch_current_sigma = _finite_float(
-            item.get(
-                BRANCH_CURRENT_SIGMA_KEY,
-                window.get(BRANCH_CURRENT_SIGMA_KEY, DEFAULT_BRANCH_CURRENT_SIGMA_PU),
-            ),
-            field=f"scan {position} {BRANCH_CURRENT_SIGMA_KEY}",
+            declared_current_sigma, field=f"scan {position} {BRANCH_CURRENT_SIGMA_KEY}",
         )
         if branch_current_sigma <= 0.0:
             raise ValueError(f"{BRANCH_CURRENT_SIGMA_KEY} must be positive")
-        branch_currents = item.get(BRANCH_CURRENT_CHANNEL)
         if branch_currents is not None and not branch_current_rows_to_phasors(branch_currents):
             raise ValueError(f"scan {position} {BRANCH_CURRENT_CHANNEL} carries no usable phasors")
         parsed.append(
@@ -886,6 +898,7 @@ def estimate_hif_location_magnitude_multiscan(
     condition_number_limit: float = 1e6,
     absolute_correlation_limit: float = 0.98,
     workers: int | None = None,
+    require_declared_sigmas: bool = False,
 ) -> dict[str, Any]:
     """Multi-scan HIF location/magnitude search over an OpenDSS candidate grid.
 
@@ -893,6 +906,9 @@ def estimate_hif_location_magnitude_multiscan(
     side by side (``None`` reads ``PSSE_HIF_WORKERS``; ``1`` is serial).  The
     parallel search fills the same per-call simulation cache with the same
     numbers, so the estimate does not depend on the worker count.
+    ``require_declared_sigmas`` rejects any scan whose phasor sigmas are not
+    declared (by the scan or its window) instead of applying the legacy
+    nominal accuracies.
     """
 
     alpha_grid_size, r_grid_size, validated_max_scans = validate_hif_search_limits(
@@ -926,6 +942,7 @@ def estimate_hif_location_magnitude_multiscan(
         scan_window_path=scan_window_path,
         default_sigma_z=sigma_z,
         shunt_convention=shunt_convention,
+        require_declared_sigmas=bool(require_declared_sigmas),
     )
     convention = parsed_scans[0].shunt_convention
     input_scan_count = len(parsed_scans)

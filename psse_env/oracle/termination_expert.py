@@ -17,7 +17,7 @@ from psse_env.oracle.expert_types import ExpertActionProposal, state_value
 from psse_env.oracle.anomaly_evidence import normalized_residual_alarm
 from psse_env.oracle.hif_continuation import accepted_hif_explanation, hif_conditioned_closure_ready
 from psse_env.state_store import SYNTHETIC_TERMINAL_COMPATIBILITY_KEY
-from psse_env.evidence_profile import is_scada_only
+from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary
 
 
 class TerminationExpert:
@@ -106,7 +106,12 @@ class TerminationExpert:
         state: Any,
         history: Sequence[Mapping[str, Any]] | None = None,
     ) -> list[ExpertActionProposal]:
-        strict = is_scada_only(state)
+        # Strict boundary (scada_only and wls_gated): a current bound WLS is
+        # required before any terminal claim and legacy synthetic finality is
+        # off.  Explanation closure exists wherever diagnostics exist (wls_gated
+        # and auxiliary); scada_only has no diagnostic that could explain.
+        strict = is_strict_boundary(state)
+        explanations_allowed = allows_diagnostic_tools(state)
         if state_value(state, "has_open_candidate"):
             return []
         if strict and not successful_current_wls(state, history):
@@ -131,7 +136,7 @@ class TerminationExpert:
         signatures = terminal_explanation_signatures(
             state_value(state, "unresolved_signatures", []) or []
         )
-        anomalies_explained = not strict and bool(signatures) and not unexplained_signatures(
+        anomalies_explained = explanations_allowed and bool(signatures) and not unexplained_signatures(
             signatures, state_value(state, "explained_anomalies", [])
         )
         statistical_closure = (no_anomaly or below_threshold) and not normalized_residual_alarm(state)

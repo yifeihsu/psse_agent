@@ -71,9 +71,14 @@ from psse_env.actions import (
 from psse_env.state_store import apply_modification
 from psse_env.noise_contract import resolve_state_measurement_noise, validate_shared_scada_covariance
 from psse_env.evidence_profile import (
-    DEFAULT_EVIDENCE_PROFILE, validate_evidence_profile, sanitize_scada_metadata,
-    sanitize_scada_observation,
+    AUXILIARY_EVIDENCE_PROFILE, DEFAULT_EVIDENCE_PROFILE, GATED_DIAGNOSTIC_TOOLS,
+    SCADA_ONLY_PROFILE, STRICT_BOUNDARY_PROFILES, WLS_GATED_PROFILE,
+    allows_diagnostic_tools, disabled_tools, is_strict_boundary,
+    requires_wls_alarm_for_diagnostics, sanitize_gated_metadata,
+    sanitize_gated_observation, sanitize_scada_metadata, sanitize_scada_observation,
+    validate_evidence_profile,
 )
+from psse_env.oracle.process_validity import current_wls_alarm
 from psse_env.providers.hif_continuation import (
     accepted_fit as accepted_hif_fit, conditioned_prediction, current_scan,
     diagnose as diagnose_hif_meters, fit_receipt, model_fingerprint,
@@ -94,6 +99,7 @@ from three_phase_nlm.branch_current_analysis import (  # noqa: E402  (repo-root 
     terminal_current_hif_localization_multiscan,
     unbalance_source_localization,
 )
+from three_phase_nlm.measurement_noise import DEFAULT_THREE_PHASE_SIGMA_PU  # noqa: E402
 from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
     _estimate_hif_location_magnitude_logic,
     _estimate_hif_location_magnitude_multiscan_logic,
@@ -488,6 +494,12 @@ class MatpowerDeploymentProviders:
         self.evidence_profile = validate_evidence_profile(evidence_profile)
         if bool(screen_checkpoint) != bool(screen_calibration):
             raise ValueError("screen_checkpoint and screen_calibration must be provided together")
+        if screen_checkpoint and is_strict_boundary(self.evidence_profile):
+            # A learned screen is an additional signal by construction; the
+            # strict profiles detect with balanced SCADA and WLS only.
+            raise ValueError(
+                f"evidence_profile={self.evidence_profile} refuses a learned WLS screen (screen_checkpoint)"
+            )
         self.screen_checkpoint = str(screen_checkpoint) if screen_checkpoint else None
         self._hif_prediction_cache: dict[str, Any] = {}
         self.screen_calibration = str(screen_calibration) if screen_calibration else None
@@ -785,30 +797,62 @@ class MatpowerDeploymentProviders:
 
     # ----------------------------------------------------------------- helpers
 
-    def _strict_scada(self, state: Mapping[str, Any]) -> bool:
+    _PROFILE_STRICTNESS = {
+        SCADA_ONLY_PROFILE: 0, WLS_GATED_PROFILE: 1, AUXILIARY_EVIDENCE_PROFILE: 2,
+    }
+
+    def _effective_profile(self, state: Mapping[str, Any]) -> str:
+        """Strictest of the provider's profile and the profile the state declares.
+
+        A permissive historical provider can never loosen a stricter
+        controller, and a strict provider stays strict whatever the state says.
+        """
         observation = state.get("policy_observation") or {}
-        return self.evidence_profile == "scada_only" or state.get("evidence_profile") == "scada_only" or (
-            isinstance(observation, Mapping) and observation.get("evidence_profile") == "scada_only"
-        )
+        declared = [self.evidence_profile]
+        for value in (
+            state.get("evidence_profile"),
+            observation.get("evidence_profile") if isinstance(observation, Mapping) else None,
+        ):
+            if isinstance(value, str) and value in self._PROFILE_STRICTNESS:
+                declared.append(value)
+        return min(declared, key=self._PROFILE_STRICTNESS.__getitem__)
+
+    def _strict_scada(self, state: Mapping[str, Any]) -> bool:
+        """Balanced SCADA only: every auxiliary stream and tool is refused."""
+        return self._effective_profile(state) == SCADA_ONLY_PROFILE
+
+    def _strict_boundary(self, state: Mapping[str, Any]) -> bool:
+        """No seeded signatures, truth handles, precomputed diagnoses or silent sigma defaults."""
+        return self._effective_profile(state) in STRICT_BOUNDARY_PROFILES
 
     def _evidence_state(self, state: Mapping[str, Any]) -> dict[str, Any]:
         """Defend the provider boundary even when called without the controller.
 
         An auxiliary-capable historical provider cannot override a stricter
-        controller. Case and raw SCADA readings are unchanged; simulated
-        operating points and auxiliary streams never reach numerical routines.
+        controller. Case and raw SCADA readings are unchanged. Under scada_only
+        simulated operating points and auxiliary streams never reach numerical
+        routines; under wls_gated_diagnostics the auxiliary streams stay, but
+        precomputed diagnoses, truth-side model handles and labels are removed.
         """
-        if not self._strict_scada(state):
+        profile = self._effective_profile(state)
+        if profile not in STRICT_BOUNDARY_PROFILES:
             result = dict(state)
             result["evidence_profile"] = self.evidence_profile
             return result
         result = dict(state)
-        result["evidence_profile"] = "scada_only"
-        result["metadata"] = sanitize_scada_metadata(state.get("metadata") or {})
+        result["evidence_profile"] = profile
         observation = state.get("policy_observation")
+        if profile == WLS_GATED_PROFILE:
+            result["metadata"] = sanitize_gated_metadata(state.get("metadata") or {})
+            if isinstance(observation, Mapping):
+                safe = sanitize_gated_observation(observation)
+                safe["evidence_profile"] = profile
+                result["policy_observation"] = safe
+            return result
+        result["metadata"] = sanitize_scada_metadata(state.get("metadata") or {})
         if isinstance(observation, Mapping):
             safe = sanitize_scada_observation(observation)
-            safe["evidence_profile"] = "scada_only"
+            safe["evidence_profile"] = SCADA_ONLY_PROFILE
             safe["unresolved_signatures"] = [str(s) for s in observation.get("unresolved_signatures") or []
                 if str(s).startswith("wls_") or str(s) == POST_CORRECTION_CONFIRMATION_SIGNATURE]
             safe["explained_anomalies"] = []
@@ -820,12 +864,89 @@ class MatpowerDeploymentProviders:
         return result
 
     def _auxiliary_unavailable(self, state: Mapping[str, Any], tool: str) -> dict[str, Any] | None:
-        if self._strict_scada(state):
+        """Refuse an auxiliary tool the effective profile does not admit right now."""
+        profile = self._effective_profile(state)
+        if profile == SCADA_ONLY_PROFILE:
             return self._failure("evidence_unavailable_in_scada_only_profile",
                 "Only balanced SCADA measurements and their WLS-derived evidence are available.",
                 **self._binding(state), evidence_source="deployment_evidence:scada_only_capability",
-                evidence_profile="scada_only", requested_tool=tool)
+                evidence_profile=SCADA_ONLY_PROFILE, requested_tool=tool)
+        if tool in disabled_tools(profile):
+            return self._failure("tool_disabled_by_evidence_profile",
+                f"{tool} is not provided under evidence_profile={profile}",
+                **self._binding(state), evidence_source="deployment_evidence:profile_capability",
+                evidence_profile=profile, requested_tool=tool)
+        if requires_wls_alarm_for_diagnostics(profile) and tool in GATED_DIAGNOSTIC_TOOLS:
+            # Provider-side copy of the process gate: the bound WLS ledger in
+            # the observation must carry a chi-square or normalized-residual
+            # alarm on this exact target state.  A direct call without an
+            # observation has no alarm and is refused.
+            observation = state.get("policy_observation")
+            observation = observation if isinstance(observation, Mapping) else {}
+            if not current_wls_alarm(observation, state.get("state_id")):
+                return self._failure("diagnostics_require_wls_alarm",
+                    f"{tool} requires a current balanced WLS alarm on the target state",
+                    **self._binding(state), evidence_source="deployment_evidence:wls_alarm_gate",
+                    evidence_profile=profile, requested_tool=tool)
         return None
+
+    @staticmethod
+    def _finite_positive(value: Any) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) and number > 0.0 else None
+
+    @classmethod
+    def _declared_phasor_sigma(
+        cls, metadata: Mapping[str, Any], key: str, channel: str, *extra_sources: Any,
+    ) -> float | None:
+        """Per-component sigma a phasor channel declares, or None.
+
+        Looks at the metadata, the HIF acquisition block, the scan window and
+        any extra source (a scan), then at each source's ``noise_contract``
+        channel declaration.  Never substitutes a nominal sensor accuracy.
+        """
+        runtime = metadata.get("hif_runtime")
+        window = metadata.get("hif_scan_window")
+        sources = [source for source in (metadata, runtime, window, *extra_sources) if isinstance(source, Mapping)]
+        for source in sources:
+            value = cls._finite_positive(source.get(key))
+            if value is not None:
+                return value
+        for source in sources:
+            contract = source.get("noise_contract")
+            channels = contract.get("channels") if isinstance(contract, Mapping) else None
+            declaration = channels.get(channel) if isinstance(channels, Mapping) else None
+            if not isinstance(declaration, Mapping):
+                continue
+            for field in ("estimator_sigma_per_component", "applied_sigma_per_component"):
+                value = cls._finite_positive(declaration.get(field))
+                if value is not None:
+                    return value
+        return None
+
+    def _phasor_sigma(
+        self, state: Mapping[str, Any], key: str, channel: str, legacy_default: float, *extra_sources: Any,
+    ) -> float | None:
+        """Declared sigma for a phasor channel; legacy default only outside strict profiles."""
+        declared = self._declared_phasor_sigma(self._metadata(state), key, channel, *extra_sources)
+        if declared is not None:
+            return declared
+        return None if self._strict_boundary(state) else float(legacy_default)
+
+    @staticmethod
+    def _sigma_undeclared(state: Mapping[str, Any], key: str, tool: str) -> dict[str, Any]:
+        return {
+            "execution_status": "failure",
+            "error_code": f"{key}_undeclared",
+            "error_detail": (
+                f"{tool} requires the declared per-component {key} of the acquired phasors; "
+                "no nominal sensor accuracy is substituted under a strict evidence profile"
+            ),
+            **{k: str(state[k]) for k in ("state_id", "state_hash") if state.get(k) is not None},
+        }
 
     @staticmethod
     def _case_path(state: Mapping[str, Any]) -> str:
@@ -3805,18 +3926,24 @@ class MatpowerDeploymentProviders:
         Explained or not: the event is still on the network, so residual and
         multiplier evidence cannot be attributed to a meter or a branch.
         """
-        if state.get("evidence_profile") == "scada_only":
+        if not allows_diagnostic_tools(cls._state_profile(state)):
             return []
         return waveform_anomaly_signatures(cls._observable_signatures(state))
+
+    @staticmethod
+    def _state_profile(state: Mapping[str, Any]) -> str:
+        observation = state.get("policy_observation")
+        observation = observation if isinstance(observation, Mapping) else {}
+        return str(state.get("evidence_profile") or observation.get("evidence_profile") or DEFAULT_EVIDENCE_PROFILE)
 
     @classmethod
     def _screening_pending(cls, state: Mapping[str, Any]) -> bool:
         """Unflagged WLS anomaly with acquisition or screening still pending."""
-        if state.get("evidence_profile") == "scada_only":
+        profile = cls._state_profile(state)
+        if not allows_diagnostic_tools(profile):
             return False
         observation = state.get("policy_observation")
         observation = observation if isinstance(observation, Mapping) else {}
-        profile = state.get("evidence_profile") or observation.get("evidence_profile") or DEFAULT_EVIDENCE_PROFILE
         if harmonic_screening_pending(
             unresolved=observation.get("unresolved_signatures") or [],
             tried_action_signatures=observation.get("tried_action_signatures") or [],
@@ -3849,37 +3976,26 @@ class MatpowerDeploymentProviders:
             for signature in cls._observable_signatures(state)
         )
 
-    @classmethod
     def _branch_current_channel(
-        cls, state: Mapping[str, Any]
-    ) -> tuple[list[dict[str, Any]] | None, float]:
+        self, state: Mapping[str, Any]
+    ) -> tuple[list[dict[str, Any]] | None, float | None]:
         """Per-phase branch-current telemetry and its declared sigma, if present.
 
         The channel may sit at the metadata top level (unbalance rows) or inside
         ``hif_runtime`` (HIF rows); the declared sigma follows the same lookup
-        and falls back to the nominal sensor accuracy.
+        and the noise contract.  Outside the strict profiles an undeclared
+        sigma falls back to the legacy nominal sensor accuracy; under a strict
+        profile it is ``None`` and the caller fails closed.
         """
-        metadata = cls._metadata(state)
+        metadata = self._metadata(state)
         runtime = metadata.get("hif_runtime")
         runtime = runtime if isinstance(runtime, Mapping) else {}
-        window = metadata.get("hif_scan_window")
-        window = window if isinstance(window, Mapping) else {}
         rows = metadata.get(BRANCH_CURRENT_CHANNEL) or runtime.get(BRANCH_CURRENT_CHANNEL)
+        sigma = self._phasor_sigma(
+            state, BRANCH_CURRENT_SIGMA_KEY, BRANCH_CURRENT_CHANNEL, DEFAULT_BRANCH_CURRENT_SIGMA_PU
+        )
         if not rows or not branch_current_rows_to_phasors(rows):
-            return None, DEFAULT_BRANCH_CURRENT_SIGMA_PU
-        sigma = DEFAULT_BRANCH_CURRENT_SIGMA_PU
-        for candidate in (
-            metadata.get(BRANCH_CURRENT_SIGMA_KEY),
-            runtime.get(BRANCH_CURRENT_SIGMA_KEY),
-            window.get(BRANCH_CURRENT_SIGMA_KEY),
-        ):
-            try:
-                value = float(candidate)
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(value) and value > 0.0:
-                sigma = value
-                break
+            return None, sigma
         return [dict(item) for item in rows if isinstance(item, Mapping)], sigma
 
     #: Most recent multi-scan HIF searches, keyed by their complete inputs.
@@ -4028,6 +4144,7 @@ class MatpowerDeploymentProviders:
             return unavailable
         from mcp_server.matpower_server import _get_three_phase_context_logic
 
+        state = self._evidence_state(state)
         metadata = self._metadata(state)
         runtime = metadata.get("hif_runtime")
         runtime = runtime if isinstance(runtime, Mapping) else {}
@@ -4049,6 +4166,7 @@ class MatpowerDeploymentProviders:
         unavailable = self._auxiliary_unavailable(state, GET_HARMONIC_CONTEXT)
         if unavailable is not None:
             return unavailable
+        state = self._evidence_state(state)
         # Requesting a measurement channel does not imply that it exists or
         # that the unknown event is harmonic. Availability is learned here,
         # after WLS, rather than advertised from hidden scenario metadata.
@@ -4144,6 +4262,7 @@ class MatpowerDeploymentProviders:
         unavailable = self._auxiliary_unavailable(state, RUN_HSE_FROM_PATH)
         if unavailable is not None:
             return unavailable
+        state = self._evidence_state(state)
         try:
             measurements = self._harmonic_measurements(state)
             case_path = self._case_path(state)
@@ -4229,10 +4348,15 @@ class MatpowerDeploymentProviders:
         unavailable = self._auxiliary_unavailable(state, RUN_THREE_PHASE_NLM_FROM_PATH)
         if unavailable is not None:
             return unavailable
+        state = self._evidence_state(state)
+        strict = self._strict_boundary(state)
         metadata = self._metadata(state)
-        diagnostic = metadata.get("nlm_diagnostic")
-        pristine_dir = metadata.get("pristine_model_dir")
-        faulted_dir = metadata.get("faulted_model_dir")
+        # A stored diagnostic is the hidden sample's own output and the faulted
+        # model is the truth; a strict profile computes from the acquired
+        # phasors only and fails closed when they are missing.
+        diagnostic = None if strict else metadata.get("nlm_diagnostic")
+        pristine_dir = None if strict else metadata.get("pristine_model_dir")
+        faulted_dir = None if strict else metadata.get("faulted_model_dir")
         unbalance_signal = self._has_family_signature(state, "three_phase_unbalance")
         hif_signal = self._has_family_signature(state, "hif")
 
@@ -4247,6 +4371,8 @@ class MatpowerDeploymentProviders:
             "three_phase_voltages"
         )
         branch_currents, current_sigma = self._branch_current_channel(state)
+        if branch_currents and current_sigma is None:
+            return self._sigma_undeclared(state, BRANCH_CURRENT_SIGMA_KEY, RUN_THREE_PHASE_NLM_FROM_PATH)
         # Screening: no sensor has flagged a waveform anomaly, so the operator
         # only holds the positive-sequence snapshot and a fundamental-frequency
         # anomaly.  Before any residual is attributed to a meter or a branch,
@@ -4453,6 +4579,12 @@ class MatpowerDeploymentProviders:
                     localized_metrics["minted_signatures"] = [HIF_SCREENING_SIGNATURE]
                 return localized_metrics
 
+        if strict:
+            return self._failure(
+                "nlm_runtime_missing",
+                "the acquired three-phase phasors are missing or unusable; a strict "
+                "evidence profile never falls back to a stored diagnostic or a faulted model",
+            )
         if not isinstance(diagnostic, Mapping) and not (pristine_dir and faulted_dir):
             return self._failure(
                 "nlm_runtime_missing",
@@ -4541,6 +4673,7 @@ class MatpowerDeploymentProviders:
             )
         except ValueError as exc:
             return self._failure("hif_search_budget_invalid", exc)
+        state = self._evidence_state(state)
         metadata = self._metadata(state)
         runtime = metadata.get("hif_runtime")
         runtime = dict(runtime) if isinstance(runtime, Mapping) else {}
@@ -4550,6 +4683,13 @@ class MatpowerDeploymentProviders:
         except Exception as exc:
             return self._failure("hif_input_error", f"{type(exc).__name__}: {exc}")
         branch_currents, current_sigma = self._branch_current_channel(state)
+        if branch_currents and current_sigma is None:
+            return self._sigma_undeclared(state, BRANCH_CURRENT_SIGMA_KEY, ESTIMATE_HIF_FROM_PATH)
+        voltage_sigma = self._phasor_sigma(
+            state, "three_phase_sigma", "three_phase_voltages", DEFAULT_THREE_PHASE_SIGMA_PU
+        )
+        if voltage_sigma is None:
+            return self._sigma_undeclared(state, "three_phase_sigma", ESTIMATE_HIF_FROM_PATH)
         payload = _estimate_hif_location_magnitude_logic(
             case_path=case_path,
             candidate_branch_row0=int(arguments["candidate_branch_row0"]),
@@ -4567,7 +4707,7 @@ class MatpowerDeploymentProviders:
             three_phase_branch_currents=branch_currents,
             branch_current_sigma_pu=current_sigma,
             sigma_z=runtime.get("sigma_z", metadata.get("sigma_z")),
-            three_phase_sigma=float(runtime.get("three_phase_sigma", metadata.get("three_phase_sigma", 5e-3))),
+            three_phase_sigma=float(voltage_sigma),
         )
         if not payload.get("success"):
             return self._failure("hif_estimation_failure", payload.get("error"))
@@ -4625,6 +4765,8 @@ class MatpowerDeploymentProviders:
         except ValueError as exc:
             return self._failure("hif_search_budget_invalid", exc)
         assert max_scans is not None
+        state = self._evidence_state(state)
+        strict = self._strict_boundary(state)
         window = self._metadata(state).get("hif_scan_window")
         window = dict(window) if isinstance(window, Mapping) else {}
         scans = window.get("scans")
@@ -4637,6 +4779,27 @@ class MatpowerDeploymentProviders:
             case_path = self._case_path(state)
         except Exception as exc:
             return self._failure("hif_input_error", f"{type(exc).__name__}: {exc}")
+        # Every scan is estimated with the sigma it declares (or the window's
+        # declaration); a strict profile refuses a scan that declares neither.
+        metadata = self._metadata(state)
+        declared_scans: list[dict[str, Any]] = []
+        for scan in scans:
+            item = dict(scan) if isinstance(scan, Mapping) else {}
+            voltage_sigma = self._declared_phasor_sigma(metadata, "three_phase_sigma", "three_phase_voltages", item)
+            if voltage_sigma is None and not strict:
+                voltage_sigma = float(DEFAULT_THREE_PHASE_SIGMA_PU)
+            if voltage_sigma is None:
+                return self._sigma_undeclared(state, "three_phase_sigma", ESTIMATE_HIF_MULTISCAN_FROM_PATH)
+            item["three_phase_sigma"] = float(voltage_sigma)
+            if item.get(BRANCH_CURRENT_CHANNEL):
+                current_sigma = self._declared_phasor_sigma(metadata, BRANCH_CURRENT_SIGMA_KEY, BRANCH_CURRENT_CHANNEL, item)
+                if current_sigma is None and not strict:
+                    current_sigma = float(DEFAULT_BRANCH_CURRENT_SIGMA_PU)
+                if current_sigma is None:
+                    return self._sigma_undeclared(state, BRANCH_CURRENT_SIGMA_KEY, ESTIMATE_HIF_MULTISCAN_FROM_PATH)
+                item[BRANCH_CURRENT_SIGMA_KEY] = float(current_sigma)
+            declared_scans.append(item)
+        scans = declared_scans
         independent = False
         try:
             acquisition = current_scan(self._metadata(state))
@@ -4666,6 +4829,7 @@ class MatpowerDeploymentProviders:
             robust_loss=str(arguments.get("robust_loss", "soft_l1")),
             smoothness_lambda=float(arguments.get("smoothness_lambda", 0.10)),
             branch_current_sigma_pu=self._branch_current_channel(state)[1],
+            require_declared_sigmas=strict,
         )
         if not payload.get("success"):
             return self._failure("hif_multiscan_failure", payload.get("error"))

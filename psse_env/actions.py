@@ -2,9 +2,19 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
-from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE, is_scada_only
+from psse_env.evidence_profile import (
+    DEFAULT_EVIDENCE_PROFILE,
+    GATED_DIAGNOSTIC_TOOLS,
+    allows_diagnostic_tools,
+    disabled_requests,
+    disabled_tools,
+    is_scada_only,
+    is_strict_boundary,
+    is_wls_gated,
+    requires_wls_alarm_for_diagnostics,
+)
 
 
 RUN_WLS = "run_wls"
@@ -216,6 +226,100 @@ THREE_PHASE_TELEMETRY_CHANNELS = frozenset(
 )
 
 
+def _ledger_wls_alarm(context_evidence: Any, active_state_id: Any, *, content_bound: bool) -> bool:
+    """A current, successful WLS ledger entry whose detection rule fired.
+
+    The alarm is the pair of provider flags (chi-square at the configured
+    level OR the largest normalized residual at its threshold).  ``wls_*``
+    signatures are not a substitute: the solve mints none while a waveform
+    signature stands, and a chi-square-only alarm may mint none at all.
+    """
+    if not isinstance(context_evidence, Mapping):
+        return False
+    evidence = context_evidence.get("wls")
+    if not isinstance(evidence, Mapping) or evidence.get("successful") is not True:
+        return False
+    if str(evidence.get("state_id") or "") != str(active_state_id or ""):
+        return False
+    if content_bound and not (isinstance(evidence.get("state_hash"), str) and evidence["state_hash"]):
+        return False
+    return evidence.get("chi_square_alarm") is True or evidence.get("normalized_residual_alarm") is True
+
+
+def current_wls_alarm(state: Any, history: Any = None) -> bool:
+    """Whether the active state's current balanced WLS reports an alarm.
+
+    This is the expert-side mirror of the ``wls_gated_diagnostics`` gate:
+    auxiliary streams and their diagnostics may be requested only while a
+    bound successful ``run_wls``/``verify_candidate`` on the active state has
+    ``chi_square_alarm`` or ``normalized_residual_alarm`` set.  Strict
+    profiles read the durable content-bound ledger only; the auxiliary
+    profile may also read the latest same-state WLS output in the visible
+    history for compact fixtures without a ledger.
+    """
+    active = str(state.get("active_state_id") or "")
+    contexts = state.get("fresh_context_evidence") or {}
+    if isinstance(contexts, Mapping) and "wls" in contexts:
+        return _ledger_wls_alarm(contexts, active, content_bound=is_strict_boundary(state))
+    if is_strict_boundary(state):
+        return False
+    events = list(history if history is not None else state.get("history_window") or [])
+    if state.get("last_tool") in {RUN_WLS, VERIFY_CANDIDATE}:
+        events.append({
+            "action": {"tool": state.get("last_tool"), "arguments": {"state_id": active}},
+            "tool_output": state.get("last_tool_output") or {},
+        })
+    for event in reversed(events):
+        if not isinstance(event, Mapping):
+            continue
+        action = safe_normalize_action(event.get("action") or event.get("executed_action") or event)
+        if action["tool"] not in {RUN_WLS, VERIFY_CANDIDATE}:
+            continue
+        requested = str(action["arguments"].get("state_id") or "")
+        if active and requested and requested != active:
+            continue
+        output = event.get("tool_output") or event.get("outcome") or {}
+        if not isinstance(output, Mapping) or output.get("execution_status") != "success":
+            return False
+        metrics = output.get("tool_metrics")
+        if not isinstance(metrics, Mapping):
+            metrics = event.get("observable_metrics")
+        if not isinstance(metrics, Mapping):
+            return False
+        return metrics.get("chi_square_alarm") is True or metrics.get("normalized_residual_alarm") is True
+    return False
+
+
+def _fundamental_anomaly_trigger(
+    signatures: Sequence[str], context_evidence: Any, active_state_id: Any, evidence_profile: Any,
+) -> bool:
+    """Whether a balanced WLS anomaly may open an auxiliary evidence request.
+
+    Under ``wls_gated_diagnostics`` the trigger is the current alarm on the
+    active state (the same condition the environment gate enforces).  The
+    historical auxiliary profile keeps its ``wls_*``-signature trigger.
+    """
+    if requires_wls_alarm_for_diagnostics(evidence_profile):
+        return _ledger_wls_alarm(context_evidence, active_state_id, content_bound=True)
+    return any(item.startswith("wls_") for item in signatures)
+
+
+def diagnostic_tool_permitted(state: Any, tool: str, request: Any = None, history: Any = None) -> bool:
+    """Whether the evidence profile lets the expert propose ``tool`` now.
+
+    Disabled tools and disabled operator requests are never proposed.  Gated
+    auxiliary diagnostics need the current balanced alarm under the WLS-gated
+    profile; every other tool is unaffected.
+    """
+    if tool in disabled_tools(state):
+        return False
+    if tool == ASK_FOR_MORE_EVIDENCE and request is not None and str(request) in disabled_requests(state):
+        return False
+    if tool in GATED_DIAGNOSTIC_TOOLS and requires_wls_alarm_for_diagnostics(state):
+        return current_wls_alarm(state, history)
+    return True
+
+
 def harmonic_screening_pending(
     *, unresolved: Any, tried_action_signatures: Any, active_state_id: Any,
     context_evidence: Any = None, evidence_profile: Any = DEFAULT_EVIDENCE_PROFILE,
@@ -226,10 +330,10 @@ def harmonic_screening_pending(
     hidden scenario family. Only a process-valid request enters the request
     ledger. Rejected pre-WLS calls must not bypass later spectral acquisition.
     """
-    if is_scada_only(evidence_profile):
+    if not allows_diagnostic_tools(evidence_profile):
         return False
     signatures = [str(item) for item in (unresolved or [])]
-    if not any(item.startswith("wls_") for item in signatures):
+    if not _fundamental_anomaly_trigger(signatures, context_evidence, active_state_id, evidence_profile):
         return False
     if waveform_anomaly_signatures(signatures):
         return False
@@ -266,10 +370,10 @@ def three_phase_acquisition_pending(
     on whether the hidden root happens to carry phase-resolved telemetry.
     Rejected calls do not count as acquisitions.
     """
-    if is_scada_only(evidence_profile):
+    if not allows_diagnostic_tools(evidence_profile):
         return False
     signatures = [str(item) for item in (unresolved or [])]
-    if not any(item.startswith("wls_") for item in signatures):
+    if not _fundamental_anomaly_trigger(signatures, context_evidence, active_state_id, evidence_profile):
         return False
     if waveform_anomaly_signatures(signatures):
         return False
@@ -312,10 +416,13 @@ def three_phase_context_available(context_evidence: Any, active_state_id: Any) -
 
 
 #: Share of normalized residuals above the outlier threshold at which a WLS
-#: anomaly counts as broad.  Measured on the corrected corpora: spectral
-#: distortion elevates 75 to 84 of the 122 channels, a load unbalance 7 to
-#: 19, a bad meter 1 to 5, and the broadest branch fault 49, so one half
-#: separates the spectral case from everything else with margin.
+#: anomaly counts as broad.  On the legacy corpora spectral distortion
+#: elevated 75 to 84 of the 122 channels, a load unbalance 7 to 19, a bad
+#: meter 1 to 5, and the broadest branch fault 49.  On the regenerated
+#: 2026-09-21 corpora a harmonic alarm is narrow too (at most 27% of the
+#: channels), so under the WLS-gated contract the rule only orders the two
+#: auxiliary requests and three-phase phasors are asked for first in
+#: practice; spectra follow when the phasors are unavailable.
 BROAD_ANOMALY_BREADTH = 0.5
 
 
@@ -394,10 +501,12 @@ def gnn_investigation_pending(state: Any) -> bool:
     screen = current_gnn_screen(state)
     if not (screen.get("phase_trigger") is True or screen.get("anomaly_trigger") is True):
         return False
-    if is_scada_only(state):
+    if is_strict_boundary(state):
         # A learned score derived from these same SCADA/WLS values may request
         # balanced investigation; it does not create a phase sensor or a fault
         # diagnosis. Both anomaly and phase heads use the same generic route.
+        # (The WLS-gated profile refuses the learned screen altogether; a
+        # legacy record is still read as a balanced request only.)
         contexts = state.get("fresh_context_evidence") or {}
         return any(not (
             isinstance(contexts.get(family), Mapping)
@@ -434,14 +543,18 @@ def preferred_first_request(state: Any, history: Any = None) -> str:
     narrow one points at a phase-resolved event or a meter, so three-phase
     measurements come first.  Either request falls back to the other when it
     returns nothing.  Without a breadth statistic (compact fixtures) the
-    spectral request keeps its historical precedence.
+    spectral request keeps its historical precedence in the auxiliary
+    profile; the WLS-gated profile asks for phasors first, because every
+    alarm on its corpora is narrow.
     """
     if is_scada_only(state):
         return GET_MEASUREMENT_CONTEXT
-    if current_gnn_screen(state).get("phase_trigger") is True:
+    if not is_strict_boundary(state) and current_gnn_screen(state).get("phase_trigger") is True:
         return GET_THREE_PHASE_CONTEXT
     breadth = wls_anomaly_breadth(state, history)
-    if breadth is not None and breadth < BROAD_ANOMALY_BREADTH:
+    if breadth is None:
+        return GET_THREE_PHASE_CONTEXT if is_wls_gated(state) else GET_HARMONIC_CONTEXT
+    if breadth < BROAD_ANOMALY_BREADTH:
         return GET_THREE_PHASE_CONTEXT
     return GET_HARMONIC_CONTEXT
 
@@ -456,11 +569,11 @@ def successful_current_wls(state: Any, history: Any = None) -> bool:
             isinstance(evidence, Mapping)
             and str(evidence.get("state_id") or "") == active
             and evidence.get("successful") is True
-            and (not is_scada_only(state) or (
+            and (not is_strict_boundary(state) or (
                 isinstance(evidence.get("state_hash"), str) and bool(evidence["state_hash"])
             ))
         )
-    if is_scada_only(state):
+    if is_strict_boundary(state):
         # New strict episodes always publish a content-bound WLS ledger. A
         # legacy score, family flag or claimed last tool is not that proof.
         return False
@@ -502,15 +615,16 @@ def three_phase_screening_pending(
 ) -> bool:
     """Whether an unflagged WLS anomaly still awaits its three-phase screening.
 
-    A ``wls_*`` signature with no waveform-family signature requires NLM once
-    a successful acquisition exposes phase telemetry. The durable ledger
+    A ``wls_*`` signature (a current balanced alarm under the WLS-gated
+    profile) with no waveform-family signature requires NLM once a
+    successful acquisition exposes phase telemetry. The durable ledger
     counts process-valid NLM dispatches, so rejected premature attempts never
     suppress later screening, even when their history has been truncated.
     """
-    if is_scada_only(evidence_profile):
+    if not allows_diagnostic_tools(evidence_profile):
         return False
     signatures = [str(item) for item in (unresolved or [])]
-    if not any(item.startswith("wls_") for item in signatures):
+    if not _fundamental_anomaly_trigger(signatures, context_evidence, active_state_id, evidence_profile):
         return False
     if waveform_anomaly_signatures(signatures):
         return False

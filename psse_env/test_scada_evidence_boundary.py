@@ -5,7 +5,7 @@ from copy import deepcopy
 import unittest
 
 from psse_env.evidence_profile import (
-    AUXILIARY_EVIDENCE_PROFILE, DEFAULT_EVIDENCE_PROFILE, SCADA_DISABLED_TOOLS,
+    AUXILIARY_EVIDENCE_PROFILE, SCADA_ONLY_PROFILE, SCADA_DISABLED_TOOLS,
     SCADA_DISABLED_REQUESTS, sanitize_scada_execution, sanitize_scada_metadata,
     sanitize_scada_observation,
 )
@@ -68,12 +68,14 @@ class RecordingProvider:
 
 
 class SCADAEvidenceBoundaryTests(unittest.TestCase):
-    def test_default_reset_removes_seeded_diagnoses_and_auxiliary_store_data(self):
+    """Invariants of the literal scada_only profile (the research default is wls_gated_diagnostics)."""
+
+    def test_scada_only_reset_removes_seeded_diagnoses_and_auxiliary_store_data(self):
         scenario = _scenario()
         original = deepcopy(scenario)
-        env = TransactionalPSSEEnv()
+        env = TransactionalPSSEEnv(evidence_profile=SCADA_ONLY_PROFILE)
         state = env.reset(scenario)
-        self.assertEqual(env.evidence_profile, DEFAULT_EVIDENCE_PROFILE)
+        self.assertEqual(env.evidence_profile, SCADA_ONLY_PROFILE)
         self.assertEqual(state["unresolved_signatures"], [])
         self.assertIsNone(state["remaining_anomaly_score"])
         self.assertFalse(state["no_material_anomaly_remaining"])
@@ -92,7 +94,8 @@ class SCADAEvidenceBoundaryTests(unittest.TestCase):
 
     def test_all_auxiliary_tools_and_hif_handoffs_are_blocked_before_provider_calls(self):
         spy = RecordingProvider("context")
-        env = TransactionalPSSEEnv(evidence_providers={name: spy for name in [*SCADA_DISABLED_TOOLS, "ask_for_more_evidence"]})
+        env = TransactionalPSSEEnv(evidence_profile=SCADA_ONLY_PROFILE,
+            evidence_providers={name: spy for name in [*SCADA_DISABLED_TOOLS, "ask_for_more_evidence"]})
         state = env.reset(_scenario())
         for tool in SCADA_DISABLED_TOOLS:
             with self.subTest(tool=tool):
@@ -109,7 +112,7 @@ class SCADAEvidenceBoundaryTests(unittest.TestCase):
 
     def test_every_provider_dispatch_receives_the_sanitized_payload(self):
         wls, context, correction, evidence = [RecordingProvider(kind) for kind in ("wls", "context", "correction", "evidence")]
-        env = TransactionalPSSEEnv(wls_runner=wls,
+        env = TransactionalPSSEEnv(evidence_profile=SCADA_ONLY_PROFILE, wls_runner=wls,
             context_providers={"get_measurement_context": context},
             correction_executors={"correct_measurements": correction},
             evidence_providers={"ask_for_more_evidence": evidence})
@@ -122,8 +125,8 @@ class SCADAEvidenceBoundaryTests(unittest.TestCase):
         for provider in (wls, context, correction, evidence):
             self.assertEqual(len(provider.inputs), 1)
             seen = provider.inputs[0]
-            self.assertEqual(seen["evidence_profile"], DEFAULT_EVIDENCE_PROFILE)
-            self.assertEqual(seen["policy_observation"]["evidence_profile"], DEFAULT_EVIDENCE_PROFILE)
+            self.assertEqual(seen["evidence_profile"], SCADA_ONLY_PROFILE)
+            self.assertEqual(seen["policy_observation"]["evidence_profile"], SCADA_ONLY_PROFILE)
             self.assertEqual(seen["policy_observation"]["explained_anomalies"], [])
             self.assertNotIn("hidden_truth", seen)
             self.assertEqual(seen["metadata"], sanitize_scada_metadata(_scenario()["metadata"]))
@@ -139,7 +142,7 @@ class SCADAEvidenceBoundaryTests(unittest.TestCase):
         self.assertEqual(result["semantic_field_provenance"], value["semantic_field_provenance"])
 
     def test_stale_auxiliary_explanations_and_conditioning_cannot_reappear(self):
-        env = TransactionalPSSEEnv()
+        env = TransactionalPSSEEnv(evidence_profile=SCADA_ONLY_PROFILE)
         state = env.reset(_scenario())
         env.context_flags.update(explained_anomalies=[{"family": "hif", "detail": {"conditioning_fit": {"success": True}}}],
             unresolved_signatures=["hif_suspected", "wls_residual_outlier index=40"],
@@ -167,7 +170,7 @@ class SCADAEvidenceBoundaryTests(unittest.TestCase):
         second["metadata"]["parameter_scans"]["initial_states"] = [[999.]]
         states, outputs, public_actions, private_actions, hashes = [], [], [], [], []
         for scenario in (first, second):
-            providers = MatpowerDeploymentProviders(evidence_profile=DEFAULT_EVIDENCE_PROFILE,
+            providers = MatpowerDeploymentProviders(evidence_profile=SCADA_ONLY_PROFILE,
                                                     chi2_alpha=.01, normalized_residual_threshold=4.)
             env = TransactionalPSSEEnv(**providers.env_kwargs(), production_dataset_mode=True)
             env.reset(scenario)
@@ -199,7 +202,7 @@ class SCADAEvidenceBoundaryTests(unittest.TestCase):
         for key in ("hidden_truth", "scenario_family", "oracle_action_hints", "unresolved_signatures",
                     "remaining_anomaly_score", "no_material_anomaly_remaining", "semantic_field_provenance"):
             self.assertNotIn(key, output)
-        self.assertEqual(output["evidence_profile"], DEFAULT_EVIDENCE_PROFILE)
+        self.assertEqual(output["evidence_profile"], SCADA_ONLY_PROFILE)
 
 
 if __name__ == "__main__":

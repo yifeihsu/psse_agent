@@ -16,6 +16,11 @@ The intended escalation ladders are:
 - HIF: ``run_three_phase_nlm_from_path`` (line-level localization) ->
   ``estimate_hif_location_magnitude_multiscan_from_path`` when a persistent
   scan window exists, else ``estimate_hif_location_magnitude_from_path``.
+
+Under ``wls_gated_diagnostics`` (the research default) every rung that
+requests an auxiliary stream or runs a diagnostic on one is proposed only
+while the active state's current balanced WLS reports an alarm; the
+discovered-mode entry to every ladder is that alarm, never a seeded flag.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ import json
 import math
 from typing import Any, Mapping, Sequence
 
-from psse_env.evidence_profile import is_scada_only
+from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary
 
 from psse_env.actions import (
     ANOMALY_FAMILY_MARKERS,
@@ -44,6 +49,8 @@ from psse_env.actions import (
     RUN_THREE_PHASE_NLM_FROM_PATH,
     RUN_WLS,
     current_gnn_screen,
+    current_wls_alarm,
+    diagnostic_tool_permitted,
     safe_normalize_action,
     harmonic_screening_pending,
     successful_current_wls,
@@ -81,7 +88,7 @@ class DiagnosticsExpert:
     def hif_continuation_proposals(self, state: Any) -> list[ExpertActionProposal]:
         """Check residuals after every accepted fit, irrespective of true family."""
         state = policy_state_view(state)
-        if is_scada_only(state):
+        if not allows_diagnostic_tools(state):
             return []
         active = state_value(state, "active_state_id")
         if not active or state_value(state, "has_open_candidate") or not accepted_hif_explanation(state):
@@ -91,9 +98,9 @@ class DiagnosticsExpert:
             return [self._proposal(RUN_WLS, {"state_id": active}, confidence=1.0,
                 evidence=["accepted_hif_requires_current_conditioned_residual_check"])]
         if conditioning["status"] == "unavailable":
-            return [self._proposal(ASK_FOR_MORE_EVIDENCE,
+            return self._permitted(state, [self._proposal(ASK_FOR_MORE_EVIDENCE,
                 {"state_id": active, "request": HIF_CONDITIONING_UNAVAILABLE_REQUEST}, confidence=1.0,
-                evidence=["hif_conditioning_unavailable", "physical_fault_still_present", "operator_handoff_required"])]
+                evidence=["hif_conditioning_unavailable", "physical_fault_still_present", "operator_handoff_required"])])
         if not hif_meter_route_ready(state):
             return []
         if hif_conditioned_closure_ready(state) and not state_value(state, "accepted_corrections", []):
@@ -135,12 +142,23 @@ class DiagnosticsExpert:
         # but never let privileged data affect a production diagnostic label.
         del oracle_hints, harmonic_fault_present, hif_fault_present
         state = policy_state_view(state)
-        if is_scada_only(state):
+        if not allows_diagnostic_tools(state):
             return []
         active_id = state_value(state, "active_state_id")
         if not active_id:
             return []
+        return self._permitted(state, self._ladder_proposals(state, history, active_id), history)
+
+    def _ladder_proposals(
+        self,
+        state: Any,
+        history: Sequence[Mapping[str, Any]] | None,
+        active_id: Any,
+    ) -> list[ExpertActionProposal]:
         available = {str(item) for item in state_value(state, "available_evidence", []) or []}
+        # A stored NLM diagnostic is a simulator-precomputed finding; strict
+        # roots never carry one and the tools recompute from telemetry.
+        strict = is_strict_boundary(state)
         unresolved = unexplained_signatures(
             state_value(state, "unresolved_signatures", []),
             state_value(state, "explained_anomalies", []),
@@ -201,8 +219,9 @@ class DiagnosticsExpert:
                     evidence=["three_phase_measurements_requested", *unbalance_codes],
                 )]
         current_channel_available = "three_phase_branch_currents" in available
+        stored_nlm_available = "nlm_diagnostic" in available and not strict
         nlm_channel_available = bool(
-            "nlm_diagnostic" in available
+            stored_nlm_available
             or current_channel_available
             or (unbalance_signal and "three_phase_voltages" in available)
         )
@@ -232,7 +251,7 @@ class DiagnosticsExpert:
                     evidence=[
                         (
                             "nlm_telemetry_available"
-                            if "nlm_diagnostic" in available
+                            if stored_nlm_available
                             else (
                                 "three_phase_branch_current_telemetry_available"
                                 if current_channel_available
@@ -322,7 +341,9 @@ class DiagnosticsExpert:
         active_id = str(state_value(state, "active_state_id") or "")
         if not active_id or state_value(state, "has_open_candidate"):
             return []
-        strict = is_scada_only(state)
+        # Strict profiles refuse the learned screen; a legacy record can only
+        # order the balanced context requests it would have made anyway.
+        strict = is_strict_boundary(state)
         if not strict and waveform_anomaly_signatures(state_value(state, "unresolved_signatures", [])):
             return []
         contexts = state_value(state, "fresh_context_evidence") or {}
@@ -380,10 +401,12 @@ class DiagnosticsExpert:
     ) -> list[ExpertActionProposal]:
         """Request additional measurements after WLS, without a family hint."""
         state = policy_state_view(state)
-        if is_scada_only(state):
+        if not allows_diagnostic_tools(state):
             return []
         active_id = state_value(state, "active_state_id")
         if not active_id or state_value(state, "has_open_candidate"):
+            return []
+        if not diagnostic_tool_permitted(state, GET_HARMONIC_CONTEXT, history=history):
             return []
         if not harmonic_screening_pending(
             unresolved=state_value(state, "unresolved_signatures", []),
@@ -409,7 +432,7 @@ class DiagnosticsExpert:
     ) -> list[ExpertActionProposal]:
         """Acquire phase measurements, then screen an unflagged WLS anomaly."""
         state = policy_state_view(state)
-        if is_scada_only(state):
+        if not allows_diagnostic_tools(state):
             return []
         active_id = state_value(state, "active_state_id")
         if not active_id or state_value(state, "has_open_candidate"):
@@ -421,7 +444,11 @@ class DiagnosticsExpert:
             raw_unresolved, state_value(state, "explained_anomalies", [])
         )
         fundamental = [str(item) for item in unresolved if str(item).startswith("wls_")]
-        if not fundamental:
+        # Discovery is keyed on the balanced alarm under the WLS-gated
+        # profile (a chi-square-only alarm mints no wls_* signature); the
+        # auxiliary profile keeps its signature trigger.
+        gated = not diagnostic_tool_permitted(state, GET_THREE_PHASE_CONTEXT, history=history)
+        if gated or not (fundamental or current_wls_alarm(state, history)):
             return []
         contexts = state_value(state, "fresh_context_evidence")
         if three_phase_acquisition_pending(
@@ -465,6 +492,25 @@ class DiagnosticsExpert:
                     "three_phase_screening_before_correction",
                     *fundamental[:3],
                 ],
+            )
+        ]
+
+    @staticmethod
+    def _permitted(
+        state: Any,
+        proposals: list[ExpertActionProposal],
+        history: Sequence[Mapping[str, Any]] | None = None,
+    ) -> list[ExpertActionProposal]:
+        """Drop proposals the evidence profile forbids right now.
+
+        Disabled tools and operator requests are never proposed; under the
+        WLS-gated profile the auxiliary diagnostics wait for the current
+        balanced alarm on the active state.
+        """
+        return [
+            proposal for proposal in proposals
+            if diagnostic_tool_permitted(
+                state, proposal.action["tool"], proposal.action["arguments"].get("request"), history,
             )
         ]
 

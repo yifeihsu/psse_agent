@@ -43,7 +43,9 @@ from psse_env.dagger.suite_builder import partition_release_scenario_v1  # noqa:
 from psse_env.oracle.expert_policy import ExpertPolicyOracle  # noqa: E402
 from psse_env.providers.scenario_generator import DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD
 from psse_env.systems import resolve_system
-from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE, EVIDENCE_PROFILES, validate_evidence_profile
+from psse_env.evidence_profile import (
+    DEFAULT_EVIDENCE_PROFILE, EVIDENCE_PROFILES, is_strict_boundary, validate_evidence_profile,
+)
 from psse_env.providers.scenario_generator import (  # noqa: E402
     CURRENT_TELEMETRY_HIF_SAMPLE_PATHS,
     CURRENT_TELEMETRY_IMBALANCE_SAMPLE_PATH,
@@ -244,7 +246,7 @@ def resolve_scenario_sources(
             raise ValueError(f"unknown waveform signature family {family!r}")
         if mode not in WAVEFORM_SIGNATURE_MODES:
             raise ValueError(f"unknown waveform signature mode {mode!r} for {family!r}")
-        if evidence_profile == "scada_only" and mode == "flagged":
+        if is_strict_boundary(evidence_profile) and mode == "flagged":
             raise ValueError("flagged waveform signatures require --evidence-profile auxiliary_diagnostics")
     return {
         "hif_sample_paths": (
@@ -539,10 +541,12 @@ def validate_training_evidence_profile(
     """Require an explicit compatible observation profile in this experiment.
 
     Missing historical declarations are accepted only by the explicitly selected
-    auxiliary profile. Reformatting an old trace cannot make its evidence SCADA-only.
+    auxiliary profile. Reformatting an old trace cannot make its evidence
+    SCADA-only or WLS-gated: both strict-boundary profiles reject undeclared rows.
     This guard is intentionally scoped to the research pipeline, not generic SFT.
     """
     profile = validate_evidence_profile(evidence_profile)
+    strict = is_strict_boundary(profile)
     for index, row in enumerate(rows):
         declared: set[str] = set()
         pending = [row]
@@ -556,7 +560,7 @@ def validate_training_evidence_profile(
                 nested = value.get(key)
                 if isinstance(nested, Mapping):
                     pending.append(nested)
-        if declared - {profile} or (not declared and profile == DEFAULT_EVIDENCE_PROFILE):
+        if declared - {profile} or (not declared and strict):
             example = row.get("example_id", index)
             raise ValueError(
                 f"{source} example {example!r} has evidence profile {sorted(declared) or 'undeclared historical'}; "
@@ -1705,7 +1709,10 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     result.add_argument("--evidence-profile", choices=EVIDENCE_PROFILES, default=DEFAULT_EVIDENCE_PROFILE,
-        help="scada_only: balanced SCADA/model evidence only; auxiliary_diagnostics: explicit historical sensor-assisted experiments")
+        help=("wls_gated_diagnostics (default): detection from balanced SCADA and WLS only, no seeded flags or "
+              "hints; after a current WLS alarm the agent may request the auxiliary streams the ground truth "
+              "generated for the root; scada_only: balanced SCADA/model evidence only; auxiliary_diagnostics: "
+              "explicit historical sensor-assisted experiments"))
     result.add_argument(
         "--unbalance-signature-mode",
         choices=WAVEFORM_SIGNATURE_MODES,

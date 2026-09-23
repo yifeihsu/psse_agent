@@ -24,7 +24,9 @@ from psse_env.dagger.offline_teacher_target_audit import (
     validate_offline_teacher_target_audit_metadata,
 )
 from psse_env.state_store import find_forbidden_policy_paths
-from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE, SCADA_ALLOWED_TOOLS, validate_evidence_profile
+from psse_env.evidence_profile import (
+    SCADA_ALLOWED_TOOLS, disabled_tools, is_scada_only, is_wls_gated, validate_evidence_profile,
+)
 
 
 DEFAULT_DAGGER_SYSTEM_PROMPT = (
@@ -53,12 +55,36 @@ def tool_schemas_for_observation(tools: Iterable[Mapping[str, Any]], observation
     if profile is None:
         return copy.deepcopy(list(tools))
     validate_evidence_profile(profile)
-    if profile != DEFAULT_EVIDENCE_PROFILE:
-        return copy.deepcopy(list(tools))
     from psse_env.dagger.protocol_bridge import CANONICAL_TO_INTERNAL_TOOL
-    return [copy.deepcopy(dict(tool)) for tool in tools
-            if CANONICAL_TO_INTERNAL_TOOL.get(str(tool.get("function", {}).get("name")),
-                str(tool.get("function", {}).get("name"))) in SCADA_ALLOWED_TOOLS]
+
+    def internal_name(tool: Mapping[str, Any]) -> str:
+        name = str(tool.get("function", {}).get("name"))
+        return CANONICAL_TO_INTERNAL_TOOL.get(name, name)
+
+    if is_scada_only(profile):
+        return [copy.deepcopy(dict(tool)) for tool in tools if internal_name(tool) in SCADA_ALLOWED_TOOLS]
+    blocked = disabled_tools(profile)
+    if not blocked:
+        return copy.deepcopy(list(tools))
+    # wls_gated_diagnostics: every configured capability except the blocked
+    # tools; the balanced-alarm gate is enforced by the process oracle and
+    # the providers, not by hiding the auxiliary schemas.
+    return [copy.deepcopy(dict(tool)) for tool in tools if internal_name(tool) not in blocked]
+
+
+WLS_GATED_PROMPT_PARAGRAPH = (
+    " Evidence profile: wls_gated_diagnostics. Start with WLS on the configured "
+    "balanced-network model, the observed SCADA voltage magnitudes and P/Q "
+    "injections/flows and the declared sensor noise; no fault flags or precomputed "
+    "diagnoses are provided. Auxiliary evidence (three-phase phasor context, "
+    "harmonic spectra, the three-phase NLM screen, HIF estimators, HSE) may be "
+    "requested only after the current WLS on the active state has raised a "
+    "chi-square or normalized-residual alarm; earlier requests are rejected. A "
+    "requested stream may be unavailable at this substation, and an unavailable "
+    "answer is not a diagnosis. run_alternative_test is unavailable. If supported "
+    "recovery cannot resolve the discrepancy, request operator review without "
+    "inventing a fault-family diagnosis."
+)
 
 
 def system_prompt_for_observation(system_prompt: str, observation: Mapping[str, Any]) -> str:
@@ -66,7 +92,9 @@ def system_prompt_for_observation(system_prompt: str, observation: Mapping[str, 
     if profile is None:
         return system_prompt
     validate_evidence_profile(profile)
-    if profile != DEFAULT_EVIDENCE_PROFILE:
+    if is_wls_gated(profile):
+        return system_prompt + WLS_GATED_PROMPT_PARAGRAPH
+    if not is_scada_only(profile):
         return system_prompt
     return system_prompt + (
         " Evidence profile: scada_only. Use only the configured balanced-network model, "

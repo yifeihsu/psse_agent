@@ -10,7 +10,7 @@ from psse_env.actions import (
 )
 from psse_env.oracle.expert_types import ExpertActionProposal, state_value
 from psse_env.oracle.process_validity import ProcessValidityOracle
-from psse_env.evidence_profile import is_scada_only
+from psse_env.evidence_profile import allows_diagnostic_tools
 
 
 class RecoveryExpert:
@@ -58,8 +58,9 @@ class RecoveryExpert:
         # that the event makes unreliable, and it was exactly that fallback,
         # recorded as a teacher target, that taught a student to open unbalance
         # episodes with WLS.  Defer to the diagnostic ladder and termination
-        # experts, which own these families.
-        if not is_scada_only(state) and not state_value(state, "candidate_state_id") and waveform_anomaly_signatures(
+        # experts, which own these families (every profile with diagnostics;
+        # scada_only has no waveform ladder to defer to).
+        if allows_diagnostic_tools(state) and not state_value(state, "candidate_state_id") and waveform_anomaly_signatures(
             state_value(state, "unresolved_signatures", []) or []
         ):
             return []

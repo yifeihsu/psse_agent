@@ -45,11 +45,57 @@ from psse_env.actions import (
 from psse_env.state_store import SYNTHETIC_TERMINAL_COMPATIBILITY_KEY
 from psse_env.oracle.expert_types import matching_evidence_codes
 from psse_env.oracle.anomaly_evidence import normalized_residual_alarm
-from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE, is_scada_only
+from psse_env.evidence_profile import (
+    DEFAULT_EVIDENCE_PROFILE, GATED_DIAGNOSTIC_TOOLS, allows_diagnostic_tools,
+    disabled_requests, disabled_tools, is_scada_only, is_strict_boundary,
+    requires_wls_alarm_for_diagnostics,
+)
 from psse_env.oracle.hif_continuation import (
     accepted_hif_explanation, hif_conditioned_closure_ready,
     hif_meter_route_ready, recovery_signatures,
 )
+
+
+def current_wls_alarm(state: Any, target_state_id: Any = None) -> bool:
+    """A current balanced WLS alarm bound to the target state's exact contents.
+
+    The gate reads the alarm flags of the durable WLS ledger (chi-square or
+    normalized residual), never the presence of ``wls_*`` signatures: the WLS
+    runner mints no signatures while a waveform signature stands, although the
+    chi-square elevation persists.  For the active state the ledger is
+    ``fresh_context_evidence.wls``; for an open (inconclusive) candidate it is
+    the candidate's own verification output.  A missing, failed, unbound or
+    quiet solve is no alarm.
+    """
+    getter = getattr(state, "get", None)
+    if not callable(getter):
+        return False
+    active_id = str(getter("active_state_id") or "")
+    candidate_id = getter("candidate_state_id")
+    target = str(target_state_id or active_id)
+    if not target:
+        return False
+    if target == active_id:
+        contexts = getter("fresh_context_evidence")
+        wls = contexts.get("wls") if isinstance(contexts, Mapping) else None
+        if not isinstance(wls, Mapping) or wls.get("successful") is not True:
+            return False
+        if str(wls.get("state_id") or "") != active_id:
+            return False
+        if not (isinstance(wls.get("state_hash"), str) and wls["state_hash"]):
+            return False
+        return wls.get("chi_square_alarm") is True or wls.get("normalized_residual_alarm") is True
+    if candidate_id is not None and target == str(candidate_id):
+        verification = getter("last_verification")
+        if not isinstance(verification, Mapping):
+            return False
+        if str(verification.get("state_id") or "") != target:
+            return False
+        return (
+            verification.get("chi_square_alarm") is True
+            or verification.get("normalized_residual_alarm") is True
+        )
+    return False
 
 
 _CORRECTION_CONTEXT_FAMILY = {
@@ -135,16 +181,22 @@ class ProcessValidityOracle:
         )
         has_unverified_candidate = bool(state.get("has_unverified_candidate"))
         has_verified_candidate = bool(state.get("has_verified_candidate"))
-        strict = is_scada_only(state)
+        # The truth boundary (WLS first, no seeded signatures, no synthetic
+        # closure) applies to every strict profile; which tools exist, and
+        # whether they wait for a balanced alarm, is a separate capability.
+        strict = is_strict_boundary(state)
+        diagnostics_enabled = allows_diagnostic_tools(state)
+        gated = requires_wls_alarm_for_diagnostics(state)
+        disabled = disabled_tools(state)
 
         if tool == INVALID_ACTION:
             error_code = str(args.get("error_code") or "schema_error")
             error_detail = str(args.get("error_detail") or "malformed_policy_action")
         elif tool not in MACRO_ACTIONS:
             error_code, error_detail = "unknown_tool", str(tool)
-        elif strict and (tool in DIAGNOSTIC_TOOLS or tool == RUN_ALTERNATIVE_TEST
-                         or (tool == ASK_FOR_MORE_EVIDENCE and args.get("request") in {
-                             HIF_DIAGNOSTICS_EXHAUSTED_REQUEST, HIF_CONDITIONING_UNAVAILABLE_REQUEST})):
+        elif tool in disabled or (
+            tool == ASK_FOR_MORE_EVIDENCE and args.get("request") in disabled_requests(state)
+        ):
             error_code, error_detail = "tool_disabled_by_evidence_profile", str(tool)
         elif tool in CORRECTION_TOOLS:
             requested = args.get("state_id") or active_id
@@ -171,7 +223,7 @@ class ProcessValidityOracle:
                 error_detail = (
                     f"{family}_autonomous_correction_blocked_for_operator_review"
                 )
-            elif not strict and waveform_anomaly_signatures(state.get("unresolved_signatures") or []) and not (
+            elif diagnostics_enabled and waveform_anomaly_signatures(state.get("unresolved_signatures") or []) and not (
                 tool == CORRECT_MEASUREMENTS and hif_meter_route_ready(state)
             ):
                 # A waveform-level anomaly (harmonic, unbalance, HIF) is on the
@@ -323,7 +375,13 @@ class ProcessValidityOracle:
                 error_code, error_detail = "unknown_state_id", str(requested)
             elif str(requested) != str(expected):
                 error_code, error_detail = "state_reference_mismatch", "evidence_state_not_current_target"
-            elif tool == GET_HARMONIC_CONTEXT and not any(
+            elif gated and tool in GATED_DIAGNOSTIC_TOOLS and not current_wls_alarm(state, expected):
+                # wls_gated_diagnostics: auxiliary streams and their
+                # diagnostics open only behind a current balanced alarm on
+                # the target state.  Under this profile the alarm itself is
+                # the observable anomaly, so no wls_* signature is required.
+                error_code, error_detail = "diagnostics_require_wls_alarm", str(tool)
+            elif tool == GET_HARMONIC_CONTEXT and not gated and not any(
                 str(item).startswith("wls_") or "harmonic" in str(item).lower()
                 for item in state.get("unresolved_signatures") or []
             ):
@@ -337,7 +395,7 @@ class ProcessValidityOracle:
                     or "harmonic_measurements" not in context.get("available_evidence_channels", [])
                 ):
                     error_code, error_detail = "missing_precondition", "hse_requires_acquired_harmonic_context"
-            elif tool == GET_THREE_PHASE_CONTEXT:
+            elif tool == GET_THREE_PHASE_CONTEXT and not gated:
                 signatures = state.get("unresolved_signatures") or []
                 flagged = matching_evidence_codes(
                     signatures, *ANOMALY_FAMILY_MARKERS["three_phase_unbalance"],
@@ -450,7 +508,7 @@ class ProcessValidityOracle:
         return context_state_id is not None and str(context_state_id) == str(state.get("active_state_id"))
 
     def _terminal_condition_met(self, state: Any) -> bool:
-        strict = is_scada_only(state)
+        strict = is_strict_boundary(state)
         if strict and not successful_current_wls(state):
             return False
         if gnn_investigation_pending(state):
@@ -458,7 +516,10 @@ class ProcessValidityOracle:
         signatures = terminal_explanation_signatures(
             state.get("unresolved_signatures") or []
         )
-        anomalies_explained = not strict and bool(signatures) and not unexplained_signatures(
+        # Explanation closure exists wherever a diagnostic can be admitted;
+        # under wls_gated_diagnostics the explanation was earned behind the
+        # balanced alarm, so it closes exactly as in the auxiliary profile.
+        anomalies_explained = allows_diagnostic_tools(state) and bool(signatures) and not unexplained_signatures(
             signatures, state.get("explained_anomalies")
         )
         synthetic_terminal_eligible = bool(
@@ -662,9 +723,16 @@ class ProcessValidityOracle:
     ) -> list[dict[str, Any]]:
         active_id = state.get("active_state_id")
         candidate_id = state.get("candidate_state_id")
-        if is_scada_only(state) and (error_code == "tool_disabled_by_evidence_profile"
-            or error_detail == "current_balanced_wls_required"
-            or any(str(error_detail or "").startswith(prefix) for prefix in ("harmonic_", "three_phase_", "hse_", "nlm_", "hif_"))):
+        if error_code in {"tool_disabled_by_evidence_profile", "diagnostics_require_wls_alarm"} or (
+            error_detail == "current_balanced_wls_required"
+        ):
+            # A disabled tool has no repair; a gated diagnostic or a strict
+            # correction/context waits for the balanced solve on the current
+            # target, which is exactly the safe action for that state.
+            return self._safe_actions_for_state(state)
+        if is_scada_only(state) and any(
+            str(error_detail or "").startswith(prefix) for prefix in ("harmonic_", "three_phase_", "hse_", "nlm_", "hif_")
+        ):
             return self._safe_actions_for_state(state)
         if error_code in {"json_parse_error", "argument_decode_error", "schema_error", "policy_exception"}:
             return self._safe_actions_for_state(state)
