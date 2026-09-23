@@ -198,12 +198,13 @@ CURRENT_TELEMETRY_HIF_SAMPLE_PATHS = (
 )
 # Physical-ohm corpora are opt-in; historical telemetry paths retain replay identity.
 PHYSICAL_HIF_SAMPLE_PATHS = tuple(_REPO_ROOT / "artifacts" / "measurements" / name / "samples.jsonl" for name in (
-    # Detectable subsets (discovered-mode WLS admission, margin 1.25) of the 2026-09-19/21 physical
-    # 69 kV 100-1000 ohm corpora; the full corpora carry the same names without "_detectable".
-    "hif_physical69_main_train_detectable_25x10_20260921", "hif_physical69_main_valid_detectable_7x10_20260921",
-    "hif_physical69_main_train_extra_detectable_69x10_20260921", "hif_physical69_main_valid_extra_detectable_17x10_20260921"))
-PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical69_detection_limit_21x10_20260919/samples.jsonl"
-PHYSICAL_HIF_SWEEP_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical_sweep_eval_336x10_20260919/samples.jsonl"
+    # Detectable subsets (discovered-mode WLS admission, margin 1.25) of the 2026-09-23 physical
+    # 69 kV 100-1000 ohm corpora (same seeds as 2026-09-19/21, re-simulated with generator reactive
+    # limits kept); the full corpora carry the same names without "_detectable".
+    "hif_physical69_main_train_detectable_27x10_20260923", "hif_physical69_main_valid_detectable_8x10_20260923",
+    "hif_physical69_main_train_extra_detectable_77x10_20260923", "hif_physical69_main_valid_extra_detectable_19x10_20260923"))
+PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical69_detection_limit_21x10_20260923/samples.jsonl"
+PHYSICAL_HIF_SWEEP_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/hif_physical_sweep_eval_336x10_20260923/samples.jsonl"
 # Unbalance corpus regenerated 2026-09-21 under the WLS shunt convention (ybus), phase-A Vm,
 # physical telemetry bases; 440 windows + 60 balanced controls, seed 20260925.
 PHYSICAL_IMBALANCE_SAMPLE_PATH = _REPO_ROOT / "artifacts/measurements/out_measurements_imbalance_currents_ybus_detectable_160_20260921/samples.jsonl"

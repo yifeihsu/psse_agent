@@ -112,10 +112,11 @@ def test_plans_cover_every_family_and_respect_corpus_capacity() -> None:
     total = {f: d0[f] + rounds * round_plan[f] + development[f] for f in families}
     # 420 raw HIF windows (84 + 252 train, 21 + 63 validation of the physical-ohm
     # corpora) serve hif and measurement+hif separately; only about 30 percent
-    # pass discovered-mode admission at margin 1.25 (about 128), so the plans
-    # are bounded by the admitted pool, not the raw count. 440 unbalance windows
-    # serve unbalance and the balanced control (160 admitted at margin 1.25).
-    assert total["hif"] <= 118 and total["measurement+hif"] <= 118
+    # pass discovered-mode admission at margin 1.25 (131 in the 2026-09-23
+    # regulated corpora), so the plans are bounded by the admitted pool, not the
+    # raw count. 440 unbalance windows serve unbalance and the balanced control
+    # (160 admitted at margin 1.25).
+    assert total["hif"] <= 131 and total["measurement+hif"] <= 131
     # The 2026-09-21 unbalance corpus has 440 windows, of which 160 pass
     # discovered-mode admission at margin 1.25; the balanced control draws from
     # the same windows, so both plans are bounded by the admitted pool.
@@ -127,13 +128,13 @@ def test_hif_corpora_are_the_physical_ohm_regeneration() -> None:
     text = (CELL / "pipeline.env").read_text(encoding="utf-8")
     assert re.search(
         r"^HIF_CORPUS_TRAIN=\$SRC/artifacts/measurements/"
-        r"hif_physical69_main_train_detectable_25x10_20260921/samples\.jsonl$",
+        r"hif_physical69_main_train_detectable_27x10_20260923/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
     assert re.search(
         r"^HIF_CORPUS_VALID=\$SRC/artifacts/measurements/"
-        r"hif_physical69_main_valid_detectable_7x10_20260921/samples\.jsonl$",
+        r"hif_physical69_main_valid_detectable_8x10_20260923/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
@@ -142,16 +143,16 @@ def test_hif_corpora_are_the_physical_ohm_regeneration() -> None:
     assert "100-200" in text and "200-500" in text and "500-1000 ohm" in text
     assert "ieee14_nominal_69_13p8_18kv_v1" in text
     assert "shunt_convention ybus" in text
-    assert "118 HIF" in text
+    assert "131 HIF" in text
     assert re.search(
         r"^HIF_CORPUS_TRAIN_EXTRA=\$SRC/artifacts/measurements/"
-        r"hif_physical69_main_train_extra_detectable_69x10_20260921/samples\.jsonl$",
+        r"hif_physical69_main_train_extra_detectable_77x10_20260923/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
     assert re.search(
         r"^HIF_CORPUS_VALID_EXTRA=\$SRC/artifacts/measurements/"
-        r"hif_physical69_main_valid_extra_detectable_17x10_20260921/samples\.jsonl$",
+        r"hif_physical69_main_valid_extra_detectable_19x10_20260923/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
