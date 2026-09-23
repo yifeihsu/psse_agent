@@ -11,9 +11,42 @@ import re
 from typing import Any, Mapping
 
 
-DEFAULT_EVIDENCE_PROFILE = "scada_only"
+#: Balanced SCADA and its WLS only; every auxiliary tool is refused.
+SCADA_ONLY_PROFILE = "scada_only"
+#: Research default (2026-09-23). Detection uses only balanced SCADA and WLS:
+#: no fault flags, hints or precomputed diagnoses reach the agent. After a
+#: current balanced WLS alarm on the active state the agent may request the
+#: auxiliary streams that the ground truth generated for that root (three-phase
+#: PMU phasors on HIF and unbalance roots, spectra on harmonic roots, breaker
+#: telemetry on topology roots) and run the matching diagnostics.
+WLS_GATED_PROFILE = "wls_gated_diagnostics"
+#: Historical reproduction: flagged roots, seeded signatures and hints allowed.
 AUXILIARY_EVIDENCE_PROFILE = "auxiliary_diagnostics"
-EVIDENCE_PROFILES = (DEFAULT_EVIDENCE_PROFILE, AUXILIARY_EVIDENCE_PROFILE)
+DEFAULT_EVIDENCE_PROFILE = WLS_GATED_PROFILE
+EVIDENCE_PROFILES = (SCADA_ONLY_PROFILE, WLS_GATED_PROFILE, AUXILIARY_EVIDENCE_PROFILE)
+#: Profiles whose truth boundary is strict: no seeded fault signatures, no
+#: private family or correction hints, no precomputed diagnoses, WLS first,
+#: no synthetic terminal closure, scenario identity kept out of store metadata.
+STRICT_BOUNDARY_PROFILES = frozenset({SCADA_ONLY_PROFILE, WLS_GATED_PROFILE})
+#: Auxiliary diagnostics that wls_gated_diagnostics permits only after a
+#: current balanced WLS alarm (chi-square or normalized residual) on the
+#: active state.
+GATED_DIAGNOSTIC_TOOLS = frozenset({
+    "get_three_phase_context", "get_harmonic_context", "run_three_phase_nlm_from_path",
+    "run_hse_from_path", "estimate_hif_location_magnitude_from_path",
+    "estimate_hif_location_magnitude_multiscan_from_path",
+})
+#: Never available under wls_gated_diagnostics: the legacy alternative test has
+#: no provider, and learned screens are an additional signal by construction.
+WLS_GATED_DISABLED_TOOLS = frozenset({"run_alternative_test"})
+WLS_GATED_DISABLED_REQUESTS: frozenset[str] = frozenset()
+#: Precomputed diagnoses and truth-side model handles that a strict root must
+#: not carry into execution: the tools recompute from measurements.
+PRECOMPUTED_DIAGNOSIS_FIELDS = frozenset({
+    "nlm_diagnostic", "faulted_model_dir", "hif_fit", "hif_estimate", "hse_summary",
+    "nlm_summary", "three_phase_summary", "harmonic_summary", "anomaly_explanation",
+    "diagnostic_acceptance",
+})
 SCADA_ALLOWED_TOOLS = frozenset({
     "run_wls", "verify_candidate", "get_measurement_context", "get_parameter_context",
     "get_topology_context", "correct_measurements", "correct_parameters", "correct_topology",
@@ -77,7 +110,8 @@ def validate_evidence_profile(value: Any = DEFAULT_EVIDENCE_PROFILE) -> str:
     return value
 
 
-def is_scada_only(value: Any = None) -> bool:
+def resolve_evidence_profile(value: Any = None) -> str:
+    """Profile named by a string, a mapping/object with ``evidence_profile``, or None."""
     if isinstance(value, Mapping):
         profile = value.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE)
     elif value is None:
@@ -86,7 +120,51 @@ def is_scada_only(value: Any = None) -> bool:
         profile = value
     else:
         profile = getattr(value, "evidence_profile", DEFAULT_EVIDENCE_PROFILE)
-    return validate_evidence_profile(profile) == DEFAULT_EVIDENCE_PROFILE
+    if profile is None:
+        profile = DEFAULT_EVIDENCE_PROFILE
+    return validate_evidence_profile(profile)
+
+
+def is_scada_only(value: Any = None) -> bool:
+    """Every auxiliary stream and tool is refused (the literal scada_only profile)."""
+    return resolve_evidence_profile(value) == SCADA_ONLY_PROFILE
+
+
+def is_strict_boundary(value: Any = None) -> bool:
+    """No seeded fault signatures, hints, precomputed diagnoses or synthetic closure."""
+    return resolve_evidence_profile(value) in STRICT_BOUNDARY_PROFILES
+
+
+def is_wls_gated(value: Any = None) -> bool:
+    return resolve_evidence_profile(value) == WLS_GATED_PROFILE
+
+
+def allows_diagnostic_tools(value: Any = None) -> bool:
+    """Auxiliary diagnostics exist in this profile (gated or not)."""
+    return resolve_evidence_profile(value) != SCADA_ONLY_PROFILE
+
+
+def requires_wls_alarm_for_diagnostics(value: Any = None) -> bool:
+    """Auxiliary requests need a current balanced WLS alarm on the active state."""
+    return resolve_evidence_profile(value) == WLS_GATED_PROFILE
+
+
+def disabled_tools(value: Any = None) -> frozenset[str]:
+    profile = resolve_evidence_profile(value)
+    if profile == SCADA_ONLY_PROFILE:
+        return SCADA_DISABLED_TOOLS
+    if profile == WLS_GATED_PROFILE:
+        return WLS_GATED_DISABLED_TOOLS
+    return frozenset()
+
+
+def disabled_requests(value: Any = None) -> frozenset[str]:
+    profile = resolve_evidence_profile(value)
+    if profile == SCADA_ONLY_PROFILE:
+        return SCADA_DISABLED_REQUESTS
+    if profile == WLS_GATED_PROFILE:
+        return WLS_GATED_DISABLED_REQUESTS
+    return frozenset()
 
 
 scada_only = is_scada_only
@@ -122,7 +200,7 @@ def sanitize_scada_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any
     if "measurement_convention" in metadata:
         raw = metadata["measurement_convention"]
         result["measurement_convention"] = _selected(raw, frozenset({"schema", "shunt_convention", "wls_model_convention"}))
-    result["evidence_profile"] = DEFAULT_EVIDENCE_PROFILE
+    result["evidence_profile"] = SCADA_ONLY_PROFILE
     return result
 
 
@@ -165,6 +243,6 @@ def sanitize_scada_execution(scenario: Mapping[str, Any]) -> dict[str, Any]:
             result[key] = sanitize_scada_metadata({key: scenario[key]})[key]
     if isinstance(scenario.get("policy_observation"), Mapping):
         result["policy_observation"] = sanitize_scada_observation(scenario["policy_observation"])
-        result["policy_observation"]["evidence_profile"] = DEFAULT_EVIDENCE_PROFILE
-    result["evidence_profile"] = DEFAULT_EVIDENCE_PROFILE
+        result["policy_observation"]["evidence_profile"] = SCADA_ONLY_PROFILE
+    result["evidence_profile"] = SCADA_ONLY_PROFILE
     return result
