@@ -1180,6 +1180,27 @@ def summarize_history(
     return summarized
 
 
+#: Controller integrity fingerprints (case, acquisition, model and fit digests,
+#: e.g. an accepted HIF fit's ``conditioning_fit`` receipt) let the environment
+#: refuse a stale fit. They carry no semantic evidence for the policy, and an
+#: opaque 64-hex digest would be an unaliased identifier in the model payload.
+#: The environment keeps them; only the model-visible view drops them.
+CONTROLLER_FINGERPRINT_KEY_SUFFIXES = ("_sha256", "_fingerprint")
+
+
+def without_controller_fingerprints(value: Any) -> Any:
+    """Copy ``value`` without keys that name controller integrity fingerprints."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): without_controller_fingerprints(item)
+            for key, item in value.items()
+            if not str(key).endswith(CONTROLLER_FINGERPRINT_KEY_SUFFIXES)
+        }
+    if isinstance(value, (list, tuple)):
+        return [without_controller_fingerprints(item) for item in value]
+    return value
+
+
 def _without_history(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
@@ -1271,6 +1292,11 @@ def prepare_model_policy_observation(
     source_history = list(
         raw_observation.get("history_window", []) if history is None else (history or [])
     )
+    # Fingerprints are dropped before any aliasing or compaction so they can
+    # neither leak nor consume the bounded evidence budget. Copies only: the
+    # environment's observation keeps them for its own stale-fit checks.
+    raw_observation = without_controller_fingerprints(raw_observation)
+    source_history = without_controller_fingerprints(source_history)
     # Opt-in replay-stable view: IDs and mapping insertion order must not decide
     # which evidence survives the character/item budgets. Legacy exports retain
     # their original compaction order unless this contract is requested.
