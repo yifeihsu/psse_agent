@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Sequence
 
 import numpy as np
+from dataclasses import dataclass
 
 from pypower.api import case14, ppoption, runopf  # type: ignore
 from pypower.idx_brch import BR_STATUS, F_BUS, TAP, T_BUS  # type: ignore
@@ -76,7 +77,18 @@ from three_phase_nlm import (  # type: ignore
     write_balanced_ieee14_load_override,
 )
 from three_phase_nlm.ieee14_adapter import ELIGIBLE_HIF_BRANCHES, branch_info_for_row0
-from three_phase_nlm.hif_operating_point import canonicalize_ieee14_operating_point  # type: ignore
+from three_phase_nlm.hif_operating_point import (  # type: ignore
+    DISPATCH_MODE_CASE14,
+    DISPATCH_MODE_OPF,
+    DISPATCH_MODES,
+    OPF_SOLVER,
+    OPFDispatchError,
+    OPFOperatingPoint,
+    canonicalize_ieee14_operating_point,
+    case14_dispatch_receipt,
+    ieee14_opf_operating_point,
+    opf_dispatch_receipt,
+)
 from three_phase_nlm.hif_parameter_estimator import _resolve_model_dir, _simulate_base  # type: ignore
 from three_phase_nlm.hif_units import (  # type: ignore
     EXCLUDED_CROSS_VOLTAGE_BRANCHES,
@@ -453,6 +465,48 @@ def build_sweep_schedule(
     return schedule[: int(n_hif)], truncated
 
 
+@dataclass(frozen=True)
+class ScanOperatingPoint:
+    """One scan's canonical operating point with the provenance of its dispatch.
+
+    ``op_point`` is the replayable canonical schema (the estimators and the
+    balanced reference read only this); ``dispatch`` is the JSON annotation
+    stored beside it; ``opf`` keeps the pypower solution in opf mode.
+    """
+
+    op_point: dict[str, Any]
+    dispatch: dict[str, Any]
+    opf: OPFOperatingPoint | None = None
+
+
+def _validated_dispatch_mode(dispatch_mode: str) -> str:
+    normalized = str(dispatch_mode).strip().lower()
+    if normalized not in DISPATCH_MODES:
+        raise ValueError(f"dispatch_mode must be one of {DISPATCH_MODES}, got {dispatch_mode!r}")
+    return normalized
+
+
+def _dispatched_operating_point(
+    *,
+    dispatch_mode: str,
+    load_scale: float,
+    bus_load_scales: Mapping[str, float] | None,
+    case14_point: Mapping[str, Any],
+) -> ScanOperatingPoint:
+    """Attach the dispatch law: the case14 model values, or the AC-OPF at the same loads.
+
+    In opf mode the OPF is solved with exactly the per-bus loads the OpenDSS
+    scan will carry (``load_scale * bus_load_scales``); a non-converged OPF
+    raises :class:`OPFDispatchError` so the caller skips the window instead of
+    quietly keeping the case14 dispatch.
+    """
+    if dispatch_mode == DISPATCH_MODE_OPF:
+        opf = ieee14_opf_operating_point(float(load_scale), bus_load_scales)
+        return ScanOperatingPoint(op_point=opf.op_point, dispatch=opf.receipt, opf=opf)
+    return ScanOperatingPoint(op_point=canonicalize_ieee14_operating_point(case14_point),
+                              dispatch=case14_dispatch_receipt())
+
+
 def _sample_diverse_operating_point(
     rng: np.random.Generator,
     *,
@@ -460,7 +514,16 @@ def _sample_diverse_operating_point(
     load_log_std: float,
     dispatch_fraction: float,
     voltage_std: float,
-) -> dict[str, Any]:
+    dispatch_mode: str = DISPATCH_MODE_CASE14,
+) -> ScanOperatingPoint:
+    """Draw one diverse scan operating point.
+
+    The random draws (spatial load profile, then the case14-mode dispatch and
+    setpoint perturbations) are consumed in the same order in every dispatch
+    mode, so the load profiles of a seed repeat across modes; in opf mode the
+    dispatch and setpoint draws are discarded and the AC-OPF at the drawn
+    loads supplies the dispatch, the PV setpoints and the source voltage.
+    """
     buses = list(IEEE14_LOAD_BASE_KW)
     raw = np.exp(rng.normal(0.0, float(load_log_std), size=len(buses)))
     weights = np.asarray([IEEE14_LOAD_BASE_KW[bus] for bus in buses], dtype=float)
@@ -482,13 +545,66 @@ def _sample_diverse_operating_point(
         bus: float(np.clip(base + rng.normal(0.0, voltage_std), 0.98, 1.10))
         for bus, base in canonicalize_ieee14_operating_point({})["voltage_setpoints_pu"].items()
     }
-    return canonicalize_ieee14_operating_point({
-        "load_scale": float(event_load_scale),
-        "bus_load_scales": bus_scales,
-        "generator_dispatch_kw": dispatch,
-        "voltage_setpoints_pu": voltage_setpoints,
-        "source_voltage_pu": float(np.clip(1.06 + rng.normal(0.0, voltage_std * 0.6), 1.03, 1.08)),
-    })
+    source_voltage = float(np.clip(1.06 + rng.normal(0.0, voltage_std * 0.6), 1.03, 1.08))
+    return _dispatched_operating_point(
+        dispatch_mode=_validated_dispatch_mode(dispatch_mode),
+        load_scale=float(event_load_scale),
+        bus_load_scales=bus_scales,
+        case14_point={
+            "load_scale": float(event_load_scale),
+            "bus_load_scales": bus_scales,
+            "generator_dispatch_kw": dispatch,
+            "voltage_setpoints_pu": voltage_setpoints,
+            "source_voltage_pu": source_voltage,
+        },
+    )
+
+
+def _resolve_scan_operating_points(
+    rng: np.random.Generator,
+    *,
+    scan_count: int,
+    mode: str,
+    event_load_scale: float,
+    load_log_std: float,
+    dispatch_fraction: float,
+    voltage_std: float,
+    dispatch_mode: str = DISPATCH_MODE_CASE14,
+) -> list[ScanOperatingPoint]:
+    """Scan operating points of one window with their dispatch provenance.
+
+    Scan 0 is the reference point at the uniform event load scale; in diverse
+    mode the later scans perturb the spatial load profile. Raises
+    :class:`OPFDispatchError` in opf mode when any scan's AC-OPF fails.
+    """
+    if int(scan_count) < 1:
+        raise ValueError("scans_per_window must be positive")
+    normalized = str(mode).strip().lower()
+    if normalized not in {"identical_noise", "diverse"}:
+        raise ValueError("operating_point_mode must be identical_noise or diverse")
+    dispatch_mode = _validated_dispatch_mode(dispatch_mode)
+    reference = _dispatched_operating_point(
+        dispatch_mode=dispatch_mode,
+        load_scale=float(event_load_scale),
+        bus_load_scales=None,
+        case14_point={"load_scale": float(event_load_scale)},
+    )
+    if normalized == "identical_noise":
+        return [reference for _ in range(int(scan_count))]
+    return [
+        reference,
+        *[
+            _sample_diverse_operating_point(
+                rng,
+                event_load_scale=float(event_load_scale),
+                load_log_std=float(load_log_std),
+                dispatch_fraction=float(dispatch_fraction),
+                voltage_std=float(voltage_std),
+                dispatch_mode=dispatch_mode,
+            )
+            for _ in range(int(scan_count) - 1)
+        ],
+    ]
 
 
 def _scan_operating_points(
@@ -500,28 +616,54 @@ def _scan_operating_points(
     load_log_std: float,
     dispatch_fraction: float,
     voltage_std: float,
+    dispatch_mode: str = DISPATCH_MODE_CASE14,
 ) -> list[dict[str, Any]]:
-    if int(scan_count) < 1:
-        raise ValueError("scans_per_window must be positive")
-    normalized = str(mode).strip().lower()
-    if normalized not in {"identical_noise", "diverse"}:
-        raise ValueError("operating_point_mode must be identical_noise or diverse")
-    reference = canonicalize_ieee14_operating_point({"load_scale": float(event_load_scale)})
-    if normalized == "identical_noise":
-        return [dict(reference) for _ in range(int(scan_count))]
+    """Canonical scan operating points only (see :func:`_resolve_scan_operating_points`)."""
     return [
-        reference,
-        *[
-            _sample_diverse_operating_point(
-                rng,
-                event_load_scale=float(event_load_scale),
-                load_log_std=float(load_log_std),
-                dispatch_fraction=float(dispatch_fraction),
-                voltage_std=float(voltage_std),
-            )
-            for _ in range(int(scan_count) - 1)
-        ],
+        dict(point.op_point)
+        for point in _resolve_scan_operating_points(
+            rng,
+            scan_count=scan_count,
+            mode=mode,
+            event_load_scale=event_load_scale,
+            load_log_std=load_log_std,
+            dispatch_fraction=dispatch_fraction,
+            voltage_std=voltage_std,
+            dispatch_mode=dispatch_mode,
+        )
     ]
+
+
+def _dispatch_meta(dispatch_mode: str) -> dict[str, Any]:
+    """meta.json description of how each scan's dispatch and setpoints were chosen."""
+    if dispatch_mode == DISPATCH_MODE_OPF:
+        return {
+            "mode": DISPATCH_MODE_OPF,
+            "solver": OPF_SOLVER,
+            "load_scaling": "case14 PD/QD at every bus times load_scale times bus_load_scales[bus]; "
+                            "the same per-load factors the OpenDSS scan carries",
+            "generator_dispatch_kw": "OPF active output of the units at buses 2, 3, 6 and 8",
+            "voltage_setpoints_pu": "OPF voltage magnitude at buses 2, 3, 6 and 8 (PV setpoints)",
+            "source_voltage_pu": "OPF voltage magnitude at bus 1; the OpenDSS Vsource reproduces the slack "
+                                 "and supplies its active and reactive power",
+            "random_draws": "the diverse-scan dispatch and setpoint draws are consumed and discarded so that "
+                            "bus_load_scales repeat the case14-mode corpora of the same seed; only the load "
+                            "profile is random",
+            "failure_policy": "a window whose AC-OPF does not converge for any scan is skipped and listed in "
+                              "generation.skipped_windows; the case14 dispatch is never substituted",
+            "annotation": "each scan and row carries a `dispatch` block beside its canonical op_point "
+                          "(mode, objective, slack output, unit reactive outputs)",
+            "healthy_controls": "pypower AC-OPF rows in every dispatch mode",
+        }
+    return {
+        "mode": DISPATCH_MODE_CASE14,
+        "solver": None,
+        "generator_dispatch_kw": "IEEE14Gen.DSS values (bus 2 at 40 MW, 1 kW condensers at 3/6/8); "
+                                 "diverse scans perturb bus 2 by +-scan_dispatch_fraction",
+        "voltage_setpoints_pu": "IEEE14Gen.DSS setpoints perturbed by scan_voltage_std in diverse scans",
+        "source_voltage_pu": "1.06 perturbed by 0.6 * scan_voltage_std in diverse scans",
+        "healthy_controls": "pypower AC-OPF rows in every dispatch mode",
+    }
 
 
 def _build_meta(
@@ -552,9 +694,11 @@ def _build_meta(
     eligibility_source: str = "three_phase_nlm.ieee14_adapter.ELIGIBLE_HIF_BRANCHES",
     shunt_convention: str = SHUNT_CONVENTION_LEGACY,
     telemetry_base_semantics: str = TELEMETRY_BASES_NORMALIZED,
+    dispatch_mode: str = DISPATCH_MODE_CASE14,
 ) -> dict[str, Any]:
     nb = 14
     nl = 20
+    dispatch_mode = _validated_dispatch_mode(dispatch_mode)
     idx_map = make_index_map(nb, nl)
     sigma_z = scada_noise_sigma(noise_scale).tolist()
     current_sigma = scaled_sensor_sigma(branch_current_noise_pu, noise_scale, field="branch_current_noise_pu")
@@ -624,9 +768,11 @@ def _build_meta(
             "telemetry_base_semantics": str(telemetry_base_semantics),
             "split_ratio_range": [float(split_min), float(split_max)],
             "branch_sampling": str(branch_sampling),
+            "dispatch": _dispatch_meta(dispatch_mode),
             "scan_window": {
                 "scans_per_window": int(scans_per_window),
                 "operating_point_mode": str(operating_point_mode),
+                "dispatch_mode": dispatch_mode,
                 "shared_parameters": shared_parameters,
                 "scan_specific_fields": [
                     "z_clean",
@@ -636,19 +782,31 @@ def _build_meta(
                     BRANCH_CURRENT_CHANNEL,
                     f"{BRANCH_CURRENT_CHANNEL}_clean",
                     "sigma_z", "three_phase_sigma", BRANCH_CURRENT_SIGMA_KEY,
-                    "op_point",
+                    "op_point", "dispatch",
                 ],
                 "operating_point_schema": list(IEEE14_OPERATING_POINT_KEYS),
                 "bus_load_scale_semantics": "profile_factor_multiplied_by_load_scale",
-                "note": "identical_noise repeats one operating point; diverse varies spatial load, dispatch, and voltage setpoints while preserving the HIF.",
+                "note": ("identical_noise repeats one operating point; diverse varies the spatial load profile "
+                         "while preserving the HIF; dispatch and voltage setpoints follow dispatch_mode "
+                         "(opf: AC-OPF at each scan's loads; case14: model values with random perturbations)."),
             },
             "generation": {
                 "seed": int(seed),
                 "noise_scale": float(noise_scale),
+                "dispatch_mode": dispatch_mode,
+                "three_phase_noise_pu": float(three_phase_noise_pu),
+                "branch_current_noise_pu": float(branch_current_noise_pu),
+                "applied_three_phase_sigma": voltage_sigma,
+                "applied_branch_current_sigma_pu": current_sigma,
                 "scan_load_log_std": float(scan_load_log_std),
                 "scan_dispatch_fraction": float(scan_dispatch_fraction),
                 "scan_voltage_std": float(scan_voltage_std),
-                "rng_streams": "event_labels, operating_points, and measurement_noise are independent",
+                "rng_streams": ("event_labels, operating_points, and measurement_noise are independent; "
+                                "the phasor sigmas scale the same standard-normal draws, so SCADA noise does "
+                                "not depend on them"),
+                "skipped_windows": [],
+                "skipped_window_count": 0,
+                "skipped_controls": [],
             },
             "phases": list(PHASES),
             "measurement_vector": "operator IEEE-14 122-entry z; hidden fault bus excluded",
@@ -734,9 +892,11 @@ def generate_dataset(
     voltage_stratum: str = "69kv",
     shunt_convention: str | None = None,
     balanced_reference: str | None = None,
+    dispatch_mode: str = DISPATCH_MODE_OPF,
 ) -> None:
     if int(scans_per_window) < 1:
         raise ValueError("scans_per_window must be positive")
+    dispatch_mode = _validated_dispatch_mode(dispatch_mode)
     noise_scale = positive_sigma(noise_scale, field="noise_scale")
     sigma_z = scada_noise_sigma(noise_scale).tolist()
     applied_current_sigma = scaled_sensor_sigma(branch_current_noise_pu, noise_scale, field="branch_current_noise_pu")
@@ -833,6 +993,7 @@ def generate_dataset(
         eligibility_source=eligibility_source,
         shunt_convention=convention,
         telemetry_base_semantics=telemetry_bases,
+        dispatch_mode=dispatch_mode,
     )
     meta["hif"]["balanced_reference"] = balanced_reference
     # Physics revision marker: the operating-point path keeps the generator
@@ -843,12 +1004,19 @@ def generate_dataset(
         "note": "apply_hif_operating_point restores Maxkvar/Minkvar after dispatch and setpoint writes; "
                 "PV generators regulate within their limits",
     }
+    opf_dispatch = dispatch_mode == DISPATCH_MODE_OPF
     meta["hif"]["z_true_semantics"] = (
         "row-level z_true: balanced OpenDSS solve at scan 0's operating point with the fault removed, "
         "same dispatch/load profile/shunt convention as the scans; z_reference_opf is the pypower OPF vector"
+        + (" at the same loads (scan 0's dispatch is that OPF's dispatch)" if opf_dispatch else
+           " (different dispatch than the OpenDSS scans)")
         if balanced_reference == BALANCED_REFERENCE_OPENDSS else
-        "row-level z_true: pypower OPF balanced case (different dispatch than the OpenDSS scans)")
+        "row-level z_true: pypower OPF balanced case"
+        + (" (scan 0's dispatch is that OPF's dispatch)" if opf_dispatch else
+           " (different dispatch than the OpenDSS scans)"))
     (out / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    skipped_windows: list[dict[str, Any]] = meta["hif"]["generation"]["skipped_windows"]
+    skipped_controls: list[dict[str, Any]] = meta["hif"]["generation"]["skipped_controls"]
     ppc_base = case14()
     base_dss_dir = Path(_REPO_ROOT) / "IEEE_14_OpenDSS"
     scenarios_root = out / "scenarios"
@@ -862,10 +1030,14 @@ def generate_dataset(
         branch_schedule = branch_schedule[: int(n_hif)]
 
     with (out / "samples.jsonl").open("w", encoding="utf-8") as handle:
-        for _ in range(int(n_no_error)):
+        for control_idx in range(int(n_no_error)):
             alpha = float(event_rng.uniform(load_scale_min, load_scale_max))
             solved = _solve_pypower(_scale_pypower_loads(ppc_base, alpha))
             if solved is None:
+                skipped_controls.append({"control_index": int(control_idx), "load_scale": alpha,
+                                         "reason": "pypower AC-OPF did not converge"})
+                print(f"WARNING: skipping healthy control {control_idx} (load_scale={alpha:.6f}): "
+                      "pypower AC-OPF did not converge", file=sys.stderr)
                 continue
             z = compute_measurements_pu(solved).astype(float).tolist()
             rec = {
@@ -879,6 +1051,8 @@ def generate_dataset(
                 MEASUREMENT_CONVENTION_KEY: _no_error_measurement_convention(),
                 "label": {"error_type": "no_error"},
                 "op_point": {"load_scale": alpha, "seed": int(seed)},
+                "dispatch": {**opf_dispatch_receipt(solved),
+                             "note": "healthy controls are pypower AC-OPF rows in every dispatch mode"},
             }
             handle.write(json.dumps(rec) + "\n")
 
@@ -926,6 +1100,26 @@ def generate_dataset(
                 r_hif_pu = float(record["r_hif_pu"])
                 r_hif_model_ohm = float(record["r_hif_model_ohm"])
 
+            # Every event draw is done; the operating points come from their own
+            # stream, so a skipped window leaves the labels of later windows intact.
+            try:
+                scan_points = _resolve_scan_operating_points(
+                    scan_rng,
+                    scan_count=int(scans_per_window),
+                    mode=operating_point_mode,
+                    event_load_scale=alpha,
+                    load_log_std=scan_load_log_std,
+                    dispatch_fraction=scan_dispatch_fraction,
+                    voltage_std=scan_voltage_std,
+                    dispatch_mode=dispatch_mode,
+                )
+            except OPFDispatchError as exc:
+                skipped_windows.append({"id": sample_id, "sample_index": int(sample_idx), "load_scale": alpha,
+                                        "branch_row0": int(branch_row0), "reason": str(exc)})
+                print(f"WARNING: skipping {sample_id}: {exc}", file=sys.stderr)
+                continue
+            scan_op_points = [point.op_point for point in scan_points]
+
             if keep_scenarios:
                 scenario_dir = scenarios_root / sample_id
                 if scenario_dir.exists():
@@ -951,18 +1145,10 @@ def generate_dataset(
                     hif_load_name=f"Load.HIF_{branch_row0 + 1}_{sample_idx:06d}",
                 )
 
-                scan_op_points = _scan_operating_points(
-                    scan_rng,
-                    scan_count=int(scans_per_window),
-                    mode=operating_point_mode,
-                    event_load_scale=alpha,
-                    load_log_std=scan_load_log_std,
-                    dispatch_fraction=scan_dispatch_fraction,
-                    voltage_std=scan_voltage_std,
-                )
                 scans = []
                 simulation_cache: dict[str, dict[str, Any]] = {}
-                for scan_index, scan_op_point in enumerate(scan_op_points):
+                for scan_index, scan_point in enumerate(scan_points):
+                    scan_op_point = scan_point.op_point
                     op_key = json.dumps(scan_op_point, sort_keys=True, separators=(",", ":"))
                     if op_key not in simulation_cache:
                         simulation_cache[op_key] = simulate_hif_candidate(
@@ -999,6 +1185,7 @@ def generate_dataset(
                         "noise_contract": noise_contract,
                         MEASUREMENT_CONVENTION_KEY: dict(convention_payload),
                         "op_point": scan_op_point,
+                        "dispatch": deepcopy(scan_point.dispatch),
                         "topology_id": "ieee14_base",
                     }
                     if physical:
@@ -1007,8 +1194,16 @@ def generate_dataset(
 
                 reference_scan = scans[0]
 
-                solved = _solve_pypower(_scale_pypower_loads(ppc_base, alpha))
+                # In opf mode scan 0's dispatch is this very OPF (uniform load at alpha).
+                if scan_points[0].opf is not None:
+                    solved = scan_points[0].opf.solution
+                else:
+                    solved = _solve_pypower(_scale_pypower_loads(ppc_base, alpha))
                 if solved is None:
+                    skipped_windows.append({"id": sample_id, "sample_index": int(sample_idx), "load_scale": alpha,
+                                            "branch_row0": int(branch_row0),
+                                            "reason": "pypower AC-OPF reference at the event load scale did not converge"})
+                    print(f"WARNING: skipping {sample_id}: pypower AC-OPF reference did not converge", file=sys.stderr)
                     continue
                 z_reference_opf = compute_measurements_pu(solved).astype(float).tolist()
                 if balanced_reference == BALANCED_REFERENCE_OPENDSS:
@@ -1112,8 +1307,10 @@ def generate_dataset(
                     "sigma_z": sigma_z,
                     "topology_id": "ieee14_base",
                     "op_point": reference_scan["op_point"],
+                    "dispatch": deepcopy(reference_scan["dispatch"]),
                     "window_metadata": {
                         "operating_point_mode": str(operating_point_mode),
+                        "dispatch_mode": dispatch_mode,
                         "persistent_hif": True,
                         "seed": int(seed),
                         "sample_index": int(sample_idx),
@@ -1127,6 +1324,14 @@ def generate_dataset(
             finally:
                 if tmp_context is not None:
                     tmp_context.cleanup()
+
+    # Record every skipped window and control (an OPF that did not converge is
+    # an exclusion, never a silent fallback to the case14 dispatch).
+    meta["hif"]["generation"]["skipped_window_count"] = len(skipped_windows)
+    (out / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    if skipped_windows or skipped_controls:
+        print(f"WARNING: {len(skipped_windows)} HIF windows and {len(skipped_controls)} healthy controls were "
+              f"skipped; see meta.json hif.generation.skipped_windows / skipped_controls", file=sys.stderr)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -1181,8 +1386,21 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="Use repeated-noise controls or electrically diverse operating points within each persistent HIF event.",
     )
     parser.add_argument("--scan-load-log-std", type=float, default=0.08)
-    parser.add_argument("--scan-dispatch-fraction", type=float, default=0.20)
-    parser.add_argument("--scan-voltage-std", type=float, default=0.008)
+    parser.add_argument("--scan-dispatch-fraction", type=float, default=0.20,
+                        help="case14 dispatch mode only: +- fraction on the bus-2 unit in diverse scans "
+                             "(the draw is consumed but discarded in opf mode).")
+    parser.add_argument("--scan-voltage-std", type=float, default=0.008,
+                        help="case14 dispatch mode only: setpoint perturbation in diverse scans "
+                             "(the draws are consumed but discarded in opf mode).")
+    parser.add_argument(
+        "--dispatch-mode",
+        choices=list(DISPATCH_MODES),
+        default=DISPATCH_MODE_OPF,
+        help="opf (default): every scan's generator dispatch, PV setpoints and source voltage come from the "
+             "pypower AC-OPF on case14 at the scan's own per-bus loads (the dispatch law of the pypower "
+             "scenario families); case14: the checked-in model dispatch with random perturbations. A "
+             "non-converged OPF skips the window and is recorded in meta.json.",
+    )
     parser.add_argument("--three-phase-noise-pu", type=float, default=DEFAULT_THREE_PHASE_SIGMA_PU,
                         help="Phase-voltage real/imaginary component sigma before multiplying by --noise-scale.")
     parser.add_argument(
@@ -1262,6 +1480,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         voltage_stratum=args.voltage_stratum,
         shunt_convention=args.shunt_convention,
         balanced_reference=args.balanced_reference,
+        dispatch_mode=args.dispatch_mode,
     )
     convention = resolve_shunt_convention_default(args.resistance_units, args.shunt_convention)
     if sampling["resistance_units"] == RESISTANCE_UNITS_OHM_LOCAL_BASE:
@@ -1270,13 +1489,15 @@ def main(argv: Sequence[str] | None = None) -> None:
             f"Wrote IEEE-14 HIF dataset to: {args.out} "
             f"[resistance_units={sampling['resistance_units']} mode={sampling['mode']} "
             f"r_hif_ohm_range={sampling['r_hif_ohm_range']} voltage_stratum={args.voltage_stratum} "
-            f"eligible_branch_row0={eligible} shunt_convention={convention}]"
+            f"eligible_branch_row0={eligible} shunt_convention={convention} dispatch_mode={args.dispatch_mode} "
+            f"three_phase_noise_pu={args.three_phase_noise_pu:g} branch_current_noise_pu={args.branch_current_noise_pu:g}]"
         )
     else:
         print(
             f"Wrote IEEE-14 HIF dataset to: {args.out} "
             f"[resistance_units={sampling['resistance_units']} r_hif_pu_range={sampling['r_hif_pu_range']} "
-            f"eligible_branch_row0={[int(i) for i in ELIGIBLE_HIF_BRANCHES]} shunt_convention={convention}]"
+            f"eligible_branch_row0={[int(i) for i in ELIGIBLE_HIF_BRANCHES]} shunt_convention={convention} "
+            f"dispatch_mode={args.dispatch_mode}]"
         )
 
 

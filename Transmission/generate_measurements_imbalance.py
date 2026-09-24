@@ -29,7 +29,7 @@ import os
 import sys
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Mapping, Tuple
 
 import numpy as np
 
@@ -82,8 +82,22 @@ from three_phase_model.voltage_bases import (  # type: ignore
     IEEE14_VOLTAGE_BASE_PROFILE_ID,
     ieee14_voltage_base_profile,
 )
+from three_phase_nlm.hif_operating_point import (  # type: ignore
+    DISPATCH_MODE_CASE14,
+    DISPATCH_MODE_OPF,
+    DISPATCH_MODES,
+    OPF_SOLVER,
+    OPFDispatchError,
+    apply_ieee14_dispatch_and_setpoints,
+    capture_operating_point_baseline,
+    case14_dispatch_receipt,
+    ieee14_opf_operating_point,
+    opf_dispatch_receipt,
+)
 
 TELEMETRY_BASE_SEMANTICS = ("physical_local_bases", "normalized_model_bases")
+#: Keys of a row op_point that carry a dispatch to replay (absent on load-only op points).
+DISPATCH_OP_POINT_KEYS = ("generator_dispatch_kw", "voltage_setpoints_pu", "source_voltage_pu")
 BALANCED_REFERENCE_OPENDSS = "opendss_same_operating_point"
 BALANCED_REFERENCE_PYPOWER_OPF = "pypower_opf"
 BALANCED_REFERENCE_MODES = (BALANCED_REFERENCE_OPENDSS, BALANCED_REFERENCE_PYPOWER_OPF)
@@ -285,6 +299,50 @@ def _scale_all_loads(base_loads: Dict[str, Dict[str, Any]], load_scale: float) -
         dss.Loads.kvar(float(info["kvar"]) * float(load_scale))
 
 
+def _apply_operating_point_dispatch(op_point: Mapping[str, Any] | None) -> Dict[str, Any] | None:
+    """Write the dispatch an op_point carries (unit kW, PV setpoints, source pu) to the active circuit.
+
+    Loads are left as the caller scaled or split them. A load-only op_point
+    (the case14 dispatch mode and the pre-2026-09-23opf corpora) is a no-op,
+    so replaying such a row keeps the checked-in model dispatch exactly.
+    """
+    if not isinstance(op_point, Mapping) or not any(key in op_point for key in DISPATCH_OP_POINT_KEYS):
+        return None
+    return apply_ieee14_dispatch_and_setpoints(capture_operating_point_baseline(), op_point)
+
+
+def _validated_dispatch_mode(dispatch_mode: str) -> str:
+    normalized = str(dispatch_mode).strip().lower()
+    if normalized not in DISPATCH_MODES:
+        raise ValueError(f"dispatch_mode must be one of {DISPATCH_MODES}, got {dispatch_mode!r}")
+    return normalized
+
+
+def _dispatch_meta(dispatch_mode: str) -> Dict[str, Any]:
+    if dispatch_mode == DISPATCH_MODE_OPF:
+        return {
+            "mode": DISPATCH_MODE_OPF,
+            "solver": OPF_SOLVER,
+            "load_scaling": "case14 PD/QD at every bus times load_scale (uniform; the same factor every OpenDSS load carries)",
+            "generator_dispatch_kw": "OPF active output of the units at buses 2, 3, 6 and 8, applied to the unbalanced "
+                                     "solve and to the balanced z_true solve",
+            "voltage_setpoints_pu": "OPF voltage magnitude at buses 2, 3, 6 and 8 (PV setpoints)",
+            "source_voltage_pu": "OPF voltage magnitude at bus 1; the OpenDSS Vsource reproduces the slack and supplies "
+                                 "its active and reactive power",
+            "failure_policy": "a window whose AC-OPF does not converge is skipped and listed in generation.skipped_windows; "
+                              "the case14 dispatch is never substituted",
+            "annotation": "each row carries the dispatch inside op_point (canonical keys) and a `dispatch` block "
+                          "(mode, objective, slack output, unit reactive outputs)",
+            "healthy_controls": "pypower AC-OPF rows in every dispatch mode",
+        }
+    return {
+        "mode": DISPATCH_MODE_CASE14,
+        "solver": None,
+        "note": "checked-in IEEE14Gen.DSS dispatch and setpoints (bus 2 at 40 MW, 1 kW condensers at 3/6/8, source 1.06)",
+        "healthy_controls": "pypower AC-OPF rows in every dispatch mode",
+    }
+
+
 def _set_loads_scaled_with_bus_unbalance(
     base_loads: Dict[str, Dict[str, Any]],
     *,
@@ -414,10 +472,12 @@ def generate_dataset(
     shunt_convention: str = SHUNT_CONVENTION_YBUS,
     telemetry_bases: str = "physical_local_bases",
     balanced_reference: str = BALANCED_REFERENCE_OPENDSS,
+    dispatch_mode: str = DISPATCH_MODE_OPF,
 ) -> None:
     # Bus injections follow the operator WLS convention by default (fixed
     # shunts stay in Ybus); the historical corpus used legacy_injection.
     shunt_convention = validate_shunt_convention(shunt_convention)
+    dispatch_mode = _validated_dispatch_mode(dispatch_mode)
     if telemetry_bases not in TELEMETRY_BASE_SEMANTICS:
         raise ValueError(f"telemetry_bases must be one of {TELEMETRY_BASE_SEMANTICS}, got {telemetry_bases!r}")
     physical_bases = telemetry_bases == "physical_local_bases"
@@ -467,11 +527,29 @@ def generate_dataset(
             eligible_load_buses=[],
             shunt_convention=shunt_convention,
             balanced_reference=balanced_reference,
+            dispatch_mode=dispatch_mode,
+            dispatch=_dispatch_meta(dispatch_mode),
+            generation=dict(
+                seed=int(seed),
+                dispatch_mode=dispatch_mode,
+                noise_scale=float(noise_scale),
+                three_phase_noise_pu=float(three_phase_noise_pu),
+                branch_current_noise_pu=float(branch_current_noise_pu),
+                applied_three_phase_sigma=voltage_sigma,
+                applied_branch_current_sigma_pu=declared_current_sigma,
+                skipped_windows=[],
+                skipped_window_count=0,
+                skipped_controls=[],
+            ),
             z_true_semantics=(
                 "balanced OpenDSS solve at the same load scale with every load balanced (bus 3 rebalanced), "
                 "same dispatch and shunt convention as the unbalanced solve; z_reference_opf is the pypower OPF vector"
+                + (" at the same load scale (the applied dispatch is that OPF's dispatch)" if dispatch_mode == DISPATCH_MODE_OPF
+                   else " (different dispatch than the OpenDSS solve)")
                 if balanced_reference == BALANCED_REFERENCE_OPENDSS else
-                "pypower OPF balanced case (different dispatch than the OpenDSS solve)"),
+                "pypower OPF balanced case"
+                + (" (the applied dispatch is that OPF's dispatch)" if dispatch_mode == DISPATCH_MODE_OPF
+                   else " (different dispatch than the OpenDSS solve)")),
             z_obs_semantics="phase-A Vm plus three-phase total P/Q injections and flows; unbalanced OpenDSS solve",
             bus_order=BUS_ORDER,
             branch_order=BRANCH_ORDER,
@@ -523,16 +601,22 @@ def generate_dataset(
         raise RuntimeError("No eligible load buses were found for imbalance generation.")
     meta["imbalance"]["eligible_load_buses"] = eligible_buses
     (out / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    skipped_windows: List[Dict[str, Any]] = meta["imbalance"]["generation"]["skipped_windows"]
+    skipped_controls: List[Dict[str, Any]] = meta["imbalance"]["generation"]["skipped_controls"]
 
     # --- write samples.jsonl ---
     with (out / "samples.jsonl").open("w", encoding="utf-8") as f:
         # 1) balanced controls (positive-sequence)
         ppc_base = case14()
-        for _ in range(int(n_no_error)):
+        for control_idx in range(int(n_no_error)):
             alpha = float(rng.uniform(load_scale_min, load_scale_max))
             ppc_scaled = _scale_pypower_loads(ppc_base, alpha)
             solved = _solve_pypower(ppc_scaled)
             if solved is None:
+                skipped_controls.append({"control_index": int(control_idx), "load_scale": alpha,
+                                         "reason": "pypower AC-OPF did not converge"})
+                print(f"WARNING: skipping healthy control {control_idx} (load_scale={alpha:.6f}): "
+                      "pypower AC-OPF did not converge", file=sys.stderr)
                 continue
             z = compute_measurements_pu(solved).astype(float).tolist()
             rec = dict(
@@ -547,11 +631,13 @@ def generate_dataset(
                                             source="pypower balanced reference; makeSbus excludes shunts"),
                 label=dict(error_type="no_error"),
                 op_point=dict(load_scale=alpha),
+                dispatch={**opf_dispatch_receipt(solved),
+                          "note": "healthy controls are pypower AC-OPF rows in every dispatch mode"},
             )
             f.write(json.dumps(rec) + "\n")
 
         # 2) three-phase imbalance (OpenDSS → 1ϕ-equivalent z + attach 3ϕ voltages)
-        for _ in range(int(n_imbalance)):
+        for window_idx in range(int(n_imbalance)):
             alpha = float(rng.uniform(load_scale_min, load_scale_max))
             fracs = tuple(
                 float(x)
@@ -559,6 +645,31 @@ def generate_dataset(
             )
             target_bus = str(rng.choice(eligible_buses))
             applied: Dict[str, Any] = {}
+
+            # Dispatch law of this window. The label draws above are complete and the
+            # row id is drawn after the solves, so a skipped window leaves every other
+            # window's labels and ids unchanged.
+            dispatch_op_point: Dict[str, Any] | None = None
+            if dispatch_mode == DISPATCH_MODE_OPF:
+                try:
+                    opf = ieee14_opf_operating_point(alpha)
+                except OPFDispatchError as exc:
+                    skipped_windows.append({"window_index": int(window_idx), "load_scale": alpha,
+                                            "target_bus": target_bus, "reason": str(exc)})
+                    print(f"WARNING: skipping unbalance window {window_idx}: {exc}", file=sys.stderr)
+                    continue
+                dispatch_op_point, dispatch_receipt, solved = opf.op_point, opf.receipt, opf.solution
+            else:
+                dispatch_receipt = case14_dispatch_receipt()
+                # pypower OPF balanced case at the same total load (different dispatch; kept for continuity)
+                solved = _solve_pypower(_scale_pypower_loads(ppc_base, alpha))
+                if solved is None:
+                    skipped_windows.append({"window_index": int(window_idx), "load_scale": alpha, "target_bus": target_bus,
+                                            "reason": "pypower AC-OPF reference did not converge"})
+                    print(f"WARNING: skipping unbalance window {window_idx}: pypower AC-OPF reference did not converge",
+                          file=sys.stderr)
+                    continue
+            z_reference_opf = compute_measurements_pu(solved).astype(float).tolist()
 
             def build_unbalanced() -> None:
                 _compile_ieee14_opendss(dss_repo)
@@ -569,6 +680,7 @@ def generate_dataset(
                     load_scale=alpha,
                     bus_fracs=fracs,
                 ))
+                _apply_operating_point_dispatch(dispatch_op_point)
                 _solve_or_raise()
 
             _solve_from_fresh_compile(build_unbalanced)
@@ -598,12 +710,6 @@ def generate_dataset(
                 branch_currents_clean = _rewrite_current_bases(branch_currents_clean)
                 branch_currents = _rewrite_current_bases(branch_currents)
 
-            # pypower OPF balanced case at the same total load (different dispatch; kept for continuity)
-            ppc_scaled = _scale_pypower_loads(ppc_base, alpha)
-            solved = _solve_pypower(ppc_scaled)
-            if solved is None:
-                continue
-            z_reference_opf = compute_measurements_pu(solved).astype(float).tolist()
             if balanced_reference == BALANCED_REFERENCE_OPENDSS:
                 # Paired balanced reference: the same OpenDSS model, dispatch, load scale and
                 # shunt convention with every load balanced (the unbalanced exports above are
@@ -611,6 +717,7 @@ def generate_dataset(
                 def build_balanced() -> None:
                     _compile_ieee14_opendss(dss_repo)
                     _scale_all_loads(base_loads, alpha)
+                    _apply_operating_point_dispatch(dispatch_op_point)
                     _solve_or_raise()
 
                 _solve_from_fresh_compile(build_balanced)
@@ -648,9 +755,19 @@ def generate_dataset(
                     unbalance_bus_name=target_bus,
                     load_split=applied,
                 ),
-                op_point=dict(load_scale=alpha, target_bus=target_bus),
+                # load_scale and target_bus first (legacy readers); in opf mode the canonical
+                # dispatch keys follow so every replay reproduces the applied dispatch.
+                op_point=dict(load_scale=alpha, target_bus=target_bus,
+                              **{k: v for k, v in (dispatch_op_point or {}).items() if k != "load_scale"}),
+                dispatch=deepcopy(dispatch_receipt),
             )
             f.write(json.dumps(rec) + "\n")
+
+    meta["imbalance"]["generation"]["skipped_window_count"] = len(skipped_windows)
+    (out / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    if skipped_windows or skipped_controls:
+        print(f"WARNING: {len(skipped_windows)} unbalance windows and {len(skipped_controls)} healthy controls were "
+              f"skipped; see meta.json imbalance.generation.skipped_windows / skipped_controls", file=sys.stderr)
 
 
 def main() -> None:
@@ -702,6 +819,14 @@ def main() -> None:
         default="physical_local_bases",
         help="Report kvbase_ln/ibase_*_a on the declared 69/13.8/18 kV bases or on the normalized 1 kV model.",
     )
+    p.add_argument(
+        "--dispatch-mode",
+        choices=list(DISPATCH_MODES),
+        default=DISPATCH_MODE_OPF,
+        help="opf (default): generator dispatch, PV setpoints and source voltage of every window come from the pypower "
+             "AC-OPF on case14 at the window's load scale (the dispatch law of the pypower scenario families); "
+             "case14: the checked-in model dispatch. A non-converged OPF skips the window and is recorded in meta.json.",
+    )
     args = p.parse_args()
 
     generate_dataset(
@@ -719,9 +844,11 @@ def main() -> None:
         shunt_convention=args.shunt_convention,
         telemetry_bases=args.telemetry_bases,
         balanced_reference=args.balanced_reference,
+        dispatch_mode=args.dispatch_mode,
     )
     print(f"Wrote imbalance dataset to: {args.out} [shunt_convention={args.shunt_convention} "
-          f"telemetry_bases={args.telemetry_bases} operator_vm=phase_a_magnitude]")
+          f"telemetry_bases={args.telemetry_bases} operator_vm=phase_a_magnitude dispatch_mode={args.dispatch_mode} "
+          f"three_phase_noise_pu={args.three_phase_noise_pu:g} branch_current_noise_pu={args.branch_current_noise_pu:g}]")
 
 
 if __name__ == "__main__":

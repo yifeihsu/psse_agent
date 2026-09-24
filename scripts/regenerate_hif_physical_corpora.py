@@ -12,9 +12,14 @@ Stages (run in order, each resumable on its own; ``--families`` selects hif, unb
                   rows copied verbatim, meta.json gains ``detectable_filter``
 5. ``reaudit``    audit of the subsets (every disturbance window must be admitted)
 
-Seeds are unchanged, so fault labels and operating points repeat the earlier corpora; only the
-simulated physics differs. New directories carry ``--tag``; nothing existing is overwritten. An
-implementation manifest records the commit, dirty files and digests of the physics sources.
+Seeds are unchanged, so fault labels, event load scales and scan load profiles repeat the earlier
+corpora. The dispatch law follows ``--dispatch-mode`` (default ``opf``: every scan's and window's
+generator dispatch, PV setpoints and source voltage come from the pypower AC-OPF at the same loads,
+the law of the pypower scenario families; ``case14`` reproduces the 20260923b model dispatch). The HIF
+PMU phasors are drawn at ``--three-phase-noise-pu`` / ``--branch-current-noise-pu`` (default 1e-4 per
+component); the unbalance corpus keeps its own sigmas (default 5e-3 / 1e-3). New directories carry
+``--tag``; nothing existing is overwritten. An implementation manifest records the commit, dirty files,
+the generator flags and digests of the physics sources.
 """
 from __future__ import annotations
 
@@ -48,6 +53,14 @@ RECIPES = (
 # discovered-mode audit (scripts/audit_unbalance_physical_corpus.py) and detectable subset.
 UNBALANCE = {"stem": "out_measurements_imbalance_currents_ybus_440", "windows": 440, "controls": 60, "seed": 20260925,
              "subset_stem": "out_measurements_imbalance_currents_ybus_detectable"}
+# Generator flags of the 2026-09-23opf revision (see docs/opf_operating_points_20260923.md): the HIF PMU
+# phasors at sigma 1e-4 per component, the unbalance corpus at its 5e-3 / 1e-3, and the AC-OPF dispatch law
+# for both families. Every flag is recorded in the receipts and the implementation manifest.
+DEFAULT_DISPATCH_MODE = "opf"
+DEFAULT_HIF_THREE_PHASE_NOISE_PU = 1e-4
+DEFAULT_HIF_BRANCH_CURRENT_NOISE_PU = 1e-4
+DEFAULT_UNBALANCE_THREE_PHASE_NOISE_PU = 5e-3
+DEFAULT_UNBALANCE_BRANCH_CURRENT_NOISE_PU = 1e-3
 ENV = dict(os.environ, OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
 ADMISSION = ("scenario generator discovered-mode WLS admission, anomaly margin 1.25 "
              "(chi-square 0.01 OR normalized residual 4.0), reference scan")
@@ -69,7 +82,17 @@ def _write_receipts(path: Path, receipts: list[dict]) -> None:
     path.write_text(json.dumps(receipts, indent=2) + "\n", encoding="utf-8")
 
 
-def generate(artifacts: Path, out: Path, tag: str, workers: int) -> None:
+def _generation_summary(meta: dict, family: str) -> dict:
+    """Dispatch mode, applied phasor sigmas and skipped windows/controls of a generated corpus."""
+    generation = (meta.get(family) or {}).get("generation") or {}
+    return {"dispatch_mode": generation.get("dispatch_mode"),
+            "three_phase_sigma": meta.get("three_phase_sigma"),
+            "branch_current_sigma_pu": meta.get("branch_current_sigma_pu"),
+            "skipped_windows": generation.get("skipped_windows", []),
+            "skipped_controls": generation.get("skipped_controls", [])}
+
+
+def generate(artifacts: Path, out: Path, tag: str, workers: int, flags: list[str] = ()) -> None:
     def job(recipe):
         stem, n_hif, n_clean, seed, extra, _ = recipe
         target = artifacts / f"{stem}_{tag}"
@@ -77,13 +100,14 @@ def generate(artifacts: Path, out: Path, tag: str, workers: int) -> None:
             raise SystemExit(f"refusing to overwrite {target}")
         command = [sys.executable, "Transmission/generate_measurements_hif_ieee14.py", "--out", str(target),
                    "--n-hif", str(n_hif), "--n-no-error", str(n_clean), "--seed", str(seed),
-                   "--scans-per-window", "10", "--resistance-units", "ohm", *extra]
+                   "--scans-per-window", "10", "--resistance-units", "ohm", *extra, *flags]
         receipt = {"corpus": target.name, **_run(command, out / f"{target.name}_generation.log")}
         if receipt["exit_code"] == 0:
             rows = _rows(target / "samples.jsonl")
             receipt.update(actual_hif=sum(r["scenario"] == "high_impedance_fault" for r in rows),
                            actual_healthy=sum(r["scenario"] == "no_error" for r in rows),
-                           actual_scans=sum(len(r.get("scans") or []) for r in rows))
+                           actual_scans=sum(len(r.get("scans") or []) for r in rows),
+                           **_generation_summary(json.loads((target / "meta.json").read_text(encoding="utf-8")), "hif"))
         receipt.update(expected_hif=n_hif, expected_healthy=n_clean)
         print(json.dumps(receipt), flush=True)
         return receipt
@@ -91,6 +115,8 @@ def generate(artifacts: Path, out: Path, tag: str, workers: int) -> None:
     with ThreadPoolExecutor(max_workers=workers) as pool:
         receipts = list(pool.map(job, RECIPES))
     _write_receipts(out / "generation_receipts.json", receipts)
+    # A skipped window (an AC-OPF that did not converge) is an exclusion the receipt names; the
+    # corpus is then short of its recipe and the run stops here rather than proceeding silently.
     bad = [r["corpus"] for r in receipts if r["exit_code"] or r.get("actual_hif") != r["expected_hif"]
            or r.get("actual_healthy") != r["expected_healthy"]]
     if bad:
@@ -246,18 +272,19 @@ def _unbalance_name(tag: str) -> str:
     return f"{UNBALANCE['stem']}_{tag}"
 
 
-def generate_unbalance(artifacts: Path, out: Path, tag: str) -> None:
+def generate_unbalance(artifacts: Path, out: Path, tag: str, flags: list[str] = ()) -> None:
     target = artifacts / _unbalance_name(tag)
     if target.exists():
         raise SystemExit(f"refusing to overwrite {target}")
     command = [sys.executable, "Transmission/generate_measurements_imbalance.py", "--out", str(target),
                "--n-imbalance", str(UNBALANCE["windows"]), "--n-no-error", str(UNBALANCE["controls"]),
-               "--seed", str(UNBALANCE["seed"])]
+               "--seed", str(UNBALANCE["seed"]), *flags]
     receipt = {"corpus": target.name, **_run(command, out / f"{target.name}_generation.log")}
     if receipt["exit_code"] == 0:
         rows = _rows(target / "samples.jsonl")
         receipt.update(actual_unbalance=sum(r["scenario"] == "three_phase_imbalance" for r in rows),
-                       actual_healthy=sum(r["scenario"] == "no_error" for r in rows))
+                       actual_healthy=sum(r["scenario"] == "no_error" for r in rows),
+                       **_generation_summary(json.loads((target / "meta.json").read_text(encoding="utf-8")), "imbalance"))
     receipt.update(expected_unbalance=UNBALANCE["windows"], expected_healthy=UNBALANCE["controls"])
     print(json.dumps(receipt), flush=True)
     _write_receipts(out / "generation_receipts_unbalance.json", [receipt])
@@ -267,32 +294,42 @@ def generate_unbalance(artifacts: Path, out: Path, tag: str) -> None:
 
 
 def validate_unbalance(artifacts: Path, out: Path, tag: str) -> None:
-    """Strict replay: every row's balanced reference and unbalanced sensor mean re-solve exactly."""
+    """Strict replay: every row's balanced reference and unbalanced sensor mean re-solve exactly.
+
+    The dispatch each row carries in its op_point (the AC-OPF dispatch in opf mode; nothing for
+    load-only op points) is applied exactly as the generator applied it.
+    """
     import numpy as np
     from Transmission import generate_measurements_imbalance as gi
     from IEEE_14_OpenDSS.export_measurement_series import extract_measurement_series
     name = _unbalance_name(tag)
     rows = [r for r in _rows(artifacts / name / "samples.jsonl") if r["scenario"] == "three_phase_imbalance"]
+    meta = json.loads((artifacts / name / "meta.json").read_text(encoding="utf-8"))
     repo = str(ROOT / "IEEE_14_OpenDSS")
     gi._compile_ieee14_opendss(repo)
     base_loads = gi._read_base_loads()
     worst_true = worst_clean = 0.0
+    dispatched_rows = 0
     for row in rows:
         scale = float(row["op_point"]["load_scale"])
         split = row["label"]["load_split"]
         gi._compile_ieee14_opendss(repo)
         gi._scale_all_loads(base_loads, scale)
+        dispatched_rows += gi._apply_operating_point_dispatch(row["op_point"]) is not None
         gi._solve_or_raise()
         z_true = np.asarray(extract_measurement_series(shunt_convention="ybus")[0], dtype=float)
         worst_true = max(worst_true, float(np.max(np.abs(z_true - np.asarray(row["z_true"])))))
         gi._compile_ieee14_opendss(repo)
         gi._set_loads_scaled_with_bus_unbalance(base_loads, target_bus=split["bus"], load_scale=scale,
                                                 bus_fracs=tuple(split["fractions"][p] for p in ("a", "b", "c")))
+        gi._apply_operating_point_dispatch(row["op_point"])
         gi._solve_or_raise()
         z_clean = np.asarray(extract_measurement_series(shunt_convention="ybus")[0], dtype=float)
         worst_clean = max(worst_clean, float(np.max(np.abs(z_clean - np.asarray(row["z_clean"])))))
     report = {"corpus": name, "rows": len(rows), "max_abs_z_true_replay_error_pu": worst_true,
-              "max_abs_z_clean_replay_error_pu": worst_clean, "tolerance_pu": 1e-9}
+              "max_abs_z_clean_replay_error_pu": worst_clean, "tolerance_pu": 1e-9,
+              "dispatch_mode": (meta.get("imbalance") or {}).get("dispatch_mode", "case14"),
+              "rows_with_replayed_dispatch": dispatched_rows}
     (out / f"{name}_replay.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report), flush=True)
     if max(worst_true, worst_clean) > 1e-9:
@@ -379,8 +416,18 @@ PROVENANCE_FILES = (
 )
 
 
+def hif_flags(args: argparse.Namespace) -> list[str]:
+    return ["--three-phase-noise-pu", f"{args.three_phase_noise_pu:g}",
+            "--branch-current-noise-pu", f"{args.branch_current_noise_pu:g}", "--dispatch-mode", args.dispatch_mode]
+
+
+def unbalance_flags(args: argparse.Namespace) -> list[str]:
+    return ["--three-phase-noise-pu", f"{args.unbalance_three_phase_noise_pu:g}",
+            "--branch-current-noise-pu", f"{args.unbalance_branch_current_noise_pu:g}", "--dispatch-mode", args.dispatch_mode]
+
+
 def write_provenance(out: Path, args: argparse.Namespace) -> None:
-    """Record the code that produced the corpora: commit, dirty files and digests of the physics sources."""
+    """Record the code that produced the corpora: commit, dirty files, generator flags and digests of the physics sources."""
     def git(*command):
         try:
             return subprocess.run(["git", *command], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
@@ -396,7 +443,10 @@ def write_provenance(out: Path, args: argparse.Namespace) -> None:
         "python": platform.python_version(), "opendssdirect": getattr(opendssdirect, "__version__", "unknown"),
         "file_sha256": {name: (hashlib.sha256((ROOT / name).read_bytes()).hexdigest() if (ROOT / name).is_file() else None)
                         for name in PROVENANCE_FILES},
-        "recipes": [{"stem": r[0], "hif_windows": r[1], "healthy_controls": r[2], "seed": r[3], "arguments": r[4]} for r in RECIPES],
+        "family_flags": {"hif": hif_flags(args), "unbalance": unbalance_flags(args)},
+        "recipes": [{"stem": r[0], "hif_windows": r[1], "healthy_controls": r[2], "seed": r[3],
+                     "arguments": [*r[4], *hif_flags(args)]} for r in RECIPES],
+        "unbalance_recipe": {**UNBALANCE, "arguments": unbalance_flags(args)},
     }
     path = out / "implementation_manifest.json"
     existing = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
@@ -415,6 +465,16 @@ def main(argv=None) -> None:
     parser.add_argument("--stages", default=",".join(STAGES))
     parser.add_argument("--families", default="hif,unbalance", help="hif, unbalance, or both")
     parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument("--dispatch-mode", choices=("opf", "case14"), default=DEFAULT_DISPATCH_MODE,
+                        help="dispatch law of both generators: opf (AC-OPF at the same loads) or case14 (model dispatch)")
+    parser.add_argument("--three-phase-noise-pu", type=float, default=DEFAULT_HIF_THREE_PHASE_NOISE_PU,
+                        help="HIF corpora: voltage-phasor sigma per real/imaginary component (pu)")
+    parser.add_argument("--branch-current-noise-pu", type=float, default=DEFAULT_HIF_BRANCH_CURRENT_NOISE_PU,
+                        help="HIF corpora: branch-current-phasor sigma per component (pu)")
+    parser.add_argument("--unbalance-three-phase-noise-pu", type=float, default=DEFAULT_UNBALANCE_THREE_PHASE_NOISE_PU,
+                        help="unbalance corpus: voltage-phasor sigma per component (pu)")
+    parser.add_argument("--unbalance-branch-current-noise-pu", type=float, default=DEFAULT_UNBALANCE_BRANCH_CURRENT_NOISE_PU,
+                        help="unbalance corpus: branch-current-phasor sigma per component (pu)")
     args = parser.parse_args(argv)
     artifacts, out = args.artifacts_dir.resolve(), args.output_dir.resolve()
     stages = [s.strip() for s in args.stages.split(",") if s.strip()]
@@ -429,13 +489,16 @@ def main(argv=None) -> None:
             continue
         if "hif" in families:
             if stage == "generate":
-                generate(artifacts, out, args.tag, args.workers)
+                generate(artifacts, out, args.tag, args.workers, hif_flags(args))
             elif stage == "validate":
                 validate(artifacts, out, args.tag, args.workers * 3)
             else:
                 STAGES[stage](artifacts, out, args.tag)
         if "unbalance" in families:
-            UNBALANCE_STAGES[stage](artifacts, out, args.tag)
+            if stage == "generate":
+                generate_unbalance(artifacts, out, args.tag, unbalance_flags(args))
+            else:
+                UNBALANCE_STAGES[stage](artifacts, out, args.tag)
 
 
 if __name__ == "__main__":
