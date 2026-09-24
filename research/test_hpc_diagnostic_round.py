@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from functools import partial
 import importlib.util
 import json
 import re
 from pathlib import Path
 
 import pytest
+
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 
 CELL = Path(__file__).resolve().parent / "hpc" / "diagnostic_round_20260903"
 SBATCH_FILES = ("diag_collect.sbatch", "diag_train.sbatch", "diag_eval.sbatch")
@@ -167,7 +170,10 @@ def _chat_row(root: str, family: str, source: str) -> dict:
     return {
         "example_id": f"{source}_{root}",
         "physical_root_fingerprint": root,
-        "metadata": {"scenario_family": family},
+        # Historical (2026-09-03 round) rows: the mixture builder's strict
+        # default profile refuses undeclared traces, so the rows and the
+        # builder both name the auxiliary profile of that round.
+        "metadata": {"scenario_family": family, "evidence_profile": AUXILIARY_EVIDENCE_PROFILE},
         "messages": [{"role": "user", "content": root}],
     }
 
@@ -189,6 +195,7 @@ def test_training_stage_trains_on_the_filtered_mixture() -> None:
 def test_filter_drops_stale_families_before_sampling_and_keeps_one_to_one(tmp_path: Path) -> None:
     from scripts.run_dagger_research import build_research_mixture
 
+    mixture_builder = partial(build_research_mixture, evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
     filter_mixture = _load_module("diag_filter_mixture", "filter_mixture.py")
     d0 = [_chat_row(f"d0_param_{i}", "parameter", "d0") for i in range(6)]
     d0 += [_chat_row(f"d0_hif_{i}", "hif", "d0") for i in range(2)]
@@ -208,7 +215,7 @@ def test_filter_drops_stale_families_before_sampling_and_keeps_one_to_one(tmp_pa
         seed=7,
         output=output,
         report_path=report_path,
-        mixture_builder=build_research_mixture,
+        mixture_builder=mixture_builder,
     )
     assert report["dropped_by_family"] == {"hif": 2, "measurement+hif": 1}
     assert report["d0_rows_after"] == 6
@@ -230,7 +237,7 @@ def test_filter_drops_stale_families_before_sampling_and_keeps_one_to_one(tmp_pa
             seed=7,
             output=tmp_path / "other.jsonl",
             report_path=tmp_path / "other.json",
-            mixture_builder=build_research_mixture,
+            mixture_builder=mixture_builder,
         )
 
 

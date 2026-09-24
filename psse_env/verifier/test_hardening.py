@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import unittest
 
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.verifier.dataset import build_verifier_example
 from psse_env.verifier.features import summarize_history
 from psse_env.verifier.rules import RuleBasedVerifier
@@ -21,6 +22,10 @@ def correction_transition(
     return {
         "parent_state_summary": {
             "episode_id": "episode",
+            # Hand-built summary without a bound WLS ledger: the strict profiles
+            # refuse every correction with current_balanced_wls_required before
+            # the payload schema is inspected, which is not what these tests probe.
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "active_state_id": "episode:s0",
             "candidate_state_id": None,
             "has_open_candidate": False,

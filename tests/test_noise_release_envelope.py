@@ -4,6 +4,7 @@ import pytest
 
 from psse_env.dagger.evaluator import privileged_execution_paths
 from psse_env.dagger.suite_builder import partition_release_scenario_v1
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from three_phase_nlm.measurement_noise import generated_noise_contract
 
 
@@ -15,6 +16,10 @@ def _scenario():
         "measurements": [1.0] * 14 + [0.0] * 108,
         "error_cardinality": 0, "source_tier": "test_fixture",
         "metadata": {
+            # These checks cover the historical release envelope (metadata passes
+            # through verbatim, privileged and unknown fields fail closed); the strict
+            # profiles instead whitelist the metadata and silently drop the rest.
+            "evidence_profile": AUXILIARY_EVIDENCE_PROFILE,
             "sigma_z": sigma,
             "three_phase_sigma": .005,
             "branch_current_sigma_pu": .001,

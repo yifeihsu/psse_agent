@@ -181,9 +181,12 @@ Resolved by the 20260923opf corpora:
   solves; the dispatch statistics above match the OPF root sample exactly,
   and the cell no longer names a 20260923b corpus.
 
-Deliberately not changed (accepted by the user for this study):
+Deliberately not changed in this revision. Only the availability cues and the
+topology-only breaker model are the user's decisions; the other items are open
+choices recorded for review:
 
-- Topology noise model. Topology roots declare structural zeros at P7/Q7 (sigma
+- Topology noise model (follows from the user's choice to keep the node/breaker
+  model for topology errors only). Topology roots declare structural zeros at P7/Q7 (sigma
   0, exact constraints) and the two-meter sigma 0.0141421 at P3/Q3 through
   `operator_noise` / `structural_zero_indices`; every other family uses the flat
   0.001 / 0.01 profile with noisy P7/Q7. The declaration is execution metadata
@@ -200,7 +203,9 @@ Deliberately not changed (accepted by the user for this study):
   generator's operating points, not values estimated from measurements; the
   single-scan and multi-scan HIF estimators replay OpenDSS at them. They stay in
   the gated metadata because the estimators need them; they never enter the
-  policy observation.
+  policy observation. This is simulator truth used by a localization tool, not a
+  measurement; replacing it with operating points estimated from SCADA or from
+  the PMU two-terminal quantities is the open alternative.
 - Numeric lattice. Synthesized pypower topology and harmonic vectors are
   quantized to 1e-12; corpus and OpenDSS families keep full binary64 digits.
   Canonicalizing every family at record time would change every corpus root's

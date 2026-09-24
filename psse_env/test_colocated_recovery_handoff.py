@@ -10,6 +10,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 import unittest
 
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.oracle.measurement_expert import MeasurementExpert
 from psse_env.transactional_env import (
     TransactionalPSSEEnv,
@@ -84,6 +85,9 @@ def _fixture(*, independent_meter=False, grouped=False):
         "rejected_hypotheses": [],
     }
     env = SimpleNamespace(
+        # The audit reads the environment's declared profile; this stub
+        # exercises the historical (ungated) handoff inventory.
+        evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
         current_state=lambda: state,
         history=history,
         store=SimpleNamespace(get_state=lambda _: {"state_hash": ACTIVE_HASH}),

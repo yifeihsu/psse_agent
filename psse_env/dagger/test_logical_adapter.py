@@ -15,6 +15,7 @@ from psse_env.providers.matpower import _render_matpower_case
 from logical_topology.inventory import build_inventory, process_topology
 from logical_topology.measurements import build_measurement_inventory, expected_measurements, sample_measurements
 from logical_topology.provider import LogicalTopologyProviders
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.state_store import find_forbidden_policy_paths
 from psse_env.systems import resolve_system
 from .logical_adapter import (LogicalCandidateQualityOracle, logical_environment_factory,
@@ -59,7 +60,11 @@ class LogicalAdapterTests(unittest.TestCase):
             "include_pairs": error == "pair"}
         if scan_options is None and error == "pair":
             options["pair_devices"] = [self.branch, self.coupler]
-        env = logical_environment_factory(scan_options=options, derived_case_dir=self.temp.name)
+        # The strict profiles sanitize the scenario at reset and drop the
+        # provider-contract metadata (metadata.logical_topology) the pure
+        # logical adapter is built on; these episodes replay the historical contract.
+        env = logical_environment_factory(scan_options=options, derived_case_dir=self.temp.name,
+            evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
         scenario = logical_scenario(env.logical_providers, case=self.case, inventory=self.inventory,
             reported_statuses=reported, sensors=sensors, observations=self.worlds[cache_key],
             scenario_id=f"logical_{error}", parent_id=f"physical_{cache_key}", true_statuses=true)

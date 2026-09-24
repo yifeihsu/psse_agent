@@ -48,6 +48,7 @@ from psse_env.dagger.study_manifest import (
     load_study_manifest,
     study_manifest_sha256,
 )
+from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.sft.provenance import stable_json_sha256
 from psse_env.state_store import PolicyObservation
 
@@ -243,6 +244,9 @@ def _terminal_trace(outcome: str) -> list[dict[str, Any]]:
 def _baseline_policy_observation() -> dict[str, Any]:
     return PolicyObservation(
         active_state_id="active",
+        # Hand-built observations (no environment stamp) read fail-closed as
+        # scada_only; these fixtures encode the historical evidence shape.
+        evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
         remaining_budget=5,
         history_window=[],
     ).as_dict()
@@ -266,6 +270,7 @@ def _post_failure_policy_observation() -> dict[str, Any]:
     ]
     return PolicyObservation(
         active_state_id="active",
+        evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
         remaining_budget=5,
         last_tool=RUN_WLS,
         last_tool_status="failure",
@@ -320,6 +325,7 @@ def _operator_handoff_policy_observation() -> dict[str, Any]:
     ]
     return PolicyObservation(
         active_state_id="active",
+        evidence_profile=AUXILIARY_EVIDENCE_PROFILE,
         remaining_budget=5,
         history_window=history,
         last_tool="get_measurement_context",

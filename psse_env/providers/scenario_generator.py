@@ -208,8 +208,9 @@ CURRENT_TELEMETRY_HIF_SAMPLE_PATHS = (
 # the unbalance corpora take OPF-driven operating points (dispatch, setpoints and source voltage
 # from the AC-OPF at the window's load scale, as the pypower families already do).  The
 # phasor sigma leaves the SCADA draws unchanged; the OPF dispatch does not, so the detectable
-# counts of the 20260923opf corpora are only known after the regeneration and are resolved
-# from the artifact directory names below rather than hard-coded.
+# counts of the 20260923opf corpora were only known after the regeneration and are resolved
+# from the artifact directory names below rather than hard-coded (the 2026-09-23 regeneration
+# admitted 27 + 8 + 77 + 19 HIF windows, the same ids as 20260923b, and 162 unbalance windows).
 PMU_PHASOR_SIGMA_PU = 1e-4
 PHYSICAL_HIF_CORPUS_TAG = "20260923opf"
 _PHYSICAL_MEASUREMENTS_DIR = _REPO_ROOT / "artifacts" / "measurements"
@@ -235,10 +236,11 @@ def resolve_tagged_corpus_path(stem: str, tag: str = PHYSICAL_HIF_CORPUS_TAG, *,
     return root / f"{stem}_PENDING{suffix}_{tag}" / "samples.jsonl"
 
 
-# TODO(20260923opf): PENDING regeneration by the corpus package (WP4): HIF corpora at PMU
-# sigma 1e-4 with OPF-driven operating points on the regulated, tightly converged OpenDSS
-# model, then the discovered-mode detectable subsets.  Until the directories exist these
-# resolve to PENDING placeholders; pass explicit hif_sample_paths to run on the committed
+# The 20260923opf corpora (regenerated 2026-09-23, docs/opf_operating_points_20260923.md):
+# HIF corpora at PMU sigma 1e-4 with OPF-driven operating points on the regulated, tightly
+# converged OpenDSS model, then the discovered-mode detectable subsets (27 + 8 + 77 + 19
+# windows, tracked).  The resolver still returns a PENDING placeholder if a subset directory
+# is missing from a checkout; pass explicit hif_sample_paths to run on the committed
 # 20260923b corpora (5e-3 / 1e-3 phasor sigma, model-default dispatch).
 PHYSICAL_HIF_SAMPLE_PATHS = tuple(resolve_tagged_corpus_path(stem) for stem in (
     # Detectable subsets (discovered-mode WLS admission, margin 1.25) of the physical 69 kV
@@ -256,14 +258,16 @@ PHYSICAL_HIF_SAMPLE_PATHS_20260923B = tuple(_PHYSICAL_MEASUREMENTS_DIR / name / 
 PHYSICAL_HIF_SAMPLE_PATHS_20260921 = tuple(_PHYSICAL_MEASUREMENTS_DIR / name / "samples.jsonl" for name in (
     "hif_physical69_main_train_detectable_25x10_20260921", "hif_physical69_main_valid_detectable_7x10_20260921",
     "hif_physical69_main_train_extra_detectable_69x10_20260921", "hif_physical69_main_valid_extra_detectable_17x10_20260921"))
-# PENDING (20260923opf): the detection-limit and sweep corpora follow the tag; their window
-# counts are fixed by the recipe (21 and 336), so the names are known.
+# The detection-limit and sweep corpora follow the tag; their window counts are fixed by the
+# recipe (21 and 336), so the names are known.  Like their 20260923b predecessors they are
+# generated artifacts that are not tracked in git.
 PHYSICAL_HIF_DETECTION_LIMIT_SAMPLE_PATH = _PHYSICAL_MEASUREMENTS_DIR / f"hif_physical69_detection_limit_21x10_{PHYSICAL_HIF_CORPUS_TAG}" / "samples.jsonl"
 PHYSICAL_HIF_SWEEP_SAMPLE_PATH = _PHYSICAL_MEASUREMENTS_DIR / f"hif_physical_sweep_eval_336x10_{PHYSICAL_HIF_CORPUS_TAG}" / "samples.jsonl"
 # Unbalance corpus under the WLS shunt convention (ybus), phase-A Vm, physical telemetry bases;
-# 440 windows + 60 balanced controls, seed 20260925.  PENDING (20260923opf): regenerated with
-# OPF-driven operating points (phasor sigmas unchanged); the admitted count is resolved from
-# the directory name.  The committed 20260923b subset (160 windows) is kept beside it.
+# 440 windows + 60 balanced controls, seed 20260925.  Regenerated 2026-09-23 (20260923opf) with
+# OPF-driven operating points (phasor sigmas unchanged): 162 windows admitted, 157 of them in
+# common with 20260923b; the admitted count is resolved from the directory name.  The
+# committed 20260923b subset (160 windows) is kept beside it.
 PHYSICAL_IMBALANCE_SAMPLE_PATH = resolve_tagged_corpus_path("out_measurements_imbalance_currents_ybus_detectable", suffix="")
 PHYSICAL_IMBALANCE_SAMPLE_PATH_20260923B = _PHYSICAL_MEASUREMENTS_DIR / "out_measurements_imbalance_currents_ybus_detectable_160_20260923b" / "samples.jsonl"
 DEFAULT_BALANCED_ARTIFACT_DIR = (
