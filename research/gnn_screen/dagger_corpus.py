@@ -22,11 +22,17 @@ DAgger, never corrupt the faulted branch's own flow meters. No window is
 filtered by WLS detectability; DAgger's detectable training subsets are marked
 in offline metadata instead.
 
-Physics: the default HIF corpora (2026-09-23) keep generator reactive limits, so
-HIF and unbalance parents both regulate voltage. The earlier 2026-09-19/21 HIF
-corpora were simulated while dispatch writes reset those limits; every HIF
-parent is checked to reproduce its stored healthy reference with the current
-simulator, so a corpus from different physics is refused instead of mixed.
+Physics: the default corpora (2026-09-23opf) keep generator reactive limits and
+run at OPF-driven operating points (unit dispatch, PV setpoints and source
+voltage from the pypower AC-OPF at the window's loads), which every row stores
+in its ``op_point``. HIF parents replay it through ``apply_hif_operating_point``;
+unbalance parents apply the uniform load scale and then the stored dispatch
+through the unbalance generator's ``_apply_operating_point_dispatch`` (a no-op
+for the load-only op_points of the pre-opf corpora). The earlier 2026-09-19/21
+HIF corpora were simulated while dispatch writes reset the reactive limits;
+every HIF and unbalance parent is checked to reproduce its stored healthy
+reference with the current simulator, so a corpus from different physics is
+refused instead of mixed.
 """
 from __future__ import annotations
 
@@ -47,24 +53,27 @@ from .dataset import FAMILY_NAMES, MEASUREMENT_CONVENTION, load_manifest
 CONTRACT = "gnn_dagger_aligned_corpus_v1"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS = REPO_ROOT / "artifacts" / "measurements"
-# 2026-09-23b corpora: same seeds and recipes as the 2026-09-19/21 corpora,
-# re-simulated with generator reactive limits kept (voltage regulation active)
-# and the OpenDSS solve tolerance at 1e-8, so the HIF and unbalance paths agree.
+# 2026-09-23opf corpora (docs/opf_operating_points_20260923.md): same seeds and
+# recipes as the 2026-09-19/21/23b corpora, re-simulated with generator reactive
+# limits kept (voltage regulation active), the OpenDSS solve tolerance at 1e-8
+# and OPF-driven operating points stored in every row's op_point, so the HIF and
+# unbalance paths agree and sit on the pypower families' dispatch; the HIF PMU
+# phasors are drawn at sigma 1e-4 (the unbalance corpus keeps 5e-3 / 1e-3).
 DEFAULT_HIF_CORPORA = (
-    "hif_physical69_main_train_84x10_20260923b",
-    "hif_physical69_main_valid_21x10_20260923b",
-    "hif_physical69_main_train_extra_252x10_20260923b",
-    "hif_physical69_main_valid_extra_63x10_20260923b",
+    "hif_physical69_main_train_84x10_20260923opf",
+    "hif_physical69_main_valid_21x10_20260923opf",
+    "hif_physical69_main_train_extra_252x10_20260923opf",
+    "hif_physical69_main_valid_extra_63x10_20260923opf",
 )
 DEFAULT_HIF_DETECTABLE = {
-    "hif_physical69_main_train_84x10_20260923b": "hif_physical69_main_train_detectable_27x10_20260923b",
-    "hif_physical69_main_valid_21x10_20260923b": "hif_physical69_main_valid_detectable_8x10_20260923b",
-    "hif_physical69_main_train_extra_252x10_20260923b": "hif_physical69_main_train_extra_detectable_77x10_20260923b",
-    "hif_physical69_main_valid_extra_63x10_20260923b": "hif_physical69_main_valid_extra_detectable_19x10_20260923b",
+    "hif_physical69_main_train_84x10_20260923opf": "hif_physical69_main_train_detectable_27x10_20260923opf",
+    "hif_physical69_main_valid_21x10_20260923opf": "hif_physical69_main_valid_detectable_8x10_20260923opf",
+    "hif_physical69_main_train_extra_252x10_20260923opf": "hif_physical69_main_train_extra_detectable_77x10_20260923opf",
+    "hif_physical69_main_valid_extra_63x10_20260923opf": "hif_physical69_main_valid_extra_detectable_19x10_20260923opf",
 }
-DEFAULT_UNBALANCE_CORPUS = "out_measurements_imbalance_currents_ybus_440_20260923b"
-DEFAULT_UNBALANCE_DETECTABLE = "out_measurements_imbalance_currents_ybus_detectable_160_20260923b"
-DEFAULT_EVALUATION_HIF = ("hif_physical_sweep_eval_336x10_20260923b", "hif_physical69_detection_limit_21x10_20260923b")
+DEFAULT_UNBALANCE_CORPUS = "out_measurements_imbalance_currents_ybus_440_20260923opf"
+DEFAULT_UNBALANCE_DETECTABLE = "out_measurements_imbalance_currents_ybus_detectable_162_20260923opf"
+DEFAULT_EVALUATION_HIF = ("hif_physical_sweep_eval_336x10_20260923opf", "hif_physical69_detection_limit_21x10_20260923opf")
 SPLIT_FRACTIONS = {"train": 0.60, "validation": 0.15, "calibration": 0.10, "test": 0.15}
 # Noise replicates per noiseless mean. Calibration parents contribute healthy
 # windows only. An unbalance parent has one unbalanced mean against ten HIF
@@ -208,6 +217,10 @@ class _Simulator:
             if self._base_loads is None:
                 self._base_loads = gi._read_base_loads()
             gi._scale_all_loads(self._base_loads, float(op_point["load_scale"]))
+            # The generator's order: scale the loads, then write the row's stored
+            # dispatch (unit kW, PV setpoints, source pu); a load-only op_point
+            # (pre-opf corpora) leaves the checked-in model dispatch in place.
+            gi._apply_operating_point_dispatch(op_point)
 
     def solve(self, op_point: dict[str, Any], *, parameter: dict | None = None,
               topology: dict | None = None) -> list[float]:
@@ -243,6 +256,19 @@ def simulator(path: str) -> _Simulator:
     if path not in _SIMULATORS:
         _SIMULATORS[path] = _Simulator(path)
     return _SIMULATORS[path]
+
+
+def unbalance_operating_point(op_point: dict[str, Any]) -> dict[str, Any]:
+    """The unbalance path's replay point: the uniform load scale plus the dispatch the row stores.
+
+    The 2026-09-23opf rows carry the OPF dispatch (``generator_dispatch_kw``,
+    ``voltage_setpoints_pu``, ``source_voltage_pu``) beside ``load_scale``; the
+    target bus and any per-bus scale are the unbalanced solve's and are dropped.
+    """
+    from Transmission.generate_measurements_imbalance import DISPATCH_OP_POINT_KEYS
+    op = {"load_scale": float(op_point["load_scale"])}
+    op.update({key: op_point[key] for key in DISPATCH_OP_POINT_KEYS if key in op_point})
+    return op
 
 
 # ------------------------------------------------------------------ strata
@@ -399,7 +425,7 @@ def build_unbalance_parent(task: dict[str, Any]) -> dict[str, Any]:
     vuf = max_vuf(row.get("three_phase_voltages_clean"))
     stratum = vuf_stratum(vuf)
     parent = _Parent(parent_id, "unbalance", stratum, bool(task["detectable"]), sigma, task["case"])
-    op = {"load_scale": float(row["op_point"]["load_scale"])}
+    op = unbalance_operating_point(row["op_point"])
     mismatch = float(np.max(np.abs(np.subtract(sim.solve(op), row["z_true"]))))
     if mismatch > 1e-9:
         raise ValueError(f"{parent_id}: the current unbalance simulator does not reproduce the stored balanced reference "
@@ -576,8 +602,8 @@ def build_corpus(output_dir: str | Path, *, seed: int = 2026092301, workers: int
         "simulation_failures": len(failures),
         "inherited_properties": [
             "HIF parents use the HIF generator path (operating-point profiles, dispatch and PV setpoints) and "
-            "unbalance parents the unbalance path (uniform load scale, file setpoints); both keep generator "
-            "reactive limits. Each parent carries its own healthy partners.",
+            "unbalance parents the unbalance path (uniform load scale, then the row's stored OPF dispatch and "
+            "setpoints); both keep generator reactive limits. Each parent carries its own healthy partners.",
             "No WLS-detectability filtering; offline_metadata.dagger_detectable marks DAgger's training subsets.",
             "The parent split is independent of the DAgger suite split; offline_metadata.dagger_corpus and "
             "dagger_source_id identify every source window.",

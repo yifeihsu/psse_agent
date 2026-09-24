@@ -198,7 +198,7 @@ into a fresh directory and optionally a file from `overrides/` as
 
 `research_full_pipeline_20260921_physical` (commit 07880e1) runs the unchanged plans on the committed detectable-only corpora: 118 physical-ohm HIF windows on 69 kV lines (25 + 69 train, 7 + 17 validation; 100-1000 ohm sampled, only the windows the operator WLS discovers at margin 1.25 kept) and 160 ybus unbalance windows. Both families use the same-operating-point OpenDSS balanced reference and declare their shunt convention; Vm is the phase-A magnitude. Jobs d0 18205117 through r2e 18205131, submitted 2026-09-21T18:13Z. See docs/ieee14_hif_legacy_reconfiguration_20260919.md.
 
-### 2026-09-23 cell: WLS-gated diagnostics (pending corpora)
+### 2026-09-23 cell: WLS-gated diagnostics on the OPF-dispatched PMU corpora
 
 The evidence contract changes to `EVIDENCE_PROFILE=wls_gated_diagnostics`
 (docs/wls_gated_evidence_20260923.md): detection uses balanced SCADA and its
@@ -213,15 +213,24 @@ both strict profiles, and `prerequisites.sh` refuses HIF corpora whose
 `meta.json` does not declare `PMU_PHASOR_SIGMA` (1e-4 per rectangular
 component) for `three_phase_sigma` and `branch_current_sigma_pu`.
 
-Corpora: the cell still names the committed `*_20260923b` corpora (5e-3 / 1e-3
-phasor sigma, model-default dispatch), which the sigma check rejects on
-purpose. The `20260923opf` regeneration (HIF at PMU sigma 1e-4 with OPF-driven
-operating points; unbalance with OPF-driven operating points, sigmas unchanged)
-is pending; when it lands, switch `HIF_CORPUS_*` and `IMBALANCE_CORPUS` to the
-`*_detectable_<N>x10_20260923opf` / `*_detectable_<N>_20260923opf` subsets,
-update the capacity comment and `research/test_hpc_full_pipeline.py`, and
-rebuild D0, the suites and BC0 (the receipt profile check refuses reuse of the
-scada_only or auxiliary stages).
+Corpora: the cell names the `20260923opf` detectable subsets
+(docs/opf_operating_points_20260923.md), regenerated from the 20260923b seeds
+and recipes with OPF-driven operating points (unit dispatch, PV setpoints and
+source voltage from the pypower AC-OPF at each scan's loads, the law the eight
+pypower families follow, so balanced SCADA no longer separates the OpenDSS
+families by dispatch) and, for HIF, PMU phasor sigma 1e-4 per rectangular
+component; the unbalance sigmas stay 5e-3 / 1e-3.
+`HIF_CORPUS_TRAIN` = `hif_physical69_main_train_detectable_27x10_20260923opf`,
+`HIF_CORPUS_VALID` = `hif_physical69_main_valid_detectable_8x10_20260923opf`,
+`HIF_CORPUS_TRAIN_EXTRA` = `hif_physical69_main_train_extra_detectable_77x10_20260923opf`,
+`HIF_CORPUS_VALID_EXTRA` = `hif_physical69_main_valid_extra_detectable_19x10_20260923opf`
+(131 admitted HIF windows, the same ids as 20260923b; labels, load profiles
+and SCADA noise draws are bit-identical) and `IMBALANCE_CORPUS` =
+`out_measurements_imbalance_currents_ybus_detectable_162_20260923opf` (162 of
+440 windows admitted; 157 in common with the 160 of 20260923b). The plans are
+unchanged (78 + 40 HIF roots, 90 unbalance roots, 40 balanced controls). The
+cell must rebuild D0, the suites and BC0: the receipt profile check refuses to
+reuse the scada_only or auxiliary stages, and the corpora themselves changed.
 
 ## Reading the results
 

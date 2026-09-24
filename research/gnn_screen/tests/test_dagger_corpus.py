@@ -65,7 +65,13 @@ def test_resimulated_healthy_scans_use_the_generators_own_paths():
     hif = dc.fault_rows(dc.DEFAULT_HIF_CORPORA[0])[0]
     unbalance = dc.fault_rows(dc.DEFAULT_UNBALANCE_CORPUS)[0]
     assert dc.simulator("hif_operating_point").solve(hif["scans"][0]["op_point"]) == hif["z_true"]
-    assert dc.simulator("imbalance_balanced").solve({"load_scale": unbalance["op_point"]["load_scale"]}) == unbalance["z_true"]
+    op = dc.unbalance_operating_point(unbalance["op_point"])
+    # The 2026-09-23opf rows store the OPF dispatch; the replay applies it after the load scaling.
+    assert {"load_scale", "generator_dispatch_kw", "voltage_setpoints_pu", "source_voltage_pu"} == set(op)
+    assert "target_bus" not in op
+    assert dc.simulator("imbalance_balanced").solve(op) == unbalance["z_true"]
+    # Without the stored dispatch the checked-in model dispatch would be replayed instead.
+    assert dc.simulator("imbalance_balanced").solve({"load_scale": op["load_scale"]}) != unbalance["z_true"]
 
 
 def test_parent_grouping_splits_and_labels(corpus):

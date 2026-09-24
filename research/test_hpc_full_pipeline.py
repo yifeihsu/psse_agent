@@ -113,15 +113,16 @@ def test_plans_cover_every_family_and_respect_corpus_capacity() -> None:
     total = {f: d0[f] + rounds * round_plan[f] + development[f] for f in families}
     # 420 raw HIF windows (84 + 252 train, 21 + 63 validation of the physical-ohm
     # corpora) serve hif and measurement+hif separately; only about 30 percent
-    # pass discovered-mode admission at margin 1.25 (131 in the 2026-09-23
-    # regulated corpora), so the plans are bounded by the admitted pool, not the
-    # raw count. 440 unbalance windows serve unbalance and the balanced control
-    # (160 admitted at margin 1.25).
+    # pass discovered-mode admission at margin 1.25 (131 in the 2026-09-23opf
+    # OPF-dispatched corpora, the same admitted windows as 20260923b), so the
+    # plans are bounded by the admitted pool, not the raw count. 440 unbalance
+    # windows serve unbalance and the balanced control (162 admitted at margin
+    # 1.25).
     assert total["hif"] <= 131 and total["measurement+hif"] <= 131
-    # The 2026-09-21 unbalance corpus has 440 windows, of which 160 pass
+    # The 2026-09-23opf unbalance corpus has 440 windows, of which 162 pass
     # discovered-mode admission at margin 1.25; the balanced control draws from
     # the same windows, so both plans are bounded by the admitted pool.
-    assert total["three_phase_unbalance"] <= 160 and total["telemetry_no_disturbance"] <= 160
+    assert total["three_phase_unbalance"] <= 162 and total["telemetry_no_disturbance"] <= 162
     assert 300 <= sum(total.values()) <= 1000
 
 
@@ -129,46 +130,54 @@ def test_hif_corpora_are_the_physical_ohm_regeneration() -> None:
     text = (CELL / "pipeline.env").read_text(encoding="utf-8")
     assert re.search(
         r"^HIF_CORPUS_TRAIN=\$SRC/artifacts/measurements/"
-        r"hif_physical69_main_train_detectable_27x10_20260923b/samples\.jsonl$",
+        r"hif_physical69_main_train_detectable_27x10_20260923opf/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
     assert re.search(
         r"^HIF_CORPUS_VALID=\$SRC/artifacts/measurements/"
-        r"hif_physical69_main_valid_detectable_8x10_20260923b/samples\.jsonl$",
+        r"hif_physical69_main_valid_detectable_8x10_20260923opf/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
     # The comment states the ohm bands, the voltage profile, the shunt
-    # convention and the resulting capacity.
+    # convention, the OPF dispatch and the PMU precision, and the resulting
+    # capacity (the 20260923opf subsets admit the same 131 windows as 20260923b).
     assert "100-200" in text and "200-500" in text and "500-1000 ohm" in text
     assert "ieee14_nominal_69_13p8_18kv_v1" in text
     assert "shunt_convention ybus" in text
-    assert "131 HIF" in text
+    assert "131 HIF" in text and "27 + 8 + 77 + 19" in text
+    assert "docs/opf_operating_points_20260923.md" in text
+    assert "PMU phasor sigma 1e-4" in text
     assert re.search(
         r"^HIF_CORPUS_TRAIN_EXTRA=\$SRC/artifacts/measurements/"
-        r"hif_physical69_main_train_extra_detectable_77x10_20260923b/samples\.jsonl$",
+        r"hif_physical69_main_train_extra_detectable_77x10_20260923opf/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
     assert re.search(
         r"^HIF_CORPUS_VALID_EXTRA=\$SRC/artifacts/measurements/"
-        r"hif_physical69_main_valid_extra_detectable_19x10_20260923b/samples\.jsonl$",
+        r"hif_physical69_main_valid_extra_detectable_19x10_20260923opf/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
     assert '"$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA"' in text
-    # The unbalance corpus is the 2026-09-21 WLS-convention regeneration and the
-    # collection stage names it so the recorded profile states which rows were used.
+    # The unbalance corpus is the 2026-09-23opf OPF-dispatched regeneration of the
+    # 2026-09-21 WLS-convention corpus (162 admitted windows) and the collection
+    # stage names it so the recorded profile states which rows were used.
     assert re.search(
         r"^IMBALANCE_CORPUS=\$SRC/artifacts/measurements/"
-        r"out_measurements_imbalance_currents_ybus_detectable_160_20260923b/samples\.jsonl$",
+        r"out_measurements_imbalance_currents_ybus_detectable_162_20260923opf/samples\.jsonl$",
         text,
         flags=re.MULTILINE,
     )
+    assert "162 unbalance" in text
     assert 'COLLECTION_ARGS+=(--imbalance-sample-path "$IMBALANCE_CORPUS")' in text
     assert "out_measurements_imbalance_currents_20260903" not in text
     assert "docs/ieee14_hif_legacy_reconfiguration_20260919.md" in text
+    # No stage input names a superseded generation.
+    assert "_20260923b/samples.jsonl" not in text and "_20260923/samples.jsonl" not in text
+    assert "_20260921/samples.jsonl" not in text
     # The legacy system-pu corpora are no longer referenced by the cell.
     assert "hif_multiscan_currents_train_85x10_20260903" not in text
     assert "hif_multiscan_currents_17x10_20260903" not in text
@@ -358,9 +367,9 @@ def test_zero_shot_stage_and_frozen_student_wiring() -> None:
 def test_evidence_profile_default_is_wls_gated_and_every_guard_accepts_it() -> None:
     """The 2026-09-23 contract: WLS-gated diagnostics by default, discovered
     signatures on every strict profile, the PMU sigma of the study declared,
-    and every shell whitelist accepting the new profile.  The corpus paths
-    may still name the 20260923b subsets (the regeneration is pending); the
-    test never requires the corpora to exist."""
+    every shell whitelist accepting the new profile, and the corpus paths
+    naming the 20260923opf subsets (the regeneration landed; no TODO marker
+    remains).  The test never requires the corpora to exist."""
     env = (CELL / "pipeline.env").read_text(encoding="utf-8")
     assert "EVIDENCE_PROFILE=${EVIDENCE_PROFILE:-wls_gated_diagnostics}" in env
     assert "HIF_SIGNATURE_MODE=${HIF_SIGNATURE_MODE:-discovered}" in env
@@ -368,7 +377,11 @@ def test_evidence_profile_default_is_wls_gated_and_every_guard_accepts_it() -> N
     assert 'case "$EVIDENCE_PROFILE" in scada_only|wls_gated_diagnostics|auxiliary_diagnostics)' in env
     assert '"$EVIDENCE_PROFILE" != auxiliary_diagnostics && "$HIF_SIGNATURE_MODE" != discovered' in env
     assert "docs/wls_gated_evidence_20260923.md" in env
-    assert "TODO(20260923opf)" in env
+    assert "TODO(20260923opf)" not in env and "TODO" not in env
+    for name in ("HIF_CORPUS_TRAIN", "HIF_CORPUS_VALID", "HIF_CORPUS_TRAIN_EXTRA", "HIF_CORPUS_VALID_EXTRA",
+                 "IMBALANCE_CORPUS"):
+        assert re.search(rf"^{name}=\$SRC/artifacts/measurements/[a-z0-9_]+_20260923opf/samples\.jsonl$", env,
+                         flags=re.MULTILINE), name
     deploy = (CELL / "deploy_remote.sh").read_text(encoding="utf-8")
     assert 'case "$EVIDENCE_PROFILE" in scada_only|wls_gated_diagnostics|auxiliary_diagnostics)' in deploy
     prerequisites = (CELL / "prerequisites.sh").read_text(encoding="utf-8")
@@ -389,3 +402,10 @@ def test_evidence_profile_default_is_wls_gated_and_every_guard_accepts_it() -> N
     readme = (CELL / "README.md").read_text(encoding="utf-8")
     assert "### 2026-09-23 cell: WLS-gated diagnostics" in readme
     assert "EVIDENCE_PROFILE=wls_gated_diagnostics" in readme and "20260923opf" in readme
+    assert "pending corpora" not in readme
+    for name in ("hif_physical69_main_train_detectable_27x10_20260923opf",
+                 "hif_physical69_main_valid_detectable_8x10_20260923opf",
+                 "hif_physical69_main_train_extra_detectable_77x10_20260923opf",
+                 "hif_physical69_main_valid_extra_detectable_19x10_20260923opf",
+                 "out_measurements_imbalance_currents_ybus_detectable_162_20260923opf"):
+        assert name in readme, name
