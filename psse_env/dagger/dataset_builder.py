@@ -1186,6 +1186,11 @@ def summarize_history(
 #: opaque 64-hex digest would be an unaliased identifier in the model payload.
 #: The environment keeps them; only the model-visible view drops them.
 CONTROLLER_FINGERPRINT_KEY_SUFFIXES = ("_sha256", "_fingerprint")
+#: Controller-only bookkeeping that the expert reads from the environment's
+#: observation but the policy never saw in the stage-0 exports: the durable,
+#: state-bound NLM localization kept under fresh_context_evidence.three_phase.
+#: The model still sees the NLM tool output in its recent history as before.
+CONTROLLER_ONLY_OBSERVATION_KEYS = frozenset({"nlm_localization"})
 
 
 def without_controller_fingerprints(value: Any) -> Any:
@@ -1195,6 +1200,7 @@ def without_controller_fingerprints(value: Any) -> Any:
             str(key): without_controller_fingerprints(item)
             for key, item in value.items()
             if not str(key).endswith(CONTROLLER_FINGERPRINT_KEY_SUFFIXES)
+            and str(key) not in CONTROLLER_ONLY_OBSERVATION_KEYS
         }
     if isinstance(value, (list, tuple)):
         return [without_controller_fingerprints(item) for item in value]

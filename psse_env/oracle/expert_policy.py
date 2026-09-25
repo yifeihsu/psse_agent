@@ -22,6 +22,7 @@ from psse_env.actions import (
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    PROCESS_REJECTION_ERROR_CODES,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     RUN_WLS,
@@ -75,6 +76,19 @@ STRUCTURAL_PATH_TOOLS = frozenset(
     {CORRECT_PARAMETERS, CORRECT_TOPOLOGY, GET_PARAMETER_CONTEXT, GET_TOPOLOGY_CONTEXT}
 )
 MEASUREMENT_PATH_TOOLS = frozenset({CORRECT_MEASUREMENTS, GET_MEASUREMENT_CONTEXT})
+_BALANCED_CONTEXT_FAMILIES = {
+    GET_MEASUREMENT_CONTEXT: "measurement",
+    GET_PARAMETER_CONTEXT: "parameter",
+    GET_TOPOLOGY_CONTEXT: "topology",
+}
+
+
+def _process_rejection(output: Mapping[str, Any]) -> bool:
+    """A process-gate or lifecycle refusal: nothing was tested."""
+    return (
+        output.get("execution_status") == "failure"
+        and str(output.get("error_code") or "") in PROCESS_REJECTION_ERROR_CODES
+    )
 
 
 def _structural_first_order(
@@ -1426,7 +1440,118 @@ class ExpertPolicyOracle:
                 current_context and phase_context.get("nlm_attempted") is True
             ):
                 signatures.discard(signature)
-        return signatures
+        return signatures - self._untested_recovery_signatures(
+            policy, history, signatures, active_id=active_id
+        )
+
+    def _untested_recovery_signatures(
+        self,
+        policy: PolicyObservation | Mapping[str, Any],
+        history: Sequence[Mapping[str, Any]],
+        signatures: set[str],
+        *,
+        active_id: Any,
+    ) -> set[str]:
+        """Balanced recovery actions that were attempted but never tested.
+
+        ``tried_action_signatures`` records every dispatched action, including
+        requests the process gate refused before any provider or executor ran,
+        and the controller retires balanced context inventories without a state
+        change (after a telemetry answer or an accepted HIF fit).  The
+        operator-escalation audit counts neither as exhaustion, so treating
+        the raw ledger as "tried" made this expert hand off while the audit
+        still saw an untried supported correction or an uninvestigated
+        required context.
+
+        * A correction on the active state stays tried only after a real test:
+          a durable same-state rejection (verification rollback or executor
+          failure), an accepted correction, or a latest visible outcome that
+          was not a process-gate refusal.  A refused attempt that has left
+          the bounded history window cannot retire the target either.
+        * A balanced context request stays tried only while its inventory is
+          still fresh on the active state, or while its latest visible answer
+          is a provider-side failure (for example, no evidence).
+
+        Every re-admitted action still passes the process-validity gate in
+        ``_rank_and_filter`` before it can be labelled.
+        """
+        durable: set[str] = set()
+        for field in ("rejected_hypotheses", "accepted_corrections"):
+            for record in self._get(policy, field, []) or []:
+                if not isinstance(record, Mapping):
+                    continue
+                if field == "rejected_hypotheses" and not recovery_record_applies_to_state(
+                    record, active_id
+                ):
+                    continue
+                if record.get("source_action"):
+                    durable |= self._equivalent_signatures(
+                        safe_normalize_action(record["source_action"])
+                    )
+                if record.get("action_signature"):
+                    text_signature = str(record["action_signature"])
+                    durable.add(text_signature)
+                    semantic = self._semantic_signature_from_text(text_signature)
+                    if semantic:
+                        durable.add(semantic)
+
+        latest_outcome: dict[str, Mapping[str, Any]] = {}
+        for item in history:
+            if not isinstance(item, Mapping):
+                continue
+            normalized = safe_normalize_action(
+                item.get("action") or item.get("executed_action") or {}
+            )
+            if (
+                normalized["tool"] not in CORRECTION_TOOLS
+                and normalized["tool"] not in _BALANCED_CONTEXT_FAMILIES
+            ):
+                continue
+            requested = normalized["arguments"].get("state_id")
+            if requested is not None and str(requested) != str(active_id):
+                continue
+            output = item.get("tool_output") or item.get("outcome") or {}
+            for signature in self._equivalent_signatures(normalized):
+                latest_outcome[signature] = output if isinstance(output, Mapping) else {}
+
+        untested: set[str] = set()
+        for signature in signatures:
+            tool, separator, encoded = signature.partition(":")
+            if not separator:
+                continue
+            outcome = latest_outcome.get(signature)
+            if tool in CORRECTION_TOOLS:
+                if (
+                    not self._signature_applies_to_state(signature, active_id)
+                    or signature in durable
+                    or (outcome is not None and not _process_rejection(outcome))
+                ):
+                    continue
+                untested.add(signature)
+            elif tool in _BALANCED_CONTEXT_FAMILIES:
+                try:
+                    arguments = json.loads(encoded)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(arguments, Mapping) or str(
+                    arguments.get("state_id") or active_id
+                ) != str(active_id):
+                    continue
+                family = _BALANCED_CONTEXT_FAMILIES[tool]
+                fresh = bool(
+                    self._get(policy, f"has_fresh_{family}_context", False)
+                    and str(self._get(policy, f"{family}_context_state_id") or "")
+                    == str(active_id)
+                )
+                provider_answered = bool(
+                    outcome is not None
+                    and outcome.get("execution_status") == "failure"
+                    and not _process_rejection(outcome)
+                )
+                if fresh or provider_answered:
+                    continue
+                untested.add(signature)
+        return untested
 
     @classmethod
     def _structurally_blocked_correction_tools(

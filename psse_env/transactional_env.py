@@ -31,6 +31,7 @@ from .actions import (
     HIF_CONDITIONING_UNAVAILABLE_REQUEST,
     INVALID_ACTION,
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    PROCESS_REJECTION_ERROR_CODES,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
@@ -1499,6 +1500,10 @@ class TransactionalPSSEEnv:
                             },
                         }
                     )
+                elif tool == RUN_THREE_PHASE_NLM_FROM_PATH and evidence_bound:
+                    self._record_nlm_localization(
+                        target_id, str(provider_state["state_hash"]), metrics
+                    )
                 self._apply_minted_signatures(tool, metrics)
                 self._record_anomaly_explanation(tool, target_id, metrics)
             if (
@@ -2455,15 +2460,9 @@ class TransactionalPSSEEnv:
                     "correction_route_not_actionable",
                 },
             }
-            process_failure_codes = {
-                "schema_error",
-                "unknown_tool",
-                "candidate_lifecycle_violation",
-                "unknown_state_id",
-                "state_reference_mismatch",
-                "missing_precondition",
-                "post_correction_confirmation_required",
-            }
+            # A process-gate refusal tested nothing; the expert applies the
+            # same shared code set when it decides what it has tried.
+            process_failure_codes = PROCESS_REJECTION_ERROR_CODES
             exhausted_families: set[str] = set()
             for event in self.history:
                 if not isinstance(event, Mapping):
@@ -4254,6 +4253,48 @@ class TransactionalPSSEEnv:
             }
         )
         self.context_flags.setdefault("explained_anomalies", []).append(record)
+
+    def _record_nlm_localization(
+        self, target_id: str, target_hash: str, metrics: Mapping[str, Any]
+    ) -> None:
+        """Keep the NLM line localization with the acquisition it screened.
+
+        The HIF ladder needs the localized branch (and phase) several steps
+        after the screen, but the policy history window is bounded.  Record
+        the provider's ranked branch rows on the state-bound three-phase
+        acquisition ledger, so the finding lives and dies with that
+        acquisition: a new request replaces the record, and a state change
+        drops it with the acquired telemetry.  Only the observable ranking is
+        kept; no hash, fit or scenario truth.
+        """
+        contexts = self.context_flags.get("fresh_context_evidence")
+        context = contexts.get("three_phase") if isinstance(contexts, Mapping) else None
+        if not (
+            isinstance(context, dict)
+            and str(context.get("state_id")) == target_id
+            and str(context.get("state_hash")) == target_hash
+            and context.get("nlm_attempted") is True
+        ):
+            return
+        summary = metrics.get("nlm_summary")
+        rows: list[int] = []
+        for group in (summary.get("top_hif_groups") if isinstance(summary, Mapping) else None) or []:
+            if not isinstance(group, Mapping) or group.get("branch_row0") is None:
+                continue
+            try:
+                row = int(group["branch_row0"])
+            except (TypeError, ValueError):
+                continue
+            if row not in rows:
+                rows.append(row)
+        if not rows:
+            context.pop("nlm_localization", None)
+            return
+        phase = str(summary.get("suspected_phase") or "").strip().upper()
+        context["nlm_localization"] = {
+            "top_hif_branch_rows": rows,
+            "suspected_phase": phase if phase in {"A", "B", "C"} else None,
+        }
 
     def _apply_minted_signatures(self, tool: str, metrics: Mapping[str, Any]) -> None:
         """Add observable signatures a diagnostic minted from telemetry.

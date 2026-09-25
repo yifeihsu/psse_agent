@@ -67,3 +67,14 @@ def test_accepted_hif_explanation_exports_without_identifier_leaks():
 def test_replay_stable_view_also_drops_fingerprints():
     prepared, _ = prepare_model_policy_observation(_observation(), alias_before_compaction=True)
     assert find_model_identifier_leaks({"state": prepared}) == []
+
+
+def test_durable_nlm_localization_stays_controller_only():
+    observation = _observation()
+    observation["fresh_context_evidence"] = {"three_phase": {
+        "state_id": "r0_abc_episode0:s0", "status": "available",
+        "nlm_localization": {"top_hif_branch_rows": [3, 7], "suspected_phase": "B"}}}
+    prepared, _ = prepare_model_policy_observation(observation)
+    assert "nlm_localization" not in prepared["fresh_context_evidence"]["three_phase"]
+    assert prepared["fresh_context_evidence"]["three_phase"]["status"] == "available"
+    assert observation["fresh_context_evidence"]["three_phase"]["nlm_localization"]["suspected_phase"] == "B"

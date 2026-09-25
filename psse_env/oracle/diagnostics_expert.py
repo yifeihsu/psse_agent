@@ -226,8 +226,15 @@ class DiagnosticsExpert:
             or (unbalance_signal and "three_phase_voltages" in available)
         )
         nlm_metrics = completed.get(RUN_THREE_PHASE_NLM_FROM_PATH)
-        hif_branch = self._nlm_top_branch(nlm_metrics)
-        hif_phase = self._nlm_suspected_phase(nlm_metrics)
+        # The controller keeps the screen's localization on the state-bound
+        # acquisition ledger; the bounded history window can have dropped the
+        # NLM output by the time the next rung is due.
+        durable_localization = self._durable_nlm_localization(phase_context, active_id)
+        if durable_localization is not None:
+            hif_branch, hif_phase = durable_localization
+        else:
+            hif_branch = self._nlm_top_branch(nlm_metrics)
+            hif_phase = self._nlm_suspected_phase(nlm_metrics)
         nlm_attempted = (
             str(phase_context.get("state_id") or "") == str(active_id)
             and phase_context.get("nlm_attempted") is True
@@ -617,6 +624,38 @@ class DiagnosticsExpert:
             return None
         text = str(phase).strip().upper()
         return text if text in {"A", "B", "C"} else None
+
+    @staticmethod
+    def _durable_nlm_localization(
+        phase_context: Any, active_id: Any
+    ) -> tuple[int, str | None] | None:
+        """Top NLM branch and phase from the acquisition ledger, if bound here."""
+        if not (
+            isinstance(phase_context, Mapping)
+            and str(phase_context.get("state_id") or "") == str(active_id)
+            and phase_context.get("request_attempted") is True
+            and phase_context.get("nlm_attempted") is True
+        ):
+            return None
+        record = phase_context.get("nlm_localization")
+        if not isinstance(record, Mapping):
+            return None
+        rows = record.get("top_hif_branch_rows")
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+            return None
+        branch: int | None = None
+        for row in rows:
+            if isinstance(row, bool):
+                continue
+            try:
+                branch = int(row)
+            except (TypeError, ValueError):
+                continue
+            break
+        if branch is None:
+            return None
+        phase = str(record.get("suspected_phase") or "").strip().upper()
+        return branch, (phase if phase in {"A", "B", "C"} else None)
 
     @staticmethod
     def _nlm_top_branch(metrics: Mapping[str, Any] | None) -> int | None:

@@ -131,6 +131,22 @@ CONTEXT_TOOLS = {
     GET_TOPOLOGY_CONTEXT,
 }
 
+# Failure codes of a process-gate or lifecycle refusal: the action never
+# reached a provider or executor, so it tested nothing.  The environment's
+# operator-escalation audit does not count such an attempt as an exhausted
+# recovery target, and the expert does not count it as a tried action.
+PROCESS_REJECTION_ERROR_CODES = frozenset(
+    {
+        "schema_error",
+        "unknown_tool",
+        "candidate_lifecycle_violation",
+        "unknown_state_id",
+        "state_reference_mismatch",
+        "missing_precondition",
+        "post_correction_confirmation_required",
+    }
+)
+
 STATE_MANAGEMENT_TOOLS = {
     COMMIT_STATE,
     ROLLBACK_STATE,
