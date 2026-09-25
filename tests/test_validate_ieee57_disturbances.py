@@ -170,3 +170,15 @@ def test_full_circuit_physics_covers_hif_hidden_nodes_and_actual_unbalanced_load
     assert faulted["phase_node_count"] == 174
     assert faulted["enabled_fault_count"] == 1
     assert faulted["checks"]["fault_ohms_law_current_pu"]["passed"]
+
+
+def test_system_table_keeps_ieee57_defaults_and_regulates_ieee118_generators():
+    from scripts.validate_ieee57_disturbances import IMPLEMENTATION_PATHS, SYSTEMS, implementation_paths
+
+    assert SYSTEMS["case57"]["chi_square_alpha"] == 0.05
+    assert SYSTEMS["case57"]["generator_control"] == "constant_pq"
+    assert SYSTEMS["case118"]["chi_square_alpha"] == 0.01
+    assert SYSTEMS["case118"]["generator_control"] == "pv_q_limits"
+    assert implementation_paths("case57") == IMPLEMENTATION_PATHS
+    assert "mcp_server/case118.m" in implementation_paths("case118")
+    assert "mcp_server/case57.m" not in implementation_paths("case118")

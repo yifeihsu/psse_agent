@@ -1,4 +1,4 @@
-"""Unfiltered physical IEEE14/IEEE57 HIF and paired noisy balanced-WLS audit.
+"""Unfiltered physical IEEE14/IEEE57/IEEE118 HIF and paired noisy balanced-WLS audit.
 
 This is a steady-state resistive-surrogate experiment, not a protection test.
 No WLS result selects a physical case. Failed solves remain unavailable records.
@@ -39,7 +39,7 @@ from research.gnn_screen.wls_features import build_wls_features
 from three_phase_model.disturbances import audit_disturbed_circuit, eligible_hif_branch_rows, inject_midspan_hif
 from three_phase_model.exporter import export_model, load_assumptions, write_json
 from three_phase_model.measurements import extract_measurements
-from three_phase_model.runtime import compile_model
+from three_phase_model.runtime import compile_model, regulated_generator_deviation
 from three_phase_model.validation import validate_model
 from three_phase_model.voltage_bases import (
     IEEE14_VOLTAGE_BASE_PROFILE_ID, apply_ieee14_voltage_bases, eligible_ieee14_hif_branch_rows,
@@ -138,7 +138,11 @@ def _snapshot(build, *, hif=None):
         branch_overrides=None if receipt is None else receipt["branch_overrides"])
     audit = (validate_model(dss, build["reference"], build["registry"], build["assumptions"])
              if receipt is None else audit_disturbed_circuit(dss, receipt, build["registry"], build["assumptions"]))
-    # The actual engine must retain the requested constant-PQ operating snapshot.
+    # The actual engine must retain the requested constant-PQ operating snapshot
+    # and every regulated generator its P, Q limits and voltage regulation.
+    regulated = regulated_generator_deviation(dss)
+    if not regulated["passed"]:
+        raise RuntimeError(f"Regulated-generator control law violated: {regulated['worst']}")
     power = {row["element"].lower(): complex(row["power_into_element_pu"]["real"],
         row["power_into_element_pu"]["imag"]) for row in telemetry["load_powers"]}
     pq_errors = []
@@ -221,8 +225,14 @@ def configure_system(system="case14", voltage_profile=None):
         )
         profile = IEEE57_VOLTAGE_BASE_PROFILE_ID
         apply_bases, planned_rows = apply_ieee57_voltage_bases, eligible_ieee57_hif_branch_rows
+    elif system == "case118":
+        from three_phase_model.voltage_bases import (
+            IEEE118_VOLTAGE_BASE_PROFILE_ID, apply_ieee118_voltage_bases, eligible_ieee118_hif_branch_rows,
+        )
+        profile = IEEE118_VOLTAGE_BASE_PROFILE_ID
+        apply_bases, planned_rows = apply_ieee118_voltage_bases, eligible_ieee118_hif_branch_rows
     else:
-        raise ValueError("Physical sweep supports system='case14' or system='case57'")
+        raise ValueError("Physical sweep supports system='case14', 'case57' or 'case118'")
     if voltage_profile is not None and voltage_profile != profile:
         raise ValueError(f"Voltage profile {voltage_profile!r} is incompatible with {system}")
     source = apply_bases(resolve_system(system).load_case())
@@ -232,7 +242,7 @@ def configure_system(system="case14", voltage_profile=None):
 def run_sweep(output, *, load_scales=(.8, 1.), noise_replicates=1, seed=20260918,
               assumptions="normalized_diagonal", resistances_ohm=RESISTANCES_OHM,
               branch_rows=None, phases=(1, 2, 3), system="case14", voltage_profile=None,
-              chi_square_alpha=None, comparison_alphas=None):
+              chi_square_alpha=None, comparison_alphas=None, generator_control=None):
     started = time.perf_counter()
     output = Path(output).resolve()
     if output.exists():
@@ -247,26 +257,34 @@ def run_sweep(output, *, load_scales=(.8, 1.), noise_replicates=1, seed=20260918
     if not phases or len(set(phases)) != len(phases) or any(phase not in (1, 2, 3) for phase in phases):
         raise ValueError("phases must be a nonempty subset of ABC")
     source, voltage_profile, eligible = configure_system(system, voltage_profile)
+    # IEEE118 generators are voltage-regulated with reactive limits (user decision
+    # 2026-09-25): fixed-PQ snapshots have no operating point for most 100-500 ohm faults.
+    generator_control = generator_control or ("pv_q_limits" if system == "case118" else "constant_pq")
+    # IEEE57 keeps its 2026-09-19 study's 5% primary gate with a 1% comparison;
+    # IEEE118 takes the pipeline's 1% gate primary with the 5% gate for comparison.
     chi_square_alpha = (.05 if system == "case57" else CHI_SQUARE_ALPHA) if chi_square_alpha is None else float(chi_square_alpha)
-    comparison_alphas = ((.01,) if system == "case57" else ()) if comparison_alphas is None else tuple(comparison_alphas)
+    comparison_alphas = ({"case57": (.01,), "case118": (.05,)}.get(system, ())
+                         if comparison_alphas is None else tuple(comparison_alphas))
     if any(not math.isfinite(alpha) or not 0 < alpha < 1 for alpha in (chi_square_alpha, *comparison_alphas)):
         raise ValueError("Chi-square alpha values must be strictly between zero and one")
     comparison_alphas = tuple(dict.fromkeys(alpha for alpha in comparison_alphas if alpha != chi_square_alpha))
     nb, nl = len(source["bus"]), len(source["branch"])
     measurement_count = 3 * nb + 4 * nl
     bus_kv = {int(row[0]): float(row[9]) for row in source["bus"]}
-    contract = CONTRACT if system == "case14" else "ieee57_physical_hif_unfiltered_sweep_v1"
+    contract = CONTRACT if system == "case14" else f"ieee{system[4:]}_physical_hif_unfiltered_sweep_v1"
     selected = eligible if branch_rows is None else list(branch_rows)
     if not selected or len(set(selected)) != len(selected) or not set(selected) <= set(eligible):
         raise ValueError("branch_rows must be distinct eligible same-voltage lines")
     expected = len(load_scales) * len(selected) * len(phases) * len(resistances_ohm)
     output.mkdir(parents=True)
     sigmas = {profile: measurement_sigma(nb, nl, noise_profile=profile) for profile in NOISE_PROFILES}
-    implementation = (*IMPLEMENTATION, "scripts/audit_ieee57_hif_physical_sweep.py") if system == "case57" else IMPLEMENTATION
+    implementation = {"case57": (*IMPLEMENTATION, "scripts/audit_ieee57_hif_physical_sweep.py"),
+                      "case118": (*IMPLEMENTATION, "scripts/audit_ieee57_hif_physical_sweep.py",
+                                  "scripts/audit_ieee118_hif_physical_sweep.py")}.get(system, IMPLEMENTATION)
     source_hashes = {name: hashlib.sha256((REPO/name).read_bytes()).hexdigest() for name in implementation}
     config = {"contract": contract, "created_utc": datetime.now(timezone.utc).isoformat(),
         "system": system, "bus_count": nb, "branch_count": nl, "measurement_count": measurement_count,
-        "voltage_profile": voltage_profile, "assumptions": assumptions,
+        "voltage_profile": voltage_profile, "assumptions": assumptions, "generator_control": generator_control,
         "load_scales": list(load_scales), "load_scaling": "multiply_bus_PD_QD; retain_non_slack_PG; solve_slack_PQ_and_PV_Q",
         "phases": list(phases), "alpha": .5, "resistances_ohm": list(resistances_ohm),
         "eligible_branch_rows0": eligible, "selected_branch_rows0": selected, "expected_physical_hif_cases": expected,
@@ -315,7 +333,7 @@ def run_sweep(output, *, load_scales=(.8, 1.), noise_replicates=1, seed=20260918
                 physical = deepcopy(source)
                 physical["bus"][:, 2:4] *= scale
                 build = export_model(physical, output/"parents"/parent_id, assumptions=load_assumptions(assumptions),
-                    case_id=system, voltage_profile=voltage_profile)
+                    case_id=system, voltage_profile=voltage_profile, generator_control=generator_control)
                 if list(eligible_hif_branch_rows(build["registry"])) != eligible:
                     raise ValueError("Compiled asset eligibility differs from declared voltage-profile eligibility")
                 healthy, _, validation, _ = _snapshot(build)
@@ -430,11 +448,13 @@ def argument_parser(*, default_system="case14", default_seed=20260918):
     parser.add_argument("--load-scales", nargs="+", type=float, default=[.8, 1.])
     parser.add_argument("--noise-replicates", type=int, default=1)
     parser.add_argument("--seed", type=int, default=default_seed)
-    parser.add_argument("--system", choices=("case14", "case57"), default=default_system)
+    parser.add_argument("--system", choices=("case14", "case57", "case118"), default=default_system)
     parser.add_argument("--voltage-profile")
     parser.add_argument("--chi-square-alpha", type=float)
     parser.add_argument("--comparison-chi-square-alphas", nargs="+", type=float)
     parser.add_argument("--assumptions", choices=("normalized_diagonal", "coupled_sensitivity"), default="normalized_diagonal")
+    parser.add_argument("--generator-control", choices=("constant_pq", "pv_q_limits"),
+                        help="Default: pv_q_limits for case118, constant_pq otherwise")
     parser.add_argument("--resistances-ohm", nargs="+", type=float, default=list(RESISTANCES_OHM))
     parser.add_argument("--branch-rows", nargs="+", type=int)
     parser.add_argument("--phases", nargs="+", type=int, default=[1, 2, 3])
@@ -447,7 +467,8 @@ def main(argv=None, *, default_system="case14", default_seed=20260918):
     summary = run_sweep(args.output_dir, load_scales=args.load_scales, noise_replicates=args.noise_replicates,
         seed=args.seed, assumptions=args.assumptions, resistances_ohm=args.resistances_ohm,
         branch_rows=args.branch_rows, phases=args.phases, system=args.system, voltage_profile=args.voltage_profile,
-        chi_square_alpha=args.chi_square_alpha, comparison_alphas=args.comparison_chi_square_alphas)
+        chi_square_alpha=args.chi_square_alpha, comparison_alphas=args.comparison_chi_square_alphas,
+        generator_control=args.generator_control)
     return 0 if summary["complete"] and not summary["physical_hif_failed"] and not summary["failed_physical_controls"] else 2
 
 

@@ -1,6 +1,7 @@
 """Fresh OpenDSS HIF/unbalance experiments, with separately audited telemetry.
 
-This is an engineering validation corpus, not a learned-policy evaluation.
+``--system`` selects IEEE57 (default; the historical 2026-09-11 study) or
+IEEE118. This is an engineering validation corpus, not a learned-policy evaluation.
 Weak/undetected disturbances and failed solves are retained. Instrument noise
 is added only after physical solves. Diagnostic functions receive no labels,
 fault-node telemetry, altered device settings, or injection receipts.
@@ -22,6 +23,7 @@ import time
 import traceback
 
 import numpy as np
+from scipy.stats import chi2
 
 REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
@@ -31,7 +33,7 @@ from psse_env.providers.matpower import MatpowerDeploymentProviders, _render_mat
 from psse_env.systems import resolve_system
 from three_phase_model.exporter import export_model, load_assumptions, write_json
 from three_phase_model.measurements import extract_measurements
-from three_phase_model.runtime import compile_model, redistribute_load
+from three_phase_model.runtime import compile_model, redistribute_load, regulated_generator_deviation
 from three_phase_model.validation import validate_model, _element, _yprim
 
 
@@ -46,6 +48,19 @@ IMPLEMENTATION_PATHS = [
     "three_phase_model/validation.py", "psse_env/providers/matpower.py",
     "tools/lagrangian_port.py", "mcp_server/matpower_server.py", "mcp_server/case57.m",
 ]
+# IEEE57 keeps the chi-square pin of its 2026-09-11 study; IEEE118 uses the
+# pipeline detector chosen 2026-09-14 (chi-square 0.01 OR normalized residual 4).
+SYSTEMS = {
+    "case57": {"label": "IEEE57", "prefix": "ieee57", "chi_square_alpha": .05, "smoke_buses": (1, 12, 57),
+               "generator_control": "constant_pq"},
+    # IEEE118 generators are voltage-regulated with reactive limits (user decision 2026-09-25).
+    "case118": {"label": "IEEE118", "prefix": "ieee118", "chi_square_alpha": .01, "smoke_buses": (1, 12, 118),
+                "generator_control": "pv_q_limits"},
+}
+
+
+def implementation_paths(system):
+    return [path.replace("case57.m", f"{system}.m") for path in IMPLEMENTATION_PATHS]
 
 
 def sha256(path):
@@ -147,6 +162,8 @@ def circuit_physics(dss, registry, assumptions):
     for family, sign in (("loads", 1), ("generators", -1)):
         collection = dss.Loads if family == "loads" else dss.Generators
         for row in registry[family]:
+            if row.get("control") == "pv":
+                continue  # checked against its own control law below
             element = _element(dss, row["element"])
             collection.Name(row["element"].split(".", 1)[1])
             expected = sign * complex(collection.kW(), collection.kvar()) / sbase_kva
@@ -159,6 +176,8 @@ def circuit_physics(dss, registry, assumptions):
         "constant_pq_device_power_pu": (pq_error, 1e-5),
         "fault_ohms_law_current_pu": (fault_error, 1e-8),
     }
+    if any(row.get("control") == "pv" for row in registry["generators"]):
+        checks["regulated_generator_control_relative"] = (regulated_generator_deviation(dss)["relative_deviation"], 1e-6)
     checked = {name: {"max_error": float(error), "limit": limit,
                       "passed": bool(np.isfinite(error) and error <= limit)}
                for name, (error, limit) in checks.items()}
@@ -184,11 +203,11 @@ def compare_snapshot(measurements, baseline):
             "max_complex_current_error_pu": currents}
 
 
-def scenario_design(registry, *, smoke=False):
+def scenario_design(registry, *, smoke=False, smoke_buses=(1, 12, 57)):
     buses = sorted({row["bus"] for row in registry["loads"]})
     lines = [row for row in registry["branches"] if row["status"] and row["dss_element"].startswith("Line.")]
     if smoke:
-        buses = [b for b in (1, 12, 57) if b in buses]
+        buses = [b for b in smoke_buses if b in buses]
         lines = [lines[i] for i in (0, len(lines)//2, len(lines)-1)]
     result = [{"family": "unbalance", "bus": bus, "delta": delta}
               for bus in buses for delta in (.05, .2)]
@@ -275,7 +294,11 @@ def summarize_experiment(output, config, receipts):
         physical_checks[key] = {"count": len(evidence), "passed": sum(e.get("passed", False) for e in evidence)}
     all_executed = not any("execution_failure" in r for r in rows)
     complete = all_executed and all(g["count"] == g["passed"] for g in physical_checks.values())
-    result = {"contract": "ieee57_disturbance_validation_summary_v1", "groups": groups,
+    system = SYSTEMS[config.get("system", "case57")]
+    wls = config["wls"]
+    layout = config.get("layout", {"line_count": 63, "load_bus_count": 42, "channel_count": 491,
+                                   "dof": 378, "chi_square_threshold": 424.334166})
+    result = {"contract": f"{system['prefix']}_disturbance_validation_summary_v1", "groups": groups,
               "physical_validation_complete_and_passed": complete, "physical_checks": physical_checks,
               "by_model_and_family": {receipt["model_id"]: {f: summarize_group([r for r in rows if r["model_id"] == receipt["model_id"] and r["family"] == f])
                   for f in ("healthy", "hif", "unbalance")} for receipt in receipts},
@@ -295,17 +318,19 @@ def summarize_experiment(output, config, receipts):
                     for d in r.get("phase_diagnostics", {}).values())]
     write_json(output / "summary.json", result)
     write_json(output / "non_detections_and_ambiguities.json", failures)
-    lines = ["# IEEE57 fresh HIF and unbalance validation", "", config["scope"] + ".", "",
+    lines = [f"# {system['label']} fresh HIF and unbalance validation", "", config["scope"] + ".", "",
              "The four models cover diagonal/coupled assumptions at 0.8 and 1.0 load. Each was freshly built, solved, and checked against its balanced reference before faults were applied.", "",
              "## Executed coverage", "",
-             f"- {groups['hif']['count']} physical line/phase resistive HIF roots; all 63 lines and all three phases per model.",
-             f"- {groups['unbalance']['count']} physical phase-load redistribution roots; all 42 load buses, at delta 0.05 and 0.20 per model.",
+             f"- {groups['hif']['count']} physical line/phase resistive HIF roots; all {layout['line_count']} lines and all three phases per model.",
+             f"- {groups['unbalance']['count']} physical phase-load redistribution roots; all {layout['load_bus_count']} load buses, at delta 0.05 and 0.20 per model.",
              f"- {groups['healthy']['count']} independent healthy instrument-noise realizations on {groups['healthy']['physical_roots']} physical healthy roots.",
              "- HIF resistance 10/100/1000 pu (0.1/1/10 ohm on the normalized 1 kV, 100 MVA base); alpha 0.2/0.5/0.8. These values are cycled across assets/phases, not a full factorial.", "",
              "## Numerical circuit checks", "", f"All required physical checks completed and passed: **{complete}**.", "",
-             "Every HIF has a paired no-fault split, fault-enabled solve, fault-removal solve and original-line restoration. Full matrix endpoint charging is retained. Checks include all-node KCL, passive I=YV, source/device/network power, constant-PQ behavior, actual resistor I=V/R and P=|V|²/R, hidden-node mapping, and recovery of external voltages/currents and the 491-channel vector.", "",
+             "Every HIF has a paired no-fault split, fault-enabled solve, fault-removal solve and original-line restoration. Full matrix endpoint charging is retained. Checks include all-node KCL, passive I=YV, source/device/network power, constant-PQ behavior, actual resistor I=V/R and P=|V|²/R, hidden-node mapping, and recovery of external voltages/currents and the " + f"{layout['channel_count']}-channel vector.", "",
              "## Detection and localization", "",
-             "WLS uses the existing provider, flat VM=1/VA=0, sigma(Vm)=0.001 pu and sigma(P/Q)=0.01 pu. The alarm is chi-square >=424.334166 (378 DOF, alpha=0.05) OR max normalized residual >=4. Both statistics are saved for every scan.", "",
+             "WLS uses the existing provider, flat VM=1/VA=0, sigma(Vm)=0.001 pu and sigma(P/Q)=0.01 pu. "
+             f"The alarm is chi-square >={layout['chi_square_threshold']:.6f} ({layout['dof']} DOF, alpha={wls['chi_square_alpha']:g}) "
+             f"OR max normalized residual >={wls['normalized_residual_threshold']:g}. Both statistics are saved for every scan.", "",
              "Phase screening uses pristine full ABC terminal admittances, nominal phase powers and external voltage/current observations. The detector receives no injection labels, hidden-node channels, or altered device settings. Its fixed threshold is 6 times the propagated per-component noise scale. Nominal phasor sigma(V)=1e-4 pu, sigma(I)=1e-3 pu; the separate precision sensitivity profile reduces both by 10. These are assumed sensor models, not field calibration.", "",
              "| Family | Cases | Noisy WLS alarms | Phase correct, exact telemetry | Phase correct, noisy nominal | Phase correct, precision sensitivity |",
              "|---|---:|---:|---:|---:|---:|"]
@@ -319,9 +344,9 @@ def summarize_experiment(output, config, receipts):
         phase = groups[family]["phase"]["noisy_nominal"]
         lines += ["", f"For {family}, {phase['correct_but_wls_no_alarm']} cases localize correctly from nominal-noise phase telemetry while noisy WLS has no alarm; {phase['correct_with_wls_alarm']} have both a WLS alarm and correct phase localization. This is an observability comparison with phase telemetry available, not a completed acquisition-policy evaluation."]
     lines += ["", "## Claim boundaries", "",
-              "This tests the review's steady-state resistive HIF surrogate. It does not test nonlinear arcing, harmonic emissions, transient waveforms, sparse or missing PMUs, unknown grounding/sequence parameters, or the old IEEE14 NLM and learned policy on IEEE57. No thresholds were tuned to accept these samples. Non-detections, ambiguities and failed executions remain in the result files. Distance and resistance fits carry first-order uncertainty; correct branch detection does not guarantee precise distance estimation. Source-bus load redistribution is particularly weakly observable because of the stiff source boundary.", "",
+              "This tests the review's steady-state resistive HIF surrogate. It does not test nonlinear arcing, harmonic emissions, transient waveforms, sparse or missing PMUs, unknown grounding/sequence parameters, or the old IEEE14 NLM and learned policy on " + system["label"] + ". No thresholds were tuned to accept these samples. Non-detections, ambiguities and failed executions remain in the result files. Distance and resistance fits carry first-order uncertainty; correct branch detection does not guarantee precise distance estimation. Source-bus load redistribution is particularly weakly observable because of the stiff source boundary.", "",
               "## Reproduce and inspect", "", "```powershell",
-              f"python scripts/validate_ieee57_disturbances.py --output-dir output/ieee57_disturbances_new --preset {config['preset']} --workers 4 --seed {config['seed']}",
+              f"python scripts/validate_ieee57_disturbances.py --system {config.get('system', 'case57')} --output-dir output/{system['prefix']}_disturbances_new --preset {config['preset']} --workers 4 --seed {config['seed']}",
               "```", "", "- [Machine-readable summary](summary.json)",
               "- [Retained non-detections and ambiguities](non_detections_and_ambiguities.json)",
               "- [Frozen experiment settings](experiment_config.json)",
@@ -349,10 +374,12 @@ def _run_model(job):
     directory.mkdir()
     (directory / "observations").mkdir()
     (directory / "scenarios").mkdir()
-    spec = resolve_system("case57")
+    system = job.get("system", "case57")
+    spec = resolve_system(system)
     case = spec.load_case()
     case["bus"][:, 2:4] *= job["load_scale"]
-    build = export_model(case, directory / "model", case_id="case57",
+    build = export_model(case, directory / "model", case_id=system,
+                         generator_control=job.get("generator_control", "constant_pq"),
                          assumptions=load_assumptions(job["assumptions"]),
                          source_provenance={"system": spec.to_manifest(), "load_scale": job["load_scale"]})
     registry, assumptions = build["registry"], build["assumptions"]
@@ -367,7 +394,7 @@ def _run_model(job):
     write_json(directory / "nominal_diagnostic_model.json", nominal)
     write_json(directory / "balanced_measurements.json", baseline)
     flat_case = make_flat_case(case, directory)
-    provider = MatpowerDeploymentProviders(chi2_alpha=.05, normalized_residual_threshold=4.0)
+    provider = MatpowerDeploymentProviders(chi2_alpha=SYSTEMS[system]["chi_square_alpha"], normalized_residual_threshold=4.0)
     configs = {key: DiagnosticConfig(**profile) for key, profile in PROFILES.items()}
     model_seed = [job["seed"], job["model_index"]]
     rows = []
@@ -403,7 +430,7 @@ def _run_model(job):
                "noise_replicate": index, "physics": circuit_physics(dss, registry, assumptions)}
         evaluate(baseline, row, 10000 + index)
         rows.append(row)
-    design = scenario_design(registry, smoke=job["smoke"])
+    design = scenario_design(registry, smoke=job["smoke"], smoke_buses=SYSTEMS[system]["smoke_buses"])
     write_json(directory / "scenario_design.json", design)
     for index, truth in enumerate(design):
         scenario_id = f"{model_id}_{truth['family']}_{index:04d}"
@@ -448,7 +475,7 @@ def _run_model(job):
             # Standalone replay uses the immutable generated base plus exact edits.
             commands = injection.get("commands", [])
             replay = directory / "scenarios" / f"{scenario_id}.dss"
-            replay.write_text('! Fresh IEEE57 fundamental-frequency research scenario\n'
+            replay.write_text(f'! Fresh {SYSTEMS[system]["label"]} fundamental-frequency research scenario\n'
                 f'Redirect "{master.as_posix()}"\n' + "\n".join(commands)
                 + (f"\nEdit {injection['fault_element']} Enabled=yes" if truth["family"] == "hif" else "")
                 + "\nSolve\n", encoding="utf-8")
@@ -472,6 +499,7 @@ def _run_model(job):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--system", choices=tuple(SYSTEMS), default="case57")
     parser.add_argument("--preset", choices=("smoke", "full"), default="full")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=20260911)
@@ -480,9 +508,13 @@ def main():
         parser.error("workers must be between 1 and 4")
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    config = {"contract": "ieee57_fresh_resistive_hif_unbalance_v1", "seed": args.seed,
+    system = SYSTEMS[args.system]
+    spec = resolve_system(args.system)
+    case = spec.load_case()
+    dof = spec.nz - spec.state_count
+    config = {"contract": f"{system['prefix']}_fresh_resistive_hif_unbalance_v1", "seed": args.seed,
         "preset": args.preset, "created_utc": datetime.now(timezone.utc).isoformat(),
-        "wls": {"chi_square_alpha": .05, "normalized_residual_threshold": 4.,
+        "wls": {"chi_square_alpha": system["chi_square_alpha"], "normalized_residual_threshold": 4.,
                 "sigma_voltage_pu": .001, "sigma_power_pu": .01, "initialization": "flat_VM1_VA0"},
         "phase_profiles": PROFILES, "phase_residual_threshold_sigmas": 6,
         "load_scales": [.8, 1.0], "unbalance_deltas": [.05, .2],
@@ -490,7 +522,14 @@ def main():
         "design": "All eligible lines, each phase once per model; resistance and alpha cycled, not a full factorial. All load buses at both deltas.",
         "noise": "Independent Gaussian real/imaginary phasor noise; separate independent SCADA channels. Sensitivity profile reuses standardized noise draws.",
         "scope": "Physical and diagnostic engineering validation; not policy/NLM/DAgger evaluation or arcing/harmonic validation",
-        "source_before": {p: sha256(REPO/p) for p in IMPLEMENTATION_PATHS}}
+        "source_before": {p: sha256(REPO/p) for p in implementation_paths(args.system)}}
+    if args.system != "case57":
+        config["system"] = args.system
+        config["generator_control"] = system["generator_control"]
+        config["layout"] = {"line_count": sum(branch.tap == 0 for branch in spec.branches),
+            "load_bus_count": int(np.count_nonzero((case["bus"][:, 2] != 0) | (case["bus"][:, 3] != 0))),
+            "channel_count": spec.nz, "dof": dof,
+            "chi_square_threshold": float(chi2.ppf(1 - system["chi_square_alpha"], dof))}
     write_json(output / "experiment_config.json", config)
     for name in config["source_before"]:
         destination = output / "implementation_snapshot" / name
@@ -501,7 +540,8 @@ def main():
     jobs = []
     for assumptions in ("normalized_diagonal", "coupled_sensitivity"):
         for scale in (.8, 1.):
-            jobs.append({"output_dir": str(output), "assumptions": assumptions, "load_scale": scale,
+            jobs.append({"output_dir": str(output), "system": args.system, "assumptions": assumptions, "load_scale": scale,
+                         "generator_control": system["generator_control"],
                          "model_id": f"{assumptions}_{round(scale*100):03d}", "model_index": len(jobs),
                          "seed": args.seed, "smoke": args.preset == "smoke",
                          "healthy_controls": 3 if args.preset == "smoke" else 100})

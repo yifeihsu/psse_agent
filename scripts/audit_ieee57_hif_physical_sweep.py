@@ -2,6 +2,8 @@
 
 The selected reconstruction uses 138 kV at buses 1--17 and 69 kV at 18--57.
 All other sweep mechanics are shared with the backward-compatible IEEE14 runner.
+The disjoint-shard runner and merger also serve IEEE118
+(scripts/audit_ieee118_hif_physical_sweep.py).
 """
 from __future__ import annotations
 
@@ -301,12 +303,14 @@ def run_parallel_sweep(output, *, workers=8, **settings):
     return summary
 
 
-def main(argv=None):
-    parser = sweep.argument_parser(default_system="case57", default_seed=20260919)
+def main(argv=None, *, default_system="case57", default_seed=20260919):
+    parser = sweep.argument_parser(default_system=default_system, default_seed=default_seed)
     parser.add_argument("--workers", type=int, default=8)
     args = vars(parser.parse_args(argv))
     output, workers = args.pop("output_dir"), args.pop("workers")
     args["comparison_alphas"] = args.pop("comparison_chi_square_alphas")
+    if args.get("generator_control") is None:
+        args.pop("generator_control", None)
     summary = run_parallel_sweep(output, workers=workers, **args)
     return 0 if (summary["complete"] and not summary["physical_hif_failed"]
         and not summary["failed_physical_controls"] and not summary["fault_wls_failures"]) else 2
