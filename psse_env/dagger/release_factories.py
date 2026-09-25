@@ -745,7 +745,7 @@ def deterministic_case_loader(value: Any) -> dict[str, Any]:
         raise TypeError("case loader requires a non-empty path or {case_path: path}")
 
     provided = value.strip()
-    if provided in {"case14", "case57"}:
+    if provided in {"case14", "case57", "case118"}:
         case_path = _REPO_ROOT / "mcp_server" / f"{provided}.m"
     else:
         case_path = Path(provided).expanduser()

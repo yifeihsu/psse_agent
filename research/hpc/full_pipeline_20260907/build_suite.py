@@ -182,7 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--system",
         default="case14",
-        help="Registered system for both draws (case14 or case57)",
+        help="Registered system for both draws (case14, case57 or case118)",
     )
     parser.add_argument(
         "--measurement-corpus",

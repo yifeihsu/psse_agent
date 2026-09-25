@@ -1,7 +1,7 @@
 """Canonical IEEE case assets, identities, and the existing WLS observation contract.
 
 This registry does not enable detailed topology or three-phase physics for IEEE
-57. Its covariance is deliberately fixed to the deployed balanced WLS solver.
+57 or IEEE 118. Its covariance is deliberately fixed to the deployed balanced WLS solver.
 Cases are loaded from repository assets, never the installed PYPOWER version.
 """
 
@@ -22,6 +22,7 @@ import numpy as np
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CASE57_SOURCE_SHA256 = "97802230f6b4dafd484e97f061c69542359648ab7ab5d51949368e68f4c975f6"
 _CASE57_BASE_CASE_HASH = "417701198ec205ae9cf8502b365664c1adb5a265894a03ffa4ddba95d540beca"
+_CASE118_SOURCE_SHA256 = "90c28f0d55324a6f11b6371c3fd8424b3c1bc18830699deaec207d7d72e50c25"
 _NOISE_MODEL = "balanced_wls_vm001_power01_v1"
 _BALANCED_FAMILIES = (
     "no_error", "measurement", "multi_measurement", "parameter", "measurement+parameter"
@@ -178,7 +179,7 @@ class SystemSpec:
         }
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=3)
 def _resolve_canonical(case_id: str) -> SystemSpec:
     asset_path = _REPO_ROOT / "mcp_server" / f"{case_id}.m"
     case = _read_case(asset_path)
@@ -208,11 +209,12 @@ def _resolve_canonical(case_id: str) -> SystemSpec:
             tap=float(row[8]), status=int(row[10]),
         ))
     provenance = {"asset_path": f"mcp_server/{case_id}.m"}
-    if case_id == "case57":
+    source_sha256 = {"case57": _CASE57_SOURCE_SHA256, "case118": _CASE118_SOURCE_SHA256}
+    if case_id in source_sha256:
         provenance.update({
             "source": "PYPOWER", "source_version": "5.1.19",
-            "source_file": "pypower/case57.py", "source_sha256": _CASE57_SOURCE_SHA256,
-            "source_url": "https://github.com/rwl/PYPOWER/blob/v5.1.19/pypower/case57.py",
+            "source_file": f"pypower/{case_id}.py", "source_sha256": source_sha256[case_id],
+            "source_url": f"https://github.com/rwl/PYPOWER/blob/v5.1.19/pypower/{case_id}.py",
         })
     else:
         provenance["source"] = "existing_repository_case14_asset"
@@ -220,7 +222,7 @@ def _resolve_canonical(case_id: str) -> SystemSpec:
     return SystemSpec(
         case_id=case_id, case_path=case_id, nb=nb, nl=nl, nz=3 * nb + 4 * nl,
         state_count=2 * nb - 1, base_case_hash=_case_hash(case),
-        supported_families=_BALANCED_FAMILIES if case_id == "case57" else _CASE14_FAMILIES,
+        supported_families=_CASE14_FAMILIES if case_id == "case14" else _BALANCED_FAMILIES,
         buses=buses, branches=tuple(branches),
         source_provenance=MappingProxyType(provenance), _asset_path=asset_path,
     )
@@ -239,9 +241,10 @@ def resolve_system(system: str = "case14", *, covariance_model: str = _NOISE_MOD
     aliases = {
         "14": "case14", "ieee14": "case14", "case14": "case14", "case14.m": "case14",
         "57": "case57", "ieee57": "case57", "case57": "case57", "case57.m": "case57",
+        "118": "case118", "ieee118": "case118", "case118": "case118", "case118.m": "case118",
     }
     try:
         canonical = aliases[system.strip().lower()]
     except KeyError as exc:
-        raise ValueError(f"Unsupported system {system!r}; choose case14 or case57") from exc
+        raise ValueError(f"Unsupported system {system!r}; choose case14, case57 or case118") from exc
     return _resolve_canonical(canonical)

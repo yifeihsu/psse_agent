@@ -3570,7 +3570,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         type=str,
         default="case14",
         help=(
-            "Registered system to generate for (case14 or case57). A system "
+            "Registered system to generate for (case14, case57 or case118). A system "
             "other than IEEE 14 runs its registry's balanced families from a "
             "fresh corpus given by --measurement-corpus and "
             "--balanced-artifact-dir"

@@ -23,7 +23,8 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[1]
 NUMERICAL_SOURCES = ("logical_topology/estimation.py", "logical_topology/inventory.py", "logical_topology/measurements.py",
-                     "psse_env/systems/registry.py", "mcp_server/case14.m", "mcp_server/case57.m")
+                     "psse_env/systems/registry.py", "mcp_server/case14.m", "mcp_server/case57.m",
+                     "mcp_server/case118.m")
 
 
 def numerical_versions() -> dict[str, str | None]:

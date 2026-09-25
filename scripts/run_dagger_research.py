@@ -1662,7 +1662,7 @@ def parser() -> argparse.ArgumentParser:
         type=str,
         default="case14",
         help=(
-            "Registered system for generated scenarios (case14 or case57); a "
+            "Registered system for generated scenarios (case14, case57 or case118); a "
             "non-IEEE14 system needs --measurement-corpus and "
             "--balanced-artifact-dir from a fresh balanced corpus"
         ),

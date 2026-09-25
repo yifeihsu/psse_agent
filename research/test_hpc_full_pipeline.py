@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from psse_env.systems import resolve_system
+
 CELL = Path(__file__).resolve().parent / "hpc" / "full_pipeline_20260907"
 GPU_STAGES = (
     "stage_bc0.sbatch", "stage_collect.sbatch", "stage_train.sbatch", "stage_eval.sbatch",
@@ -362,6 +364,13 @@ def test_zero_shot_stage_and_frozen_student_wiring() -> None:
             "no_error", "measurement", "multi_measurement", "parameter", "measurement+parameter",
         }
     assert re.search(r"^FROZEN_STUDENT_ADAPTER=/scratch/", overrides, flags=re.MULTILINE)
+    ieee118 = (CELL / "overrides" / "ieee118_balanced_20260925.env").read_text(encoding="utf-8")
+    assert "\r" not in ieee118
+    assert re.search(r"^SYSTEM=case118$", ieee118, flags=re.MULTILINE)
+    for name in ("D0_PLAN", "ROUND_TRAIN_PLAN", "DEVELOPMENT_PLAN"):
+        match = re.search(rf"^{name}='(\{{.*\}})'$", ieee118, flags=re.MULTILINE)
+        assert match, name
+        assert set(json.loads(match.group(1))) == set(resolve_system("case118").supported_families)
 
 
 def test_evidence_profile_default_is_wls_gated_and_every_guard_accepts_it() -> None:

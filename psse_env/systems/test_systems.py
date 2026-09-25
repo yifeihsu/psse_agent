@@ -14,7 +14,8 @@ from psse_env.systems import resolve_system
 
 class SystemRegistryTests(unittest.TestCase):
     def test_registered_cases_match_existing_deployment_loader(self):
-        for name, dimensions in (("case14", (14, 20, 122, 27)), ("case57", (57, 80, 491, 113))):
+        for name, dimensions in (("case14", (14, 20, 122, 27)), ("case57", (57, 80, 491, 113)),
+                                 ("case118", (118, 186, 1098, 235))):
             with self.subTest(system=name):
                 spec = resolve_system(name)
                 self.assertEqual((spec.nb, spec.nl, spec.nz, spec.state_count), dimensions)
@@ -45,6 +46,26 @@ class SystemRegistryTests(unittest.TestCase):
         self.assertEqual(int(np.count_nonzero(case["bus"][:, 5])), 3)
         self.assertEqual(case["gen"][0, 3], 200)
         self.assertEqual(case["gen"][0, 4], -140)
+
+    def test_ieee118_preserves_parallel_circuits_taps_shunts_and_source_voltages(self):
+        spec = resolve_system("case118")
+        case = spec.load_case()
+        self.assertEqual(spec.source_provenance["source_sha256"],
+                         "90c28f0d55324a6f11b6371c3fd8424b3c1bc18830699deaec207d7d72e50c25")
+        self.assertEqual(case["gen"].shape, (54, 21))
+        self.assertEqual(case["gencost"].shape, (54, 7))
+        self.assertEqual(int(np.count_nonzero(case["bus"][:, 1] == 3)), 1)
+        self.assertEqual(int(case["bus"][case["bus"][:, 1] == 3, 0][0]), 69)
+        parallel = {(branch.from_bus, branch.to_bus) for branch in spec.branches if branch.circuit_ordinal == 2}
+        self.assertEqual(parallel, {(42, 49), (49, 54), (56, 59), (49, 66), (77, 80), (89, 90), (89, 92)})
+        tapped = [branch.row0 for branch in spec.branches if branch.tap != 0]
+        self.assertEqual(tapped, [7, 31, 35, 50, 92, 94, 101, 106, 126])
+        self.assertEqual(len(spec.eligible_parameter_rows0), 177)
+        self.assertTrue(set(tapped).isdisjoint(spec.eligible_parameter_rows0))
+        self.assertEqual(int(np.count_nonzero(case["bus"][:, 5])), 14)
+        self.assertEqual(sorted(case["bus"][case["bus"][:, 5] < 0, 0].astype(int).tolist()), [5, 37])
+        self.assertEqual(sorted(set(case["bus"][:, 9].tolist())), [138.0, 161.0, 345.0])
+        self.assertEqual(spec.to_manifest()["residual_degrees_of_freedom"], 863)
 
     def test_cases_and_sigma_are_fresh_and_asset_identity_is_immutable(self):
         spec = resolve_system("case57")
@@ -98,7 +119,9 @@ class SystemRegistryTests(unittest.TestCase):
         self.assertEqual(resolve_system().case_id, "case14")
         for alias in ("57", "ieee57", "CASE57", "case57.m"):
             self.assertEqual(resolve_system(alias).case_id, "case57")
-        for unsupported in ("case118", "arbitrary.m", ""):
+        for alias in ("118", "ieee118", "CASE118", "case118.m"):
+            self.assertEqual(resolve_system(alias).case_id, "case118")
+        for unsupported in ("case300", "arbitrary.m", ""):
             with self.assertRaisesRegex(ValueError, "Unsupported system"):
                 resolve_system(unsupported)
         with self.assertRaisesRegex(ValueError, "Unsupported covariance"):

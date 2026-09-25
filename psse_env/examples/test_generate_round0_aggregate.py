@@ -2514,7 +2514,12 @@ class SystemSwitchTests(unittest.TestCase):
         # A zero count is not a request for the family.
         round0_module._validate_plan_for_system(parse(base), {"measurement": 1, "topology": 0})
         with self.assertRaisesRegex(ValueError, "Unsupported system"):
-            round0_module._validate_plan_for_system(parse(["--system", "case118"]), {"measurement": 1})
+            round0_module._validate_plan_for_system(parse(["--system", "case300"]), {"measurement": 1})
+        # IEEE 118 takes the same balanced route as IEEE 57.
+        base118 = ["--system", "case118", "--measurement-corpus", "c.jsonl", "--balanced-artifact-dir", "art"]
+        round0_module._validate_plan_for_system(parse(base118), {"measurement": 1, "measurement+parameter": 1})
+        with self.assertRaisesRegex(ValueError, "does not support plan families"):
+            round0_module._validate_plan_for_system(parse(base118), {"measurement": 1, "hif": 1})
         # The tracked IEEE 14 default plan is not a case57 plan.
         with self.assertRaisesRegex(ValueError, "does not support plan families"):
             round0_module._validate_plan_for_system(parse(base), round0_module.DEFAULT_PLAN)

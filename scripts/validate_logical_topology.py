@@ -26,7 +26,7 @@ SOURCE_FILES = [
     "logical_topology/runtime.py", "logical_topology/calibration.py", "logical_topology/fit_cache.py",
     "logical_topology/scenarios.py", "logical_topology/audit.py",
     "psse_env/systems/registry.py", "Transmission/generate_measurements.py",
-    "mcp_server/case14.m", "mcp_server/case57.m",
+    "mcp_server/case14.m", "mcp_server/case57.m", "mcp_server/case118.m",
 ]
 
 
@@ -145,7 +145,7 @@ def write_report(output, manifest, summary, config):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--system", choices=("case14", "case57"), default="case57")
+    parser.add_argument("--system", choices=("case14", "case57", "case118"), default="case57")
     parser.add_argument("--load-scales", type=float, nargs="+", default=[.8, 1.0])
     parser.add_argument("--preset", choices=("smoke", "full"), default="full")
     parser.add_argument("--workers", type=int, default=4)

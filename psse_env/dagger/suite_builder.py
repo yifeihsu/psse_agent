@@ -437,8 +437,8 @@ def _portable_case_reference(value: Any) -> Any:
         return _json_native(value)
     if value == "case14":
         return "case14"
-    if value == "case57":
-        return _json_native(_load_python_case("case57"))
+    if value in ("case57", "case118"):
+        return _json_native(_load_python_case(value))
     if not isinstance(value, (str, os.PathLike)):
         raise ValueError(f"unsupported clean-case reference: {type(value).__name__}")
     path = Path(value)

@@ -38,7 +38,7 @@ def _counts(value: str | None) -> dict[str, int]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--system", default="case57", help="Registered system (case14 or case57)")
+    parser.add_argument("--system", default="case57", help="Registered system (case14, case57 or case118)")
     parser.add_argument("--output-dir", type=Path, required=True, help="Corpus directory; must not exist yet")
     parser.add_argument("--seed", type=int, default=20260914)
     parser.add_argument("--counts", default=None, help="JSON (inline or a file) of rows per corpus scenario")
