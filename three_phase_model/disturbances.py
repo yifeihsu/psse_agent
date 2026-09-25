@@ -300,7 +300,7 @@ def inject_midspan_hif(
             before_fault = _node_voltage_snapshot(dss)
             dss.Text.Command(f"Edit {fault} Enabled=yes")
             _solve_from_node_voltages(dss, before_fault)
-    except Exception:
+    except Exception as failure:
         present = {name.lower() for name in dss.Circuit.AllElementNames()}
         for name in created:
             if name.lower() in present:
@@ -309,7 +309,10 @@ def inject_midspan_hif(
         # Disabled hidden buses can remain in OpenDSS's node allocation. Extra
         # seeds are harmless; retaining the hidden seed avoids masking the
         # original failure with an unrelated missing-initialization error.
-        _solve_from_node_voltages(dss, numerical_seeds)
+        try:
+            _solve_from_node_voltages(dss, numerical_seeds)
+        except Exception as restore_failure:
+            failure.add_note(f"restoring the original line also failed: {restore_failure}")
         raise
     return receipt
 

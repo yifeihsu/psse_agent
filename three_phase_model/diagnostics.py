@@ -90,8 +90,11 @@ def capture_nominal_model(dss: Any, registry: Mapping[str, Any], assumptions: Ma
     for family, api in (("loads", dss.Loads), ("generators", dss.Generators)):
         for row in registry.get(family, []):
             api.Name(str(row["element"]).split(".", 1)[1])
+            # A regulated generator's kvar is its solved output (the Newton
+            # acceptance restates it), so it matches the reference to solver accuracy.
+            relative = 1e-7 if row.get("control") == "pv" else 1e-10
             for field, actual in (("kw", api.kW()), ("kvar", api.kvar())):
-                if not math.isclose(float(row[field]), actual, rel_tol=1e-10, abs_tol=1e-8):
+                if not math.isclose(float(row[field]), actual, rel_tol=relative, abs_tol=1e-8 if relative == 1e-10 else 1e-3):
                     raise ValueError("nominal capture requires unchanged registry PQ device settings")
     buses = sorted(registry["buses"], key=lambda row: row["row0"])
     bus_names = {int(row["external_bus"]): row["dss_bus"] for row in buses}
@@ -102,13 +105,20 @@ def capture_nominal_model(dss: Any, registry: Mapping[str, Any], assumptions: Ma
     net = {bus: np.zeros(3, dtype=complex) for bus in bus_names}
     load = {bus: np.zeros(3, dtype=complex) for bus in bus_names}
     shunt = {bus: np.zeros((3, 3), dtype=complex) for bus in bus_names}
+    regulated = set()
     for family, sign in (("loads", -1), ("generators", 1)):
         for row in registry.get(family, []):
-            bus, phase = int(row["bus"]), int(row["phase"]) - 1
-            power = complex(row["kw"], row["kvar"]) / (base * 1000 / 3)
-            net[bus][phase] += sign * power
-            if family == "loads":
-                load[bus][phase] += power
+            bus = int(row["bus"])
+            phases = row.get("phases", [row.get("phase")])
+            # Registry kW/kvar are per element: per phase for single-phase
+            # devices, the three-phase total for a regulated generator.
+            power = complex(row["kw"], row["kvar"]) / len(phases) / (base * 1000 / 3)
+            for phase in phases:
+                net[bus][int(phase) - 1] += sign * power
+                if family == "loads":
+                    load[bus][int(phase) - 1] += power
+            if row.get("control") == "pv":
+                regulated.add(bus)
     for row in registry.get("shunts", []):
         bus = int(row["bus"])
         shunt[bus] += _abc_y(dss, row["element"], [bus_names[bus]], [bus_kv[bus]], base)
@@ -142,7 +152,8 @@ def capture_nominal_model(dss: Any, registry: Mapping[str, Any], assumptions: Ma
             "branches": branch_rows,
             "buses": [{"bus": bus, "dss_bus": bus_names[bus], "base_kv_ll": bus_kv[bus],
                        "nominal_net_pq_pu_rect": _rect(net[bus]),
-                       "nominal_load_pq_pu_rect": _rect(load[bus]), "shunt_y_pu_rect": _rect(shunt[bus])}
+                       "nominal_load_pq_pu_rect": _rect(load[bus]), "shunt_y_pu_rect": _rect(shunt[bus]),
+                       **({"regulated_generator": True} if bus in regulated else {})}
                       for bus in bus_names],
             "source": {"bus": source_bus, "y_pu_rect": _rect(source_y), "emf_pu_rect": _rect(emf)}}
 
@@ -299,6 +310,20 @@ def screen_measurements(telemetry: Mapping[str, Any], nominal_model: Mapping[str
         residual = obs-expected
         jac = _jacobian(shunt+sy, np.diag(np.conj(s)/(v.conj()**2)))
         ccov = degree[bus]*si2*np.eye(6) + sv2*jac@jac.T
+        regulated = bool(nominal.get("regulated_generator"))
+        reactive_change = None
+        if regulated:
+            # A voltage-regulated generator's Q is not nominal: equal Q on each
+            # phase adds dq*j/conj(v) to the injected current. Fit that common-
+            # mode change (GLS) and screen, with propagated covariance, what remains.
+            direction = 1j/np.conj(v)
+            wr, rr = np.r_[direction.real, direction.imag], np.r_[residual.real, residual.imag]
+            weighted = np.linalg.solve(ccov, wr)
+            gain = weighted/float(wr@weighted)
+            reactive_change = -float(gain@rr)
+            residual = residual + reactive_change*direction
+            projection = np.eye(6)-np.outer(wr, gain)
+            ccov = projection@ccov@projection.T
         current_scores = _scores(residual, ccov)
         k = shunt+sy
         q = obs+k@v-(sy@emf if bus == source_bus else 0)
@@ -309,8 +334,12 @@ def screen_measurements(telemetry: Mapping[str, Any], nominal_model: Mapping[str
         contrast, contrast_cov = p@delta, pr@pcov@pr.T
         spread_scores = _scores(contrast, contrast_cov)
         total_cov = total_projection@pcov@total_projection.T
-        total_sigma = math.sqrt(max(float(np.trace(total_cov))/2, 1e-30))
-        total_score = float(abs(sum(delta))/total_sigma)
+        if regulated:
+            # Regulated reactive output is free; only the active total is tested.
+            total_score = float(abs(sum(delta).real)/math.sqrt(max(float(total_cov[0, 0]), 1e-30)))
+        else:
+            total_sigma = math.sqrt(max(float(np.trace(total_cov))/2, 1e-30))
+            total_score = float(abs(sum(delta))/total_sigma)
         spread = float(np.max(spread_scores))
         node_rank.append({"bus": bus, "normalized_residual": float(np.max(current_scores)),
                           "phase_power_spread_normalized_residual": spread,
@@ -318,6 +347,8 @@ def screen_measurements(telemetry: Mapping[str, Any], nominal_model: Mapping[str
                           "total_power_change_normalized_residual": total_score,
                           "total_preserving_within_noise": total_score < config.detection_sigmas,
                           "incident_terminal_count": degree[bus], "source_boundary_bus": bus == source_bus,
+                          **({"regulated_generator": True, "fitted_common_mode_reactive_change_pu": reactive_change}
+                             if regulated else {}),
                           "phase_current_sigma_per_component_pu": np.sqrt((np.diag(ccov)[:3]+np.diag(ccov)[3:])/2).tolist(),
                           "linearized_nodal_chi_square_statistic": _statistic(residual, ccov),
                           "linearized_power_contrast_statistic": _statistic(contrast, contrast_cov),

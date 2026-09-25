@@ -14,7 +14,13 @@ For the named IEEE57 physical reconstruction (buses 1–17 at 138 kV and 18–57
 python scripts/build_three_phase_model.py --system case57 --voltage-profile ieee57_reconstruction_138_69kv_v1 --output-dir generated/ieee57_physical_new
 ```
 
-The voltage map is an explicit reconstruction because the canonical case does not supply physical bus ratings. Omitting `--voltage-profile` retains the normalized model. See [physical-ohm HIF configuration and WLS evidence](../docs/ieee57_physical_hif_20260919.md) for local resistance conversion, paired noise/covariance settings and detection limits.
+The voltage map is an explicit reconstruction because the canonical case does not supply physical bus ratings.
+
+IEEE118 (`--system case118`) uses the case's own BASE_KV via `--voltage-profile ieee118_source_basekv_138_161_345kv_v1`,
+and its disturbance scenarios use `--generator-control pv_q_limits` (one three-phase `Model=3` unit per generator,
+average-magnitude regulation, reactive limits enforced in the reference too). OpenDSS's own iteration cannot hold the
+IEEE118 operating point; `runtime.compile_model`/`solve` detect a device off its control law and fall back to a Newton
+solve that OpenDSS then accepts. See [the IEEE118 model and scenario migration](../docs/ieee118_opendss_model_20260925.md). Omitting `--voltage-profile` retains the normalized model. See [physical-ohm HIF configuration and WLS evidence](../docs/ieee57_physical_hif_20260919.md) for local resistance conversion, paired noise/covariance settings and detection limits.
 
 `export_model()` returns the independently solved PYPOWER reference, asset registry and assumptions. `compile_model()` uses a new DSS context. `extract_measurements()` exports phase, sequence, total-power and canonical WLS measurements. `validate_model()` reads actual compiled YPrim, voltages and currents. `redistribute_load()` changes phase demand while preserving total demand and solves the resulting circuit.
 

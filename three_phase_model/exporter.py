@@ -13,8 +13,18 @@ from typing import Any, Mapping
 import numpy as np
 from pypower.api import ppoption, runpf
 from pypower.idx_bus import BUS_I, BUS_TYPE, REF, PD, QD, GS, BS, BASE_KV, VM, VA
-from pypower.idx_gen import GEN_BUS, GEN_STATUS, PG, QG
+from pypower.idx_gen import GEN_BUS, GEN_STATUS, PG, QG, QMAX, QMIN, VG
 from pypower.idx_brch import F_BUS, T_BUS, BR_R, BR_X, BR_B, TAP, SHIFT, BR_STATUS
+
+# Generator realizations. The default keeps every non-slack generator at its
+# solved snapshot P/Q on each phase (the IEEE57 contract). The opt-in PV form is
+# one three-phase OpenDSS Model=3 element per generator: fixed P, equal Q on the
+# three phases, Q adjusted to hold the average phase-to-neutral magnitude at the
+# generator setpoint VG and clamped to [QMIN, QMAX]. Its reference solve enforces
+# the same limits (the slack stays an unlimited Thevenin source).
+CONSTANT_PQ_GENERATORS = "solved_positive_sequence_snapshot_constant_pq_per_phase"
+PV_GENERATORS = "voltage_regulated_average_phase_magnitude_with_reactive_limits"
+GENERATOR_CONTROLS = {"constant_pq": CONSTANT_PQ_GENERATORS, "pv_q_limits": PV_GENERATORS}
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -36,7 +46,7 @@ def validate_assumptions(spec: Mapping[str, Any]) -> None:
         "voltage_realization": "normalized_uniform_not_equipment_ratings",
         "negative_sequence": "equal_to_positive_sequence",
         "transformer_connection": "grounded_wye_grounded_wye",
-        "generator_control": "solved_positive_sequence_snapshot_constant_pq_per_phase",
+        "generator_control": CONSTANT_PQ_GENERATORS,
         "source_boundary": "fixed_thevenin_emf_compensated_at_reference_snapshot",
         "harmonics": "fundamental_only_spectrum_no_validated_harmonic_extension",
         "faults": "not_in_baseline",
@@ -55,6 +65,8 @@ def validate_assumptions(spec: Mapping[str, Any]) -> None:
         raise ValueError(f"Unknown or missing assumption fields: unknown={sorted(unknown)}, missing={sorted(missing)}")
     for key, value in expected.items():
         if key == "voltage_realization" and spec.get(key) == "declared_per_bus_nominal_voltage":
+            continue
+        if key == "generator_control" and spec.get(key) == PV_GENERATORS:
             continue
         if spec.get(key) != value:
             raise ValueError(f"Unsupported three-phase assumption {key}: {spec.get(key)!r}")
@@ -91,6 +103,65 @@ def validate_assumptions(spec: Mapping[str, Any]) -> None:
             raise ValueError(f"{key} must specify a finite nonzero passive impedance")
 
 
+def solve_reference(case: Mapping[str, Any], generator_control: str = CONSTANT_PQ_GENERATORS) -> dict[str, Any]:
+    """Positive-sequence reference; PV realizations enforce reactive limits.
+
+    Limits are enforced by the usual outer loop around an unlimited Newton PF:
+    a violating generator is fixed at its limit (its bus becomes PQ), and a
+    fixed generator whose voltage sits on the wrong side of its setpoint is
+    released, until the set is stable. The result satisfies complementarity:
+    V = VG inside the limits, V <= VG at QMAX, V >= VG at QMIN. The slack
+    generator is never limited. Bus types of the returned case are the source's.
+    """
+    options = ppoption(VERBOSE=0, OUT_ALL=0, PF_TOL=1e-11, PF_MAX_IT=100, ENFORCE_Q_LIMS=0)
+    if generator_control == CONSTANT_PQ_GENERATORS:
+        reference, success = runpf(case, options)
+        if not success:
+            raise ValueError("Positive-sequence reference power flow did not converge")
+        reference["reactive_limited_gen_rows0"] = {}
+        return reference
+    if generator_control != PV_GENERATORS:
+        raise ValueError(f"Unsupported generator control: {generator_control!r}")
+    work = copy.deepcopy(dict(case))
+    types = np.asarray(work["bus"][:, BUS_TYPE]).copy()
+    row = {int(number): i for i, number in enumerate(work["bus"][:, BUS_I])}
+    slack = int(work["bus"][types == REF, BUS_I][0])
+    active = [i for i, gen in enumerate(work["gen"]) if gen[GEN_STATUS] > 0 and int(gen[GEN_BUS]) != slack]
+    shared = [int(bus) for bus, count in zip(*np.unique([work["gen"][i, GEN_BUS] for i in active], return_counts=True)) if count > 1]
+    if shared:
+        raise ValueError(f"Reactive-limit enforcement needs one active generator per PV bus: {shared}")
+    if any(work["gen"][i, QMIN] > work["gen"][i, QMAX] for i in active):
+        raise ValueError("Every regulated generator needs QMIN <= QMAX")
+    limited: dict[int, str] = {}
+    for _ in range(50):
+        trial = copy.deepcopy(work)
+        for i, side in limited.items():
+            trial["gen"][i, QG] = trial["gen"][i, QMAX if side == "max" else QMIN]
+            trial["bus"][row[int(trial["gen"][i, GEN_BUS])], BUS_TYPE] = 1
+        reference, success = runpf(trial, options)
+        if not success:
+            raise ValueError("Reactive-limited positive-sequence reference did not converge")
+        changed = False
+        for i in active:
+            gen = reference["gen"][i]
+            voltage = reference["bus"][row[int(gen[GEN_BUS])], VM]
+            if i in limited:
+                if (limited[i] == "max" and voltage > gen[VG] + 1e-9) or (limited[i] == "min" and voltage < gen[VG] - 1e-9):
+                    del limited[i]
+                    changed = True
+            elif gen[QG] > gen[QMAX] + 1e-7:
+                limited[i], changed = "max", True
+            elif gen[QG] < gen[QMIN] - 1e-7:
+                limited[i], changed = "min", True
+        if not changed:
+            break
+    else:
+        raise ValueError("Reactive-limit set did not settle")
+    reference["bus"][:, BUS_TYPE] = types
+    reference["reactive_limited_gen_rows0"] = {int(i): side for i, side in sorted(limited.items())}
+    return reference
+
+
 def phase_matrix(positive: float, zero_ratio: float) -> np.ndarray:
     """A diag(z0,z1,z1) A^-1 for a reciprocal transposed completion."""
     return np.eye(3) * positive + np.ones((3, 3)) * positive * (zero_ratio - 1.0) / 3.0
@@ -109,17 +180,23 @@ def _serial_case(case: Mapping[str, Any]) -> dict[str, Any]:
 def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
                  assumptions: Mapping[str, Any] | None = None,
                  case_id: str = "custom", source_provenance: Mapping[str, Any] | None = None,
-                 voltage_profile: str | None = None) -> dict[str, Any]:
+                 voltage_profile: str | None = None, generator_control: str | None = None) -> dict[str, Any]:
     """Solve the canonical positive-sequence case, then export its PQ snapshot.
 
     The source matrices are never mutated. Cases with shifts, islands, invalid
     branches, or a failed reference solve are rejected before any model is written.
     Uniform normalized voltage remains the default. ``voltage_profile`` opts
-    into the selected IEEE14 or IEEE57 bases; ``assumptions.bus_base_kv_ll`` permits
+    into the selected IEEE14, IEEE57 or IEEE118 bases; ``assumptions.bus_base_kv_ll`` permits
     an explicit complete map. Per-unit branch parameters/taps are preserved.
     With a bus map, the scalar ``base_kv_ll`` names the slack/source base only.
+    ``generator_control`` ("constant_pq" or "pv_q_limits") overrides the
+    assumptions' generator realization; see GENERATOR_CONTROLS.
     """
     spec = copy.deepcopy(dict(load_assumptions() if assumptions is None else assumptions))
+    if generator_control is not None:
+        if generator_control not in GENERATOR_CONTROLS:
+            raise ValueError(f"generator_control must be one of {sorted(GENERATOR_CONTROLS)}")
+        spec["generator_control"] = GENERATOR_CONTROLS[generator_control]
     if voltage_profile is not None:
         from .voltage_bases import get_voltage_base_profile
         profile_metadata = get_voltage_base_profile(voltage_profile)
@@ -196,9 +273,9 @@ def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
     # All bus and branch conversions use the explicit local map below.
     spec["base_kv_ll"] = kv
     normalized["bus"][:, BASE_KV] = [bus_kv[int(number)] for number in ids]
-    reference, success = runpf(normalized, ppoption(VERBOSE=0, OUT_ALL=0, PF_TOL=1e-11, PF_MAX_IT=100, ENFORCE_Q_LIMS=0))
-    if not success:
-        raise ValueError("Positive-sequence reference power flow did not converge")
+    regulated = spec["generator_control"] == PV_GENERATORS
+    reference = solve_reference(normalized, spec["generator_control"])
+    limited = reference.pop("reactive_limited_gen_rows0")
     lo, hi = map(float, spec["constant_pq_voltage_range"])
     if np.any(reference["bus"][:, VM] <= lo) or np.any(reference["bus"][:, VM] >= hi):
         raise ValueError("Reference voltage is outside the declared constant-PQ envelope")
@@ -256,7 +333,8 @@ def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
                 f"Taps=[{native_tap:.16g} 1] %NoLoadLoss=0 %IMag=0 ppm_Antifloat=0 "
                 f"Wdg=1 RNeut=0 XNeut=0 Wdg=2 RNeut=0 XNeut=0 BaseFreq={freq:.16g} Enabled={enabled}")
             # Preserve any transformer charging as endpoint admittances. The
-            # source case57 has none, but this avoids a silent generic loss.
+            # source case57 has none; case118's zero-tap cross-voltage 86-87
+            # and 68-116 branches carry line charging under physical bases.
             for side, bus_id, ratio in (("from", f, native_tap ** 2), ("to", t, 1.0)):
                 if branch[BR_B] != 0:
                     element = f"Capacitor.{name}_{side}_charging"
@@ -290,6 +368,18 @@ def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
         number = int(gen[GEN_BUS])
         if number == slack:
             slack_gen_rows.append(i)
+            continue
+        if regulated:
+            # kW and kvar come before Maxkvar/Minkvar: setting kW re-derives
+            # default reactive limits in OpenDSS, so the limits are stated last.
+            element = f"Generator.gen_{i+1:03d}"
+            kw, kvar = float(gen[PG])*1000, float(gen[QG])*1000
+            qmax, qmin = float(gen[QMAX])*1000, float(gen[QMIN])*1000
+            files["Generators.dss"].append(f"New {element} Phases=3 Bus1=b{number}.1.2.3 Conn=wye kV={bus_kv[number]:.16g} kW={kw:.16g} kvar={kvar:.16g} Model=3 Vpu={float(gen[VG]):.16g} Maxkvar={qmax:.16g} Minkvar={qmin:.16g} Status=fixed Vminpu={lo:.16g} Vmaxpu={hi:.16g} Spectrum=fundamental_only BaseFreq={freq:.16g}")
+            registry["generators"].append({"gen_row0": i, "bus": number, "phases": [1, 2, 3], "element": element,
+                                           "kw": kw, "kvar": kvar, "kv_ll": bus_kv[number], "control": "pv",
+                                           "vset_pu": float(gen[VG]), "qmax_kvar": qmax, "qmin_kvar": qmin,
+                                           "reference_reactive_limit": limited.get(i)})
             continue
         for phase, letter in enumerate("abc", 1):
             element = f"Generator.gen_{i+1:03d}_{letter}"
@@ -334,8 +424,11 @@ def export_model(case: Mapping[str, Any], output_dir: str | Path, *,
                 "physical_branch_count": len(registry["branches"]),
                 "line_count": sum(row["dss_element"].startswith("Line.") for row in registry["branches"]),
                 "transformer_count": sum(row["dss_element"].startswith("Transformer.") for row in registry["branches"]),
-                "snapshot_equivalence_only": True, "pv_control_equivalence": False,
-                "reference_q_limits_enforced": False, "validation_performed": False,
+                "snapshot_equivalence_only": not regulated, "pv_control_equivalence": regulated,
+                "generator_control": spec["generator_control"],
+                "reference_q_limits_enforced": regulated,
+                "reference_reactive_limited_gen_rows0": {str(i): side for i, side in limited.items()},
+                "validation_performed": False,
                 "files_sha256": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(out.iterdir())}}
     write_json(out / "build_manifest.json", manifest)
     return {"output_dir": str(out), "reference": reference, "registry": registry, "assumptions": spec, "manifest": manifest}

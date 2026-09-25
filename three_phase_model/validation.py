@@ -252,7 +252,8 @@ Malformed or unavailable engine evidence raises rather than producing a pass.
                          for terminal, bus in enumerate(element["buses"])
                          for conductor in range(element["ncond"])
                          if element["nodes"][terminal * element["ncond"] + conductor] != 0]
-            expected = [(_bus_name(by_external[int(device["bus"])]["dss_bus"]), int(device["phase"]))]
+            expected = [(_bus_name(by_external[int(device["bus"])]["dss_bus"]), int(phase))
+                        for phase in device.get("phases", [device.get("phase")])]
             if energized != expected:
                 identity_problems.append(f"{device['element']}:phase_or_bus_mapping_mismatch")
             if kind == "generators" and int(gen_table[int(device["gen_row0"]), 0]) != int(device["bus"]):

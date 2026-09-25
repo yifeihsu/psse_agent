@@ -2,7 +2,8 @@
 
 The canonical case may leave BASE_KV equal to zero. The named profile below is
 an explicit model choice supplied for this experiment, not a claim that every
-IEEE14/IEEE57 variant has these nominal voltages. No canonical source asset is edited.
+IEEE14/IEEE57 variant has these nominal voltages. The IEEE118 profile adopts the
+BASE_KV the canonical case itself carries. No canonical source asset is edited.
 """
 from __future__ import annotations
 
@@ -24,6 +25,10 @@ IEEE14_NOMINAL_KV = {
 }
 IEEE57_VOLTAGE_BASE_PROFILE_ID = "ieee57_reconstruction_138_69kv_v1"
 IEEE57_RECONSTRUCTION_KV = {bus: 138.0 if bus <= 17 else 69.0 for bus in range(1, 58)}
+IEEE118_VOLTAGE_BASE_PROFILE_ID = "ieee118_source_basekv_138_161_345kv_v1"
+_IEEE118_345KV_BUSES = frozenset((8, 9, 10, 26, 30, 38, 63, 64, 65, 68, 81))
+IEEE118_SOURCE_KV = {bus: 345.0 if bus in _IEEE118_345KV_BUSES else 161.0 if bus == 87 else 138.0
+                     for bus in range(1, 119)}
 
 
 def _positive(value: Any, name: str) -> float:
@@ -62,12 +67,36 @@ def ieee57_voltage_base_profile() -> dict[str, Any]:
     }
 
 
+def ieee118_voltage_base_profile() -> dict[str, Any]:
+    """Describe the case's own BASE_KV map: 345 kV core, one 161 kV bus, 138 kV rest.
+
+    Two zero-tap branches join different source bases (86-87 at 138/161 kV and
+    68-116 at 345/138 kV); the exporter realizes them as ideal-ratio
+    transformers carrying the source charging at their endpoints.
+    """
+    return {
+        "profile_id": IEEE118_VOLTAGE_BASE_PROFILE_ID,
+        "bus_base_kv_ll": dict(IEEE118_SOURCE_KV),
+        "voltage_units": "kV_line_to_line",
+        "selection_basis": "canonical case BASE_KV column: buses 8, 9, 10, 26, 30, 38, 63, 64, 65, 68, 81 at 345 kV, "
+                           "bus 87 at 161 kV, the other 106 buses at 138 kV",
+        "reference_base_mva": 100.0,
+        "canonical_nominal_voltage_claim": True,
+        "universal_ieee118_variant_claim": False,
+        "canonical_source_modified": False,
+        "zero_tap_cross_voltage_branches": [[86, 87], [68, 116]],
+        "physicalization_scope": "supplies local physical units while retaining source per-unit network parameters",
+    }
+
+
 def get_voltage_base_profile(name: str) -> dict[str, Any]:
     """Return detached metadata for an explicitly supported profile identity."""
     if name == IEEE14_VOLTAGE_BASE_PROFILE_ID:
         return ieee14_voltage_base_profile()
     if name == IEEE57_VOLTAGE_BASE_PROFILE_ID:
         return ieee57_voltage_base_profile()
+    if name == IEEE118_VOLTAGE_BASE_PROFILE_ID:
+        return ieee118_voltage_base_profile()
     raise ValueError(f"unsupported explicit voltage profile: {name!r}")
 
 
@@ -115,6 +144,27 @@ def apply_ieee57_voltage_bases(case: Mapping[str, Any]) -> dict[str, Any]:
     configured["bus"] = bus
     configured["voltage_base_profile"] = {
         **ieee57_voltage_base_profile(), "original_bus_base_kv_ll": previous,
+    }
+    return configured
+
+
+def apply_ieee118_voltage_bases(case: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy an IEEE118 case and attach its source-BASE_KV profile.
+
+    A case whose nonzero BASE_KV disagrees with the profile is rejected rather
+    than silently re-based; zero entries are filled from the profile.
+    """
+    bus = np.array(_bus_matrix(case, voltage_map=IEEE118_SOURCE_KV, system_name="IEEE118"), copy=True)
+    previous = {int(row[BUS_I]): float(row[BASE_KV]) for row in bus}
+    conflicts = sorted(number for number, kv in previous.items() if kv not in (0.0, IEEE118_SOURCE_KV[number]))
+    if conflicts:
+        raise ValueError(f"IEEE118 BASE_KV differs from the source profile at buses {conflicts}")
+    configured = deepcopy(dict(case))
+    for row in bus:
+        row[BASE_KV] = IEEE118_SOURCE_KV[int(row[BUS_I])]
+    configured["bus"] = bus
+    configured["voltage_base_profile"] = {
+        **ieee118_voltage_base_profile(), "original_bus_base_kv_ll": previous,
     }
     return configured
 
@@ -183,6 +233,11 @@ def ieee57_hif_branch_eligibility(case: Mapping[str, Any]) -> dict[str, Any]:
     return _hif_branch_eligibility(case, ieee57_voltage_base_profile(), system_name="IEEE57")
 
 
+def ieee118_hif_branch_eligibility(case: Mapping[str, Any]) -> dict[str, Any]:
+    """Same-voltage active zero-tap lines; 86-87 and 68-116 cross voltage bases."""
+    return _hif_branch_eligibility(case, ieee118_voltage_base_profile(), system_name="IEEE118")
+
+
 def _hif_branch_eligibility(case: Mapping[str, Any], profile: Mapping[str, Any], *, system_name: str) -> dict[str, Any]:
     voltage_map = profile["bus_base_kv_ll"]
     _bus_matrix(case, voltage_map=voltage_map, system_name=system_name)
@@ -224,6 +279,10 @@ def eligible_ieee14_hif_branch_rows(case: Mapping[str, Any]) -> list[int]:
 
 def eligible_ieee57_hif_branch_rows(case: Mapping[str, Any]) -> list[int]:
     return ieee57_hif_branch_eligibility(case)["eligible_branch_rows0"]
+
+
+def eligible_ieee118_hif_branch_rows(case: Mapping[str, Any]) -> list[int]:
+    return ieee118_hif_branch_eligibility(case)["eligible_branch_rows0"]
 
 
 
@@ -281,6 +340,8 @@ __all__ = ["IEEE14_VOLTAGE_BASE_PROFILE_ID", "IEEE14_NOMINAL_KV", "ieee14_voltag
            "ieee14_hif_branch_eligibility", "eligible_ieee14_hif_branch_rows",
            "IEEE57_VOLTAGE_BASE_PROFILE_ID", "IEEE57_RECONSTRUCTION_KV", "ieee57_voltage_base_profile",
            "apply_ieee57_voltage_bases", "ieee57_hif_branch_eligibility", "eligible_ieee57_hif_branch_rows",
+           "IEEE118_VOLTAGE_BASE_PROFILE_ID", "IEEE118_SOURCE_KV", "ieee118_voltage_base_profile",
+           "apply_ieee118_voltage_bases", "ieee118_hif_branch_eligibility", "eligible_ieee118_hif_branch_rows",
            "get_voltage_base_profile",
            "HIF_RESISTANCE_CLASSES_OHM", "HIF_DETECTION_LIMIT_BAND_OHM", "hif_resistance_class",
            "hif_resistance_classification_table"]

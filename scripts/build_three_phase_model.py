@@ -68,7 +68,8 @@ def compare_matpower_reference(directory, build, measurements, load_scale):
              "maximum_branch_power_error_pu": branch_error, "original_reference_directory": str(root)}
     destination = Path(build["output_dir"]) / "matpower_reference"
     destination.mkdir()
-    for name in ("reference_report.json", "reference_results.json", "case57_balanced_3p.m", "case57_normalized_1p.m"):
+    case_id = build["registry"]["case_id"]
+    for name in ("reference_report.json", "reference_results.json", f"{case_id}_balanced_3p.m", f"{case_id}_normalized_1p.m"):
         shutil.copyfile(root / name, destination / name)
     write_json(destination / "opendss_cross_reference_report.json", cross)
     return cross
@@ -76,7 +77,7 @@ def compare_matpower_reference(directory, build, measurements, load_scale):
 
 def build_and_validate(output_dir, *, system="case57", assumptions="normalized_diagonal",
                        load_scale=1.0, unbalance_bus=12, unbalance_delta=0.2,
-                       matpower_reference_dir=None, voltage_profile=None):
+                       matpower_reference_dir=None, voltage_profile=None, generator_control=None):
     if not np.isfinite(load_scale) or load_scale <= 0:
         raise ValueError("load_scale must be finite and positive")
     spec = resolve_system(system)
@@ -85,6 +86,7 @@ def build_and_validate(output_dir, *, system="case57", assumptions="normalized_d
     build = export_model(case, output_dir, case_id=spec.case_id,
                          assumptions=load_assumptions(assumptions),
                          **({"voltage_profile": voltage_profile} if voltage_profile is not None else {}),
+                         **({"generator_control": generator_control} if generator_control is not None else {}),
                          source_provenance={"system": spec.to_manifest(), "load_scale": load_scale})
     out = Path(build["output_dir"])
     dss = compile_model(out / "Master.dss")
@@ -102,6 +104,8 @@ def build_and_validate(output_dir, *, system="case57", assumptions="normalized_d
     write_json(out / "measurement_layout.json", layout)
     reports = {"balanced": balanced}
     if balanced["passed"] and matpower_reference_dir is not None:
+        if build["manifest"]["reference_q_limits_enforced"]:
+            raise ValueError("The MATPOWER three-phase reference is unlimited; it cannot cross-check a reactive-limited build")
         reports["matpower_cross_reference"] = compare_matpower_reference(matpower_reference_dir, build, measurements, load_scale)
     # Every supplied balanced reference must pass before disturbance generation.
     if all(report["passed"] for report in reports.values()):
@@ -143,10 +147,12 @@ def build_and_validate(output_dir, *, system="case57", assumptions="normalized_d
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--system", choices=("case14", "case57"), default="case57")
+    parser.add_argument("--system", choices=("case14", "case57", "case118"), default="case57")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--assumptions", default="normalized_diagonal")
     parser.add_argument("--voltage-profile", help="Explicit named voltage reconstruction; omission preserves normalized 1-kV behavior")
+    parser.add_argument("--generator-control", choices=("constant_pq", "pv_q_limits"),
+                        help="Omitted keeps the assumptions' constant-PQ generator snapshot")
     parser.add_argument("--load-scale", type=float, default=1.0)
     parser.add_argument("--unbalance-bus", type=int, default=12)
     parser.add_argument("--unbalance-delta", type=float, default=0.2)
@@ -155,7 +161,7 @@ def main(argv=None):
     result = build_and_validate(args.output_dir, system=args.system, assumptions=args.assumptions,
                                load_scale=args.load_scale, unbalance_bus=args.unbalance_bus,
                                unbalance_delta=args.unbalance_delta, matpower_reference_dir=args.matpower_reference_dir,
-                               voltage_profile=args.voltage_profile)
+                               voltage_profile=args.voltage_profile, generator_control=args.generator_control)
     print(json.dumps({key: value for key, value in result.items() if key != "reports"}, indent=2))
     return 0 if result["passed"] else 2
 
