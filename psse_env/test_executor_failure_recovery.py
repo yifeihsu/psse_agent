@@ -117,7 +117,12 @@ def _select(state):
 class ExecutorFailureRecoveryTests(unittest.TestCase):
     def test_bounded_observation_resumes_meter_only_with_structured_failure_receipt(self):
         state, meter = _minimal_observation()
-        self.assertEqual(_select(state)[0]["tool"], "ask_for_more_evidence")
+        # A ledger entry alone is not a test: without a durable same-state
+        # receipt the line-19 attempt (outside the window) may have been a
+        # process-gate refusal, and the escalation audit still counts line 19
+        # as an outstanding supported correction, so the expert retries it
+        # instead of labelling a handoff the audit would reject.
+        self.assertEqual(_select(state)[0], _parameter(19))
         state["rejected_hypotheses"].append(_failure_receipt(_parameter(19)))
         self.assertEqual(_select(state)[0], meter)
 
