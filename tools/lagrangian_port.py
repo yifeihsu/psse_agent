@@ -514,9 +514,11 @@ def lagrangian_m_singlephase_details(
     X = lu_gain.solve(rhs)
     phi = X[ns:, :]  # equivalent to [E5; E8]
 
-    R_used = np.diag(Rdiag_full)
-    covu = phi @ R_used @ phi.T
-    ea = S @ covu @ S.T
+    # ea = S (phi R phi') S' grouped as (S phi) R (S phi)': the same matrix
+    # without a dense diagonal R or the m-by-m measurement covariance, which
+    # dominate the cost at IEEE118 size (1,098 measurements).
+    s_phi = S @ phi
+    ea = (s_phi * np.asarray(Rdiag_full, dtype=float)[None, :]) @ s_phi.T
 
     lambda_vec = S @ dxl[ns:]
     tt = np.sqrt(np.clip(np.diag(ea), a_min=0.0, a_max=None))
