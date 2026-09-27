@@ -1591,6 +1591,13 @@ RESEARCH_CASE_LOADER = "psse_env.dagger.release_factories:deterministic_case_loa
 #: Worker processes load their models one at a time; a worker that died while
 #: loading must not stall the others forever.
 POLICY_LOAD_LOCK_TIMEOUT_SECONDS = 1800.0
+#: Once every planned episode is checkpointed, a worker still alive after
+#: this grace is terminated: its results are on disk, and a process that
+#: never exits holds its GPU memory at zero utilization until the cluster
+#: cancels the job (round-2 eval of the 2026-09-24 cell, 2026-09-27).
+WORKER_EXIT_GRACE_SECONDS = 120.0
+#: How often the parent checks its workers and their checkpoints.
+WORKER_POLL_SECONDS = 15.0
 _THREAD_ENVIRONMENT = (
     "OMP_NUM_THREADS",
     "MKL_NUM_THREADS",
@@ -1728,7 +1735,13 @@ def _shard_progress(tag: str, record: Mapping[str, Any]) -> None:
 
 
 def _evaluation_worker(job: Mapping[str, Any], load_lock: Any) -> None:
-    """Spawn target: roll out one shard of one policy's planned episodes."""
+    """Spawn target: roll out one shard of one policy's planned episodes.
+
+    The worker leaves with ``os._exit`` once its episodes are checkpointed:
+    model libraries can keep non-daemon threads or a CUDA teardown alive that
+    never lets a normal interpreter exit finish.  A shard with nothing
+    pending exits before it loads a model.
+    """
 
     import pickle
     import traceback
@@ -1738,6 +1751,7 @@ def _evaluation_worker(job: Mapping[str, Any], load_lock: Any) -> None:
     # The parent's stdout carries its JSON report; worker output goes to stderr.
     os.dup2(2, 1)
     sys.stdout = sys.stderr
+    status = 0
     try:
         environment = job["environment"]
         RESEARCH_ENVIRONMENT_OPTIONS.clear()
@@ -1749,26 +1763,12 @@ def _evaluation_worker(job: Mapping[str, Any], load_lock: Any) -> None:
                 environment["hif_search_profile"], environment["evidence_profile"]
             )
         )
-        if job["adapter"] is None:
-            expert = (
-                _import_callable(job["expert_policy_factory"])
-                if job.get("expert_policy_factory")
-                else research_expert_policy
-            )
-            policy = expert(environment_factory)
-        else:
-            loader = _import_callable(job["policy_loader"])
-            acquired = load_lock.acquire(timeout=POLICY_LOAD_LOCK_TIMEOUT_SECONDS)
-            try:
-                policy = loader(Path(job["adapter"]), **job["policy_kwargs"])
-            finally:
-                if acquired:
-                    load_lock.release()
         from psse_env.dagger.evaluator import ClosedLoopRolloutEvaluator
 
+        loaded: dict[str, Any] = {}
         evaluator = ClosedLoopRolloutEvaluator(
             env_factory=environment_factory,
-            policy_factory=lambda _policy=policy, **_kwargs: _policy,
+            policy_factory=lambda **_kwargs: loaded["policy"],
             max_steps=int(job["max_steps"]),
             seed=int(job["seed"]),
             case_loader=_import_callable(job["case_loader"]),
@@ -1777,24 +1777,84 @@ def _evaluation_worker(job: Mapping[str, Any], load_lock: Any) -> None:
         )
         scenarios = pickle.loads(Path(job["scenarios_path"]).read_bytes())
         plan = evaluator.plan_episodes({"standard_success": scenarios})
-        count = int(job["shard_count"])
         pending = [
-            item.ordinal
-            for item in plan.episodes
-            if (item.ordinal - 1) % count == shard
-            and not _episode_checkpoint(label_dir, item.ordinal).exists()
+            ordinal for ordinal in _shard_ordinals(plan, int(job["shard_count"]), shard)
+            if not _episode_checkpoint(label_dir, ordinal).exists()
         ]
+        if pending:
+            if job["adapter"] is None:
+                expert = (
+                    _import_callable(job["expert_policy_factory"])
+                    if job.get("expert_policy_factory")
+                    else research_expert_policy
+                )
+                loaded["policy"] = expert(environment_factory)
+            else:
+                loader = _import_callable(job["policy_loader"])
+                acquired = load_lock.acquire(timeout=POLICY_LOAD_LOCK_TIMEOUT_SECONDS)
+                try:
+                    loaded["policy"] = loader(Path(job["adapter"]), **job["policy_kwargs"])
+                finally:
+                    if acquired:
+                        load_lock.release()
 
-        def checkpoint(item: Any, episode: Any) -> None:
-            _atomic_bytes(
-                _episode_checkpoint(label_dir, item.ordinal),
-                pickle.dumps(episode, protocol=pickle.HIGHEST_PROTOCOL),
-            )
+            def checkpoint(item: Any, episode: Any) -> None:
+                _atomic_bytes(
+                    _episode_checkpoint(label_dir, item.ordinal),
+                    pickle.dumps(episode, protocol=pickle.HIGHEST_PROTOCOL),
+                )
 
-        evaluator.run_planned_episodes(plan, ordinals=pending, on_episode=checkpoint)
+            evaluator.run_planned_episodes(plan, ordinals=pending, on_episode=checkpoint)
     except BaseException:
         _atomic_text(label_dir / f"error-{shard}.txt", traceback.format_exc())
-        raise
+        status = 1
+    finally:
+        try:
+            sys.stderr.flush()
+        finally:
+            os._exit(status)
+
+
+def _shard_ordinals(plan: Any, shard_count: int, shard: int) -> list[int]:
+    """The planned episodes a shard owns: every ``shard_count``-th ordinal."""
+    return [item.ordinal for item in plan.episodes if (item.ordinal - 1) % int(shard_count) == int(shard)]
+
+
+def _missing_checkpoints(plan: Any, label_dir: Path) -> list[Any]:
+    return [item for item in plan.episodes if not _episode_checkpoint(label_dir, item.ordinal).is_file()]
+
+
+def _await_workers(processes: Sequence[tuple[Mapping[str, Any], Any]], complete: Callable[[], bool]) -> None:
+    """Join the workers; once every episode is on disk, stragglers get a grace.
+
+    A worker is expected to exit by itself right after its last checkpoint.
+    One that is still alive ``WORKER_EXIT_GRACE_SECONDS`` after the whole
+    plan is checkpointed is terminated (then killed), since it can only be
+    holding resources.
+    """
+    import time
+
+    finished_at: float | None = None
+    while any(process.is_alive() for _job, process in processes):
+        for _job, process in processes:
+            process.join(timeout=WORKER_POLL_SECONDS / max(len(processes), 1))
+        if not complete():
+            continue
+        if finished_at is None:
+            finished_at = time.monotonic()
+        if time.monotonic() - finished_at < WORKER_EXIT_GRACE_SECONDS:
+            continue
+        for job, process in processes:
+            if process.is_alive():
+                print(f"[eval] terminating {job['label']} shard {job['shard_index']}: "
+                      "every episode is checkpointed but the worker has not exited",
+                      file=sys.stderr, flush=True)
+                process.terminate()
+                process.join(timeout=30)
+                if process.is_alive():
+                    process.kill()
+                    process.join(timeout=30)
+        break
 
 
 def _evaluate_policies_in_parallel(
@@ -1852,6 +1912,10 @@ def _evaluate_policies_in_parallel(
         for stale in label_dir.glob("error-*.txt"):
             stale.unlink()
         for shard in range(count):
+            if all(_episode_checkpoint(label_dir, ordinal).is_file()
+                   for ordinal in _shard_ordinals(plan, count, shard)):
+                # A resumed job whose shard already finished loads nothing.
+                continue
             jobs.append(
                 {
                     "label": label,
@@ -1873,7 +1937,7 @@ def _evaluate_policies_in_parallel(
     _release_policy_memory(policy_cache_clear)
     context = multiprocessing.get_context("spawn")
     load_lock = context.Lock()
-    threads = str(max(1, _available_cpus() // len(jobs)))
+    threads = str(max(1, _available_cpus() // max(len(jobs), 1)))
     saved = {name: os.environ.get(name) for name in _THREAD_ENVIRONMENT}
     processes: list[tuple[dict[str, Any], Any]] = []
     try:
@@ -1893,12 +1957,14 @@ def _evaluate_policies_in_parallel(
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
-    for _job, process in processes:
-        process.join()
+    _await_workers(
+        processes,
+        lambda: not any(_missing_checkpoints(plan, shard_root / label) for label, _adapter in comparators),
+    )
     failures = []
     for job, process in processes:
-        if process.exitcode != 0:
-            error = Path(job["label_dir"]) / f"error-{job['shard_index']}.txt"
+        error = Path(job["label_dir"]) / f"error-{job['shard_index']}.txt"
+        if error.is_file() or (process.exitcode not in (0, None) and _missing_checkpoints(plan, Path(job["label_dir"]))):
             detail = error.read_text(encoding="utf-8").strip().splitlines() if error.is_file() else []
             failures.append(
                 f"{job['label']} shard {job['shard_index']} exit {process.exitcode}: "
@@ -1909,11 +1975,7 @@ def _evaluate_policies_in_parallel(
     payloads: dict[str, dict[str, Any]] = {}
     for label, _adapter in comparators:
         label_dir = shard_root / label
-        missing = [
-            item.episode_key
-            for item in plan.episodes
-            if not _episode_checkpoint(label_dir, item.ordinal).is_file()
-        ]
+        missing = [item.episode_key for item in _missing_checkpoints(plan, label_dir)]
         if missing:
             raise RuntimeError(f"{label} evaluation is missing episodes: {missing[:8]}")
         episodes = [

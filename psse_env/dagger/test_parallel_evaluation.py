@@ -5,7 +5,10 @@ so one process leaves the GPU idle about half the time and the cluster
 cancels the job.  ``ParallelEvaluation`` shards every policy's development
 roots over worker processes; these tests run a small real suite both ways,
 with the expert standing in for the adapters, and require the same reports,
-and check that a requeued job resumes from its episode checkpoints.
+check that a requeued job resumes from its episode checkpoints, that a job
+whose episodes are all checkpointed loads no policy, and that a worker whose
+model stack leaves a thread behind still exits (the round-2 eval of the
+2026-09-24 cell hung at zero GPU use after its last episode until cancelled).
 """
 from __future__ import annotations
 
@@ -13,6 +16,8 @@ import json
 import os
 import pickle
 import tempfile
+import threading
+import time
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -47,6 +52,17 @@ def expert_as_adapter(_adapter, **_kwargs):
     return research_module.research_expert_policy(environment_factory)
 
 
+def thread_leaking_expert(adapter, **kwargs):
+    """Policy loader that leaves a non-daemon thread running, as some model stacks do."""
+
+    threading.Thread(target=time.sleep, args=(3600.0,), daemon=False).start()
+    return expert_as_adapter(adapter, **kwargs)
+
+
+def refusing_loader(*_args, **_kwargs):
+    raise AssertionError("a fully checkpointed evaluation must not load a policy")
+
+
 def _scenarios():
     generator = Round0ScenarioGenerator(seed=20260927, normalized_residual_threshold=4.0)
     return [
@@ -55,7 +71,8 @@ def _scenarios():
     ]
 
 
-def _parallel(workers: int) -> research_module.ParallelEvaluation:
+def _parallel(workers: int, loader: str = "expert_as_adapter", expert: str | None = None):
+    module = "psse_env.dagger.test_parallel_evaluation"
     return research_module.ParallelEvaluation(
         workers_per_policy=workers,
         environment={
@@ -63,8 +80,9 @@ def _parallel(workers: int) -> research_module.ParallelEvaluation:
             "evidence_profile": DEFAULT_EVIDENCE_PROFILE,
             "options": dict(research_module.RESEARCH_ENVIRONMENT_OPTIONS),
         },
-        policy_loader="psse_env.dagger.test_parallel_evaluation:expert_as_adapter",
-        environment_factory="psse_env.dagger.test_parallel_evaluation:environment_factory",
+        policy_loader=f"{module}:{loader}",
+        environment_factory=f"{module}:environment_factory",
+        expert_policy_factory=None if expert is None else f"{module}:{expert}",
     )
 
 
@@ -134,7 +152,7 @@ class ParallelEvaluationTests(unittest.TestCase):
                 for episode in reference_reports["bc0_eval.json"]["suite_metrics"]["episodes"]
             }
             resumed = root / "resumed"
-            self._seed_checkpoints(resumed, plan, episodes)
+            self._seed_checkpoints(resumed, plan, episodes, "bc0", "student", skip_last=True)
             counter = root / "environments.txt"
             os.environ[ENVIRONMENT_COUNTER] = str(counter)
             try:
@@ -151,13 +169,57 @@ class ParallelEvaluationTests(unittest.TestCase):
                 sorted(builds.values()), [2, 1 + episodes_total, 1 + episodes_total]
             )
 
-    def _seed_checkpoints(self, output_dir, plan, episodes):
-        label_dir = output_dir / "evaluation" / "shards" / "bc0"
+    def test_a_finished_job_only_merges_its_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reference = _evaluate(self.scenarios, root / "reference", parallel=_parallel(1))
+            reference_reports = _reports(root / "reference")
+            planner = ClosedLoopRolloutEvaluator(
+                env_factory=research_module._never_called,
+                policy_factory=research_module._never_called,
+                max_steps=research_module.RESEARCH_EPISODE_BUDGET,
+                seed=4,
+                **research_module.PAIRED_EVALUATION_CONTRACT,
+            )
+            plan = planner.plan_episodes({"standard_success": list(self.scenarios)})
+            finished = root / "finished"
+            for label, adapter in (("bc0", "student"), ("r1", "candidate"), ("expert", None)):
+                episodes = {
+                    episode["episode_key"]: episode
+                    for episode in reference_reports[f"{label}_eval.json"]["suite_metrics"]["episodes"]
+                }
+                self._seed_checkpoints(finished, plan, episodes, label, adapter, skip_last=False)
+            # Every loader refuses: with all episodes on disk no worker starts.
+            comparison = _evaluate(
+                self.scenarios, finished,
+                parallel=_parallel(2, loader="refusing_loader", expert="refusing_loader"),
+            )
+            self.assertEqual(comparison, reference)
+            self.assertEqual(_reports(finished), reference_reports)
+
+    def test_a_worker_that_leaves_a_thread_behind_still_exits(self) -> None:
+        original = research_module.WORKER_EXIT_GRACE_SECONDS
+        research_module.WORKER_EXIT_GRACE_SECONDS = 600.0
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                started = time.monotonic()
+                comparison = _evaluate(
+                    self.scenarios, Path(directory), parallel=_parallel(1, loader="thread_leaking_expert"),
+                )
+                elapsed = time.monotonic() - started
+        finally:
+            research_module.WORKER_EXIT_GRACE_SECONDS = original
+        self.assertIsNotNone(comparison["r1_overall"])
+        # Without the explicit exit the parent would wait for the grace period.
+        self.assertLess(elapsed, 300.0)
+
+    def _seed_checkpoints(self, output_dir, plan, episodes, label, adapter, *, skip_last):
+        label_dir = output_dir / "evaluation" / "shards" / label
         identity = {
-            "label": "bc0",
-            "adapter": "student",
-            "adapter_files": research_module._adapter_identity(Path("student")),
-            "policy_kwargs": {
+            "label": label,
+            "adapter": adapter,
+            "adapter_files": research_module._adapter_identity(None if adapter is None else Path(adapter)),
+            "policy_kwargs": None if adapter is None else {
                 "base_model": "gemma",
                 "base_revision": "f" * 40,
                 "load_in_4bit": True,
@@ -174,7 +236,7 @@ class ParallelEvaluationTests(unittest.TestCase):
         identity = json.loads(json.dumps(identity, sort_keys=True, default=str))
         label_dir.mkdir(parents=True)
         (label_dir / "plan.json").write_text(json.dumps(identity), encoding="utf-8")
-        for item in list(plan.episodes)[:-1]:
+        for item in list(plan.episodes)[:-1] if skip_last else list(plan.episodes):
             research_module._atomic_bytes(
                 research_module._episode_checkpoint(label_dir, item.ordinal),
                 pickle.dumps(EpisodeEvaluation(**episodes[item.episode_key])),
