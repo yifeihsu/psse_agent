@@ -1028,18 +1028,21 @@ class MatpowerDeploymentProviders:
         nb = int(ppc["bus"].shape[0])
         nl = int(ppc["branch"].shape[0])
         noise_options = self._noise_options(state, len(z))
+        # The conditioning method names the predictor that ran (the ledger
+        # key the continuation checks), never the prediction's own label.
+        method = "paired_opendss_effect_compensation"
         if self._strict_scada(state):
             prediction = None
         elif self._effective_profile(state) == SUSPICION_GATED_PROFILE:
             prediction = self._balanced_conditioned_prediction(state, ppc, z, noise_options)
+            method = BALANCED_HIF_CONDITIONING_METHOD
         else:
             prediction = conditioned_prediction(state, self._hif_prediction_cache)
         conditional = None
         wls_z = z
         if prediction is not None:
             conditional = diagnose_hif_meters(
-                state, prediction, noise_options.get("measurement_sigma"),
-                method=str(prediction.get("method") or "paired_opendss_effect_compensation"),
+                state, prediction, noise_options.get("measurement_sigma"), method=method,
             )
             if self.normalized_residual_threshold is None:
                 conditional["conditioning"]["status"] = "unavailable"
@@ -1139,7 +1142,6 @@ class MatpowerDeploymentProviders:
                           "error": f"{type(exc).__name__}: {exc}", "rounds": []}
             self._hif_screen_cache.put(key, report)
         compact: dict[str, Any] = {
-            **self._binding(state),
             "method": report.get("method", HIF_SCREEN_METHOD),
             "status": report.get("status"),
             "suspected": bool(report.get("suspected")),

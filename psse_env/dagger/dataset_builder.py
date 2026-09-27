@@ -25,7 +25,8 @@ from psse_env.dagger.offline_teacher_target_audit import (
 )
 from psse_env.state_store import find_forbidden_policy_paths
 from psse_env.evidence_profile import (
-    SCADA_ALLOWED_TOOLS, disabled_tools, is_scada_only, is_wls_gated, validate_evidence_profile,
+    SCADA_ALLOWED_TOOLS, disabled_tools, is_scada_only, is_suspicion_gated, is_wls_gated,
+    validate_evidence_profile,
 )
 
 
@@ -85,6 +86,21 @@ WLS_GATED_PROMPT_PARAGRAPH = (
     "recovery cannot resolve the discrepancy, request operator review without "
     "inventing a fault-family diagnosis."
 )
+SUSPICION_GATED_PROMPT_PARAGRAPH = (
+    " Evidence profile: suspicion_gated_diagnostics. Start with WLS on the configured "
+    "balanced-network model, the observed SCADA voltage magnitudes and P/Q "
+    "injections/flows and the declared sensor noise; no fault flags or precomputed "
+    "diagnoses are provided. Each WLS alarm is screened against single-cause balanced "
+    "explanations (a meter, a branch parameter, a line outage, or a high-impedance "
+    "fault on a line). Phase-resolved PMU phasors, the three-phase NLM screen and the "
+    "HIF estimator may be requested only while the current WLS on the active state "
+    "reports an HIF suspicion (wls_hif_suspected); other requests are rejected, and "
+    "the phasors can show that the suspicion was wrong. Harmonic spectra and HSE "
+    "need a harmonic suspicion, which no balanced screen raises. run_alternative_test "
+    "and the multi-scan HIF estimator are unavailable. If supported recovery cannot "
+    "resolve the discrepancy, request operator review without inventing a "
+    "fault-family diagnosis."
+)
 
 
 def system_prompt_for_observation(system_prompt: str, observation: Mapping[str, Any]) -> str:
@@ -92,6 +108,8 @@ def system_prompt_for_observation(system_prompt: str, observation: Mapping[str, 
     if profile is None:
         return system_prompt
     validate_evidence_profile(profile)
+    if is_suspicion_gated(profile):
+        return system_prompt + SUSPICION_GATED_PROMPT_PARAGRAPH
     if is_wls_gated(profile):
         return system_prompt + WLS_GATED_PROMPT_PARAGRAPH
     if not is_scada_only(profile):
@@ -194,6 +212,7 @@ PROVENANCE_SOURCE_KEYS = frozenset(
 
 HISTORY_METRIC_KEYS = (
     "gnn_screen",
+    "hif_screen",
     "wls_objective",
     "chi_square_statistic",
     "residual_norm",
@@ -290,6 +309,7 @@ LAST_VERIFICATION_PRIORITY_KEYS = (
 CONTEXT_DETAIL_KEYS = frozenset(
     {
         "gnn_screen",
+        "hif_screen",
         "measurement_findings",
         "parameter_findings",
         "topology_findings",

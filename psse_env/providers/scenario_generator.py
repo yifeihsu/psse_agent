@@ -57,7 +57,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 from psse_env.evidence_profile import (
     DEFAULT_EVIDENCE_PROFILE, AUXILIARY_EVIDENCE_PROFILE,
-    allows_diagnostic_tools, is_scada_only, is_strict_boundary,
+    allows_diagnostic_tools, is_scada_only, is_strict_boundary, is_suspicion_gated,
     validate_evidence_profile, sanitize_execution_for_profile,
 )
 
@@ -2089,7 +2089,13 @@ class Round0ScenarioGenerator:
                         "sigma_semantics": item.get("sigma_semantics", "per_component"),
                     }
                 )
+        from pypower.idx_bus import VA, VM
+
         return {
+            "fundamental_state": {
+                "vm": [float(value) for value in solution["bus"][:, VM]],
+                "va_deg": [float(value) for value in solution["bus"][:, VA]],
+            },
             "id": f"synthesized_harmonic_{index}",
             "scenario": "harmonic_anomaly",
             "z_true": _canonicalize_synthesized_measurement_vector(trace["z_scada_true"]),
@@ -2144,6 +2150,10 @@ class Round0ScenarioGenerator:
         )
         scenario["clean_case"] = self.case_path
         scenario["clean_measurements"] = [float(value) for value in row["z_true"]]
+        if isinstance(row.get("fundamental_state"), Mapping):
+            # The harmonic SCADA means include harmonic power; a PMU reads the
+            # fundamental, which is the OPF operating point the trace held fixed.
+            scenario["_fundamental_state"] = copy.deepcopy(dict(row["fundamental_state"]))
         if mode == "flagged":
             scenario["unresolved_signatures"] = [HARMONIC_SIGNATURE]
             scenario["semantic_field_provenance"]["unresolved_signatures"] = (
@@ -2291,6 +2301,8 @@ class Round0ScenarioGenerator:
                 scenario["metadata"]["hif_scan_window"][BRANCH_CURRENT_SIGMA_KEY] = float(
                     current_sigma
                 )
+        if is_suspicion_gated(self.evidence_profile):
+            self._uniform_pmu_sigma(scenario, row)
         scenario["hidden_truth"] = {"true_hif_errors": [copy.deepcopy(label)]}
         scenario["release_audit"] = {
             **copy.deepcopy(_EXPLANATION_ONLY_RELEASE_AUDIT),
@@ -2298,6 +2310,85 @@ class Round0ScenarioGenerator:
             "sensor_signatures_withheld": [HIF_SIGNATURE] if hif_mode == "discovered" else [],
         }
         return scenario
+
+    def _attach_true_state_phasors(
+        self, scenario: dict[str, Any], fundamental: Mapping[str, Any] | None = None,
+    ) -> None:
+        """PMU phasors of the root's own true state (suspicion_gated_diagnostics).
+
+        The balanced HIF screen can fire on a root of any family, so every
+        root must answer a phasor request; roots whose simulation produced no
+        phasors get those of their true balanced state (the fit of the clean
+        measurement vector on the true network, or a harmonic trace's
+        fundamental OPF point) at the uniform PMU sigma, in the exporter's
+        row format.  A per-root random stream keeps every other draw unchanged.
+        """
+        from psse_env.providers.balanced_phasors import (
+            balanced_phasor_rows, noisy_phasors, phasor_rng, true_balanced_state,
+        )
+
+        metadata = scenario.setdefault("metadata", {})
+        if metadata.get("three_phase_voltages") and metadata.get(BRANCH_CURRENT_CHANNEL):
+            return
+        clean_case = scenario.get("clean_case") or scenario.get("case") or self.case_path
+        case = _load_python_case(clean_case if isinstance(clean_case, str) else str(clean_case))
+        try:
+            if isinstance(fundamental, Mapping):
+                vm = np.asarray(fundamental["vm"], dtype=float)
+                va = np.deg2rad(np.asarray(fundamental["va_deg"], dtype=float))
+                va = va - va[int(np.flatnonzero(np.asarray(case["bus"])[:, 1].astype(int) == 3)[0])]
+            else:
+                vm, va = true_balanced_state(case, scenario["clean_measurements"])
+            voltages, currents = balanced_phasor_rows(case, vm, va)
+        except (KeyError, ValueError) as exc:
+            raise ScenarioRejected("true_state_phasors_failed", str(exc)) from exc
+        sigma = float(PMU_PHASOR_SIGMA_PU)
+        voltages, currents = noisy_phasors(voltages, currents, phasor_rng(self.seed, scenario["scenario_id"]), sigma)
+        metadata["three_phase_voltages"] = voltages
+        metadata[BRANCH_CURRENT_CHANNEL] = currents
+        metadata["three_phase_sigma"] = sigma
+        metadata[BRANCH_CURRENT_SIGMA_KEY] = sigma
+
+    def _uniform_pmu_sigma(self, scenario: dict[str, Any], row: Mapping[str, Any]) -> None:
+        """Re-noise a simulated window's phasors at the uniform PMU sigma.
+
+        A declared sigma that differs by family (the unbalance corpus carries
+        5e-3 / 1e-3) would name the family on every phasor request, so the
+        clean phasors of the same window are drawn again at the PMU sigma and
+        the noise contract is declared to match.
+        """
+        from psse_env.providers.balanced_phasors import noisy_phasors, phasor_rng
+        from three_phase_nlm.measurement_noise import generated_noise_contract
+
+        metadata = scenario["metadata"]
+        sigma = float(PMU_PHASOR_SIGMA_PU)
+        declared = (metadata.get("three_phase_sigma"), metadata.get(BRANCH_CURRENT_SIGMA_KEY))
+        if all(value is not None and math.isclose(float(value), sigma) for value in declared):
+            return
+        clean_voltages = row.get("three_phase_voltages_clean")
+        clean_currents = row.get("three_phase_branch_currents_clean")
+        if not clean_voltages or not clean_currents:
+            scans = row.get("scans") or []
+            if scans:
+                clean_voltages = scans[0].get("three_phase_voltages_clean")
+                clean_currents = scans[0].get("three_phase_branch_currents_clean")
+        if not clean_voltages or not clean_currents:
+            raise ScenarioRejected("clean_phasors_missing_for_uniform_pmu_sigma", str(row.get("id")))
+        voltages, currents = noisy_phasors(clean_voltages, clean_currents,
+                                           phasor_rng(self.seed, scenario["scenario_id"]), sigma)
+        metadata["three_phase_voltages"] = voltages
+        metadata[BRANCH_CURRENT_CHANNEL] = currents
+        metadata["three_phase_sigma"] = sigma
+        metadata[BRANCH_CURRENT_SIGMA_KEY] = sigma
+        contract = metadata.get("noise_contract") if isinstance(metadata.get("noise_contract"), Mapping) else {}
+        metadata["noise_contract"] = generated_noise_contract(
+            metadata.get("sigma_z") or row["sigma_z"], noise_scale=float(contract.get("noise_scale", 1.0)),
+            three_phase_sigma=sigma, branch_current_sigma_pu=sigma,
+        )
+        for block in ("hif_runtime", "hif_scan_window"):
+            # The OpenDSS acquisition blocks keep the corpus draws; this
+            # profile never reads them (the sanitizer drops both).
+            metadata.pop(block, None)
 
     @staticmethod
     def _balanced_voltage_control(
@@ -2414,6 +2505,8 @@ class Round0ScenarioGenerator:
                 scenario["metadata"][BRANCH_CURRENT_SIGMA_KEY] = float(
                     row[BRANCH_CURRENT_SIGMA_KEY]
                 )
+        if is_suspicion_gated(self.evidence_profile):
+            self._uniform_pmu_sigma(scenario, row)
         scenario["hidden_truth"] = {"true_unbalance_errors": [label]}
         scenario["release_audit"] = {
             **copy.deepcopy(_EXPLANATION_ONLY_RELEASE_AUDIT),
@@ -2436,6 +2529,8 @@ class Round0ScenarioGenerator:
         sigma_z = row["sigma_z"]
         voltage_sigma = float(row["three_phase_sigma"])
         current_sigma = float(row[BRANCH_CURRENT_SIGMA_KEY])
+        if is_suspicion_gated(self.evidence_profile):
+            voltage_sigma = current_sigma = float(PMU_PHASOR_SIGMA_PU)
         op_point = canonicalize_ieee14_operating_point(row.get("op_point") or {})
         try:
             balanced_model = _simulate_base(_resolve_model_dir(None, self.case_path), op_point=op_point)
@@ -3749,6 +3844,9 @@ class Round0ScenarioGenerator:
             scenario["source_tier"] = source_tier
             if scenario.get("source_realization_id"):
                 scenario["source_tier"] = "physics_synthesized_balanced"
+            fundamental = scenario.pop("_fundamental_state", None)
+            if is_suspicion_gated(self.evidence_profile):
+                self._attach_true_state_phasors(scenario, fundamental)
             if is_strict_boundary(self.evidence_profile):
                 # scada_only keeps balanced SCADA and its declarations only;
                 # wls_gated_diagnostics also keeps the auxiliary streams the
