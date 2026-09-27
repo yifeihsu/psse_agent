@@ -229,6 +229,32 @@ class EpisodeEvaluation:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class PlannedEpisode:
+    """One episode of an evaluation plan: its position, seed, and scenario."""
+
+    ordinal: int
+    suite: str
+    scenario_id: str
+    occurrence: int
+    episode_seed: int
+    scenario: Mapping[str, Any]
+
+    @property
+    def episode_key(self) -> str:
+        return f"{self.suite}:{self.scenario_id}:{self.occurrence}"
+
+
+@dataclass(frozen=True)
+class EvaluationPlan:
+    """Validated suites with the canonical episode order and seeds."""
+
+    suites: dict[str, list[Mapping[str, Any]]]
+    release_scenario_schema_validation: dict[str, Any]
+    suite_manifest: dict[str, Any]
+    episodes: tuple[PlannedEpisode, ...]
+
+
 def recovery_score(
     metrics: RecoveryMetrics | Mapping[str, Any],
     *,
@@ -1703,6 +1729,21 @@ class ClosedLoopRolloutEvaluator:
         scenario_suites: Mapping[str, Iterable[Mapping[str, Any]]]
         | Iterable[Mapping[str, Any]],
     ) -> EvaluationResult:
+        plan = self.plan_episodes(scenario_suites)
+        return self.summarize_episodes(plan, self.run_planned_episodes(plan))
+
+    def plan_episodes(
+        self,
+        scenario_suites: Mapping[str, Iterable[Mapping[str, Any]]]
+        | Iterable[Mapping[str, Any]],
+    ) -> EvaluationPlan:
+        """Validate the suites and fix the canonical episode order and seeds.
+
+        Each episode's seed depends only on its suite, scenario id, and
+        occurrence, so any subset of the plan can run in another process and
+        the merged episodes summarize exactly like one sequential run.
+        """
+
         suites = _normalize_suites(scenario_suites)
         if self.development_holdout_mode and (
             set(suites) != {_DIAGNOSTIC_DEVELOPMENT_SUITE}
@@ -1747,8 +1788,7 @@ class ClosedLoopRolloutEvaluator:
             minimum_roots_per_suite=self.minimum_roots_per_suite,
             allow_diagnostic_development=self.development_holdout_mode,
         )
-        episodes: list[EpisodeEvaluation] = []
-        total_episodes = sum(len(rows) for rows in suites.values())
+        planned: list[PlannedEpisode] = []
         for suite_name in sorted(suites):
             ordered = sorted(
                 enumerate(suites[suite_name]),
@@ -1762,42 +1802,91 @@ class ClosedLoopRolloutEvaluator:
                 scenario_id = _scenario_id(scenario, original_index)
                 occurrence = occurrence_by_id[scenario_id]
                 occurrence_by_id[scenario_id] += 1
-                episode_seed = _episode_seed(
-                    self.seed,
-                    suite_name,
-                    scenario_id,
-                    occurrence,
+                planned.append(
+                    PlannedEpisode(
+                        ordinal=len(planned) + 1,
+                        suite=suite_name,
+                        scenario_id=scenario_id,
+                        occurrence=occurrence,
+                        episode_seed=_episode_seed(
+                            self.seed,
+                            suite_name,
+                            scenario_id,
+                            occurrence,
+                        ),
+                        scenario=scenario,
+                    )
                 )
-                episode_ordinal = len(episodes) + 1
-                episode_key = f"{suite_name}:{scenario_id}:{occurrence}"
-                self._emit_progress(
-                    "episode_start",
-                    episode_key=episode_key,
-                    episode_ordinal=episode_ordinal,
-                    total_episodes=total_episodes,
-                    suite=suite_name,
-                    scenario_id=scenario_id,
-                )
-                episode_started = time.perf_counter()
-                episode = self._run_episode(
-                    suite=suite_name,
-                    scenario=scenario,
-                    scenario_index=occurrence,
-                    episode_seed=episode_seed,
-                )
-                episodes.append(episode)
-                self._emit_progress(
-                    "episode_complete",
-                    episode_key=episode.episode_key,
-                    episode_ordinal=episode_ordinal,
-                    total_episodes=total_episodes,
-                    elapsed_seconds=time.perf_counter() - episode_started,
-                    policy_steps=episode.policy_steps,
-                    terminal=episode.terminal,
-                    terminal_outcome=episode.terminal_outcome,
-                    evaluator_error=episode.evaluator_error,
-                )
+        return EvaluationPlan(
+            suites=suites,
+            release_scenario_schema_validation=release_scenario_schema_validation,
+            suite_manifest=suite_manifest,
+            episodes=tuple(planned),
+        )
 
+    def run_planned_episodes(
+        self,
+        plan: EvaluationPlan,
+        *,
+        ordinals: Iterable[int] | None = None,
+        on_episode: Callable[[PlannedEpisode, EpisodeEvaluation], None] | None = None,
+    ) -> list[EpisodeEvaluation]:
+        """Roll out the planned episodes (all, or the given ordinals) in order."""
+
+        selected = None if ordinals is None else {int(value) for value in ordinals}
+        total_episodes = len(plan.episodes)
+        episodes: list[EpisodeEvaluation] = []
+        for item in plan.episodes:
+            if selected is not None and item.ordinal not in selected:
+                continue
+            self._emit_progress(
+                "episode_start",
+                episode_key=item.episode_key,
+                episode_ordinal=item.ordinal,
+                total_episodes=total_episodes,
+                suite=item.suite,
+                scenario_id=item.scenario_id,
+            )
+            episode_started = time.perf_counter()
+            episode = self._run_episode(
+                suite=item.suite,
+                scenario=item.scenario,
+                scenario_index=item.occurrence,
+                episode_seed=item.episode_seed,
+            )
+            episodes.append(episode)
+            self._emit_progress(
+                "episode_complete",
+                episode_key=episode.episode_key,
+                episode_ordinal=item.ordinal,
+                total_episodes=total_episodes,
+                elapsed_seconds=time.perf_counter() - episode_started,
+                policy_steps=episode.policy_steps,
+                terminal=episode.terminal,
+                terminal_outcome=episode.terminal_outcome,
+                evaluator_error=episode.evaluator_error,
+            )
+            if on_episode is not None:
+                on_episode(item, episode)
+        return episodes
+
+    def summarize_episodes(
+        self,
+        plan: EvaluationPlan,
+        episodes: Sequence[EpisodeEvaluation],
+    ) -> EvaluationResult:
+        """Summarize a plan's episodes, in plan order, into the suite report."""
+
+        position = {item.episode_key: item.ordinal for item in plan.episodes}
+        keys = [episode.episode_key for episode in episodes]
+        if len(set(keys)) != len(keys) or set(keys) != set(position):
+            raise ValueError(
+                "summarize_episodes needs exactly one episode per planned episode"
+            )
+        episodes = sorted(episodes, key=lambda episode: position[episode.episode_key])
+        suites = plan.suites
+        release_scenario_schema_validation = plan.release_scenario_schema_validation
+        suite_manifest = plan.suite_manifest
         overall = summarize_episode_evaluations(episodes)
         release_environment_validation = _summarize_release_environment_attestations(
             [episode.release_environment_attestation for episode in episodes]

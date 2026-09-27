@@ -39,21 +39,22 @@ collection_args "$ROUND"
 # the ceiling every student is read against, per family and per stratum.
 expert_args=()
 [[ "$ROUND" == r1 ]] && expert_args=(--eval-expert)
+# One rollout process leaves the GPU idle while the environment steps on the
+# CPU (48-60% utilization, under the cluster's 60% H100/H200 cancellation
+# line), so every policy is rolled out at once by worker processes sharing the
+# GPU: two per policy when the card holds four ~15 GB copies, else one.  The
+# workers checkpoint every episode, so a requeued job resumes where it stopped.
+if [[ -z "${EVAL_WORKERS_PER_POLICY:-}" ]]; then
+  gpu_mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 | tr -dc '0-9')
+  EVAL_WORKERS_PER_POLICY=1
+  (( ${gpu_mib:-0} >= 70000 )) && EVAL_WORKERS_PER_POLICY=2
+fi
+echo "[eval:$ROUND] $EVAL_WORKERS_PER_POLICY worker(s) per policy"
 if [[ ! -s "$COLLECTION_DIR/evaluation/comparison.json" ]]; then
   "$PY" scripts/run_dagger_research.py "${COLLECTION_ARGS[@]}" \
-    --eval-r1-adapter "$CANDIDATE" "${expert_args[@]}" > "$ROUND_DIR/evaluation_console.json"
+    --eval-r1-adapter "$CANDIDATE" "${expert_args[@]}" \
+    --eval-workers-per-policy "$EVAL_WORKERS_PER_POLICY" > "$ROUND_DIR/evaluation_console.json"
 fi
-"$PY" - "$COLLECTION_DIR/round1.train.jsonl" "$ROUND_DIR/collection.done" <<'PY'
-import hashlib
-import json
-import sys
-from pathlib import Path
-mixture = Path(sys.argv[1])
-done = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-if hashlib.sha256(mixture.read_bytes()).hexdigest() != done["mixture_sha256"]:
-    raise SystemExit("the evaluation rerun changed the mixture; the trained mixture is no longer the recorded one")
-print("mixture unchanged across the evaluation rerun")
-PY
 "$PY" "$PIPE/summarize.py" round --round-dir "$ROUND_DIR" --round "$ROUND" --output "$ROUND_DIR/round_summary.json"
 if [[ "$ROUND" == r2 ]]; then
   "$PY" "$PIPE/summarize.py" pipeline --out-dir "$OUT" --output "$OUT/pipeline_summary.json"

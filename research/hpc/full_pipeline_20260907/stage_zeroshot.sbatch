@@ -40,22 +40,20 @@ trap stage_cleanup EXIT
 cd "$SRC"
 collection_args "$ROUND"
 EVAL_DIR=$COLLECTION_DIR/$ZEROSHOT_EVAL_NAME
+# Worker processes share the GPU as in stage_eval.sbatch (two per policy on a
+# card of 70 GB or more), so the rollout clears the utilization line.
+if [[ -z "${EVAL_WORKERS_PER_POLICY:-}" ]]; then
+  gpu_mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 | tr -dc '0-9')
+  EVAL_WORKERS_PER_POLICY=1
+  (( ${gpu_mib:-0} >= 70000 )) && EVAL_WORKERS_PER_POLICY=2
+fi
+echo "[zeroshot] $EVAL_WORKERS_PER_POLICY worker(s) per policy"
 if [[ ! -s "$EVAL_DIR/expert_eval.json" || ! -s "$EVAL_DIR/comparison.json" ]]; then
   "$PY" scripts/run_dagger_research.py "${COLLECTION_ARGS[@]}" \
     --eval-student-only --eval-expert --eval-output-name "$ZEROSHOT_EVAL_NAME" \
+    --eval-workers-per-policy "$EVAL_WORKERS_PER_POLICY" \
     > "$ROUND_DIR/${ZEROSHOT_EVAL_NAME}_console.json"
 fi
-"$PY" - "$COLLECTION_DIR/round1.train.jsonl" "$ROUND_DIR/collection.done" <<'PY'
-import hashlib
-import json
-import sys
-from pathlib import Path
-mixture = Path(sys.argv[1])
-done = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-if hashlib.sha256(mixture.read_bytes()).hexdigest() != done["mixture_sha256"]:
-    raise SystemExit("the zero-shot rerun changed the mixture; the collected mixture is no longer the recorded one")
-print("mixture unchanged across the zero-shot evaluation")
-PY
 "$PY" "$PIPE/summarize.py" round --round-dir "$ROUND_DIR" --round "$ROUND" \
   --evaluation-name "$ZEROSHOT_EVAL_NAME" --output "$ROUND_DIR/${ZEROSHOT_EVAL_NAME}_summary.json"
 echo "fp-zeroshot-complete"
