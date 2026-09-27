@@ -12,7 +12,9 @@ from psse_env.evidence_profile import (
     disabled_tools,
     is_scada_only,
     is_strict_boundary,
+    is_suspicion_gated,
     is_wls_gated,
+    required_suspicion,
     requires_wls_alarm_for_diagnostics,
 )
 
@@ -314,7 +316,13 @@ def _fundamental_anomaly_trigger(
     Under ``wls_gated_diagnostics`` the trigger is the current alarm on the
     active state (the same condition the environment gate enforces).  The
     historical auxiliary profile keeps its ``wls_*``-signature trigger.
+    Under ``suspicion_gated_diagnostics`` an alarm alone opens nothing: a
+    balanced HIF suspicion mints an HIF-marked WLS signature instead, which
+    routes to phasor acquisition and holds the balanced corrections until the
+    phasors have been examined.
     """
+    if is_suspicion_gated(evidence_profile):
+        return False
     if requires_wls_alarm_for_diagnostics(evidence_profile):
         return _ledger_wls_alarm(context_evidence, active_state_id, content_bound=True)
     return any(item.startswith("wls_") for item in signatures)
@@ -332,8 +340,51 @@ def diagnostic_tool_permitted(state: Any, tool: str, request: Any = None, histor
     if tool == ASK_FOR_MORE_EVIDENCE and request is not None and str(request) in disabled_requests(state):
         return False
     if tool in GATED_DIAGNOSTIC_TOOLS and requires_wls_alarm_for_diagnostics(state):
-        return current_wls_alarm(state, history)
+        if not current_wls_alarm(state, history):
+            return False
+        family = required_suspicion(state, tool)
+        if family is not None and not current_suspicion(state, family):
+            return False
     return True
+
+
+def current_screen_report(state: Any, family: str) -> Mapping[str, Any]:
+    """The balanced screen report for ``family`` on the current, bound WLS.
+
+    Screens run inside ``run_wls`` and ride on its ledger entry, so a report
+    is current exactly when that WLS is: successful, on the active state, and
+    content-bound.  Only the HIF screen exists (``hif_screen``); a harmonic
+    screen would publish ``harmonic_screen`` the same way.
+    """
+    contexts = state.get("fresh_context_evidence") if isinstance(state, Mapping) else None
+    wls = (contexts.get("wls") or {}) if isinstance(contexts, Mapping) else {}
+    if not (
+        isinstance(wls, Mapping)
+        and wls.get("successful") is True
+        and isinstance(wls.get("state_hash"), str) and wls["state_hash"]
+        and str(wls.get("state_id") or "") == str(state.get("active_state_id") or "")
+    ):
+        return {}
+    report = wls.get(f"{family}_screen")
+    return report if isinstance(report, Mapping) else {}
+
+
+def current_suspicion(state: Any, family: str) -> bool:
+    """Whether the balanced evidence on the active state points at ``family``.
+
+    Under suspicion_gated_diagnostics this, together with the WLS alarm, is
+    what admits the family's auxiliary stream: phase-resolved phasors for an
+    HIF suspicion, spectra for a harmonic one.  A suspicion that the acquired
+    phasors later refuted still admits the stream it already opened.
+    """
+    report = current_screen_report(state, family)
+    return report.get("status") == "valid" and report.get("suspected") is True
+
+
+def hif_suspicion_refuted(state: Any) -> bool:
+    """The current HIF suspicion was tested on phasors and found no HIF."""
+    report = current_screen_report(state, "hif")
+    return current_suspicion(state, "hif") and report.get("refuted_by_phase_measurements") is True
 
 
 def harmonic_screening_pending(

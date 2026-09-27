@@ -72,19 +72,27 @@ from psse_env.state_store import apply_modification
 from psse_env.noise_contract import resolve_state_measurement_noise, validate_shared_scada_covariance
 from psse_env.evidence_profile import (
     AUXILIARY_EVIDENCE_PROFILE, DEFAULT_EVIDENCE_PROFILE, GATED_DIAGNOSTIC_TOOLS,
-    SCADA_ONLY_PROFILE, STRICT_BOUNDARY_PROFILES, WLS_GATED_PROFILE,
-    allows_diagnostic_tools, disabled_tools, is_strict_boundary,
-    requires_wls_alarm_for_diagnostics, sanitize_gated_metadata,
+    SCADA_ONLY_PROFILE, STRICT_BOUNDARY_PROFILES, SUSPICION_GATED_PROFILE, WLS_ALARM_GATED_PROFILES,
+    WLS_GATED_PROFILE, allows_diagnostic_tools, disabled_tools, is_strict_boundary,
+    required_suspicion, requires_wls_alarm_for_diagnostics, sanitize_gated_metadata, suspicion_error_code,
     sanitize_gated_observation, sanitize_scada_metadata, sanitize_scada_observation,
     validate_evidence_profile,
 )
-from psse_env.oracle.process_validity import current_wls_alarm
+from psse_env.oracle.process_validity import current_family_suspicion, current_wls_alarm
 from psse_env.providers.hif_continuation import (
     accepted_fit as accepted_hif_fit, conditioned_prediction, current_scan,
     diagnose as diagnose_hif_meters, fit_receipt, model_fingerprint,
 )
 from psse_env.oracle.measurement_recovery_evidence import (
     measurement_targets_predating_branch_repair,
+)
+from psse_env.providers.hif_screen import (
+    DEFAULT_HIF_SCREEN_CONFIG, HIF_SCREEN_METHOD, HIF_SCREEN_SIGNATURE, HifScreenCache,
+    default_hif_lines, screen_hif,
+)
+from psse_env.providers.suspicion_gated import (
+    BALANCED_HIF_CONDITIONING_METHOD, PMU_HIF_FIT_METHOD, balanced_hif_prediction,
+    phase_voltage_offsets, pmu_fit_receipt, pmu_hif_estimate, zero_sequence_line_screen,
 )
 from psse_env.oracle.expert_types import matching_evidence_codes
 
@@ -502,6 +510,8 @@ class MatpowerDeploymentProviders:
             )
         self.screen_checkpoint = str(screen_checkpoint) if screen_checkpoint else None
         self._hif_prediction_cache: dict[str, Any] = {}
+        self._hif_screen_cache = HifScreenCache()
+        self.hif_screen_config = DEFAULT_HIF_SCREEN_CONFIG
         self.screen_calibration = str(screen_calibration) if screen_calibration else None
         if hif_resistance_search not in {"physical_ohm", "legacy_pu"}:
             raise ValueError("hif_resistance_search must be physical_ohm or legacy_pu")
@@ -798,7 +808,8 @@ class MatpowerDeploymentProviders:
     # ----------------------------------------------------------------- helpers
 
     _PROFILE_STRICTNESS = {
-        SCADA_ONLY_PROFILE: 0, WLS_GATED_PROFILE: 1, AUXILIARY_EVIDENCE_PROFILE: 2,
+        SCADA_ONLY_PROFILE: 0, SUSPICION_GATED_PROFILE: 1, WLS_GATED_PROFILE: 2,
+        AUXILIARY_EVIDENCE_PROFILE: 3,
     }
 
     def _effective_profile(self, state: Mapping[str, Any]) -> str:
@@ -842,8 +853,8 @@ class MatpowerDeploymentProviders:
         result = dict(state)
         result["evidence_profile"] = profile
         observation = state.get("policy_observation")
-        if profile == WLS_GATED_PROFILE:
-            result["metadata"] = sanitize_gated_metadata(state.get("metadata") or {})
+        if profile in WLS_ALARM_GATED_PROFILES:
+            result["metadata"] = sanitize_gated_metadata(state.get("metadata") or {}, profile)
             if isinstance(observation, Mapping):
                 safe = sanitize_gated_observation(observation)
                 safe["evidence_profile"] = profile
@@ -887,6 +898,12 @@ class MatpowerDeploymentProviders:
                 return self._failure("diagnostics_require_wls_alarm",
                     f"{tool} requires a current balanced WLS alarm on the target state",
                     **self._binding(state), evidence_source="deployment_evidence:wls_alarm_gate",
+                    evidence_profile=profile, requested_tool=tool)
+            family = required_suspicion(profile, tool)
+            if family is not None and not current_family_suspicion(observation, family, state.get("state_id")):
+                return self._failure(suspicion_error_code(family),
+                    f"{tool} requires a current balanced {family} suspicion on the target state",
+                    **self._binding(state), evidence_source="deployment_evidence:suspicion_gate",
                     evidence_profile=profile, requested_tool=tool)
         return None
 
@@ -1011,11 +1028,19 @@ class MatpowerDeploymentProviders:
         nb = int(ppc["bus"].shape[0])
         nl = int(ppc["branch"].shape[0])
         noise_options = self._noise_options(state, len(z))
-        prediction = None if self._strict_scada(state) else conditioned_prediction(state, self._hif_prediction_cache)
+        if self._strict_scada(state):
+            prediction = None
+        elif self._effective_profile(state) == SUSPICION_GATED_PROFILE:
+            prediction = self._balanced_conditioned_prediction(state, ppc, z, noise_options)
+        else:
+            prediction = conditioned_prediction(state, self._hif_prediction_cache)
         conditional = None
         wls_z = z
         if prediction is not None:
-            conditional = diagnose_hif_meters(state, prediction, noise_options.get("measurement_sigma"))
+            conditional = diagnose_hif_meters(
+                state, prediction, noise_options.get("measurement_sigma"),
+                method=str(prediction.get("method") or "paired_opendss_effect_compensation"),
+            )
             if self.normalized_residual_threshold is None:
                 conditional["conditioning"]["status"] = "unavailable"
                 conditional["conditioning"]["failure_reasons"].append("normalized_residual_test_not_configured")
@@ -1035,6 +1060,115 @@ class MatpowerDeploymentProviders:
             "hif_meter_diagnosis": conditional,
             "wls_measurements": wls_z,
         }
+
+    @staticmethod
+    def _declared_scada_sigma(noise_options: Mapping[str, Any], nb: int, nz: int) -> list[float]:
+        """The WLS sigma vector: the declared one, else the solver's nominal 1e-3 / 1e-2."""
+        sigma = noise_options.get("measurement_sigma")
+        if sigma is not None:
+            return [float(value) for value in sigma]
+        return [0.001] * int(nb) + [0.01] * (int(nz) - int(nb))
+
+    def _balanced_conditioned_prediction(
+        self, state: Mapping[str, Any], ppc: Mapping[str, Any], z: Sequence[float],
+        noise_options: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """HIF-present prediction from an accepted PMU snapshot fit (suspicion-gated)."""
+        fit = accepted_hif_fit(state)
+        if fit is None:
+            return None
+        if fit.get("method") != PMU_HIF_FIT_METHOD:
+            raise ValueError("suspicion-gated HIF conditioning needs a PMU snapshot fit")
+        from tools.lagrangian_port import _copy_result_to_internal
+
+        internal = _copy_result_to_internal(ppc)
+        nb = int(internal["bus"].shape[0])
+        sigma = self._declared_scada_sigma(noise_options, nb, len(z))
+        exact = list(noise_options.get("exact_measurement_indices") or [])
+        voltages = self._metadata(state).get("three_phase_voltages")
+        if not voltages:
+            raise ValueError("suspicion-gated HIF conditioning needs the acquired phase voltages")
+        # Offsets are read in the external bus order of the loaded case.
+        offsets = phase_voltage_offsets(voltages, np.asarray(ppc["bus"], dtype=float))
+        key = json.dumps([fit, [float(v) for v in z], sigma, exact, np.asarray(internal["branch"]).tolist(),
+                          np.asarray(internal["bus"]).tolist(), offsets.tolist()], sort_keys=True, default=str)
+        cached = self._hif_prediction_cache.get(key)
+        if cached is None:
+            cached = balanced_hif_prediction(
+                internal["baseMVA"], internal["bus"], internal["branch"], z, sigma, exact, fit,
+                voltage_offsets=offsets,
+                normalized_residual_threshold=float(self.normalized_residual_threshold or 4.0),
+            )
+            if len(self._hif_prediction_cache) >= 32:
+                self._hif_prediction_cache.clear()
+            self._hif_prediction_cache[key] = cached
+        return copy.deepcopy(cached)
+
+    def _hif_screen(self, state: Mapping[str, Any], solved: Mapping[str, Any]) -> dict[str, Any]:
+        """Balanced HIF screen on this solve (suspicion_gated_diagnostics).
+
+        The compact report is policy-visible and rides on the WLS ledger: its
+        ``suspected`` flag is what admits phasors.  A suspicion that phasors
+        acquired on this exact state already refuted is reported as such.
+        """
+        from tools.lagrangian_port import _copy_result_to_internal
+
+        payload = solved["payload"]
+        z = [float(value) for value in solved["wls_measurements"]]
+        internal = _copy_result_to_internal(solved["ppc"])
+        noise_options = self._noise_options(state, len(z))
+        sigma = self._declared_scada_sigma(noise_options, int(solved["nb"]), len(z))
+        exact = [int(i) for i in noise_options.get("exact_measurement_indices") or []]
+        lines = default_hif_lines(solved["ppc"])
+        key = HifScreenCache.key(
+            internal["bus"], internal["branch"], z, sigma, exact, lines, [internal["baseMVA"]],
+            config=self.hif_screen_config,
+        )
+        report = self._hif_screen_cache.get(key)
+        if report is None:
+            try:
+                report = screen_hif(
+                    internal["baseMVA"], internal["bus"], internal["branch"], z, sigma, exact,
+                    lines=lines, va0=payload.get("theta_est_rad"), vm0=payload.get("vm_est_pu"),
+                    dof=int(payload["dof"]) if payload.get("dof") is not None else None,
+                    config=self.hif_screen_config,
+                )
+            except Exception as exc:
+                # A screen failure is no suspicion; it never blocks the WLS result.
+                report = {"method": HIF_SCREEN_METHOD, "status": "screen_error", "suspected": False,
+                          "error": f"{type(exc).__name__}: {exc}", "rounds": []}
+            self._hif_screen_cache.put(key, report)
+        compact: dict[str, Any] = {
+            **self._binding(state),
+            "method": report.get("method", HIF_SCREEN_METHOD),
+            "status": report.get("status"),
+            "suspected": bool(report.get("suspected")),
+            "outcome": report.get("outcome"),
+            "rounds": [
+                {"winner": item.get("winner"), "clean_after_removal": item.get("clean_after_removal"),
+                 "set_aside_channels": list(item.get("dropped_channels") or []),
+                 "scores": {name: round(float(value), 3) for name, value in (item.get("scores") or {}).items()}}
+                for item in report.get("rounds") or []
+            ],
+        }
+        if report.get("error"):
+            compact["error"] = report["error"]
+        if compact["suspected"]:
+            compact.update(
+                branch_row0=int(report["branch_row0"]),
+                line_index1=int(report["branch_row0"]) + 1,
+                alpha_from_from_bus=round(float(report["alpha"]), 3),
+                meter_set_aside_index0=report.get("meter_set_aside_index0"),
+            )
+            observation = state.get("policy_observation")
+            contexts = observation.get("fresh_context_evidence") if isinstance(observation, Mapping) else None
+            phase = contexts.get("three_phase") if isinstance(contexts, Mapping) else None
+            if (isinstance(phase, Mapping)
+                and str(phase.get("state_id") or "") == str(state.get("state_id") or "")
+                and phase.get("state_hash") == state.get("state_hash")
+                and phase.get("hif_suspicion_refuted") is True):
+                compact["refuted_by_phase_measurements"] = True
+        return compact
 
     @staticmethod
     def _failure(error_code: str, error_detail: Any = None, **metrics: Any) -> dict[str, Any]:
@@ -1319,6 +1453,12 @@ class MatpowerDeploymentProviders:
         active-branch ``RATE_A`` limits.  A zero/non-positive ``RATE_A`` has the
         standard MATPOWER meaning of no applicable limit and is reported as
         unrated rather than silently treated as a passing rated branch.
+
+        While an accepted HIF is conditioned, WLS receives the measurements
+        with the fault's effect removed; the voltage channels then read the
+        positive-sequence magnitude the case limits are written for, rather
+        than one phase that a single-phase fault pushes past a generator's
+        set-point limit in the parent state as much as in the candidate.
         """
         import numpy as np
 
@@ -1340,7 +1480,7 @@ class MatpowerDeploymentProviders:
             ppc = solved["ppc"]
             bus = np.asarray(ppc["bus"], dtype=float)
             branch = np.asarray(ppc["branch"], dtype=float)
-            z = np.asarray(solved["z"], dtype=float)
+            z = np.asarray(solved.get("wls_measurements", solved["z"]), dtype=float)
             nb = int(solved["nb"])
             nl = int(solved["nl"])
             index_map = solved["index_map"]
@@ -1785,6 +1925,17 @@ class MatpowerDeploymentProviders:
         # power-flow convergence claim.
         if is_candidate:
             metrics.update(self._steady_state_physical_evidence(solved))
+        if self._effective_profile(state) == SUSPICION_GATED_PROFILE and not resolved and not conditional:
+            screen = self._hif_screen(state, solved)
+            metrics["hif_screen"] = screen
+            if screen.get("suspected") and not screen.get("refuted_by_phase_measurements") and not waveform_sensor:
+                # A reason to request phase-resolved measurements, not a
+                # diagnosis; the signature carries the HIF marker so balanced
+                # corrections wait until the phasors have been examined.
+                metrics["unresolved_signatures"] = _dedupe([
+                    *metrics["unresolved_signatures"],
+                    f"{HIF_SCREEN_SIGNATURE} line={screen['line_index1']}",
+                ])
         if self.screen_checkpoint:
             report = self._screen_wls(state, solved)
             metrics["gnn_screen"] = report
@@ -4349,6 +4500,8 @@ class MatpowerDeploymentProviders:
         if unavailable is not None:
             return unavailable
         state = self._evidence_state(state)
+        if self._effective_profile(state) == SUSPICION_GATED_PROFILE:
+            return self._suspicion_three_phase_nlm(state)
         strict = self._strict_boundary(state)
         metadata = self._metadata(state)
         # A stored diagnostic is the hidden sample's own output and the faulted
@@ -4642,6 +4795,170 @@ class MatpowerDeploymentProviders:
                 }
         return metrics
 
+    def _suspicion_phasors(self, state: Mapping[str, Any], tool: str):
+        """Acquired snapshot phasors with declared sigmas, or a failure payload."""
+        metadata = self._metadata(state)
+        voltages = metadata.get("three_phase_voltages")
+        currents, current_sigma = self._branch_current_channel(state)
+        if not voltages or not currents:
+            return None, self._failure(
+                "nlm_runtime_missing" if tool == RUN_THREE_PHASE_NLM_FROM_PATH else "hif_phasors_missing",
+                "the acquired three-phase voltage and branch-current phasors are missing or unusable",
+            )
+        if current_sigma is None:
+            return None, self._sigma_undeclared(state, BRANCH_CURRENT_SIGMA_KEY, tool)
+        voltage_sigma = self._phasor_sigma(
+            state, "three_phase_sigma", "three_phase_voltages", DEFAULT_THREE_PHASE_SIGMA_PU
+        )
+        if voltage_sigma is None:
+            return None, self._sigma_undeclared(state, "three_phase_sigma", tool)
+        return (voltages, currents, float(current_sigma), float(voltage_sigma)), None
+
+    def _suspicion_three_phase_nlm(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        """Test a balanced HIF suspicion on the acquired snapshot phasors.
+
+        A zero-sequence line differential above the floor confirms an HIF-like
+        event and localizes the line and phase for the estimator.  Otherwise
+        the suspicion is refuted; a noise-significant per-phase shunt-power
+        spread is then explained as a three-phase unbalance (the phasors were
+        acquired on a legitimate suspicion), and anything else is balanced.
+        """
+        acquired, failure = self._suspicion_phasors(state, RUN_THREE_PHASE_NLM_FROM_PATH)
+        if failure is not None:
+            return failure
+        voltages, currents, current_sigma, _voltage_sigma = acquired
+        screen = zero_sequence_line_screen(voltages, currents, sigma_pu=current_sigma, top_k=self.top_k)
+        if screen is None:
+            return self._failure("nlm_runtime_missing", "no line carries terminal phasors at both ends")
+        screen_summary = {
+            key: screen[key] for key in (
+                "method", "max_zero_sequence_pu", "second_zero_sequence_pu", "zero_sequence_floor_pu",
+                "hif_like", "branch_current_sigma_pu",
+            )
+        }
+        metrics: dict[str, Any] = {
+            **self._binding(state),
+            "evidence_source": "deployment_diagnostic:zero_sequence_line_differential",
+        }
+        if screen["hif_like"]:
+            top = screen["top_lines"][0]
+            groups = [
+                {key: item[key] for key in ("rank", "branch_row0", "line_index1", "dss_element", "from_bus", "to_bus", "phase")}
+                | {"score": item["zero_sequence_pu"]}
+                for item in screen["top_lines"]
+            ]
+            metrics["nlm_summary"] = {
+                "success": True, "converged": True, "method": screen["method"],
+                "diagnostic_classification": "hif_suspected",
+                "top_hif_groups": groups,
+                "suspected_phase": top["phase"],
+                "zero_sequence_screen": screen_summary,
+                "separation_ratio": float(top["zero_sequence_pu"]) / max(
+                    float(screen["second_zero_sequence_pu"]), float(screen["zero_sequence_floor_pu"])),
+            }
+            return metrics
+        localization = unbalance_source_localization(voltages, currents, top_k=self.top_k, sigma_pu=current_sigma)
+        significant = bool(localization is not None and localization.get("significant"))
+        summary: dict[str, Any] = {
+            "success": True, "converged": True,
+            "method": "zero_sequence_line_differential+shunt_power_spread",
+            "diagnostic_classification": "three_phase_unbalance" if significant else "balanced_three_phase",
+            "top_hif_groups": [],
+            "zero_sequence_screen": screen_summary,
+            "top_vuf_buses": _three_phase_vuf_evidence(voltages, top_k=self.top_k),
+        }
+        acceptance = {
+            "accepted": significant,
+            "null_hypothesis": "no_significant_shunt_power_spread_and_no_zero_sequence_line_differential",
+            "source_significant": significant,
+            "acceptance_basis": "shunt_power_spread_source" if significant else None,
+        }
+        metrics.update(nlm_summary=summary, diagnostic_acceptance=acceptance, hif_suspicion_refuted=True)
+        if significant:
+            detail = {
+                "bus_1based": int(localization["bus_1based"]),
+                "localization": {key: localization[key] for key in (
+                    "method", "bus_1based", "phase_power_spread_rel", "separation_ratio", "significant",
+                    "significant_bus_count",
+                ) if key in localization},
+                "top_unbalance_source_buses": localization.get("top_unbalance_source_buses"),
+            }
+            summary["localization"] = detail["localization"]
+            summary["top_unbalance_source_buses"] = detail["top_unbalance_source_buses"]
+            metrics["anomaly_explanation"] = {
+                "family": "three_phase_unbalance", "kind": "voltage_unbalance_source_localized", "detail": detail,
+            }
+        return metrics
+
+    def _suspicion_estimate_hif(self, state: Mapping[str, Any], arguments: Mapping[str, Any]) -> dict[str, Any]:
+        """Position and resistance of the localized fault from the snapshot phasors.
+
+        Accepted only when the line's zero-sequence differential clears the
+        floor and the closed form is conclusive (positive, predominantly
+        resistive fault impedance away from both terminals, both ends
+        consistent); the receipt it records drives the balanced conditioning.
+        """
+        acquired, failure = self._suspicion_phasors(state, ESTIMATE_HIF_FROM_PATH)
+        if failure is not None:
+            return failure
+        voltages, currents, current_sigma, voltage_sigma = acquired
+        row0 = int(arguments["candidate_branch_row0"])
+        screen = zero_sequence_line_screen(voltages, currents, sigma_pu=current_sigma, top_k=10**6)
+        line = next((item for item in (screen or {}).get("top_lines") or [] if item["branch_row0"] == row0), None)
+        if line is None:
+            return self._failure("hif_target_unsupported", f"branch row {row0} is not a line with terminal phasors")
+        phase = str(arguments.get("candidate_phase") or line["phase"]).strip().upper()
+        estimate = pmu_hif_estimate(
+            voltages, currents, branch_row0=row0, phase=phase, sigma_pu=current_sigma,
+            voltage_sigma_pu=voltage_sigma,
+        )
+        if estimate is None:
+            return self._failure("hif_estimation_failure", f"no two-terminal estimate on branch row {row0} phase {phase}")
+        terminal = {
+            **estimate,
+            "differential_detected": bool(line["zero_sequence_pu"] >= screen["zero_sequence_floor_pu"]),
+            "zero_sequence_pu": float(line["zero_sequence_pu"]),
+            "zero_sequence_floor_pu": float(screen["zero_sequence_floor_pu"]),
+        }
+        conclusive, reason = self._terminal_current_conclusive(terminal, {})
+        estimated = {
+            "alpha_from_from_bus": float(estimate["alpha_from_from_bus"]),
+            "r_hif_pu": float(estimate["r_hif_pu"]),
+            "r_hif_ohm": float(estimate["r_hif_ohm"]),
+            "phase": phase,
+        }
+        acceptance = {
+            "accepted": bool(conclusive),
+            "acceptance_basis": "pmu_two_terminal_snapshot" if conclusive else None,
+            "null_hypothesis": "no_zero_sequence_line_differential",
+            "terminal_current_conclusive": bool(conclusive),
+            "terminal_current_reason": reason,
+            "terminal_consistency_limit": self.hif_terminal_consistency_limit,
+        }
+        metrics: dict[str, Any] = {
+            **self._binding(state),
+            "evidence_source": "deployment_diagnostic:pmu_two_terminal_snapshot",
+            "hif_summary": {
+                "candidate_branch_row0": row0,
+                "estimated": estimated,
+                "terminal_current_estimate": terminal,
+                "sensitivity": estimate.get("sensitivity"),
+            },
+            "diagnostic_acceptance": acceptance,
+        }
+        if conclusive:
+            metrics["anomaly_explanation"] = {
+                "family": "hif",
+                "kind": "hif_pmu_snapshot_accepted",
+                "detail": {
+                    "candidate_branch_row0": row0,
+                    "estimated": estimated,
+                    "conditioning_fit": pmu_fit_receipt(estimate),
+                    "terminal_current_estimate": terminal,
+                },
+            }
+        return metrics
+
     def _hif_search_arguments(self, arguments, *sources):
         from IEEE_14_OpenDSS.measurement_convention import resolve_shunt_convention
         explicit = arguments.get("shunt_convention")
@@ -4662,6 +4979,8 @@ class MatpowerDeploymentProviders:
                 "hif_target_missing",
                 "estimate_hif_location_magnitude requires candidate_branch_row0",
             )
+        if self._effective_profile(state) == SUSPICION_GATED_PROFILE:
+            return self._suspicion_estimate_hif(self._evidence_state(state), arguments)
         try:
             alpha_grid_size, r_grid_size, _ = validate_hif_search_limits(
                 alpha_grid_size=arguments.get(

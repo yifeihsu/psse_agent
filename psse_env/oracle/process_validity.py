@@ -46,9 +46,10 @@ from psse_env.state_store import SYNTHETIC_TERMINAL_COMPATIBILITY_KEY
 from psse_env.oracle.expert_types import matching_evidence_codes
 from psse_env.oracle.anomaly_evidence import normalized_residual_alarm
 from psse_env.evidence_profile import (
-    DEFAULT_EVIDENCE_PROFILE, GATED_DIAGNOSTIC_TOOLS, allows_diagnostic_tools,
-    disabled_requests, disabled_tools, is_scada_only, is_strict_boundary,
-    requires_wls_alarm_for_diagnostics,
+    DEFAULT_EVIDENCE_PROFILE, DIAGNOSTIC_SUSPICION_REQUIREMENTS, GATED_DIAGNOSTIC_TOOLS,
+    allows_diagnostic_tools, disabled_requests, disabled_tools, is_scada_only,
+    is_strict_boundary, required_suspicion, requires_wls_alarm_for_diagnostics,
+    suspicion_error_code,
 )
 from psse_env.oracle.hif_continuation import (
     accepted_hif_explanation, hif_conditioned_closure_ready,
@@ -96,6 +97,46 @@ def current_wls_alarm(state: Any, target_state_id: Any = None) -> bool:
             or verification.get("normalized_residual_alarm") is True
         )
     return False
+
+
+def current_family_suspicion(state: Any, family: str, target_state_id: Any = None) -> bool:
+    """A balanced screen suspicion of ``family`` on the target state's current WLS.
+
+    suspicion_gated_diagnostics admits a family's auxiliary stream only when
+    the screen that rides on the bound WLS (the active state's ledger, or an
+    open candidate's own verification) reports ``suspected``.  Screens exist
+    for HIF only; no other family can be suspected yet.
+    """
+    getter = getattr(state, "get", None)
+    if not callable(getter):
+        return False
+    active_id = str(getter("active_state_id") or "")
+    candidate_id = getter("candidate_state_id")
+    target = str(target_state_id or active_id)
+    key = f"{family}_screen"
+    if target and target == active_id:
+        contexts = getter("fresh_context_evidence")
+        wls = contexts.get("wls") if isinstance(contexts, Mapping) else None
+        if not (
+            isinstance(wls, Mapping) and wls.get("successful") is True
+            and str(wls.get("state_id") or "") == active_id
+            and isinstance(wls.get("state_hash"), str) and wls["state_hash"]
+        ):
+            return False
+        report = wls.get(key)
+    elif candidate_id is not None and target == str(candidate_id):
+        verification = getter("last_verification")
+        if not isinstance(verification, Mapping) or str(verification.get("state_id") or "") != target:
+            return False
+        report = verification.get(key)
+    else:
+        return False
+    return isinstance(report, Mapping) and report.get("status") == "valid" and report.get("suspected") is True
+
+
+_SUSPICION_ERROR_CODES = frozenset(
+    suspicion_error_code(family) for family in set(DIAGNOSTIC_SUSPICION_REQUIREMENTS.values())
+)
 
 
 _CORRECTION_CONTEXT_FAMILY = {
@@ -397,6 +438,14 @@ class ProcessValidityOracle:
                 # the target state.  Under this profile the alarm itself is
                 # the observable anomaly, so no wls_* signature is required.
                 error_code, error_detail = "diagnostics_require_wls_alarm", str(tool)
+            elif (
+                required_suspicion(state, tool) is not None
+                and not current_family_suspicion(state, required_suspicion(state, tool), expected)
+            ):
+                # suspicion_gated_diagnostics: the alarm alone no longer opens
+                # an auxiliary stream; the balanced evidence must point at the
+                # family that needs it (an HIF suspicion for phasors).
+                error_code, error_detail = suspicion_error_code(required_suspicion(state, tool)), str(tool)
             elif tool == GET_HARMONIC_CONTEXT and not gated and not any(
                 str(item).startswith("wls_") or "harmonic" in str(item).lower()
                 for item in state.get("unresolved_signatures") or []
@@ -739,7 +788,7 @@ class ProcessValidityOracle:
     ) -> list[dict[str, Any]]:
         active_id = state.get("active_state_id")
         candidate_id = state.get("candidate_state_id")
-        if error_code in {"tool_disabled_by_evidence_profile", "diagnostics_require_wls_alarm"} or (
+        if error_code in {"tool_disabled_by_evidence_profile", "diagnostics_require_wls_alarm"} | _SUSPICION_ERROR_CODES or (
             error_detail == "current_balanced_wls_required"
         ):
             # A disabled tool has no repair; a gated diagnostic or a strict

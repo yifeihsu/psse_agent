@@ -20,14 +20,30 @@ SCADA_ONLY_PROFILE = "scada_only"
 #: PMU phasors on HIF and unbalance roots, spectra on harmonic roots, breaker
 #: telemetry on topology roots) and run the matching diagnostics.
 WLS_GATED_PROFILE = "wls_gated_diagnostics"
+#: Research contract of 2026-09-27. The operator sees balanced SCADA and its
+#: balanced WLS; an auxiliary stream is requested only when the balanced
+#: evidence itself points at the family that needs it.  Phase-resolved PMU
+#: phasors (and the HIF diagnostics on them) follow a current HIF suspicion
+#: from the balanced physics screen run on each WLS alarm
+#: (``psse_env.providers.hif_screen``); spectra follow a harmonic suspicion,
+#: which no balanced screen provides yet, so they are refused.  Every alarmed
+#: root carries phasors generated from its true state at one PMU sigma, so a
+#: request can never answer by availability.
+SUSPICION_GATED_PROFILE = "suspicion_gated_diagnostics"
 #: Historical reproduction: flagged roots, seeded signatures and hints allowed.
 AUXILIARY_EVIDENCE_PROFILE = "auxiliary_diagnostics"
 DEFAULT_EVIDENCE_PROFILE = WLS_GATED_PROFILE
-EVIDENCE_PROFILES = (SCADA_ONLY_PROFILE, WLS_GATED_PROFILE, AUXILIARY_EVIDENCE_PROFILE)
+EVIDENCE_PROFILES = (
+    SCADA_ONLY_PROFILE, WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE, AUXILIARY_EVIDENCE_PROFILE,
+)
+#: Profiles that admit auxiliary diagnostics only behind a current balanced
+#: WLS alarm on the target state (the suspicion-gated profile adds its
+#: family suspicions on top of that alarm).
+WLS_ALARM_GATED_PROFILES = frozenset({WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE})
 #: Profiles whose truth boundary is strict: no seeded fault signatures, no
 #: private family or correction hints, no precomputed diagnoses, WLS first,
 #: no synthetic terminal closure, scenario identity kept out of store metadata.
-STRICT_BOUNDARY_PROFILES = frozenset({SCADA_ONLY_PROFILE, WLS_GATED_PROFILE})
+STRICT_BOUNDARY_PROFILES = frozenset({SCADA_ONLY_PROFILE, WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE})
 #: Auxiliary diagnostics that wls_gated_diagnostics permits only after a
 #: current balanced WLS alarm (chi-square or normalized residual) on the
 #: active state.
@@ -36,10 +52,26 @@ GATED_DIAGNOSTIC_TOOLS = frozenset({
     "run_hse_from_path", "estimate_hif_location_magnitude_from_path",
     "estimate_hif_location_magnitude_multiscan_from_path",
 })
+#: The family suspicion each auxiliary diagnostic needs under
+#: suspicion_gated_diagnostics, on top of the current WLS alarm.
+DIAGNOSTIC_SUSPICION_REQUIREMENTS = {
+    "get_three_phase_context": "hif",
+    "run_three_phase_nlm_from_path": "hif",
+    "estimate_hif_location_magnitude_from_path": "hif",
+    "get_harmonic_context": "harmonic",
+    "run_hse_from_path": "harmonic",
+}
 #: Never available under wls_gated_diagnostics: the legacy alternative test has
 #: no provider, and learned screens are an additional signal by construction.
 WLS_GATED_DISABLED_TOOLS = frozenset({"run_alternative_test"})
 WLS_GATED_DISABLED_REQUESTS: frozenset[str] = frozenset()
+#: Also unavailable under suspicion_gated_diagnostics: the multi-scan HIF
+#: estimator needs a persistent scan window that only HIF windows carry, so
+#: its answer would reveal the family; HIF estimation there uses the PMU
+#: snapshot phasors every alarmed root carries.
+SUSPICION_GATED_DISABLED_TOOLS = WLS_GATED_DISABLED_TOOLS | frozenset({
+    "estimate_hif_location_magnitude_multiscan_from_path",
+})
 #: Precomputed diagnoses and truth-side model handles that a strict root must
 #: not carry into execution: the tools recompute from measurements.
 PRECOMPUTED_DIAGNOSIS_FIELDS = frozenset({
@@ -181,7 +213,12 @@ def is_strict_boundary(value: Any = None) -> bool:
 
 
 def is_wls_gated(value: Any = None) -> bool:
-    return resolve_evidence_profile(value) == WLS_GATED_PROFILE
+    """Auxiliary streams follow a current balanced WLS alarm (either gated profile)."""
+    return resolve_evidence_profile(value) in WLS_ALARM_GATED_PROFILES
+
+
+def is_suspicion_gated(value: Any = None) -> bool:
+    return resolve_evidence_profile(value) == SUSPICION_GATED_PROFILE
 
 
 def allows_diagnostic_tools(value: Any = None) -> bool:
@@ -191,7 +228,18 @@ def allows_diagnostic_tools(value: Any = None) -> bool:
 
 def requires_wls_alarm_for_diagnostics(value: Any = None) -> bool:
     """Auxiliary requests need a current balanced WLS alarm on the active state."""
-    return resolve_evidence_profile(value) == WLS_GATED_PROFILE
+    return resolve_evidence_profile(value) in WLS_ALARM_GATED_PROFILES
+
+
+def required_suspicion(value: Any, tool: str) -> str | None:
+    """Family suspicion ``tool`` needs under the profile, if any."""
+    if resolve_evidence_profile(value) != SUSPICION_GATED_PROFILE:
+        return None
+    return DIAGNOSTIC_SUSPICION_REQUIREMENTS.get(str(tool))
+
+
+def suspicion_error_code(family: str) -> str:
+    return f"diagnostics_require_{family}_suspicion"
 
 
 def disabled_tools(value: Any = None) -> frozenset[str]:
@@ -200,6 +248,8 @@ def disabled_tools(value: Any = None) -> frozenset[str]:
         return SCADA_DISABLED_TOOLS
     if profile == WLS_GATED_PROFILE:
         return WLS_GATED_DISABLED_TOOLS
+    if profile == SUSPICION_GATED_PROFILE:
+        return SUSPICION_GATED_DISABLED_TOOLS
     return frozenset()
 
 
@@ -207,7 +257,7 @@ def disabled_requests(value: Any = None) -> frozenset[str]:
     profile = resolve_evidence_profile(value)
     if profile == SCADA_ONLY_PROFILE:
         return SCADA_DISABLED_REQUESTS
-    if profile == WLS_GATED_PROFILE:
+    if profile in WLS_ALARM_GATED_PROFILES:
         return WLS_GATED_DISABLED_REQUESTS
     return frozenset()
 
@@ -330,8 +380,10 @@ def _sanitize_scan_window(raw: Any) -> Any:
     return window
 
 
-def sanitize_gated_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Execution metadata for wls_gated_diagnostics.
+def sanitize_gated_metadata(
+    metadata: Mapping[str, Any] | None, profile: str = WLS_GATED_PROFILE,
+) -> dict[str, Any]:
+    """Execution metadata for the WLS-alarm-gated profiles.
 
     Keeps the balanced SCADA declarations and the full auxiliary measurement
     streams (three-phase phasors with their declared sigmas, spectra, breaker
@@ -339,8 +391,17 @@ def sanitize_gated_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any
     admitted diagnostics can compute from measurements.  Drops seeded
     signatures, hidden truth, labels, family and scenario hints and every
     precomputed diagnosis or truth-side model handle.
+
+    Under suspicion_gated_diagnostics the HIF acquisition block and scan
+    window are dropped as well: they carry the simulator's operating point and
+    exist only on HIF windows, and that profile's HIF diagnostics work from
+    the snapshot phasors every alarmed root carries.
     """
+    if profile not in WLS_ALARM_GATED_PROFILES:
+        raise ValueError(f"sanitize_gated_metadata needs a gated profile, got {profile!r}")
     metadata = metadata if isinstance(metadata, Mapping) else {}
+    if profile == SUSPICION_GATED_PROFILE:
+        metadata = {key: value for key, value in metadata.items() if key not in {"hif_runtime", "hif_scan_window"}}
     result = _selected(metadata, _GATED_METADATA_FIELDS)
     if "parameter_scans" in metadata:
         result["parameter_scans"] = _selected(metadata["parameter_scans"], _PARAMETER_SCAN_FIELDS)
@@ -363,7 +424,7 @@ def sanitize_gated_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any
         result["hif_scan_window"] = _sanitize_scan_window(metadata["hif_scan_window"])
     for key in PRECOMPUTED_DIAGNOSIS_FIELDS:
         result.pop(key, None)
-    result["evidence_profile"] = WLS_GATED_PROFILE
+    result["evidence_profile"] = profile
     return result
 
 
@@ -391,22 +452,24 @@ def sanitize_gated_observation(value: Any) -> Any:
     return deepcopy(value)
 
 
-def sanitize_gated_execution(scenario: Mapping[str, Any]) -> dict[str, Any]:
-    """Return execution data for wls_gated_diagnostics; audit truth is absent.
+def sanitize_gated_execution(
+    scenario: Mapping[str, Any], profile: str = WLS_GATED_PROFILE,
+) -> dict[str, Any]:
+    """Return execution data for a WLS-alarm-gated profile; audit truth is absent.
 
     Seeded ``unresolved_signatures`` and their waveform provenance, anomaly
     scores, hints and hidden truth are not execution fields and are dropped;
     the metadata keeps the auxiliary streams through ``sanitize_gated_metadata``.
     """
     result = _selected(scenario, _EXECUTION_FIELDS)
-    result["metadata"] = sanitize_gated_metadata(scenario.get("metadata"))
+    result["metadata"] = sanitize_gated_metadata(scenario.get("metadata"), profile)
     for key in ("noise_contract", "operator_noise", "parameter_scans", "measurement_convention"):
         if key in scenario:
-            result[key] = sanitize_gated_metadata({key: scenario[key]})[key]
+            result[key] = sanitize_gated_metadata({key: scenario[key]}, profile)[key]
     if isinstance(scenario.get("policy_observation"), Mapping):
         result["policy_observation"] = sanitize_gated_observation(scenario["policy_observation"])
-        result["policy_observation"]["evidence_profile"] = WLS_GATED_PROFILE
-    result["evidence_profile"] = WLS_GATED_PROFILE
+        result["policy_observation"]["evidence_profile"] = profile
+    result["evidence_profile"] = profile
     return result
 
 
@@ -415,8 +478,8 @@ def sanitize_execution_for_profile(scenario: Mapping[str, Any], profile: Any = N
     resolved = resolve_evidence_profile(profile)
     if resolved == SCADA_ONLY_PROFILE:
         return sanitize_scada_execution(scenario)
-    if resolved == WLS_GATED_PROFILE:
-        return sanitize_gated_execution(scenario)
+    if resolved in WLS_ALARM_GATED_PROFILES:
+        return sanitize_gated_execution(scenario, resolved)
     return deepcopy(dict(scenario))
 
 
@@ -425,6 +488,6 @@ def sanitize_observation_for_profile(value: Any, profile: Any = None) -> Any:
     resolved = resolve_evidence_profile(profile)
     if resolved == SCADA_ONLY_PROFILE:
         return sanitize_scada_observation(value)
-    if resolved == WLS_GATED_PROFILE:
+    if resolved in WLS_ALARM_GATED_PROFILES:
         return sanitize_gated_observation(value)
     return deepcopy(value)

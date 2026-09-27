@@ -47,7 +47,7 @@ from psse_env.oracle.termination_expert import TerminationExpert
 from psse_env.oracle.hif_continuation import hif_meter_route_ready, recovery_signatures
 from psse_env.oracle.topology_expert import TopologyExpert
 from psse_env.actions import diagnostic_tool_permitted
-from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary
+from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary, is_suspicion_gated
 from psse_env.state_store import (
     SYNTHETIC_TERMINAL_COMPATIBILITY_KEY,
     OracleState,
@@ -208,6 +208,10 @@ class ExpertPolicyOracle:
         )
         if preferred_first_request(policy, context.history) == GET_THREE_PHASE_CONTEXT:
             stages = tuple(reversed(stages))
+        if is_suspicion_gated(policy):
+            # Auxiliary measurements follow a balanced suspicion, never the
+            # alarm alone: phasors only on a current HIF suspicion.
+            stages = (self.diagnostics_expert.suspicion_screening_proposals,)
         screening: list[ExpertActionProposal] = []
         for stage in stages:
             screening = stage(policy, context.history)

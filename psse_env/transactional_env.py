@@ -50,7 +50,7 @@ from .actions import (
 from .oracle.candidate_quality import CandidateAssessment, CandidateDisposition, CandidateQualityOracle
 from .oracle.anomaly_evidence import normalized_residual_alarm
 from .oracle.hif_continuation import (
-    HIF_CONDITIONING_METHOD, accepted_hif_explanation, current_hif_conditioning,
+    HIF_CONDITIONING_METHOD, HIF_CONDITIONING_METHODS, accepted_hif_explanation, current_hif_conditioning,
     hif_conditioned_closure_ready,
 )
 from .oracle.expert_types import (
@@ -70,11 +70,12 @@ from .private_target_matching import correction_family
 from .episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, validate_episode_action_limit
 from .evidence_profile import (
     DEFAULT_EVIDENCE_PROFILE, GATED_DIAGNOSTIC_TOOLS, allows_diagnostic_tools,
-    disabled_requests, disabled_tools, is_scada_only, is_strict_boundary, is_wls_gated,
-    requires_wls_alarm_for_diagnostics, sanitize_execution_for_profile,
-    sanitize_observation_for_profile, scada_signatures, validate_evidence_profile,
+    disabled_requests, disabled_tools, is_scada_only, is_strict_boundary, is_suspicion_gated,
+    is_wls_gated, required_suspicion, requires_wls_alarm_for_diagnostics,
+    sanitize_execution_for_profile, sanitize_observation_for_profile, scada_signatures,
+    suspicion_error_code, validate_evidence_profile,
 )
-from .oracle.process_validity import current_wls_alarm
+from .oracle.process_validity import current_family_suspicion, current_wls_alarm
 from .state_store import (
     CandidateLifecycle,
     FORBIDDEN_POLICY_KEYS,
@@ -790,6 +791,9 @@ class TransactionalPSSEEnv:
                 "max_normalized_residual",
                 "chi_square_alarm",
                 "gnn_screen",
+                # The balanced HIF screen rides on this solve; its suspicion
+                # is what admits phasors under suspicion_gated_diagnostics.
+                "hif_screen",
             ):
                 if key in wls:
                     contexts["wls"][key] = wls[key]
@@ -830,7 +834,7 @@ class TransactionalPSSEEnv:
             raw = metrics.get("hif_conditioning")
             if (isinstance(raw, Mapping) and str(raw.get("state_id") or "") == active_id
                 and raw.get("state_hash") == active_hash
-                and raw.get("method") == HIF_CONDITIONING_METHOD
+                and raw.get("method") in HIF_CONDITIONING_METHODS
                 and raw.get("status") in {"ready", "unavailable"}
                 and raw.get("physical_fault_still_present") is True):
                 retained = {key: policy_safe_copy(raw[key]) for key in (
@@ -844,7 +848,11 @@ class TransactionalPSSEEnv:
                 return retained
             return {
                 "status": "unavailable", "state_id": active_id, "state_hash": active_hash,
-                "method": HIF_CONDITIONING_METHOD, "remaining_meter_candidate_indices": [],
+                "method": (
+                    "balanced_split_line_shunt_compensation" if is_suspicion_gated(self.evidence_profile)
+                    else HIF_CONDITIONING_METHOD
+                ),
+                "remaining_meter_candidate_indices": [],
                 "failure_reasons": ["current_hif_conditioning_evidence_missing_or_unbound"],
                 "physical_fault_still_present": True,
                 "evidence_source": "controller_observed:conditioned_wls_unavailable",
@@ -1271,6 +1279,13 @@ class TransactionalPSSEEnv:
                 return self._standard_output(
                     execution_status="failure", error_code="diagnostics_require_wls_alarm",
                     error_detail=f"{tool} requires a current balanced WLS alarm on {target_id}",
+                    state_mutated=False,
+                )
+            family = required_suspicion(self.evidence_profile, tool)
+            if family is not None and not current_family_suspicion(self.current_state(), family, target_id):
+                return self._standard_output(
+                    execution_status="failure", error_code=suspicion_error_code(family),
+                    error_detail=f"{tool} requires a current balanced {family} suspicion on {target_id}",
                     state_mutated=False,
                 )
         if tool in CORRECTION_TOOLS:
@@ -4277,6 +4292,15 @@ class TransactionalPSSEEnv:
         ):
             return
         summary = metrics.get("nlm_summary")
+        if isinstance(summary, Mapping) and summary.get("diagnostic_classification") is not None:
+            context["nlm_classification"] = str(summary["diagnostic_classification"])
+        if metrics.get("hif_suspicion_refuted") is True:
+            # The phasors a balanced HIF suspicion opened show no HIF-like
+            # line differential: the next WLS on this state reports the
+            # suspicion as refuted and mints no HIF signature.
+            context["hif_suspicion_refuted"] = True
+        else:
+            context.pop("hif_suspicion_refuted", None)
         rows: list[int] = []
         for group in (summary.get("top_hif_groups") if isinstance(summary, Mapping) else None) or []:
             if not isinstance(group, Mapping) or group.get("branch_row0") is None:

@@ -29,7 +29,9 @@ import json
 import math
 from typing import Any, Mapping, Sequence
 
-from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary, is_wls_gated
+from psse_env.evidence_profile import (
+    allows_diagnostic_tools, disabled_tools, is_strict_boundary, is_suspicion_gated, is_wls_gated,
+)
 
 from psse_env.actions import (
     ANOMALY_FAMILY_MARKERS,
@@ -49,8 +51,11 @@ from psse_env.actions import (
     RUN_THREE_PHASE_NLM_FROM_PATH,
     RUN_WLS,
     current_gnn_screen,
+    current_screen_report,
+    current_suspicion,
     current_wls_alarm,
     diagnostic_tool_permitted,
+    hif_suspicion_refuted,
     safe_normalize_action,
     harmonic_screening_pending,
     successful_current_wls,
@@ -290,9 +295,11 @@ class DiagnosticsExpert:
             # estimator follows.
             multiscan_record = completed.get(ESTIMATE_HIF_MULTISCAN_FROM_PATH)
             window_advertised = "hif_scan_window" in available
-            multiscan_applicable = window_advertised or (
-                is_wls_gated(state)
-                and (multiscan_record is None or multiscan_record.get("_execution_status") == "success")
+            multiscan_applicable = ESTIMATE_HIF_MULTISCAN_FROM_PATH not in disabled_tools(state) and (
+                window_advertised or (
+                    is_wls_gated(state)
+                    and (multiscan_record is None or multiscan_record.get("_execution_status") == "success")
+                )
             )
             if multiscan_applicable and ESTIMATE_HIF_MULTISCAN_FROM_PATH not in completed:
                 proposals.append(
@@ -343,6 +350,54 @@ class DiagnosticsExpert:
                     )
                 )
         return proposals
+
+    def suspicion_screening_proposals(
+        self, state: Any, history: Sequence[Mapping[str, Any]] | None = None,
+    ) -> list[ExpertActionProposal]:
+        """suspicion_gated_diagnostics: phasors follow a balanced HIF suspicion only.
+
+        On a current suspicion from the WLS screen the ladder acquires the
+        phase-resolved measurements, then tests the suspicion on them once.
+        A refutation is followed by a fresh WLS, which reports the suspicion
+        as refuted and mints no HIF signature, so the balanced routes open;
+        a confirmation leaves the localized HIF to the estimator rung.  With
+        no suspicion nothing auxiliary is requested at all.
+        """
+        state = policy_state_view(state)
+        if not is_suspicion_gated(state):
+            return []
+        active_id = state_value(state, "active_state_id")
+        if not active_id or state_value(state, "has_open_candidate"):
+            return []
+        if not current_suspicion(state, "hif") or hif_suspicion_refuted(state):
+            return []
+        contexts = state_value(state, "fresh_context_evidence") or {}
+        phase = contexts.get("three_phase") if isinstance(contexts, Mapping) else None
+        phase = phase if isinstance(phase, Mapping) else {}
+        report = current_screen_report(state, "hif")
+        bound = (
+            str(phase.get("state_id") or "") == str(active_id)
+            and phase.get("request_attempted") is True
+        )
+        evidence = [f"balanced_hif_suspicion line={report.get('line_index1')}"]
+        if not bound:
+            return self._permitted(state, [self._proposal(
+                GET_THREE_PHASE_CONTEXT, {"state_id": active_id}, confidence=0.97,
+                evidence=[*evidence, "phase_resolved_measurements_requested"],
+            )], history)
+        if phase.get("nlm_attempted") is not True:
+            if not three_phase_context_available(contexts, active_id):
+                return []
+            return self._permitted(state, [self._proposal(
+                RUN_THREE_PHASE_NLM_FROM_PATH, {"state_id": active_id}, confidence=0.97,
+                evidence=[*evidence, "hif_suspicion_tested_on_phasors"],
+            )], history)
+        if phase.get("hif_suspicion_refuted") is True:
+            return [self._proposal(
+                RUN_WLS, {"state_id": active_id}, confidence=0.97,
+                evidence=[*evidence, "hif_suspicion_refuted_by_phase_measurements", "balanced_solve_refresh"],
+            )]
+        return []
 
     def gnn_balanced_screening_proposals(
         self, state: Any, history: Sequence[Mapping[str, Any]] | None = None,

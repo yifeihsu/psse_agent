@@ -162,7 +162,8 @@ def conditioned_prediction(state: Mapping[str, Any], cache: dict[str, Any]) -> d
     return copy.deepcopy(cache[key])
 
 
-def diagnose(state: Mapping[str, Any], prediction: Mapping[str, Any], sigma: Any) -> dict[str, Any]:
+def diagnose(state: Mapping[str, Any], prediction: Mapping[str, Any], sigma: Any,
+             *, method: str = "paired_opendss_effect_compensation") -> dict[str, Any]:
     result = diagnose_conditioned_meter_errors(
         state["measurements"], prediction["predicted_hif_measurements"], sigma,
         prediction_lower=prediction["prediction_lower"], prediction_upper=prediction["prediction_upper"],
@@ -177,7 +178,7 @@ def diagnose(state: Mapping[str, Any], prediction: Mapping[str, Any], sigma: Any
         "status": "unavailable" if reasons else "ready",
         "state_id": str(state.get("state_id") or ""),
         "state_hash": str(state.get("state_hash") or ""),
-        "method": "paired_opendss_effect_compensation",
+        "method": method,
         "remaining_meter_candidate_indices": result["candidate_indices"],
         "failure_reasons": reasons,
         "overlapping_candidate_indices": result["candidate_event_overlap_indices"],

@@ -15,6 +15,10 @@ from psse_env.evidence_profile import allows_diagnostic_tools
 
 
 HIF_CONDITIONING_METHOD = "paired_opendss_effect_compensation"
+#: Conditioning methods whose ledger opens the conditioned meter route: the
+#: OpenDSS replay of the WLS-gated contract and the balanced split-line shunt
+#: of the suspicion-gated contract (``psse_env.providers.suspicion_gated``).
+HIF_CONDITIONING_METHODS = frozenset({HIF_CONDITIONING_METHOD, "balanced_split_line_shunt_compensation"})
 
 
 def accepted_hif_explanation(state: Any) -> bool:
@@ -47,7 +51,7 @@ def current_hif_conditioning(state: Any) -> Mapping[str, Any] | None:
     if (not isinstance(record, Mapping) or not active_id
         or str(record.get("state_id") or "") != active_id
         or not isinstance(record.get("state_hash"), str) or not record["state_hash"]
-        or record.get("method") != HIF_CONDITIONING_METHOD
+        or record.get("method") not in HIF_CONDITIONING_METHODS
         or record.get("physical_fault_still_present") is not True
         or record.get("status") not in {"ready", "unavailable"}):
         return None
