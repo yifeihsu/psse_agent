@@ -373,17 +373,17 @@ def test_zero_shot_stage_and_frozen_student_wiring() -> None:
         assert set(json.loads(match.group(1))) == set(resolve_system("case118").supported_families)
 
 
-def test_evidence_profile_default_is_wls_gated_and_every_guard_accepts_it() -> None:
-    """The 2026-09-23 contract: WLS-gated diagnostics by default, discovered
-    signatures on every strict profile, the PMU sigma of the study declared,
-    every shell whitelist accepting the new profile, and the corpus paths
-    naming the 20260923opf subsets (the regeneration landed; no TODO marker
-    remains).  The test never requires the corpora to exist."""
+def test_evidence_profile_default_is_suspicion_gated_and_every_guard_accepts_it() -> None:
+    """The 2026-09-27 contract: suspicion-gated diagnostics by default (phasors
+    only on a balanced HIF suspicion), discovered signatures on every strict
+    profile, the PMU sigma of the study declared, every shell whitelist
+    accepting both gated profiles, and the corpus paths naming the 20260923opf
+    subsets.  The test never requires the corpora to exist."""
     env = (CELL / "pipeline.env").read_text(encoding="utf-8")
-    assert "EVIDENCE_PROFILE=${EVIDENCE_PROFILE:-wls_gated_diagnostics}" in env
+    assert "EVIDENCE_PROFILE=${EVIDENCE_PROFILE:-suspicion_gated_diagnostics}" in env
     assert "HIF_SIGNATURE_MODE=${HIF_SIGNATURE_MODE:-discovered}" in env
     assert re.search(r"^PMU_PHASOR_SIGMA=1e-4$", env, flags=re.MULTILINE)
-    assert 'case "$EVIDENCE_PROFILE" in scada_only|wls_gated_diagnostics|auxiliary_diagnostics)' in env
+    assert 'case "$EVIDENCE_PROFILE" in scada_only|wls_gated_diagnostics|suspicion_gated_diagnostics|auxiliary_diagnostics)' in env
     assert '"$EVIDENCE_PROFILE" != auxiliary_diagnostics && "$HIF_SIGNATURE_MODE" != discovered' in env
     assert "docs/wls_gated_evidence_20260923.md" in env
     assert "TODO(20260923opf)" not in env and "TODO" not in env
@@ -392,9 +392,9 @@ def test_evidence_profile_default_is_wls_gated_and_every_guard_accepts_it() -> N
         assert re.search(rf"^{name}=\$SRC/artifacts/measurements/[a-z0-9_]+_20260923opf/samples\.jsonl$", env,
                          flags=re.MULTILINE), name
     deploy = (CELL / "deploy_remote.sh").read_text(encoding="utf-8")
-    assert 'case "$EVIDENCE_PROFILE" in scada_only|wls_gated_diagnostics|auxiliary_diagnostics)' in deploy
+    assert 'case "$EVIDENCE_PROFILE" in scada_only|wls_gated_diagnostics|suspicion_gated_diagnostics|auxiliary_diagnostics)' in deploy
     prerequisites = (CELL / "prerequisites.sh").read_text(encoding="utf-8")
-    assert '"$EVIDENCE_PROFILE" == wls_gated_diagnostics && -n "${PMU_PHASOR_SIGMA:-}"' in prerequisites
+    assert '"$EVIDENCE_PROFILE" == wls_gated_diagnostics || "$EVIDENCE_PROFILE" == suspicion_gated_diagnostics' in prerequisites
     for key in ("three_phase_sigma", "branch_current_sigma_pu"):
         assert key in prerequisites
     build_suite = _load("build_suite.py")
@@ -402,7 +402,7 @@ def test_evidence_profile_default_is_wls_gated_and_every_guard_accepts_it() -> N
         "--source-root", "src", "--d0-raw", "d0.jsonl", "--round-train-plan", "{}",
         "--development-plan", "{}", "--seed", "1", "--output-dir", "out",
     ])
-    assert args.evidence_profile == "wls_gated_diagnostics"
+    assert args.evidence_profile == "suspicion_gated_diagnostics"
     assert args.hif_signature_mode == "discovered"
     # The stage scripts pass the profile through unchanged and record it.
     for name in ("stage_d0.sbatch", "stage_bc0.sbatch"):

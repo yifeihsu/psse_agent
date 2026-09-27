@@ -134,8 +134,8 @@ def test_cli_and_source_descriptor_declare_strict_default():
 def test_hpc_templates_guard_reuse_and_record_selected_profile():
     root = Path(__file__).resolve().parents[1] / "research/hpc/full_pipeline_20260907"
     env = (root / "pipeline.env").read_text(encoding="utf-8")
-    assert 'EVIDENCE_PROFILE=${EVIDENCE_PROFILE:-wls_gated_diagnostics}' in env
-    assert 'case "$EVIDENCE_PROFILE" in scada_only|wls_gated_diagnostics|auxiliary_diagnostics)' in env
+    assert 'EVIDENCE_PROFILE=${EVIDENCE_PROFILE:-suspicion_gated_diagnostics}' in env
+    assert 'case "$EVIDENCE_PROFILE" in scada_only|wls_gated_diagnostics|suspicion_gated_diagnostics|auxiliary_diagnostics)' in env
     assert 'declared = declared or "auxiliary_diagnostics"' in env
     assert 'assert_stage_evidence_profile "$PREVIOUS_PIPE/out/$receipt"' in env
     assert env.index('assert_stage_evidence_profile "$PREVIOUS_PIPE/out/$receipt"') < env.index('ln -s "$PREVIOUS_PIPE/out/$subdir"')

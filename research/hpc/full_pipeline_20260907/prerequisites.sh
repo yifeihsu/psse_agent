@@ -33,10 +33,10 @@ for path in "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID" "$HIF_CORPUS_TRAIN_EXTRA" "$
   "$SRC/data/measurements_5class_merged.jsonl" "$BC0_SUITE"; do
   [[ -s "$path" ]] || { echo "missing or empty input: $path" >&2; exit 2; }
 done
-# Under wls_gated_diagnostics the HIF corpora must declare the PMU phasor
+# Under the WLS-gated contracts the HIF corpora must declare the PMU phasor
 # precision of the study (pipeline.env PMU_PHASOR_SIGMA) in their meta.json;
 # an empty PMU_PHASOR_SIGMA disables the check for an explicit ablation.
-if [[ "$EVIDENCE_PROFILE" == wls_gated_diagnostics && -n "${PMU_PHASOR_SIGMA:-}" ]]; then
+if [[ ( "$EVIDENCE_PROFILE" == wls_gated_diagnostics || "$EVIDENCE_PROFILE" == suspicion_gated_diagnostics ) && -n "${PMU_PHASOR_SIGMA:-}" ]]; then
   "$PY" - "$PMU_PHASOR_SIGMA" "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID" "$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA" <<'PY'
 import json
 import math
