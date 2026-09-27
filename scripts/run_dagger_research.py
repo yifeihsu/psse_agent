@@ -13,13 +13,16 @@ import argparse
 import copy
 import gc
 import hashlib
+import importlib
 import json
 import math
 import os
 import random
 import re
+import shutil
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -1446,6 +1449,7 @@ def evaluate_paired_adapters(
     case_loader: Callable[[Any], Any] | None = None,
     expert_policy_factory: Callable[[], Any] | None = None,
     evaluation_dirname: str = "evaluation",
+    parallel: ParallelEvaluation | None = None,
 ) -> dict[str, Any]:
     """Run BC0 and R1 on the exact same saved development scenarios.
 
@@ -1464,65 +1468,73 @@ def evaluate_paired_adapters(
     loaded cases so the strict audit can compare parameter and topology
     corrections against the clean case; without it every such correction is
     scored as evidence missing.  It defaults to the production parser.
+
+    With ``parallel`` every policy is rolled out at once by worker processes
+    that each load their own copy and take every n-th planned episode (see
+    ``ParallelEvaluation``); the workers rebuild the environment, loaders,
+    and expert from the recorded configuration, so ``policy_loader``,
+    ``environment_factory``, ``evaluator``, and ``case_loader`` are not
+    called, and ``expert_policy_factory`` only asks for the expert.
     """
-
-    if case_loader is None:
-        from psse_env.dagger.release_factories import deterministic_case_loader
-
-        case_loader = deterministic_case_loader
 
     roots = [_row_root(row) for row in development_scenarios]
     if not roots or "" in roots or len(roots) != len(set(roots)):
         raise ValueError("Paired evaluation requires unique development physical roots")
-    suite = {"standard_success": list(development_scenarios)}
-    payloads: dict[str, dict[str, Any]] = {}
     comparators: list[tuple[str, Any]] = [("bc0", bc0_adapter)]
     if r1_adapter is not None:
         comparators.append(("r1", r1_adapter))
     if expert_policy_factory is not None:
         comparators.append(("expert", None))
-    for label, adapter in comparators:
-        if adapter is None:
-            policy = expert_policy_factory()
-        else:
-            policy = policy_loader(
-                adapter,
-                base_model=base_model,
-                base_revision=base_revision,
-                load_in_4bit=load_in_4bit,
-                local_files_only=local_files_only,
-                trust_remote_code=trust_remote_code,
-                prompt_profile=prompt_profile,
-                architecture=architecture,
-            )
-        result = evaluator(
-            suite,
-            env_factory=environment_factory,
-            policy_factory=lambda _policy=policy, **_kwargs: _policy,
-            max_steps=max_steps,
+    policy_kwargs = {
+        "base_model": base_model,
+        "base_revision": base_revision,
+        "load_in_4bit": load_in_4bit,
+        "local_files_only": local_files_only,
+        "trust_remote_code": trust_remote_code,
+        "prompt_profile": prompt_profile,
+        "architecture": architecture,
+    }
+    if parallel is not None:
+        if case_loader is not None:
+            raise ValueError("a parallel evaluation resolves its case loader by import path")
+        payloads = _evaluate_policies_in_parallel(
+            comparators=comparators,
+            development_scenarios=development_scenarios,
+            evaluation_dir=output_dir / evaluation_dirname,
             seed=seed,
-            required_suites=["standard_success"],
-            minimum_suites=1,
-            minimum_episodes_per_suite=1,
-            minimum_roots_per_suite=1,
-            require_release_environment=False,
-            require_policy_identity=False,
-            case_loader=case_loader,
+            max_steps=max_steps,
+            policy_kwargs=policy_kwargs,
+            parallel=parallel,
+            policy_cache_clear=policy_cache_clear,
         )
-        payload = result.as_dict()
-        payloads[label] = payload
-        _write_json(output_dir / evaluation_dirname / f"{label}_eval.json", payload)
-        del result, policy
-        if policy_cache_clear is not None:
-            policy_cache_clear()
-        gc.collect()
-        try:
-            import torch
+        for label, payload in payloads.items():
+            _write_json(output_dir / evaluation_dirname / f"{label}_eval.json", payload)
+    else:
+        payloads = {}
+        if case_loader is None:
+            from psse_env.dagger.release_factories import deterministic_case_loader
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
+            case_loader = deterministic_case_loader
+        suite = {"standard_success": list(development_scenarios)}
+        for label, adapter in comparators:
+            if adapter is None:
+                policy = expert_policy_factory()
+            else:
+                policy = policy_loader(adapter, **policy_kwargs)
+            result = evaluator(
+                suite,
+                env_factory=environment_factory,
+                policy_factory=lambda _policy=policy, **_kwargs: _policy,
+                max_steps=max_steps,
+                seed=seed,
+                case_loader=case_loader,
+                **PAIRED_EVALUATION_CONTRACT,
+            )
+            payload = result.as_dict()
+            payloads[label] = payload
+            _write_json(output_dir / evaluation_dirname / f"{label}_eval.json", payload)
+            del result, policy
+            _release_policy_memory(policy_cache_clear)
 
     bc0_overall = payloads["bc0"]["suite_metrics"]["overall"]
     r1_overall = payloads["r1"]["suite_metrics"]["overall"] if "r1" in payloads else None
@@ -1553,7 +1565,363 @@ def evaluate_paired_adapters(
         },
     }
     _write_json(output_dir / evaluation_dirname / "comparison.json", comparison)
+    if parallel is not None:
+        # The merged reports are written; the per-episode checkpoints only
+        # served a resumed job and would be stale for any later evaluation.
+        shutil.rmtree(output_dir / evaluation_dirname / "shards", ignore_errors=True)
     return comparison
+
+
+#: Evaluator settings shared by the sequential and the parallel paired
+#: evaluation, so both score the development suite under one contract.
+PAIRED_EVALUATION_CONTRACT: dict[str, Any] = {
+    "required_suites": ["standard_success"],
+    "minimum_suites": 1,
+    "minimum_episodes_per_suite": 1,
+    "minimum_roots_per_suite": 1,
+    "require_release_environment": False,
+    "require_policy_identity": False,
+}
+#: Worker-side import paths: parallel evaluation workers are fresh (spawned)
+#: processes and rebuild each factory from these.
+RESEARCH_POLICY_LOADER = (
+    "psse_env.dagger.research_policy_factory:research_gemma_policy_factory"
+)
+RESEARCH_CASE_LOADER = "psse_env.dagger.release_factories:deterministic_case_loader"
+#: Worker processes load their models one at a time; a worker that died while
+#: loading must not stall the others forever.
+POLICY_LOAD_LOCK_TIMEOUT_SECONDS = 1800.0
+_THREAD_ENVIRONMENT = (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
+
+
+@dataclass(frozen=True)
+class ParallelEvaluation:
+    """Shard each policy's development roots over worker processes.
+
+    The environment steps on the CPU between model calls, so one rollout
+    process leaves the GPU idle about half the time (48-60% utilization on
+    the torch eval jobs, under the cluster's 60% cancellation line).  With
+    ``workers_per_policy`` workers per policy and every policy at once, the
+    GPU is shared by several processes whose CPU phases interleave.
+
+    Each worker loads its own policy copy (one load at a time), rolls out
+    every ``workers_per_policy``-th planned episode, and pickles each
+    finished episode, so a preempted and requeued job resumes where it
+    stopped.  The parent summarizes the merged episodes in plan order with
+    the evaluator's own summary, so the reports match a sequential run.
+
+    ``environment`` records how the worker rebuilds the research environment
+    (``hif_search_profile``, ``evidence_profile``, and the
+    ``RESEARCH_ENVIRONMENT_OPTIONS`` values); the import-path fields let a
+    test substitute light factories.
+    """
+
+    workers_per_policy: int
+    environment: Mapping[str, Any]
+    policy_loader: str = RESEARCH_POLICY_LOADER
+    case_loader: str = RESEARCH_CASE_LOADER
+    environment_factory: str | None = None
+    expert_policy_factory: str | None = None
+
+    def __post_init__(self) -> None:
+        if int(self.workers_per_policy) < 1:
+            raise ValueError("workers_per_policy must be at least 1")
+
+
+def research_expert_policy(environment_factory: Callable[..., Any]) -> Any:
+    """The teacher under the policy observation boundary.
+
+    It judges validity with the same process oracle the research environment
+    uses, and sees only the policy observation through the same wrapper the
+    release factories use, exactly like the adapters it is compared with.
+    """
+
+    from psse_env.dagger.release_factories import ObservableExpertPolicy
+
+    return ObservableExpertPolicy(
+        ExpertPolicyOracle(process_oracle=environment_factory().process_oracle)
+    )
+
+
+def _release_policy_memory(policy_cache_clear: Callable[[], None] | None) -> None:
+    if policy_cache_clear is not None:
+        policy_cache_clear()
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _import_callable(path: str) -> Callable[..., Any]:
+    module_name, _, attribute = str(path).partition(":")
+    if not module_name or not attribute:
+        raise ValueError(f"expected an import path module:callable, got {path!r}")
+    value: Any = importlib.import_module(module_name)
+    for part in attribute.split("."):
+        value = getattr(value, part)
+    if not callable(value):
+        raise TypeError(f"{path} is not callable")
+    return value
+
+
+def _available_cpus() -> int:
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:
+        return max(1, os.cpu_count() or 1)
+
+
+def _atomic_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    with temporary.open("wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
+def _episode_checkpoint(label_dir: Path, ordinal: int) -> Path:
+    return label_dir / f"episode-{int(ordinal):04d}.pkl"
+
+
+def _adapter_identity(adapter: Path | None) -> list[list[Any]] | None:
+    """Names, sizes, and times of the adapter files: a retrained adapter at
+    the same path must not resume from the previous adapter's episodes."""
+
+    if adapter is None:
+        return None
+    root = Path(adapter)
+    if not root.exists():
+        return [[str(root), None, None]]
+    files = sorted(path for path in root.rglob("*") if path.is_file()) if root.is_dir() else [root]
+    return [
+        [str(path.relative_to(root) if root.is_dir() else path.name), path.stat().st_size, path.stat().st_mtime_ns]
+        for path in files
+    ]
+
+
+def _never_called(*_args: Any, **_kwargs: Any) -> Any:
+    raise AssertionError("the evaluation planner never builds environments or policies")
+
+
+def _shard_progress(tag: str, record: Mapping[str, Any]) -> None:
+    if record.get("event") != "episode_complete":
+        return
+    print(
+        f"[eval {tag}] {record.get('episode_ordinal')}/{record.get('total_episodes')} "
+        f"{record.get('episode_key')} steps={record.get('policy_steps')} "
+        f"outcome={record.get('terminal_outcome')} "
+        f"error={record.get('evaluator_error')} {float(record.get('elapsed_seconds') or 0.0):.0f}s",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _evaluation_worker(job: Mapping[str, Any], load_lock: Any) -> None:
+    """Spawn target: roll out one shard of one policy's planned episodes."""
+
+    import pickle
+    import traceback
+
+    label_dir = Path(job["label_dir"])
+    shard = int(job["shard_index"])
+    # The parent's stdout carries its JSON report; worker output goes to stderr.
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
+    try:
+        environment = job["environment"]
+        RESEARCH_ENVIRONMENT_OPTIONS.clear()
+        RESEARCH_ENVIRONMENT_OPTIONS.update(environment["options"])
+        environment_factory = (
+            _import_callable(job["environment_factory"])
+            if job.get("environment_factory")
+            else resolve_environment_factory(
+                environment["hif_search_profile"], environment["evidence_profile"]
+            )
+        )
+        if job["adapter"] is None:
+            expert = (
+                _import_callable(job["expert_policy_factory"])
+                if job.get("expert_policy_factory")
+                else research_expert_policy
+            )
+            policy = expert(environment_factory)
+        else:
+            loader = _import_callable(job["policy_loader"])
+            acquired = load_lock.acquire(timeout=POLICY_LOAD_LOCK_TIMEOUT_SECONDS)
+            try:
+                policy = loader(Path(job["adapter"]), **job["policy_kwargs"])
+            finally:
+                if acquired:
+                    load_lock.release()
+        from psse_env.dagger.evaluator import ClosedLoopRolloutEvaluator
+
+        evaluator = ClosedLoopRolloutEvaluator(
+            env_factory=environment_factory,
+            policy_factory=lambda _policy=policy, **_kwargs: _policy,
+            max_steps=int(job["max_steps"]),
+            seed=int(job["seed"]),
+            case_loader=_import_callable(job["case_loader"]),
+            progress_callback=partial(_shard_progress, f"{job['label']}/{shard}"),
+            **PAIRED_EVALUATION_CONTRACT,
+        )
+        scenarios = pickle.loads(Path(job["scenarios_path"]).read_bytes())
+        plan = evaluator.plan_episodes({"standard_success": scenarios})
+        count = int(job["shard_count"])
+        pending = [
+            item.ordinal
+            for item in plan.episodes
+            if (item.ordinal - 1) % count == shard
+            and not _episode_checkpoint(label_dir, item.ordinal).exists()
+        ]
+
+        def checkpoint(item: Any, episode: Any) -> None:
+            _atomic_bytes(
+                _episode_checkpoint(label_dir, item.ordinal),
+                pickle.dumps(episode, protocol=pickle.HIGHEST_PROTOCOL),
+            )
+
+        evaluator.run_planned_episodes(plan, ordinals=pending, on_episode=checkpoint)
+    except BaseException:
+        _atomic_text(label_dir / f"error-{shard}.txt", traceback.format_exc())
+        raise
+
+
+def _evaluate_policies_in_parallel(
+    *,
+    comparators: Sequence[tuple[str, Path | None]],
+    development_scenarios: Sequence[Mapping[str, Any]],
+    evaluation_dir: Path,
+    seed: int,
+    max_steps: int,
+    policy_kwargs: Mapping[str, Any],
+    parallel: ParallelEvaluation,
+    policy_cache_clear: Callable[[], None] | None,
+) -> dict[str, dict[str, Any]]:
+    import multiprocessing
+    import pickle
+
+    from psse_env.dagger.evaluator import ClosedLoopRolloutEvaluator
+
+    shard_root = evaluation_dir / "shards"
+    shard_root.mkdir(parents=True, exist_ok=True)
+    scenarios_path = shard_root / "development_scenarios.pkl"
+    _atomic_bytes(
+        scenarios_path,
+        pickle.dumps(list(development_scenarios), protocol=pickle.HIGHEST_PROTOCOL),
+    )
+    planner = ClosedLoopRolloutEvaluator(
+        env_factory=_never_called,
+        policy_factory=_never_called,
+        max_steps=max_steps,
+        seed=seed,
+        **PAIRED_EVALUATION_CONTRACT,
+    )
+    plan = planner.plan_episodes({"standard_success": list(development_scenarios)})
+    count = int(parallel.workers_per_policy)
+    jobs: list[dict[str, Any]] = []
+    for label, adapter in comparators:
+        label_dir = shard_root / label
+        identity = {
+            "label": label,
+            "adapter": None if adapter is None else str(adapter),
+            "adapter_files": _adapter_identity(adapter),
+            "policy_kwargs": dict(policy_kwargs) if adapter is not None else None,
+            "environment": dict(parallel.environment),
+            "seed": int(seed),
+            "max_steps": int(max_steps),
+            "episode_keys": [item.episode_key for item in plan.episodes],
+        }
+        identity = json.loads(json.dumps(identity, sort_keys=True, default=str))
+        marker = label_dir / "plan.json"
+        if label_dir.exists() and (not marker.is_file() or _read_json(marker) != identity):
+            # Checkpoints from another adapter, suite, or configuration.
+            shutil.rmtree(label_dir)
+        label_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(marker, identity)
+        for stale in label_dir.glob("error-*.txt"):
+            stale.unlink()
+        for shard in range(count):
+            jobs.append(
+                {
+                    "label": label,
+                    "adapter": None if adapter is None else str(adapter),
+                    "shard_index": shard,
+                    "shard_count": count,
+                    "label_dir": str(label_dir),
+                    "scenarios_path": str(scenarios_path),
+                    "seed": int(seed),
+                    "max_steps": int(max_steps),
+                    "policy_kwargs": dict(policy_kwargs),
+                    "environment": dict(parallel.environment),
+                    "policy_loader": parallel.policy_loader,
+                    "case_loader": parallel.case_loader,
+                    "environment_factory": parallel.environment_factory,
+                    "expert_policy_factory": parallel.expert_policy_factory,
+                }
+            )
+    _release_policy_memory(policy_cache_clear)
+    context = multiprocessing.get_context("spawn")
+    load_lock = context.Lock()
+    threads = str(max(1, _available_cpus() // len(jobs)))
+    saved = {name: os.environ.get(name) for name in _THREAD_ENVIRONMENT}
+    processes: list[tuple[dict[str, Any], Any]] = []
+    try:
+        for name in _THREAD_ENVIRONMENT:
+            os.environ[name] = threads
+        for job in jobs:
+            process = context.Process(
+                target=_evaluation_worker,
+                args=(job, load_lock),
+                name=f"eval-{job['label']}-{job['shard_index']}",
+            )
+            process.start()
+            processes.append((job, process))
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+    for _job, process in processes:
+        process.join()
+    failures = []
+    for job, process in processes:
+        if process.exitcode != 0:
+            error = Path(job["label_dir"]) / f"error-{job['shard_index']}.txt"
+            detail = error.read_text(encoding="utf-8").strip().splitlines() if error.is_file() else []
+            failures.append(
+                f"{job['label']} shard {job['shard_index']} exit {process.exitcode}: "
+                + (detail[-1] if detail else "no error record")
+            )
+    if failures:
+        raise RuntimeError("parallel evaluation workers failed: " + "; ".join(failures))
+    payloads: dict[str, dict[str, Any]] = {}
+    for label, _adapter in comparators:
+        label_dir = shard_root / label
+        missing = [
+            item.episode_key
+            for item in plan.episodes
+            if not _episode_checkpoint(label_dir, item.ordinal).is_file()
+        ]
+        if missing:
+            raise RuntimeError(f"{label} evaluation is missing episodes: {missing[:8]}")
+        episodes = [
+            pickle.loads(_episode_checkpoint(label_dir, item.ordinal).read_bytes())
+            for item in plan.episodes
+        ]
+        payloads[label] = planner.summarize_episodes(plan, episodes).as_dict()
+    return payloads
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1784,6 +2152,16 @@ def parser() -> argparse.ArgumentParser:
             "policy observation boundary and record it as the teacher ceiling"
         ),
     )
+    result.add_argument(
+        "--eval-workers-per-policy",
+        type=int,
+        default=0,
+        help=(
+            "Evaluate every policy at once with this many worker processes each, "
+            "sharing the GPU and checkpointing every episode (0: one policy after "
+            "another in this process)"
+        ),
+    )
     return result
 
 
@@ -1978,18 +2356,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
         expert_policy_factory = None
         if args.eval_expert:
-            from psse_env.dagger.release_factories import ObservableExpertPolicy
-            from psse_env.oracle.expert_policy import ExpertPolicyOracle
 
             def expert_policy_factory() -> Any:
-                # The teacher judges validity with the same process oracle the
-                # research environment uses, and sees only the policy
-                # observation through the same wrapper the release factories
-                # use, exactly like the adapters it is compared with.
-                return ObservableExpertPolicy(
-                    ExpertPolicyOracle(process_oracle=environment_factory().process_oracle)
-                )
+                return research_expert_policy(environment_factory)
 
+        if args.eval_workers_per_policy < 0:
+            raise ValueError("--eval-workers-per-policy must be zero or positive")
+        parallel = None
+        if args.eval_workers_per_policy > 0:
+            parallel = ParallelEvaluation(
+                workers_per_policy=args.eval_workers_per_policy,
+                environment={
+                    "hif_search_profile": hif_search_profile,
+                    "evidence_profile": args.evidence_profile,
+                    "options": dict(RESEARCH_ENVIRONMENT_OPTIONS),
+                },
+            )
         comparison = evaluate_paired_adapters(
             development_scenarios=development,
             bc0_adapter=adapter,
@@ -2013,6 +2395,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             policy_cache_clear=clear_research_policy_cache,
             expert_policy_factory=expert_policy_factory,
             evaluation_dirname=str(args.eval_output_name),
+            parallel=parallel,
         )
     report = {
         "passed": True,
