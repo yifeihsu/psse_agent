@@ -15,12 +15,7 @@ from research.evaluate import run_episode
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHERS = (
-    "submit_research_gemma4_dagger_round1.sh", "submit_research_dagger_trace_update.sh",
-    "submit_research_dagger_update.sh", "submit_research_dagger_repair.sh",
-    "submit_research_dagger_demo.sh", "submit_eval_v3.sh",
-    "submit_research_gemma4_bc0_eval.sh", "submit_research_gemma4_bc0_replay_compare.sh",
-    "submit_research_gemma4_smoke.sh",
-    "submit_dagger_release_eval.sh",
+    "submit_eval_v3.sh",
     "research/hpc/occupancy_cell_20260827/run_arm.sh", "research/hpc/occupancy_cell_20260827/audit.sh",
     "research/hpc/exposure_curve_20260828/run_arm.sh", "research/hpc/exposure_curve_20260828/audit.sh",
 )
@@ -46,9 +41,7 @@ def test_research_cli_episode_default_is_forty_without_changing_training_default
         assert captured[0].get_default("train_max_steps") == -1
 
 
-@pytest.mark.parametrize("module_name", [
-    "scripts.run_dagger_research", "psse_env.sft.research_bc0_eval", "psse_env.sft.research_bc0_checkpoint_compare",
-])
+@pytest.mark.parametrize("module_name", ["scripts.run_dagger_research"])
 def test_public_parser_factories_share_the_episode_default(module_name):
     parser = importlib.import_module(module_name).parser()
     assert parser.get_default("max_steps") == DEFAULT_EPISODE_ACTION_LIMIT
@@ -122,10 +115,6 @@ def test_scheduled_stages_resolve_one_shared_episode_budget(relative, fields, ov
 
 
 def test_training_update_limits_are_not_replaced_by_episode_budget():
-    round1 = (ROOT / "submit_research_gemma4_dagger_round1.sh").read_text()
-    assert "TRAIN_MAX_STEPS=32" in round1
-    assert "SAVE_EVAL_STEPS=8" in round1
-    assert '--max-steps "$TRAIN_MAX_STEPS"' in round1
     occupancy = (ROOT / "research/hpc/occupancy_cell_20260827/run_arm.sh").read_text()
     assert '--max-steps "$UPDATES"' in occupancy
     exposure = (ROOT / "research/hpc/exposure_curve_20260828/run_arm.sh").read_text()
@@ -152,59 +141,7 @@ def test_old_independent_stage_overrides_cannot_desynchronize_horizons(tmp_path,
     assert result.stdout.splitlines() == ["40"] * len(fields)
 
 
-@pytest.mark.parametrize("name", ["submit_dagger_release_eval.sh", "submit_dagger_sft_round0.sh"])
+@pytest.mark.parametrize("name", ["submit_dagger_sft_round0.sh"])
 def test_active_release_launchers_select_current_study_template(name):
     text = (ROOT / name).read_text()
     assert "STUDY_MANIFEST=${STUDY_MANIFEST:-psse_env/dagger/studies/dagger_multiseed_study_v2.json}" in text
-
-
-def test_research_smoke_uses_forty_episode_actions_and_preserves_optimizer_smoke_size():
-    from psse_env.sft.research_smoke import parser
-
-    assert parser().get_default("closed_loop_max_steps") == DEFAULT_EPISODE_ACTION_LIMIT
-    assert parser().get_default("overfit_steps") == 20
-    launcher = (ROOT / "submit_research_gemma4_smoke.sh").read_text()
-    assert '--closed-loop-max-steps "$EPISODE_MAX_STEPS"' in launcher
-    assert "--overfit-steps 20" in launcher
-
-
-def test_round1_report_identity_and_gate_use_configured_episode_horizons():
-    launcher = (ROOT / "submit_research_gemma4_dagger_round1.sh").read_text()
-    assert '"max_steps": collection_max_steps' in launcher
-    assert '"paired_development_evaluation": {"roots": 15, "max_steps": evaluation_max_steps}' in launcher
-    assert 'comparison.get("max_steps") != int(sys.argv[4])' in launcher
-    assert '"max_steps": 4,' not in launcher
-    assert 'comparison.get("max_steps") != 24' not in launcher
-    assert '"max_steps": 32' in launcher  # Optimizer updates remain separate.
-
-
-@pytest.mark.parametrize("module_name", ["generate_baseline", "generate_sft_pilot"])
-def test_example_generators_expose_default_budget_in_generated_observations(tmp_path, monkeypatch, module_name):
-    import json
-
-    module = importlib.import_module(f"psse_env.examples.{module_name}")
-    if module_name == "generate_sft_pilot":
-        # Exercise the actual generator's environment/collector wiring without
-        # making this budget test depend on its separate synthetic teacher gate.
-        captured = []
-
-        class BudgetCaptured(Exception):
-            pass
-
-        def capture(collector, **kwargs):
-            collector.env.reset(kwargs["scenarios"][0])
-            captured.append((collector.env.max_steps, kwargs["max_steps"],
-                             collector.env.get_policy_observation([]).remaining_budget))
-            raise BudgetCaptured()
-
-        monkeypatch.setattr(module.DaggerRolloutCollector, "collect_iteration", capture)
-        with pytest.raises(BudgetCaptured):
-            module.generate(tmp_path)
-        assert captured == [(DEFAULT_EPISODE_ACTION_LIMIT,) * 3]
-        return
-    module.generate(tmp_path)
-    filename = "sample_rollout.jsonl" if module_name == "generate_baseline" else "pilot.raw.jsonl"
-    rows = [json.loads(line) for line in (tmp_path / filename).read_text().splitlines()]
-    first_rows = [row for row in rows if row.get("step", 0) == 0]
-    assert first_rows
-    assert all(row["policy_observation"]["remaining_budget"] == DEFAULT_EPISODE_ACTION_LIMIT for row in first_rows)

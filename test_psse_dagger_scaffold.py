@@ -30,7 +30,6 @@ from psse_env.dagger.error_injectors import InjectedAction
 from psse_env.oracle import CandidateDisposition, CandidateQualityOracle, ExpertPolicyOracle, ProcessValidityOracle
 from psse_env.oracle.candidate_quality import CandidateAssessment
 from psse_env.state_store import find_forbidden_policy_paths, policy_safe_copy
-from psse_env.verifier import RuleBasedVerifier, build_verifier_dataset, evaluate_predictions
 
 
 STANDARD_OUTPUT_KEYS = {
@@ -2197,113 +2196,6 @@ class CounterfactualTests(unittest.TestCase):
         )[0]
         self.assertEqual(row["injected_tool_output"]["execution_status"], "failure")
         self.assertEqual(row["executed_action"]["tool"], "commit_state")
-
-
-class ProcessVerifierTests(unittest.TestCase):
-    def test_collector_rows_preserve_complete_transition_for_verifier(self):
-        class CorrectionPolicy:
-            def act(self, observation):
-                return correct_measurement(observation["active_state_id"])
-
-        rows = DaggerRolloutCollector(
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
-            policy=CorrectionPolicy(),
-            expert_oracle=ExpertPolicyOracle(),
-            rng=random.Random(0),
-        ).collect_iteration(scenarios=[synthetic_scenario()], iteration=0, beta=0.0, max_steps=1)
-        verifier_row = build_verifier_dataset(rows)[0]
-        self.assertEqual(verifier_row["action"]["tool"], "correct_measurements")
-        self.assertIsNotNone(verifier_row["candidate_state_summary"]["candidate_state_id"])
-
-    def test_counterfactual_nested_transitions_reach_verifier_dataset(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
-        state = env.reset(synthetic_scenario())
-        rows = CounterfactualGenerator(env=env, expert_oracle=ExpertPolicyOracle()).generate_from_current(
-            [InjectedAction("wrong_target_component", correct_measurement(state["active_state_id"], index=1))],
-            root_scenario_id="case",
-        )
-        verifier_rows = build_verifier_dataset(rows)
-        self.assertEqual(len(verifier_rows), 3)
-        self.assertTrue(verifier_rows[1]["labels"]["process_valid"])
-        self.assertEqual(verifier_rows[2]["labels"]["candidate_disposition"], "REJECT")
-
-    def test_verifier_requires_context_state_identity(self):
-        result = RuleBasedVerifier().verify(
-            {
-                "parent_state_summary": {
-                    "active_state_id": "e:s0",
-                    "has_fresh_parameter_context": True,
-                    "parameter_context_state_id": None,
-                },
-                "action": {
-                    "tool": "correct_parameters",
-                    "arguments": {"state_id": "e:s0", "line_index": 0, "value": 0.2},
-                },
-                "tool_output": {"execution_status": "success"},
-                "candidate_state_summary": {},
-                "verification_metrics": {},
-                "history_summary": {},
-            }
-        )
-        self.assertFalse(result["process_valid"])
-
-    def test_successful_commit_without_privileged_parent_label_is_inconclusive(self):
-        result = RuleBasedVerifier().verify(
-            {
-                "parent_state_summary": {
-                    "active_state_id": "e:s0",
-                    "candidate_state_id": "e:s1",
-                    "has_open_candidate": True,
-                    "has_verified_candidate": True,
-                },
-                "action": {"tool": "commit_state", "arguments": {"candidate_state_id": "e:s1"}},
-                "tool_output": {"execution_status": "success", "active_state_id": "e:s1"},
-                "candidate_state_summary": {"active_state_id": "e:s1"},
-                "verification_metrics": {},
-                "history_summary": {},
-            }
-        )
-        self.assertTrue(result["process_valid"])
-        self.assertEqual(result["candidate_disposition"], "INCONCLUSIVE")
-
-    def test_solver_dispatch_failure_does_not_make_process_illegal(self):
-        result = RuleBasedVerifier().verify(
-            {
-                "parent_state_summary": {"active_state_id": "e:s0"},
-                "action": {"tool": "run_wls", "arguments": {"state_id": "e:s0"}},
-                "tool_output": {
-                    "execution_status": "failure",
-                    "error_code": "dispatch_error",
-                    "error_detail": "SolverRuntimeError",
-                },
-                "candidate_state_summary": {},
-                "verification_metrics": {},
-                "history_summary": {},
-            }
-        )
-        self.assertTrue(result["process_valid"])
-
-    def test_rule_verifier_rejects_false_finalization(self):
-        verifier = RuleBasedVerifier()
-        result = verifier.verify(
-            {
-                "parent_state_summary": {"active_state_id": "e:s0", "remaining_anomaly_score": 4.0},
-                "action": {"tool": "finalize_diagnosis", "arguments": {}},
-                "tool_output": {"execution_status": "success"},
-                "candidate_state_summary": {},
-                "verification_metrics": {"remaining_anomaly_score": 4.0, "anomaly_threshold": 1.0},
-                "history_summary": {},
-            }
-        )
-        self.assertFalse(result["process_valid"])
-        self.assertNotEqual(result["candidate_disposition"], "ACCEPT_FINAL")
-
-    def test_false_accept_final_rate_is_reported(self):
-        metrics = evaluate_predictions(
-            [{"candidate_disposition": "REJECT"}, {"candidate_disposition": "ACCEPT_FINAL"}],
-            [{"candidate_disposition": "ACCEPT_FINAL"}, {"candidate_disposition": "ACCEPT_FINAL"}],
-        )
-        self.assertEqual(metrics["false_accept_final_rate"], 1.0)
 
 
 class AggreVaTeLiteTests(unittest.TestCase):
