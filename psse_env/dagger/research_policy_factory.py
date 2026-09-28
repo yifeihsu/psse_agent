@@ -14,13 +14,6 @@ import threading
 import time
 from typing import Any, Mapping, Sequence
 
-from eval_sft_agent_gemma_v4 import (
-    decode_generated_response,
-    get_stop_token_ids,
-    render_eval_text,
-    resolve_pad_token_id,
-    tokenize_rendered_text,
-)
 from psse_env.dagger.dataset_builder import (
     CANONICAL_DAGGER_SYSTEM_PROMPT,
     validate_policy_payload,
@@ -46,6 +39,13 @@ from psse_env.dagger.release_factories import (
     _validated_generated_action,
 )
 from psse_env.sft.gates import GateError
+from psse_env.sft.gemma_text import (
+    decode_generated_response,
+    get_stop_token_ids,
+    render_eval_text,
+    resolve_pad_token_id,
+    tokenize_rendered_text,
+)
 from psse_env.sft.training import infer_required_side_input_names
 
 

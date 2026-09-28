@@ -18,14 +18,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from eval_sft_agent_gemma_v4 import (
-    decode_generated_response,
-    get_stop_token_ids,
-    render_eval_text,
-    resolve_pad_token_id,
-    tokenize_rendered_text,
-)
-from gpt_oss_power_sft_revised_v3 import encode_text, sanitize_tool_schemas
 from psse_env.dagger.dataset_builder import (
     CANONICAL_DAGGER_SYSTEM_PROMPT,
     validate_policy_payload,
@@ -40,6 +32,15 @@ from psse_env.dagger.release_factories import (
     checkpoint_tree_sha256,
 )
 from psse_env.sft.gates import GateError
+from psse_env.sft.gemma_text import (
+    decode_generated_response,
+    encode_text,
+    get_stop_token_ids,
+    render_eval_text,
+    resolve_pad_token_id,
+    sanitize_tool_schemas,
+    tokenize_rendered_text,
+)
 from psse_env.sft.training import infer_required_side_input_names
 
 

@@ -15,7 +15,6 @@ from research.evaluate import run_episode
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHERS = (
-    "submit_eval_v3.sh",
     "research/hpc/occupancy_cell_20260827/run_arm.sh", "research/hpc/occupancy_cell_20260827/audit.sh",
     "research/hpc/exposure_curve_20260828/run_arm.sh", "research/hpc/exposure_curve_20260828/audit.sh",
 )
