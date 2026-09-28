@@ -1,18 +1,8 @@
-"""A minimal research prototype of the DAgger pipeline.
+"""Research experiments built on ``psse_env``.
 
-The modules under ``psse_env`` implement a release-grade pipeline: content
-addressed provenance, frozen commit bindings, study-manifest pinning, approved
-accelerator classes and reproducibility receipts.  That machinery is valuable
-for a production artifact and is pure overhead for an academic demonstration.
-
-This package keeps the science and drops the scaffolding.  It reuses the
-environment, the expert oracle, the rollout collector, the SFT rendering and
-masking, and the canonical policy classes unchanged, so results remain
-comparable with the release path.  It does not reuse the gate wrappers.
-
-Nothing produced here is release evidence.
+``gnn_screen`` holds the WLS screening GNN, the ``reviewed_*`` modules and
+``filter_reviewed_training`` build the reviewed fault-scenario cohorts, and
+``hpc/full_pipeline_20260907`` is the Slurm cell that runs the expert
+aggregate, BC0 and the DAgger rounds.  Nothing produced here is release
+evidence.
 """
-
-from __future__ import annotations
-
-__all__ = ["collect", "evaluate", "model", "train"]

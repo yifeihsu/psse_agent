@@ -1,7 +1,6 @@
 """Episode horizons agree across runtime entry points and active launchers."""
 from __future__ import annotations
 
-import argparse
 import importlib
 import os
 from pathlib import Path
@@ -11,33 +10,8 @@ import subprocess
 import pytest
 
 from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT
-from research.evaluate import run_episode
 
 ROOT = Path(__file__).resolve().parents[1]
-LAUNCHERS = (
-    "research/hpc/occupancy_cell_20260827/run_arm.sh", "research/hpc/occupancy_cell_20260827/audit.sh",
-    "research/hpc/exposure_curve_20260828/run_arm.sh", "research/hpc/exposure_curve_20260828/audit.sh",
-)
-
-
-@pytest.mark.parametrize("module_name", ["research.collect", "research.evaluate", "research.run_dagger", "research.physical_outcome_audit"])
-def test_research_cli_episode_default_is_forty_without_changing_training_default(monkeypatch, module_name):
-    captured = []
-
-    class ParserCaptured(Exception):
-        pass
-
-    def capture(parser, *_args, **_kwargs):
-        captured.append(parser)
-        raise ParserCaptured()
-
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", capture)
-    module = importlib.import_module(module_name)
-    with pytest.raises(ParserCaptured):
-        module.main([])
-    assert captured[0].get_default("max_steps") == DEFAULT_EPISODE_ACTION_LIMIT == 40
-    if module_name == "research.run_dagger":
-        assert captured[0].get_default("train_max_steps") == -1
 
 
 @pytest.mark.parametrize("module_name", ["scripts.run_dagger_research"])
@@ -48,38 +22,6 @@ def test_public_parser_factories_share_the_episode_default(module_name):
         assert parser.get_default("eval_max_steps") == DEFAULT_EPISODE_ACTION_LIMIT
 
 
-@pytest.mark.parametrize("limit", [3, DEFAULT_EPISODE_ACTION_LIMIT])
-def test_research_runner_binds_visible_budget_before_reset_and_respects_explicit_smoke_override(limit):
-    class Env:
-        max_steps = 65
-        terminal = False
-
-        def reset(self, _scenario):
-            self.reset_budget = self.max_steps
-            self.calls = 0
-
-        def get_policy_observation(self, _history):
-            return {"remaining_budget": self.max_steps - self.calls}
-
-        def step(self, _action):
-            self.calls += 1
-            return {}, {"execution_status": "success", "tool_metrics": {}}
-
-    class Policy:
-        seen = []
-
-        def act(self, observation):
-            self.seen.append(observation["remaining_budget"])
-            return {"tool": "run_wls", "arguments": {}}
-
-    env, policy = Env(), Policy()
-    report = run_episode(env, policy, {"scenario_id": "budget_probe"}, max_steps=limit)
-    assert env.reset_budget == limit
-    assert env.calls == report["steps"] == limit
-    assert policy.seen == list(range(limit, 0, -1))
-    assert report["termination_reason"] == "step_horizon"
-
-
 def _bash():
     bundled = Path("C:/Program Files/Git/bin/bash.exe")
     candidate = str(bundled) if bundled.exists() else shutil.which("bash")
@@ -88,18 +30,8 @@ def _bash():
     return candidate
 
 
-@pytest.mark.parametrize("relative", LAUNCHERS)
-def test_active_shell_launchers_default_to_forty_and_remain_valid_bash(relative):
-    path = ROOT / relative
-    text = path.read_text(encoding="utf-8")
-    assert "EPISODE_MAX_STEPS=${EPISODE_MAX_STEPS:-40}" in text
-    assert "--max-steps 24" not in text
-    subprocess.run([_bash(), "-n", path.as_posix()], check=True, capture_output=True, text=True)
-
-
 @pytest.mark.parametrize("relative,fields", [
     ("research/hpc/full_pipeline_20260907/pipeline.env", ["D0_MAX_STEPS", "COLLECTION_MAX_STEPS", "EVAL_MAX_STEPS"]),
-    ("research/hpc/diagnostic_round_20260903/round.env", ["COLLECTION_MAX_STEPS", "EVAL_MAX_STEPS"]),
 ])
 @pytest.mark.parametrize("override", [None, "7"])
 def test_scheduled_stages_resolve_one_shared_episode_budget(relative, fields, override):
@@ -113,18 +45,9 @@ def test_scheduled_stages_resolve_one_shared_episode_budget(relative, fields, ov
     assert result.stdout.splitlines() == [override or "40"] * len(fields)
 
 
-def test_training_update_limits_are_not_replaced_by_episode_budget():
-    occupancy = (ROOT / "research/hpc/occupancy_cell_20260827/run_arm.sh").read_text()
-    assert '--max-steps "$UPDATES"' in occupancy
-    exposure = (ROOT / "research/hpc/exposure_curve_20260828/run_arm.sh").read_text()
-    assert '--max-steps "$MAX_STEPS"' in exposure
-
-
 @pytest.mark.parametrize("relative,root_name,override_name,fields", [
     ("research/hpc/full_pipeline_20260907/pipeline.env", "PIPE", "pipeline.overrides.env",
      ["D0_MAX_STEPS", "COLLECTION_MAX_STEPS", "EVAL_MAX_STEPS"]),
-    ("research/hpc/diagnostic_round_20260903/round.env", "ROUND", "round.overrides.env",
-     ["COLLECTION_MAX_STEPS", "EVAL_MAX_STEPS"]),
 ])
 def test_old_independent_stage_overrides_cannot_desynchronize_horizons(tmp_path, relative, root_name, override_name, fields):
     text = (ROOT / relative).read_text()
