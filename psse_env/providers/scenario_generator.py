@@ -72,7 +72,6 @@ from three_phase_nlm.branch_current_analysis import (  # noqa: E402
     BRANCH_CURRENT_CHANNEL,
     BRANCH_CURRENT_SIGMA_KEY,
     DEFAULT_UNBALANCE_VUF_THRESHOLD,
-    balanced_branch_current_control,
     branch_current_rows_to_phasors,
     line_differential_null_test,
     unbalance_source_localization,
@@ -165,17 +164,6 @@ DEFAULT_RELEASE_HIF_QUALITY_PATHS = (
     DEFAULT_RELEASE_HIF_SAMPLE_PATHS[0].with_name("meta.json"),
     DEFAULT_RELEASE_HIF_SAMPLE_PATHS[0].with_name("quality_report.json"),
 )
-# The 2026-07 imbalance corpus carries an unlabeled second unbalance at bus 3
-# (the checked-in OpenDSS load file splits bus 3 unevenly and the old generator
-# only scaled it; see docs/branch_current_telemetry_20260903.md).  It is kept
-# as a legacy reference only and is never a generator default.
-LEGACY_IMBALANCE_SAMPLE_PATH = (
-    _REPO_ROOT
-    / "artifacts"
-    / "measurements"
-    / "out_measurements_imbalance"
-    / "samples.jsonl"
-)
 DEFAULT_IMBALANCE_SAMPLE_PATH = (
     _REPO_ROOT
     / "artifacts"
@@ -253,11 +241,6 @@ PHYSICAL_HIF_SAMPLE_PATHS = tuple(resolve_tagged_corpus_path(stem) for stem in (
 PHYSICAL_HIF_SAMPLE_PATHS_20260923B = tuple(_PHYSICAL_MEASUREMENTS_DIR / name / "samples.jsonl" for name in (
     "hif_physical69_main_train_detectable_27x10_20260923b", "hif_physical69_main_valid_detectable_8x10_20260923b",
     "hif_physical69_main_train_extra_detectable_77x10_20260923b", "hif_physical69_main_valid_extra_detectable_19x10_20260923b"))
-# The 2026-09-21 detectable subsets (5e-3 / 1e-3 phasor sigma, pre-fix reactive limits) that
-# the 2026-09-21 cell ran on; kept for replay identity of that cell only.
-PHYSICAL_HIF_SAMPLE_PATHS_20260921 = tuple(_PHYSICAL_MEASUREMENTS_DIR / name / "samples.jsonl" for name in (
-    "hif_physical69_main_train_detectable_25x10_20260921", "hif_physical69_main_valid_detectable_7x10_20260921",
-    "hif_physical69_main_train_extra_detectable_69x10_20260921", "hif_physical69_main_valid_extra_detectable_17x10_20260921"))
 # The detection-limit and sweep corpora follow the tag; their window counts are fixed by the
 # recipe (21 and 336), so the names are known.  Like their 20260923b predecessors they are
 # generated artifacts that are not tracked in git.
@@ -4072,11 +4055,9 @@ __all__ = [
     "DEFAULT_RELEASE_HIF_SAMPLE_PATHS",
     "DEFAULT_RELEASE_HIF_QUALITY_PATHS",
     "DEFAULT_IMBALANCE_SAMPLE_PATH",
-    "LEGACY_IMBALANCE_SAMPLE_PATH",
     "CURRENT_TELEMETRY_HIF_SAMPLE_PATHS",
     "PHYSICAL_HIF_SAMPLE_PATHS",
     "PHYSICAL_HIF_SAMPLE_PATHS_20260923B",
-    "PHYSICAL_HIF_SAMPLE_PATHS_20260921",
     "PHYSICAL_HIF_CORPUS_TAG",
     "PHYSICAL_IMBALANCE_SAMPLE_PATH_20260923B",
     "PMU_PHASOR_SIGMA_PU",

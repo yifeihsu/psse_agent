@@ -19,8 +19,6 @@ from psse_env.providers.scenario_generator import (
     COMPOSED_FAMILIES,
     CURRENT_TELEMETRY_HIF_SAMPLE_PATHS,
     DEFAULT_HIF_FALLBACK_SAMPLE_PATHS,
-    DEFAULT_IMBALANCE_SAMPLE_PATH,
-    LEGACY_IMBALANCE_SAMPLE_PATH,
     Round0ScenarioGenerator,
     ScenarioRejected,
     SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT,
@@ -360,7 +358,6 @@ class ScenarioConstructionTests(unittest.TestCase):
             "out_measurements_imbalance_currents_20260903",
             str(Round0ScenarioGenerator().imbalance_sample_path),
         )
-        self.assertNotEqual(DEFAULT_IMBALANCE_SAMPLE_PATH, LEGACY_IMBALANCE_SAMPLE_PATH)
         for path in CURRENT_TELEMETRY_HIF_SAMPLE_PATHS:
             self.assertTrue(path.is_file(), path)
 

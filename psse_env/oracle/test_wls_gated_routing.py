@@ -560,7 +560,7 @@ _MAIN_CHECKOUT_MEASUREMENTS = Path("C:/Users/Holiday/Documents/ChatGPT/PSSE_Agen
 
 def _physical_hif_corpus() -> Path | None:
     """The physical 69 kV validation subset: the generator's tagged corpus when
-    checked out, else the tracked 2026-09-23b/21 subsets (main checkout read-only)."""
+    checked out, else the tracked 2026-09-23b subset (main checkout read-only)."""
     candidates = []
     try:
         from psse_env.providers.scenario_generator import PHYSICAL_HIF_SAMPLE_PATHS
@@ -569,7 +569,6 @@ def _physical_hif_corpus() -> Path | None:
         pass
     for root in (_MEASUREMENTS, _MAIN_CHECKOUT_MEASUREMENTS):
         candidates.append(root / "hif_physical69_main_valid_detectable_8x10_20260923b" / "samples.jsonl")
-        candidates.append(root / "hif_physical69_main_valid_detectable_7x10_20260921" / "samples.jsonl")
     return next((path for path in candidates if path.is_file()), None)
 
 
