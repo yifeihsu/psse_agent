@@ -33,7 +33,7 @@ Python analysis utilities:
 - `analysis.py` – compares pandapower `case14` results vs OpenDSS (positive‑sequence bus voltages and line flows).
 - `report_unbalance.py` – computes bus voltage unbalance factor (VUF) and prints per‑phase VLN at a chosen bus.
 - `compare_posseq_flows.py` – compares positive‑sequence line/trafo powers between unbalanced and balanced cases.
-- `report_sequences.py`, `verify_equivalence.py`, `debug_opendss.py` – export/compare OpenDSS sequence quantities and CSV snapshots.
+- `report_sequences.py`, `verify_equivalence.py` – export/compare OpenDSS sequence quantities and CSV snapshots.
 
 Measurement series exporters:
 
