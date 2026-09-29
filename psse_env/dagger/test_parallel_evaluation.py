@@ -33,16 +33,19 @@ from psse_env.evidence_profile import DEFAULT_EVIDENCE_PROFILE
 from psse_env.providers.scenario_generator import Round0ScenarioGenerator
 
 PLAN = {"measurement": 2, "parameter": 1, "topology": 1, "no_error": 1}
-#: When set, every environment build appends the building process id here, so
-#: a test can count the episodes each worker process actually rolled out.
+#: When set, names a directory in which every environment build creates a new
+#: file prefixed with the building process id, so a test can count the
+#: episodes each worker process actually rolled out.  A file per build, not a
+#: line appended to one shared file: the Windows C runtime emulates O_APPEND
+#: with a seek to the end followed by a separate write, so workers appending
+#: at the same time overwrite each other's lines and a count comes up short.
 ENVIRONMENT_COUNTER = "PSSE_TEST_ENVIRONMENT_COUNTER"
 
 
 def environment_factory(**_kwargs):
     counter = os.environ.get(ENVIRONMENT_COUNTER)
     if counter:
-        with open(counter, "a", encoding="utf-8") as handle:
-            handle.write(f"{os.getpid()}\n")
+        os.close(tempfile.mkstemp(prefix=f"{os.getpid()}-", dir=counter)[0])
     return research_module.resolve_environment_factory("release", DEFAULT_EVIDENCE_PROFILE)()
 
 
@@ -153,7 +156,8 @@ class ParallelEvaluationTests(unittest.TestCase):
             }
             resumed = root / "resumed"
             self._seed_checkpoints(resumed, plan, episodes, "bc0", "student", skip_last=True)
-            counter = root / "environments.txt"
+            counter = root / "environments"
+            counter.mkdir()
             os.environ[ENVIRONMENT_COUNTER] = str(counter)
             try:
                 comparison = _evaluate(self.scenarios, resumed, parallel=_parallel(1))
@@ -163,7 +167,7 @@ class ParallelEvaluationTests(unittest.TestCase):
             self.assertEqual(_reports(resumed), reference_reports)
             # One build for each worker's policy oracle plus one per episode:
             # the resumed student rolled out only its missing episode.
-            builds = Counter(counter.read_text(encoding="utf-8").split())
+            builds = Counter(path.name.partition("-")[0] for path in counter.iterdir())
             episodes_total = len(plan.episodes)
             self.assertEqual(
                 sorted(builds.values()), [2, 1 + episodes_total, 1 + episodes_total]
