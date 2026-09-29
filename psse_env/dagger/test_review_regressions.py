@@ -14,6 +14,7 @@ from psse_env.actions import (
 from psse_env.dagger.counterfactual_generator import CounterfactualGenerator
 from psse_env.dagger.error_injectors import InjectedAction
 from psse_env.dagger.rollout_collector import (
+    ALL_ADMISSIBLE_SUPERVISION,
     BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
     DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
     DaggerRolloutCollector,
@@ -88,6 +89,12 @@ class _LearnerRecoveryPolicy:
         }
 
 
+def _observation_field(observation, name):
+    if isinstance(observation, Mapping):
+        return observation.get(name)
+    return getattr(observation, name, None)
+
+
 class _LearnerRecoveryOracle:
     def __init__(self):
         self.seen_truth = []
@@ -101,14 +108,8 @@ class _LearnerRecoveryOracle:
             if isinstance(state, OracleState)
             else state
         )
-
-        def field(name):
-            if isinstance(observation, Mapping):
-                return observation.get(name)
-            return getattr(observation, name, None)
-
-        if field("candidate_lifecycle") == "VERIFIED_REJECT":
-            candidate = field("candidate_state_id")
+        if _observation_field(observation, "candidate_lifecycle") == "VERIFIED_REJECT":
+            candidate = _observation_field(observation, "candidate_state_id")
             return [
                 {
                     "tool": "rollback_state",
@@ -118,7 +119,7 @@ class _LearnerRecoveryOracle:
         return [
             {
                 "tool": RUN_WLS,
-                "arguments": {"state_id": field("active_state_id")},
+                "arguments": {"state_id": _observation_field(observation, "active_state_id")},
             }
         ]
 
@@ -176,7 +177,7 @@ class _HistorySensitiveRecoveryOracle(_LearnerRecoveryOracle):
             return [
                 {
                     "tool": "get_parameter_context",
-                    "arguments": {"state_id": field("active_state_id")},
+                    "arguments": {"state_id": _observation_field(observation, "active_state_id")},
                 }
             ]
         return super().next_actions(state, history)
@@ -301,6 +302,12 @@ class _LearnerRecoveryEnv:
             true_measurement_errors=copy.deepcopy(
                 list(reset.get("true_measurement_errors") or [])
             ),
+            true_parameter_errors=copy.deepcopy(
+                list(reset.get("true_parameter_errors") or [])
+            ),
+            true_topology_errors=copy.deepcopy(
+                list(reset.get("true_topology_errors") or [])
+            ),
             candidate_disposition="REJECT" if self.stage == 1 else None,
             candidate_lifecycle=observation.candidate_lifecycle,
             candidate_assessment=(
@@ -376,6 +383,41 @@ class _RunWlsPolicy:
             "tool": RUN_WLS,
             "arguments": {"state_id": observation["active_state_id"]},
         }
+
+
+def _collect_history_boundary(true_parameter_errors, supervision_policy):
+    oracle = _HistorySensitiveRecoveryOracle()
+    rows = DaggerRolloutCollector(
+        env=_HistoryBoundaryEnv(),
+        policy=_RunWlsPolicy(),
+        expert_oracle=oracle,
+        rng=random.Random(0),
+        supervision_policy=supervision_policy,
+        forbidden_physical_roots={"held-out-root"},
+    ).collect_iteration(
+        scenarios=[
+            _scenario(
+                scenario_id="history-boundary",
+                case={},
+                measurements=[1.0],
+                root_scenario_id="history-boundary",
+                physical_root_fingerprint="history-boundary-root",
+                scenario_family="parameter",
+                error_cardinality=1,
+                case_id="case14",
+                dataset_split="dagger_train",
+                source_tier="generated",
+                truth_complete=True,
+                clean_measurements=[1.0],
+                true_parameter_errors=copy.deepcopy(true_parameter_errors),
+            )
+        ],
+        iteration=1,
+        beta=0.25,
+        max_steps=2,
+        collection_role="training",
+    )
+    return oracle, rows
 
 
 class DaggerExecutionRegressionTests(unittest.TestCase):
@@ -604,45 +646,12 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
         self.assertTrue(changed_rows[1]["production_label_eligible"])
 
     def test_dagger1_teacher_cannot_read_private_transition_history(self):
-        def collect(true_parameter_errors):
-            oracle = _HistorySensitiveRecoveryOracle()
-            rows = DaggerRolloutCollector(
-                env=_HistoryBoundaryEnv(),
-                policy=_RunWlsPolicy(),
-                expert_oracle=oracle,
-                rng=random.Random(0),
-                supervision_policy=DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
-                forbidden_physical_roots={"held-out-root"},
-            ).collect_iteration(
-                scenarios=[
-                    _scenario(
-                        scenario_id="history-boundary",
-                        case={},
-                        measurements=[1.0],
-                        root_scenario_id="history-boundary",
-                        physical_root_fingerprint="history-boundary-root",
-                        scenario_family="parameter",
-                        error_cardinality=1,
-                        case_id="case14",
-                        dataset_split="dagger_train",
-                        source_tier="generated",
-                        truth_complete=True,
-                        clean_measurements=[1.0],
-                        true_parameter_errors=copy.deepcopy(
-                            true_parameter_errors
-                        ),
-                    )
-                ],
-                iteration=1,
-                beta=0.25,
-                max_steps=2,
-                collection_role="training",
-            )
-            return oracle, rows
-
-        plain_oracle, plain_rows = collect([])
-        changed_oracle, changed_rows = collect(
-            [{"line_index": 1, "field": "r", "clean": 0.1}]
+        plain_oracle, plain_rows = _collect_history_boundary(
+            [], DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION
+        )
+        changed_oracle, changed_rows = _collect_history_boundary(
+            [{"line_index": 1, "field": "r", "clean": 0.1}],
+            DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
         )
 
         self.assertEqual(
@@ -664,6 +673,38 @@ class DaggerExecutionRegressionTests(unittest.TestCase):
         for oracle in (plain_oracle, changed_oracle):
             self.assertTrue(oracle.teacher_histories)
             self.assertTrue(all(history == [] for history in oracle.teacher_histories))
+
+    def test_history_fixture_retargets_a_teacher_that_reads_private_history(self):
+        # Positive control for the D1 history boundary: the all-admissible
+        # collector hands the teacher its private transition history, so the
+        # adversarial fixture must see the parameter route and retarget.  An
+        # inert fixture would make the D1 invariance above hold vacuously.
+        parameter_context = {
+            "tool": "get_parameter_context",
+            "arguments": {"state_id": "active"},
+        }
+        _, plain_rows = _collect_history_boundary([], ALL_ADMISSIBLE_SUPERVISION)
+        _, changed_rows = _collect_history_boundary(
+            [{"line_index": 1, "field": "r", "clean": 0.1}],
+            ALL_ADMISSIBLE_SUPERVISION,
+        )
+        self.assertEqual(
+            [row["preferred_action"]["tool"] for row in plain_rows],
+            [RUN_WLS, RUN_WLS],
+        )
+        self.assertEqual(
+            [row["preferred_action"] for row in changed_rows],
+            [{"tool": RUN_WLS, "arguments": {"state_id": "active"}}, parameter_context],
+        )
+        # The D1 selector hands the teacher a truth-free mapping rather than
+        # an OracleState; a leaked route must retarget that input too.
+        self.assertEqual(
+            _HistorySensitiveRecoveryOracle().next_actions(
+                {"active_state_id": "active"},
+                [{"transition_label": {"opaque_private_route": "parameter"}}],
+            ),
+            [parameter_context],
+        )
 
     def test_dagger1_recovery_strata_use_only_observable_state(self):
         target = {"tool": RUN_WLS, "arguments": {"state_id": "active"}}
