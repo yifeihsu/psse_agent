@@ -221,37 +221,3 @@ from the frozen suite, marked ineligible for release and training, and may not
 replace full evaluation. After any source or DAgger-data change, regenerate
 the aggregate and source-bound expert/base evidence before promotion. Keep the
 frozen suite and all safety/performance thresholds unchanged.
-
-Model artifacts may be evaluated on any one approved H200, H100, or RTX Pro
-6000 with at least 90,000 MiB. Candidate and base artifacts are each
-hardware-attested independently; their paired comparison does not require the
-same approved accelerator class because cluster availability is constrained.
-
-## Gemma 4 SFT launch gate
-
-Generate and audit the bundled production-mode pilot from the archive root:
-
-```bash
-python -m psse_env.examples.generate_sft_pilot \
-  --output-dir psse_env/examples/sft_pilot
-
-python -m psse_env.sft gate \
-  --model unsloth/gemma-4-31B-it \
-  --revision 8a796db4df380b178065ed910849477ff0e99c87 \
-  --train psse_env/examples/sft_pilot/pilot.train.jsonl \
-  --validation psse_env/examples/sft_pilot/pilot.validation.jsonl \
-  --test psse_env/examples/sft_pilot/pilot.test.jsonl
-```
-
-The gate requires 32-128 production-tagged rows, disjoint root groups, valid
-row-level JSON schemas, dictionary-valued arguments, exact processor rendering,
-assistant-only masks, nonzero supervision, no target truncation, and tool-call
-round trips. The generator separately requires observable provider declarations,
-zero hidden-provenance leakage, zero teacher conflicts at the configured
-tolerance, and target-aware state-class consistency.
-
-The bundled 90-row dataset is a tokenizer and training-stack pilot only. It has
-no rejected-candidate, partial-commit, invalid-precondition, or loop examples,
-and validation/test each contain one root group. Before full 31B SFT, generate a
-recovery-balanced aggregate, run the exact 31B forward/backward and tiny-overfit
-gates on HPC, and pass a short root-group-held-out recovery evaluation.

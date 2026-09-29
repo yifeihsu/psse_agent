@@ -1,7 +1,5 @@
-# Research-only Gemma 4 E4B/12B environment.
-#
-# Do not replace requirements-sft.txt with this file: that lock belongs to the
-# strict 31B release path.  Transformers 5.10 adds Gemma4 Unified (12B) and the
+# Gemma 4 E4B/12B research environment, checked by the pipeline cell's
+# prerequisites.sh.  Transformers 5.10 adds Gemma4 Unified (12B) and the
 # documented AutoModelForMultimodalLM loader used by the research pipeline.
 torch==2.10.0
 torchvision==0.25.0
