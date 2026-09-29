@@ -109,6 +109,20 @@ class HIFMeterNonregressionTests(unittest.TestCase):
                 verification["physical_bound_violations"][0].update(patch)
                 self.assertEqual(_assess(parent, candidate, action, verification).disposition, CandidateDisposition.REJECT)
 
+    def test_conditioned_violation_binds_to_the_unchanged_meter_reading(self):
+        # While an HIF is accounted the limit is tested on the conditioned
+        # value; the record also carries the meter's own reading.
+        parent, candidate, action, verification = _fixture()
+        verification["physical_bound_violations"][0].update(observed_vm_pu=1.1, measured_vm_pu=1.12)
+        self.assertEqual(_assess(parent, candidate, action, verification).disposition,
+                         CandidateDisposition.ACCEPT_PARTIAL)
+        for change in ({"measured_vm_pu": 1.13}, {"measured_vm_pu": None}, {"observed_vm_pu": 1.04}):
+            with self.subTest(change=change):
+                changed = deepcopy(verification)
+                changed["physical_bound_violations"][0].update(change)
+                self.assertEqual(_assess(parent, candidate, action, changed).disposition,
+                                 CandidateDisposition.REJECT)
+
     def test_thermal_topology_or_incomplete_physics_remain_rejected(self):
         for field, patch in (
             ("active_branch_rate_a_bounds", {"within_defined_rate_a_bounds": False, "violation_count": 1}),
@@ -168,8 +182,15 @@ class HIFMeterNonregressionTests(unittest.TestCase):
         self.assertIn("candidate_parent_mismatch", result.rationale_codes)
 
     def test_captured_real_candidates_pass_quality_without_relaxing_voltage_constraints(self):
+        from mcp_server.matpower_server import _load_python_case
         from psse_env.providers.matpower import MatpowerDeploymentProviders
 
+        # Voltage limits are tested on the HIF-conditioned channels. Two roots
+        # keep violations once the fault's effect is removed, so their meter
+        # repair stays partial. The only raw violation of r0_b32f59dc6fa0 is
+        # the fault's own phase-A depression at generator bus 3.
+        partial = {"r0_de51c28ced3e", "r0_e50050413ab6"}
+        bus = _load_python_case("case14")["bus"]
         root = Path(__file__).resolve().parents[2]/"output/hif_continuation_fix_20260922"
         frozen_path = root/"frozen_mixed_scenarios.json"
         root_ids = ("r0_de51c28ced3e", "r0_b32f59dc6fa0", "r0_e50050413ab6")
@@ -208,10 +229,18 @@ class HIFMeterNonregressionTests(unittest.TestCase):
                 oracle = provider._deployment_candidate_quality_oracle()
                 result = oracle.label_candidate(parent_state=parent, candidate_state=candidate,
                     source_action=correction["action"], verification_output=verification)
+                self.assertEqual(parent["measurements"][:14], candidate["measurements"][:14])
+                if root_id not in partial:
+                    self.assertLess(parent["measurements"][2], bus[2][12])
+                    self.assertEqual(verification["physical_bound_violations"], [])
+                    self.assertEqual(result.disposition, CandidateDisposition.ACCEPT_FINAL)
+                    continue
                 self.assertEqual(result.disposition, CandidateDisposition.ACCEPT_PARTIAL)
                 self.assertEqual(result.progress_class, "meter_repaired_preexisting_hif_voltage_violation")
                 self.assertFalse(verification["physical_constraints_ok"])
-                self.assertEqual(parent["measurements"][:14], candidate["measurements"][:14])
+                for violation in verification["physical_bound_violations"]:
+                    self.assertEqual(violation["measured_vm_pu"], parent["measurements"][violation["measurement_index0"]])
+                    self.assertLess(violation["observed_vm_pu"], violation["vmin_pu"])
 
 
 if __name__ == "__main__":

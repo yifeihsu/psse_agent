@@ -1104,12 +1104,17 @@ class CandidateQualityOracle:
                 if type(index) is not int or not 0 <= index < count or index in seen:
                     return False
                 seen.add(index)
+                # The limit is tested on ``observed_vm_pu``: the HIF-conditioned
+                # channel while an HIF is accounted, when ``measured_vm_pu``
+                # carries the meter's own reading that must be unchanged.
+                observed = float(violation["observed_vm_pu"])
+                measured = float(violation.get("measured_vm_pu", observed))
                 if not (
-                    float(violation["observed_vm_pu"]) == float(before[index]) == float(after[index])
+                    measured == float(before[index]) == float(after[index])
                     and float(violation["vmin_pu"]) == float(bus[index][12])
                     and float(violation["vmax_pu"]) == float(bus[index][11])
                     and float(violation["bus"]) == float(bus[index][0])
-                    and (after[index] < bus[index][12] or after[index] > bus[index][11])
+                    and (observed < bus[index][12] or observed > bus[index][11])
                 ):
                     return False
         except (KeyError, TypeError, ValueError, IndexError, OverflowError, OSError, RuntimeError):

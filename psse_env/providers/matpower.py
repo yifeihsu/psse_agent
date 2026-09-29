@@ -1461,6 +1461,9 @@ class MatpowerDeploymentProviders:
         positive-sequence magnitude the case limits are written for, rather
         than one phase that a single-phase fault pushes past a generator's
         set-point limit in the parent state as much as in the candidate.
+        A voltage violation found on a conditioned channel also records the
+        meter's own reading (``measured_vm_pu``) next to the tested value
+        (``observed_vm_pu``), so a consumer can bind it to the measured channel.
         """
         import numpy as np
 
@@ -1483,6 +1486,7 @@ class MatpowerDeploymentProviders:
             bus = np.asarray(ppc["bus"], dtype=float)
             branch = np.asarray(ppc["branch"], dtype=float)
             z = np.asarray(solved.get("wls_measurements", solved["z"]), dtype=float)
+            measured = np.asarray(solved["z"], dtype=float)
             nb = int(solved["nb"])
             nl = int(solved["nl"])
             index_map = solved["index_map"]
@@ -1492,6 +1496,7 @@ class MatpowerDeploymentProviders:
             bus = np.empty((0, 0), dtype=float)
             branch = np.empty((0, 0), dtype=float)
             z = np.asarray([], dtype=float)
+            measured = np.asarray([], dtype=float)
             nb = nl = 0
             index_map = {}
             base_mva = math.nan
@@ -1503,7 +1508,8 @@ class MatpowerDeploymentProviders:
         if not math.isfinite(base_mva) or base_mva <= 0.0:
             input_errors.append("matpower_base_mva_invalid")
         expected_measurements = 3 * nb + 4 * nl
-        if z.ndim != 1 or len(z) != expected_measurements or not np.isfinite(z).all():
+        if (z.ndim != 1 or len(z) != expected_measurements or not np.isfinite(z).all()
+                or measured.shape != z.shape or not np.isfinite(measured).all()):
             input_errors.append("measurement_telemetry_invalid")
         if not isinstance(index_map, Mapping) or not all(
             key in index_map for key in ("Vm", "Pf", "Qf", "Pt", "Qt")
@@ -1592,6 +1598,8 @@ class MatpowerDeploymentProviders:
 
         if not input_errors:
             vm = z[index_map["Vm"]]
+            measured_vm = measured[index_map["Vm"]]
+            conditioned = solved.get("hif_prediction") is not None
             vm_violations: list[dict[str, Any]] = []
             for row in in_service_rows:
                 observed = float(vm[row])
@@ -1617,6 +1625,8 @@ class MatpowerDeploymentProviders:
                         "vmin_pu": vmin,
                         "vmax_pu": vmax,
                     }
+                    if conditioned:
+                        item["measured_vm_pu"] = float(measured_vm[row])
                     vm_violations.append(item)
                     violations.append(item)
             voltage = {

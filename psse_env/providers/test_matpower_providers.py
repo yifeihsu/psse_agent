@@ -342,6 +342,21 @@ class WlsRunnerTests(unittest.TestCase):
             ]
         )
 
+    def test_conditioned_vm_violation_keeps_the_meter_reading(self) -> None:
+        solved = copy.deepcopy(self.providers._solve(self._clean_candidate_state()))
+        self.assertIsNone(solved["hif_prediction"])
+        index = solved["index_map"]["Vm"].start + 2
+        conditioned = list(solved["z"])
+        conditioned[index] = float(solved["ppc"]["bus"][2, 12]) - 0.05
+        solved.update(wls_measurements=conditioned, hif_prediction={"method": "test"})
+
+        metrics = self.providers._steady_state_physical_evidence(solved)
+        self.assertIs(metrics["physical_constraints_ok"], False)
+        [violation] = metrics["physical_bound_violations"]
+        self.assertEqual(violation["measurement_index0"], index)
+        self.assertEqual(violation["observed_vm_pu"], conditioned[index])
+        self.assertEqual(violation["measured_vm_pu"], solved["z"][index])
+
     def test_incomplete_physical_inputs_are_inconclusive_and_fail_closed(self) -> None:
         solved = self.providers._solve(self._clean_candidate_state())
         solved = copy.deepcopy(solved)
