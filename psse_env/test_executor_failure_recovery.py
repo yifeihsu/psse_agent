@@ -239,9 +239,14 @@ class ExecutorFailureRecoveryTests(unittest.TestCase):
             self.skipTest("Captured historical mixed-policy diagnostic is a local audit artifact")
         captured = json.loads(artifact.read_text())
         state = deepcopy(captured["policy_observation"])
-        self.assertEqual(_select(state)[0], captured["actions"][0])
         failed_event = captured["environment_history"][16]
         self.assertEqual(failed_event["tool_output"]["error_code"], "parameter_correction_failure")
+        # The captured expert labelled a handoff that the escalation audit
+        # refused; without the receipt the line-19 attempt (outside the window)
+        # is untested, so the expert now retries it instead.
+        self.assertEqual(captured["actions"][0]["tool"], "ask_for_more_evidence")
+        self.assertEqual(captured["audit"]["missing"], ["same_state_supported_corrections_unexhausted"])
+        self.assertEqual(_select(state)[0], failed_event["action"])
         state["rejected_hypotheses"].append(_failure_receipt(
             failed_event["action"], captured["audit"]["ledger"]["active_state_hash"]
         ))
