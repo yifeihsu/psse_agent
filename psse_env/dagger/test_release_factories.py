@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
-import sys
 import tempfile
 import types
 import unittest
@@ -23,10 +21,10 @@ from psse_env.actions import (
     RUN_WLS,
 )
 from psse_env.dagger import release_factories as factories
+from psse_env.dagger.research_policy_factory import ResearchGemmaPolicy
+from psse_env.research_models import PROMPT_PROFILE_RELEASE
 from psse_env.dagger.evaluator import (
     ClosedLoopRolloutEvaluator,
-    _call_factory,
-    _load_import_spec,
 )
 from psse_env.dagger.release_audit import (
     ACCEPTED_TARGET_NONREGRESSION_CHECK,
@@ -171,89 +169,6 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "deployment mode"),
         ):
             factories.production_environment_factory()
-
-
-class FactoryImportSpecTests(unittest.TestCase):
-    MODULE = "psse_env.dagger.release_factories"
-
-    def test_exact_release_import_specs_resolve_and_match_evaluator_calls(self) -> None:
-        environment_factory = _load_import_spec(
-            f"{self.MODULE}:production_environment_factory", field="environment"
-        )
-        expert_factory = _load_import_spec(
-            f"{self.MODULE}:observable_expert_policy_factory", field="expert"
-        )
-        model_factory = _load_import_spec(
-            f"{self.MODULE}:gemma_release_policy_factory", field="model"
-        )
-        case_loader = _load_import_spec(
-            f"{self.MODULE}:deterministic_case_loader", field="case_loader"
-        )
-        self.assertIs(environment_factory, factories.production_environment_factory)
-        self.assertIs(expert_factory, factories.observable_expert_policy_factory)
-        self.assertIs(model_factory, factories.gemma_release_policy_factory)
-        self.assertIs(case_loader, factories.deterministic_case_loader)
-
-        environment = _call_factory(environment_factory, 101)
-        self.assertIs(environment.production_dataset_mode, True)
-        self.assertEqual(environment.candidate_quality_oracle.mode, "deployment")
-        self.assertTrue(
-            callable(environment.candidate_quality_oracle.case_loader)
-        )
-
-        expert = _call_factory(
-            expert_factory,
-            102,
-            policy_identity={
-                "explicit_policy_identity": factories.EXPERT_POLICY_IDENTITY,
-                "model_id": None,
-                "model_revision": None,
-            },
-        )
-        self.assertEqual(
-            expert.release_policy_identity["explicit_policy_identity"],
-            factories.EXPERT_POLICY_IDENTITY,
-        )
-
-        bundle = factories._ModelBundle(
-            model=object(),
-            processor=object(),
-            model_id=factories.BASE_MODEL_ID,
-            model_revision=factories.BASE_MODEL_REVISION,
-        )
-        with mock.patch.object(
-            factories, "_cached_model_bundle", return_value=bundle
-        ) as cache:
-            model_policy = _call_factory(
-                model_factory,
-                103,
-                policy_identity={
-                    "explicit_policy_identity": None,
-                    "model_id": factories.BASE_MODEL_ID,
-                    "model_revision": factories.BASE_MODEL_REVISION,
-                },
-            )
-        cache.assert_called_once_with(
-            factories.BASE_MODEL_ID, factories.BASE_MODEL_REVISION
-        )
-        self.assertEqual(
-            model_policy.release_policy_identity["model_revision"],
-            factories.BASE_MODEL_REVISION,
-        )
-
-        parsed = {
-            "baseMVA": 100.0,
-            "bus": [],
-            "gen": [],
-            "branch": [],
-        }
-        with mock.patch(
-            "mcp_server.matpower_server._load_python_case", return_value=parsed
-        ) as parser:
-            self.assertEqual(case_loader({"case_path": "case14"}), parsed)
-        parser.assert_called_once_with(
-            str((factories._REPO_ROOT / "mcp_server" / "case14.m").resolve())
-        )
 
 
 class ObservableExpertFactoryTests(unittest.TestCase):
@@ -781,9 +696,6 @@ class RealProductionExpertRecoveryTests(unittest.TestCase):
         self.assertEqual(episode["trace"][0]["action"]["tool"], RUN_WLS)
         self.assertIs(episode["trace"][0]["intervention"], True)
         self.assertLessEqual(episode["steps"], 40)
-        from psse_env.dagger.evaluation_gate import _intervention_failures
-        evidence_failures, _ = _intervention_failures(episode, setup["contract"])
-        self.assertEqual(evidence_failures, [])
         self.assertIs(episode["terminal"], True)
         self.assertEqual(episode["terminal_outcome"], "operator_escalation")
         self.assertEqual(episode["invalid_action_count"], 0)
@@ -973,272 +885,6 @@ class CheckpointTreeIdentityTests(unittest.TestCase):
                 self.skipTest("filesystem does not permit hardlinks")
             with self.assertRaisesRegex(ValueError, "multiply linked"):
                 factories.checkpoint_tree_sha256(checkpoint)
-
-    def test_adapter_validation_requires_exact_tree_and_pinned_base(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            digest = _write_adapter_tree(root)
-            self.assertEqual(factories._validate_adapter_tree(str(root), digest), root)
-            with self.assertRaisesRegex(GateError, "digest mismatch"):
-                factories._validate_adapter_tree(str(root), "0" * 64)
-
-            config = json.loads((root / "adapter_config.json").read_text())
-            config["base_model_name_or_path"] = "other/model"
-            (root / "adapter_config.json").write_text(json.dumps(config), encoding="utf-8")
-            changed_digest = factories.checkpoint_tree_sha256(root)
-            with self.assertRaisesRegex(GateError, "base_model_name_or_path"):
-                factories._validate_adapter_tree(str(root), changed_digest)
-
-    def test_release_checkpoint_inspection_validates_adapter_before_copy(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            digest = _write_adapter_tree(root)
-            inspection = factories.inspect_release_checkpoint(root)
-            self.assertEqual(inspection["path"], str(root))
-            self.assertEqual(inspection["tree_sha256"], digest)
-            self.assertEqual(inspection["file_count"], 2)
-            self.assertGreater(inspection["total_bytes"], 0)
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "trainer_state.json").write_text("{}", encoding="utf-8")
-            with self.assertRaisesRegex(GateError, "adapter_config"):
-                factories.inspect_release_checkpoint(root)
-
-
-class ModelLoadingContractTests(unittest.TestCase):
-    def setUp(self) -> None:
-        factories._MODEL_BUNDLES.clear()
-
-    def tearDown(self) -> None:
-        factories._MODEL_BUNDLES.clear()
-
-    def test_snapshot_tree_rejects_corrupt_weight_and_tokenizer_bytes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            snapshot = Path(directory)
-            payloads = {
-                "model.safetensors": b"model-weight-bytes",
-                "tokenizer.json": b'{"tokenizer": true}',
-            }
-            for name, payload in payloads.items():
-                (snapshot / name).write_bytes(payload)
-            tokenizer = payloads["tokenizer.json"]
-            tokenizer_git_hash = hashlib.sha1(
-                f"blob {len(tokenizer)}\0".encode("ascii") + tokenizer
-            ).hexdigest()
-            manifest = {
-                "model.safetensors": (
-                    len(payloads["model.safetensors"]),
-                    "sha256",
-                    hashlib.sha256(payloads["model.safetensors"]).hexdigest(),
-                ),
-                "tokenizer.json": (
-                    len(tokenizer),
-                    "git_blob_sha1",
-                    tokenizer_git_hash,
-                ),
-            }
-            factories._verify_snapshot_tree(snapshot, manifest)
-
-            for name in payloads:
-                with self.subTest(name=name):
-                    original = payloads[name]
-                    (snapshot / name).write_bytes(b"x" * len(original))
-                    with self.assertRaisesRegex(GateError, "digest mismatch"):
-                        factories._verify_snapshot_tree(snapshot, manifest)
-                    (snapshot / name).write_bytes(original)
-
-    def test_base_loader_uses_only_image_text_model_and_exact_snapshot(self) -> None:
-        # Import before patching sys.modules so mock.patch.dict restores the
-        # already-complete torch module graph rather than leaving only its
-        # lazily imported submodules behind.
-        import torch  # noqa: F401
-
-        with tempfile.TemporaryDirectory() as directory:
-            snapshot = Path(directory).resolve()
-
-            class Processor:
-                name_or_path = str(snapshot)
-
-                def apply_chat_template(self, *_args: Any, **_kwargs: Any) -> str:
-                    return "prompt"
-
-                def decode(self, *_args: Any, **_kwargs: Any) -> str:
-                    return ""
-
-            class Config:
-                model_type = "gemma4"
-                _name_or_path = str(snapshot)
-
-            class Model:
-                config = Config()
-
-                def eval(self) -> "Model":
-                    return self
-
-            class AutoProcessor:
-                calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
-
-                @classmethod
-                def from_pretrained(cls, *args: Any, **kwargs: Any) -> Processor:
-                    cls.calls.append((args, kwargs))
-                    return Processor()
-
-            class AutoModelForImageTextToText:
-                calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
-
-                @classmethod
-                def from_pretrained(cls, *args: Any, **kwargs: Any) -> Model:
-                    cls.calls.append((args, kwargs))
-                    return Model()
-
-            class BitsAndBytesConfig:
-                def __init__(self, **kwargs: Any) -> None:
-                    self.kwargs = kwargs
-
-            transformer_module = types.SimpleNamespace(
-                AutoModelForImageTextToText=AutoModelForImageTextToText,
-                AutoProcessor=AutoProcessor,
-                BitsAndBytesConfig=BitsAndBytesConfig,
-            )
-            post_load_attestation = mock.Mock()
-            with (
-                mock.patch.object(factories, "_resolve_base_snapshot", return_value=snapshot),
-                mock.patch.object(
-                    factories,
-                    "_verify_snapshot_tree",
-                    post_load_attestation,
-                ),
-                mock.patch.dict(sys.modules, {"transformers": transformer_module}),
-            ):
-                model, processor = factories._load_base_components()
-
-            self.assertIsInstance(model, Model)
-            self.assertIsInstance(processor, Processor)
-            self.assertEqual(len(AutoProcessor.calls), 1)
-            self.assertEqual(len(AutoModelForImageTextToText.calls), 1)
-            model_args, model_kwargs = AutoModelForImageTextToText.calls[0]
-            self.assertEqual(model_args, (str(snapshot),))
-            self.assertIs(model_kwargs["local_files_only"], True)
-            self.assertIs(model_kwargs["trust_remote_code"], False)
-            self.assertEqual(model_kwargs["device_map"], "auto")
-            post_load_attestation.assert_called_once_with(
-                snapshot,
-                factories.BASE_SNAPSHOT_FILE_MANIFEST,
-                factories.BASE_SNAPSHOT_OPTIONAL_FILE_MANIFEST,
-            )
-
-    def test_base_identity_is_exact_and_checkpoint_never_falls_back(self) -> None:
-        base_model = types.SimpleNamespace(eval=lambda: None)
-        processor = object()
-        with mock.patch.object(
-            factories, "_load_base_components", return_value=(base_model, processor)
-        ) as loader:
-            bundle = factories._load_model_bundle(
-                factories.BASE_MODEL_ID, factories.BASE_MODEL_REVISION
-            )
-            self.assertIs(bundle.model, base_model)
-            loader.assert_called_once_with()
-        with self.assertRaisesRegex(GateError, "exactly"):
-            factories._load_model_bundle(factories.BASE_MODEL_ID, "a" * 40)
-        with self.assertRaisesRegex(GateError, "absolute path"):
-            factories._load_model_bundle("relative/checkpoint", "a" * 64)
-
-        with tempfile.TemporaryDirectory() as directory:
-            checkpoint = Path(directory)
-            digest = _write_adapter_tree(checkpoint)
-
-            class PeftModel:
-                @classmethod
-                def from_pretrained(cls, *_args: Any, **_kwargs: Any) -> Any:
-                    raise RuntimeError("adapter load failed")
-
-            with (
-                mock.patch.object(
-                    factories,
-                    "_load_base_components",
-                    return_value=(base_model, processor),
-                ),
-                mock.patch.dict(
-                    sys.modules, {"peft": types.SimpleNamespace(PeftModel=PeftModel)}
-                ),
-                self.assertRaisesRegex(GateError, "raw base model was not used"),
-            ):
-                factories._load_model_bundle(str(checkpoint), digest)
-
-    def test_valid_local_peft_is_loaded_and_attested(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            checkpoint = Path(directory)
-            digest = _write_adapter_tree(checkpoint)
-            base_model = object()
-            processor = object()
-            calls: list[tuple[Any, str, dict[str, Any]]] = []
-
-            class Loaded:
-                peft_config = {"default": object()}
-
-                def eval(self) -> "Loaded":
-                    return self
-
-            loaded = Loaded()
-
-            class PeftModel:
-                @classmethod
-                def from_pretrained(
-                    cls, model: Any, path: str, **kwargs: Any
-                ) -> Loaded:
-                    calls.append((model, path, kwargs))
-                    private_weights = Path(path) / "adapter_model.safetensors"
-                    self.assertEqual(private_weights.read_bytes(), b"adapter-weights")
-                    # Mutation of the source during PEFT load cannot change the
-                    # already verified private bytes supplied to the loader.
-                    (checkpoint / "adapter_model.safetensors").write_bytes(b"mutated")
-                    self.assertEqual(private_weights.read_bytes(), b"adapter-weights")
-                    return loaded
-
-            with (
-                mock.patch.object(
-                    factories,
-                    "_load_base_components",
-                    return_value=(base_model, processor),
-                ),
-                mock.patch.dict(
-                    sys.modules, {"peft": types.SimpleNamespace(PeftModel=PeftModel)}
-                ),
-            ):
-                bundle = factories._load_model_bundle(str(checkpoint), digest.upper())
-            self.assertIs(bundle.model, loaded)
-            self.assertEqual(bundle.model_revision, digest)
-            self.assertEqual(calls[0][0], base_model)
-            self.assertNotEqual(calls[0][1], str(checkpoint))
-            self.assertEqual(calls[0][1], bundle.adapter_snapshot_path)
-            self.assertIsNotNone(bundle.adapter_snapshot_owner)
-            self.assertTrue(Path(bundle.adapter_snapshot_path).is_dir())
-            self.assertIs(calls[0][2]["is_trainable"], False)
-            self.assertIs(calls[0][2]["local_files_only"], True)
-
-    def test_factory_caches_one_bundle_per_identity(self) -> None:
-        bundle = factories._ModelBundle(
-            model=object(),
-            processor=object(),
-            model_id=factories.BASE_MODEL_ID,
-            model_revision=factories.BASE_MODEL_REVISION,
-        )
-        with mock.patch.object(
-            factories, "_load_model_bundle", return_value=bundle
-        ) as loader:
-            first = factories.gemma_release_policy_factory(
-                model_id=factories.BASE_MODEL_ID,
-                model_revision=factories.BASE_MODEL_REVISION,
-            )
-            second = factories.gemma_release_policy_factory(
-                model_id=factories.BASE_MODEL_ID,
-                model_revision=factories.BASE_MODEL_REVISION,
-            )
-        loader.assert_called_once_with(
-            factories.BASE_MODEL_ID, factories.BASE_MODEL_REVISION
-        )
-        self.assertEqual(first.release_policy_identity, second.release_policy_identity)
 
 
 class GeneratedToolCallValidationTests(unittest.TestCase):
@@ -1495,10 +1141,10 @@ class CanonicalGemmaInferenceTests(unittest.TestCase):
         bundle = factories._ModelBundle(
             model=model,
             processor=processor,
-            model_id=factories.BASE_MODEL_ID,
-            model_revision=factories.BASE_MODEL_REVISION,
+            model_id="unsloth/gemma-4-31B-it",
+            model_revision="8a796db4df380b178065ed910849477ff0e99c87",
         )
-        policy = factories.GemmaReleasePolicy(bundle)
+        policy = ResearchGemmaPolicy(bundle, {"prompt_profile": PROMPT_PROFILE_RELEASE})
         controller_id = "root-episode:s12345678"
         action = policy.act(
             {

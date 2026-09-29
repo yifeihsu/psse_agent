@@ -1,9 +1,8 @@
-"""Diagnostic-only Gemma 4 E2B policy loader for small closed-loop replays.
+"""Prompt budget, tool schemas and policy wrapper for the small Gemma 4 models.
 
-This module intentionally is not part of the release policy.  It lets the
-production closed-loop evaluator exercise the small local adapters created by
-the preliminary pipeline while preserving the canonical SFT observation and
-tool-controller bridge.
+``research_policy_factory`` renders the E2B/E4B prompts with the canonical tool
+schemas, token budgets and forced tool-call prefix defined here and wraps the
+loaded model in ``_CanonicalE2BPolicy``.
 """
 
 from __future__ import annotations
@@ -11,11 +10,8 @@ from __future__ import annotations
 import copy
 import json
 import os
-import re
-import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Mapping
 
 from psse_env.dagger.dataset_builder import (
@@ -24,12 +20,10 @@ from psse_env.dagger.dataset_builder import (
     tool_schemas_for_observation,
     system_prompt_for_observation,
 )
-from psse_env.dagger.policy_adapter import LocalAliasPolicyAdapter
 from psse_env.dagger.protocol_bridge import unified_tool_schemas
 from psse_env.dagger.release_factories import (
     _model_input_device,
     _validated_generated_action,
-    checkpoint_tree_sha256,
 )
 from psse_env.sft.gates import GateError
 from psse_env.sft.gemma_text import (
@@ -44,10 +38,6 @@ from psse_env.sft.gemma_text import (
 from psse_env.sft.training import infer_required_side_input_names
 
 
-BASE_MODEL_REVISION = "f0c5915f17ad6c66dbeb577fb06ff8925bf8d7ae"
-BASE_MODEL_ID = "unsloth/gemma-4-E2B-it"
-
-
 def _positive_int_env(name: str, default: int) -> int:
     value = int(os.environ.get(name, default))
     if value <= 0:
@@ -60,9 +50,6 @@ def _positive_int_env(name: str, default: int) -> int:
 # source code or rebuilding any dataset/checkpoint.
 MAX_INPUT_TOKENS = _positive_int_env("RESEARCH_MAX_INPUT_TOKENS", 8192)
 MAX_NEW_TOKENS = _positive_int_env("RESEARCH_MAX_NEW_TOKENS", 64)
-RELAXED_ADAPTER_IDENTITY = (
-    os.environ.get("RESEARCH_RELAXED_ADAPTER_IDENTITY", "0") == "1"
-)
 FORCED_TOOL_PREFIX = "<|tool_call>call:"
 
 
@@ -106,112 +93,6 @@ class _E2BBundle:
     model_id: str
     model_revision: str
     base_model_path: str
-
-
-_BUNDLES: dict[tuple[str, str], _E2BBundle] = {}
-_BUNDLE_LOCK = threading.Lock()
-
-
-def _validate_adapter_identity(model_id: str, model_revision: str) -> tuple[Path, Path]:
-    if re.fullmatch(r"[0-9a-f]{64}", model_revision) is None:
-        raise GateError("E2B adapter revision must be a lowercase 64-hex tree digest")
-    adapter = Path(model_id).expanduser()
-    if not adapter.is_absolute():
-        raise GateError("E2B adapter model_id must be an absolute path")
-    adapter = adapter.resolve(strict=True)
-    if (
-        not RELAXED_ADAPTER_IDENTITY
-        and checkpoint_tree_sha256(adapter) != model_revision
-    ):
-        raise GateError("E2B adapter tree digest does not match model_revision")
-
-    config_path = adapter / "adapter_config.json"
-    weights_path = adapter / "adapter_model.safetensors"
-    if not config_path.is_file() or not weights_path.is_file():
-        raise GateError("E2B adapter must contain adapter_config.json and safetensors weights")
-    try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise GateError(f"E2B adapter configuration is invalid: {exc}") from exc
-    if str(config.get("peft_type") or "").upper() != "LORA":
-        raise GateError("E2B diagnostic loader accepts only LoRA adapters")
-
-    base_value = str(config.get("base_model_name_or_path") or "").strip()
-    if not base_value:
-        raise GateError("E2B adapter has no base_model_name_or_path")
-    if base_value == BASE_MODEL_ID:
-        hf_home = Path(
-            os.environ.get("HF_HOME")
-            or Path.home() / ".cache" / "huggingface"
-        ).expanduser()
-        base = (
-            hf_home
-            / "hub"
-            / "models--unsloth--gemma-4-E2B-it"
-            / "snapshots"
-            / BASE_MODEL_REVISION
-        ).resolve(strict=True)
-    else:
-        base = Path(base_value).expanduser().resolve(strict=True)
-    if base.name.lower() != BASE_MODEL_REVISION:
-        raise GateError(
-            "E2B adapter does not bind the pinned preliminary base revision "
-            f"{BASE_MODEL_REVISION}"
-        )
-    try:
-        base_config = json.loads((base / "config.json").read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise GateError(f"Pinned E2B base configuration is invalid: {exc}") from exc
-    if base_config.get("model_type") != "gemma4":
-        raise GateError("Pinned preliminary base is not a Gemma 4 model")
-    return adapter, base
-
-
-def _load_bundle(model_id: str, model_revision: str) -> _E2BBundle:
-    adapter, base = _validate_adapter_identity(model_id, model_revision)
-    try:
-        from unsloth import FastModel
-    except Exception as exc:  # pragma: no cover - depends on the live GPU environment.
-        raise GateError(f"Unsloth is required for preliminary E2B evaluation: {exc}") from exc
-
-    try:
-        model, processor = FastModel.from_pretrained(
-            model_name=str(adapter),
-            tokenizer_name=str(adapter),
-            max_seq_length=MAX_INPUT_TOKENS,
-            load_in_4bit=True,
-            load_in_16bit=False,
-            full_finetuning=False,
-        )
-        FastModel.for_inference(model)
-    except Exception as exc:  # pragma: no cover - depends on the live GPU environment.
-        raise GateError(
-            "Pinned local E2B adapter load failed; no raw-base fallback was used: "
-            f"{type(exc).__name__}: {exc}"
-        ) from exc
-    if (
-        not RELAXED_ADAPTER_IDENTITY
-        and checkpoint_tree_sha256(adapter) != model_revision
-    ):
-        raise GateError("E2B adapter changed while it was being loaded")
-    model.eval()
-    return _E2BBundle(
-        model=model,
-        processor=processor,
-        model_id=str(adapter),
-        model_revision=model_revision,
-        base_model_path=str(base),
-    )
-
-
-def _cached_bundle(model_id: str, model_revision: str) -> _E2BBundle:
-    key = (str(Path(model_id).expanduser().resolve(strict=True)), model_revision)
-    with _BUNDLE_LOCK:
-        bundle = _BUNDLES.get(key)
-        if bundle is None:
-            bundle = _load_bundle(*key)
-            _BUNDLES[key] = bundle
-        return bundle
 
 
 class _CanonicalE2BPolicy:
@@ -378,56 +259,10 @@ class _CanonicalE2BPolicy:
         )
 
 
-class PreliminaryE2BPolicy:
-    """SFT-visible policy wrapper with evaluator identity attestation."""
-
-    def __init__(self, bundle: _E2BBundle) -> None:
-        self._canonical = _CanonicalE2BPolicy(bundle)
-        self._adapter = LocalAliasPolicyAdapter(self._canonical, protocol="canonical")
-        self._model_id = bundle.model_id
-        self._model_revision = bundle.model_revision
-
-    @property
-    def release_policy_identity(self) -> dict[str, str | None]:
-        return {
-            "explicit_policy_identity": None,
-            "model_id": self._model_id,
-            "model_revision": self._model_revision,
-        }
-
-    @property
-    def last_action_metrics(self) -> dict[str, Any]:
-        return self._canonical.last_action_metrics
-
-    def act(self, observation: Mapping[str, Any]) -> dict[str, Any]:
-        validate_policy_payload(observation)
-        return self._adapter.act(copy.deepcopy(dict(observation)))
-
-
-def preliminary_e2b_policy_factory(
-    *,
-    model_id: str | None = None,
-    model_revision: str | None = None,
-    seed: int | None = None,
-    rng: Any | None = None,
-) -> PreliminaryE2BPolicy:
-    """Build the content-addressed local E2B policy for diagnostic replay."""
-
-    del seed, rng
-    normalized_id = str(model_id or "").strip()
-    normalized_revision = str(model_revision or "").strip().lower()
-    if not normalized_id or not normalized_revision:
-        raise ValueError("Preliminary E2B policy requires model_id and model_revision")
-    return PreliminaryE2BPolicy(_cached_bundle(normalized_id, normalized_revision))
-
-
 __all__ = [
-    "BASE_MODEL_REVISION",
     "FORCED_TOOL_PREFIX",
     "MAX_INPUT_TOKENS",
     "MAX_NEW_TOKENS",
-    "PreliminaryE2BPolicy",
     "canonical_prompt_tool_schemas",
     "normalize_episode_state_reference",
-    "preliminary_e2b_policy_factory",
 ]

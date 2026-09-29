@@ -4,7 +4,7 @@ import copy
 import math
 import random
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from concurrent.futures import Executor
 from dataclasses import replace
 from typing import Any, Mapping
@@ -18,12 +18,10 @@ from psse_env.actions import (
     safe_normalize_action,
 )
 from psse_env.dagger.dataset_builder import validate_policy_payload
-from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, bind_env_action_limit
+from psse_env.episode_budget import bind_env_action_limit
 from psse_env.dagger.offline_teacher_target_audit import (
     offline_teacher_target_audit,
-    validate_offline_teacher_target_audit_metadata,
 )
-from psse_env.dagger.replay_buffer import BalancedReplayBuffer
 from psse_env.state_store import OracleState, PolicyObservation, policy_safe_copy
 
 
@@ -33,9 +31,6 @@ BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION = (
 )
 DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION = (
     "dagger1_observable_recovery_handoff_v2"
-)
-OFFLINE_TEACHER_TARGET_QUARANTINE_SUMMARY_CONTRACT = (
-    "dagger1_offline_teacher_target_quarantine_summary_v1"
 )
 SUPPORTED_SUPERVISION_POLICIES = frozenset(
     {
@@ -90,9 +85,6 @@ def _observable_last_failure(observation: Mapping[str, Any]) -> tuple[bool, str 
     )
     error_code = str(output.get("error_code") or "").strip()
     return bool(failed), error_code or None
-
-
-OBSERVABLE_COMMIT_CLASS_CONTRACT = "dagger1_observable_commit_class_v1"
 
 
 def observable_candidate_verified(observation: Mapping[str, Any]) -> bool:
@@ -616,203 +608,6 @@ def audit_target_aware_state_classes(
         "mismatches": mismatches,
         "semantic_violations": violations,
         "passed": not mismatches and not violations,
-    }
-
-
-def audit_dagger1_recovery_labels(
-    examples: Iterable[Mapping[str, Any]],
-) -> dict[str, Any]:
-    """Recompute observable recovery strata and eligibility invariants."""
-    rows = list(examples)
-    counts: Counter[str] = Counter()
-    mismatches: list[dict[str, Any]] = []
-    eligibility_violations: list[dict[str, Any]] = []
-    for index, row in enumerate(rows):
-        observation = row.get("policy_observation") or row.get("state_summary") or {}
-        observation = observation if isinstance(observation, Mapping) else {}
-        try:
-            error_cardinality = int(row.get("error_cardinality") or 0)
-        except (TypeError, ValueError, OverflowError):
-            error_cardinality = 0
-        expected = classify_dagger1_recovery_stratum(
-            observation,
-            preferred_action=row.get("preferred_action"),
-            state_class=str(row.get("state_class") or ""),
-            scenario_family=str(row.get("scenario_family") or "unknown"),
-            error_cardinality=error_cardinality,
-        )
-        labels = row.get("labels") if isinstance(row.get("labels"), Mapping) else {}
-        actual_value = row.get("recovery_stratum", labels.get("recovery_stratum"))
-        actual = str(actual_value) if actual_value is not None else None
-        counts[actual or "unclassified"] += 1
-        if actual != expected:
-            mismatches.append(
-                {
-                    "index": index,
-                    "example_id": row.get("example_id"),
-                    "actual": actual,
-                    "expected": expected,
-                }
-            )
-
-        if row.get("production_label_eligible") is not True:
-            continue
-        reasons: list[str] = []
-        if row.get("state_origin") != "learner_policy":
-            reasons.append("not_learner_visited_state")
-        if row.get("collection_role") != "training":
-            reasons.append("collection_role_not_training")
-        try:
-            row_beta = float(row.get("collection_beta"))
-        except (TypeError, ValueError, OverflowError):
-            row_beta = -1.0
-        if not 0.25 <= row_beta <= 0.5:
-            reasons.append("training_beta_contract_not_verified")
-        if expected not in _DAGGER1_PRODUCTION_RECOVERY_STRATA:
-            reasons.append("not_production_recovery_stratum")
-        if row.get("preferred_action") is None:
-            reasons.append("missing_expert_target")
-        full_expert_actions: list[Any] = []
-        if row.get("preferred_action") is not None:
-            full_expert_actions.append(row.get("preferred_action"))
-        deferred = row.get("deferred_expert_actions")
-        if isinstance(deferred, list):
-            full_expert_actions.extend(deferred)
-        recomputed_rank_one = observable_rank_one_target_proof(
-            observation,
-            preferred_action=row.get("preferred_action"),
-            expert_actions=full_expert_actions,
-        )
-        recorded_rank_one = row.get(
-            "observable_rank_one_target_proof",
-            labels.get("observable_rank_one_target_proof"),
-        )
-        if recomputed_rank_one.get("passed") is not True:
-            reasons.append("expert_target_not_observably_rank_one")
-        if recorded_rank_one != recomputed_rank_one:
-            reasons.append("observable_rank_one_proof_mismatch")
-        actions = row.get("valid_next_actions")
-        if not isinstance(actions, list) or len(actions) != 1:
-            reasons.append("expert_target_not_observably_rank_one")
-        if labels.get("training_decision_evidence_verified") is not True:
-            reasons.append("training_decision_evidence_not_verified")
-        offline_audit = row.get("offline_teacher_target_audit")
-        try:
-            validate_offline_teacher_target_audit_metadata(
-                offline_audit, require_passed=True
-            )
-        except ValueError:
-            reasons.append("offline_teacher_target_audit_not_passed")
-        if reasons:
-            eligibility_violations.append(
-                {
-                    "index": index,
-                    "example_id": row.get("example_id"),
-                    "reasons": reasons,
-                }
-            )
-    return {
-        "total_rows": len(rows),
-        "recovery_stratum_counts": dict(sorted(counts.items())),
-        "mismatches": mismatches,
-        "eligibility_violations": eligibility_violations,
-        "passed": not mismatches and not eligibility_violations,
-    }
-
-
-def summarize_dagger1_offline_teacher_target_quarantine(
-    rows: Iterable[Mapping[str, Any]],
-) -> dict[str, Any]:
-    """Count failed private audits only for otherwise-admissible D1 rows.
-
-    Candidate membership deliberately reproduces every production condition
-    that precedes the offline audit in ``collect_iteration``.  Thus a failed
-    audit cannot hide by flipping ``production_label_eligible`` to false, while
-    diagnostic, initial/expert, and non-recovery rows do not create false
-    quarantine counts.
-    """
-
-    materialized = list(rows)
-    passed_rows = 0
-    quarantined_rows = 0
-    invalid_or_missing = 0
-    action_classes: Counter[str] = Counter()
-    reason_codes: Counter[str] = Counter()
-    quarantined_example_ids: list[str] = []
-
-    def is_candidate(row: Mapping[str, Any]) -> bool:
-        labels = row.get("labels")
-        labels = labels if isinstance(labels, Mapping) else {}
-        proof = row.get(
-            "observable_rank_one_target_proof",
-            labels.get("observable_rank_one_target_proof"),
-        )
-        stratum = row.get("recovery_stratum", labels.get("recovery_stratum"))
-        return bool(
-            row.get("supervision_policy", labels.get("supervision_policy"))
-            == DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION
-            and row.get("collection_role", labels.get("collection_role"))
-            == "training"
-            and row.get("state_origin", labels.get("state_origin"))
-            == "learner_policy"
-            and stratum in _DAGGER1_PRODUCTION_RECOVERY_STRATA
-            and row.get("preferred_action") is not None
-            and labels.get("training_decision_evidence_verified") is True
-            and isinstance(proof, Mapping)
-            and proof.get("passed") is True
-        )
-
-    candidate_rows = [row for row in materialized if is_candidate(row)]
-    for index, row in enumerate(candidate_rows):
-        raw_audit = row.get("offline_teacher_target_audit")
-        try:
-            audit = validate_offline_teacher_target_audit_metadata(raw_audit)
-        except ValueError:
-            quarantined_rows += 1
-            invalid_or_missing += 1
-            reason_codes["invalid_or_missing_audit_metadata"] += 1
-            quarantined_example_ids.append(
-                str(row.get("example_id") or f"candidate_{index}")
-            )
-            continue
-        if audit["passed"] is True:
-            passed_rows += 1
-            continue
-        quarantined_rows += 1
-        action_classes[str(audit["action_class"])] += 1
-        for reason in audit["reason_codes"]:
-            reason_codes[str(reason)] += 1
-        quarantined_example_ids.append(
-            str(row.get("example_id") or f"candidate_{index}")
-        )
-
-    zero_quarantine = quarantined_rows == 0
-    return {
-        "contract": OFFLINE_TEACHER_TARGET_QUARANTINE_SUMMARY_CONTRACT,
-        "candidate_definition": {
-            "collector_contract": DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
-            "collection_role": "training",
-            "state_origin": "learner_policy",
-            "production_recovery_strata": sorted(
-                _DAGGER1_PRODUCTION_RECOVERY_STRATA
-            ),
-            "pre_audit_requirements": [
-                "preferred_action_present",
-                "training_decision_evidence_verified",
-                "observable_rank_one_target_proof_passed",
-            ],
-        },
-        "total_rows": len(materialized),
-        "candidate_rows": len(candidate_rows),
-        "non_candidate_rows": len(materialized) - len(candidate_rows),
-        "passed_rows": passed_rows,
-        "quarantined_rows": quarantined_rows,
-        "invalid_or_missing_audit_rows": invalid_or_missing,
-        "quarantined_by_action_class": dict(sorted(action_classes.items())),
-        "quarantined_by_reason_code": dict(sorted(reason_codes.items())),
-        "quarantined_example_ids": quarantined_example_ids,
-        "zero_truth_audit_quarantine": zero_quarantine,
-        "passed": zero_quarantine,
     }
 
 
@@ -1555,170 +1350,3 @@ class DaggerRolloutCollector:
         except Exception as exc:  # collection must retain arbitrary learner failures
             return invalid_action("policy_exception", f"{type(exc).__name__}: {exc}")
         return safe_normalize_action(raw)
-
-
-def _validation_score(result: Any) -> float:
-    if isinstance(result, (int, float)):
-        return float(result)
-    if isinstance(result, Mapping):
-        for key in ("score", "recovery_score", "validation_score"):
-            if result.get(key) is not None:
-                return float(result[key])
-    if hasattr(result, "score"):
-        return float(result.score)
-    raise TypeError("evaluate_fn must return a number, a mapping with score, or an object with .score")
-
-
-def _requires_explicit_snapshot(
-    policy: Any, *, _seen: set[int] | None = None, _depth: int = 0
-) -> bool:
-    if policy is None or _depth > 3:
-        return False
-    seen = _seen if _seen is not None else set()
-    identity = id(policy)
-    if identity in seen:
-        return False
-    seen.add(identity)
-    policy_type = type(policy)
-    type_path = f"{policy_type.__module__}.{policy_type.__qualname__}".lower()
-    mro_paths = " ".join(
-        f"{item.__module__}.{item.__qualname__}".lower()
-        for item in getattr(policy_type, "__mro__", ())
-    )
-    framework_policy = any(
-        marker in f"{type_path} {mro_paths}"
-        for marker in ("transformers.", "peft.", "accelerate.")
-    )
-    sharded_or_quantized = bool(getattr(policy, "hf_device_map", None)) or any(
-        bool(getattr(policy, name, False))
-        for name in ("is_loaded_in_4bit", "is_loaded_in_8bit")
-    )
-    peft_policy = getattr(policy, "peft_config", None) is not None
-    pretrained_policy = all(
-        hasattr(policy, name) for name in ("save_pretrained", "config", "state_dict")
-    )
-    if framework_policy or sharded_or_quantized or peft_policy or pretrained_policy:
-        return True
-    for attribute in ("policy", "model", "module"):
-        try:
-            nested = getattr(policy, attribute, None)
-        except Exception:
-            continue
-        if nested is not None and nested is not policy and _requires_explicit_snapshot(
-            nested, _seen=seen, _depth=_depth + 1
-        ):
-            return True
-    return False
-
-
-def _snapshot_policy(policy: Any, snapshot_policy_fn: Callable[[Any], Any] | None) -> Any:
-    if snapshot_policy_fn is not None:
-        return snapshot_policy_fn(policy)
-    if _requires_explicit_snapshot(policy):
-        raise TypeError(
-            "evaluate_fn checkpoint selection requires snapshot_policy_fn for "
-            "Transformers, PEFT, quantized, or sharded policies; generic deepcopy "
-            "is not a reliable 31B checkpoint snapshot."
-        )
-    try:
-        return copy.deepcopy(policy)
-    except Exception as exc:
-        raise TypeError(
-            "Policy is not deepcopy-able; provide snapshot_policy_fn so best-checkpoint selection is reliable."
-        ) from exc
-
-
-def run_dagger(
-    *,
-    policy: Any,
-    expert_oracle: Any,
-    env: Any,
-    scenarios_by_iteration: Callable[[int], Iterable[Mapping[str, Any]]] | Iterable[Mapping[str, Any]],
-    initial_dataset: list[dict[str, Any]] | None = None,
-    num_iterations: int = 8,
-    beta_schedule: list[float] | None = None,
-    max_steps: int = DEFAULT_EPISODE_ACTION_LIMIT,
-    train_policy_fn: Callable[[Any, list[dict[str, Any]]], Any] | None = None,
-    evaluate_fn: Callable[[Any, Any, Any], Any] | None = None,
-    snapshot_policy_fn: Callable[[Any], Any] | None = None,
-    training_dataset_fn: Callable[[list[dict[str, Any]], int], list[dict[str, Any]]] | None = None,
-    balanced_replay: bool = True,
-    replay_sample_size: int | None = None,
-    replay_unknown_class_policy: str = "error",
-    replay_unknown_class_weight: float = 0.05,
-    replay_max_duplicate_count: int = 2,
-    replay_max_rows_per_root: int | None = None,
-    replay_late_iteration_model_fraction: float = 0.25,
-    replay_require_late_iteration_model_quota: bool = True,
-    replay_report_fn: Callable[[Mapping[str, Any], int], None] | None = None,
-    rng: random.Random | None = None,
-) -> tuple[Any, list[dict[str, Any]]]:
-    dataset = list(initial_dataset or [])
-    betas = beta_schedule or [1.0, 0.5, 0.25, 0.1, 0.05, 0.0, 0.0, 0.0]
-    current_policy = policy
-    best_policy: Any | None = None
-    best_score = float("-inf")
-    shared_rng = rng or random.Random()
-
-    if evaluate_fn is not None:
-        best_score = _validation_score(evaluate_fn(current_policy, env, expert_oracle))
-        best_policy = _snapshot_policy(current_policy, snapshot_policy_fn)
-
-    materialized_scenarios: list[Mapping[str, Any]] | None = None
-    if not callable(scenarios_by_iteration):
-        materialized_scenarios = list(scenarios_by_iteration)
-        if not materialized_scenarios:
-            raise ValueError("scenarios_by_iteration is empty.")
-
-    for iteration in range(num_iterations):
-        beta = betas[min(iteration, len(betas) - 1)]
-        if callable(scenarios_by_iteration):
-            scenarios = list(scenarios_by_iteration(iteration))
-            if not scenarios:
-                raise ValueError(f"Scenario provider returned no scenarios for iteration {iteration}.")
-        else:
-            scenarios = list(materialized_scenarios or [])
-        collector = DaggerRolloutCollector(
-            env=env,
-            policy=current_policy,
-            expert_oracle=expert_oracle,
-            rng=shared_rng,
-        )
-        dataset.extend(
-            collector.collect_iteration(
-                scenarios=scenarios,
-                iteration=iteration,
-                beta=beta,
-                max_steps=max_steps,
-            )
-        )
-        if training_dataset_fn is not None:
-            training_dataset = training_dataset_fn(dataset, iteration)
-        elif balanced_replay and train_policy_fn is not None:
-            sample_size = replay_sample_size if replay_sample_size is not None else len(dataset)
-            replay_buffer = BalancedReplayBuffer(
-                dataset,
-                unknown_class_policy=replay_unknown_class_policy,
-                unknown_class_weight=replay_unknown_class_weight,
-                max_duplicate_count=replay_max_duplicate_count,
-                max_rows_per_root=replay_max_rows_per_root,
-                late_iteration_model_fraction=replay_late_iteration_model_fraction,
-                require_late_iteration_model_quota=(
-                    replay_require_late_iteration_model_quota
-                ),
-            )
-            training_dataset = replay_buffer.sample(sample_size, rng=shared_rng)
-            if replay_report_fn is not None:
-                replay_report_fn(replay_buffer.sample_report() or {}, iteration)
-        else:
-            training_dataset = dataset
-        if train_policy_fn is not None:
-            current_policy = train_policy_fn(current_policy, list(training_dataset))
-        if evaluate_fn is not None:
-            score = _validation_score(evaluate_fn(current_policy, env, expert_oracle))
-            if score > best_score:
-                best_score = score
-                best_policy = _snapshot_policy(current_policy, snapshot_policy_fn)
-
-    selected_policy = best_policy if evaluate_fn is not None and best_policy is not None else current_policy
-    return selected_policy, dataset

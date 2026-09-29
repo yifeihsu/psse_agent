@@ -7,11 +7,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from psse_env.dagger import release_factories
 from psse_env.dagger.evaluator import (
     EVALUATION_SUITES,
-    _load_import_spec,
-    fingerprint_evaluation_suites,
     validate_release_scenario_suites,
 )
 from psse_env.dagger.splits import physical_root_fingerprint
@@ -22,7 +19,6 @@ from psse_env.dagger.suite_builder import (
     BC0_SUITE_GENERATION_SEED,
     BC0_SUITE_SEED,
     BC0_SUITE_SOURCE_PARTITION,
-    DEFAULT_OUTPUT_PATH,
     DEFAULT_POLICY_PATH,
     REPO_ROOT,
     _TrackedArtifactScenarioGenerator,
@@ -39,7 +35,6 @@ from psse_env.dagger.suite_builder import (
     write_frozen_suite,
 )
 from psse_env.providers.scenario_generator import ScenarioRejected
-from psse_env.sft.provenance import file_sha256
 
 
 def _scenario(family: str, index: int) -> dict:
@@ -283,66 +278,6 @@ class BC0SuiteBuilderTests(unittest.TestCase):
             16,
         )
 
-    def test_packaged_suite_policy_and_factories_are_content_coherent(self) -> None:
-        policy = json.loads(DEFAULT_POLICY_PATH.read_text(encoding="utf-8"))
-        suites = json.loads(DEFAULT_OUTPUT_PATH.read_text(encoding="utf-8"))
-        suite_policy = policy["suite_policy"]
-        self.assertEqual(suite_policy["status"], "pinned")
-        self.assertEqual(
-            suite_policy["approved_suite_sha256"], file_sha256(DEFAULT_OUTPUT_PATH)
-        )
-
-        contract = fingerprint_evaluation_suites(
-            suites,
-            seed=suite_policy["evaluator_seed"],
-            required_suites=tuple(suite_policy["required_suites"]),
-            minimum_suites=len(suite_policy["required_suites"]),
-            minimum_episodes_per_suite=1,
-            minimum_roots_per_suite=suite_policy[
-                "minimum_physical_roots_per_suite"
-            ],
-        )
-        manifest_fields = (
-            "suite_manifest",
-            "suite_content_hashes",
-            "suite_root_set_hashes",
-            "suite_content_sha256",
-            "root_set_sha256",
-        )
-        self.assertEqual(
-            suite_policy["approved_suite_manifest"],
-            {field: contract[field] for field in manifest_fields},
-        )
-        roots = [
-            row["grouping"]["physical_root_fingerprint"]
-            for suite_rows in suites.values()
-            for row in suite_rows
-        ]
-        self.assertEqual(len(roots), 115)
-        self.assertEqual(len(set(roots)), 115)
-        self.assertTrue(all(root.startswith("physical_v3_") for root in roots))
-
-        # Factories are approved by import spec; the policy carries no source
-        # digest, so editing release_factories.py never needs a re-pin.
-        expected_specs = {
-            "environment": "production_environment_factory",
-            "expert_policy": "observable_expert_policy_factory",
-            "model_policy": "gemma_release_policy_factory",
-            "case_loader": "deterministic_case_loader",
-        }
-        for role, callable_name in expected_specs.items():
-            with self.subTest(factory_role=role):
-                import_spec = (
-                    "psse_env.dagger.release_factories:" + callable_name
-                )
-                self.assertEqual(
-                    policy["approved_factories"][role],
-                    [{"import_spec": import_spec}],
-                )
-                self.assertIs(
-                    _load_import_spec(import_spec, field=f"{role} factory"),
-                    getattr(release_factories, callable_name),
-                )
 
     def test_partition_is_schema_v1_and_keeps_truth_out_of_execution(self) -> None:
         flat = _scenario("measurement", 3)

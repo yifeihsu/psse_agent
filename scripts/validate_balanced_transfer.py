@@ -52,7 +52,6 @@ RECEIPT_PATHS = (
     "psse_env/dagger/release_factories.py",
     "psse_env/dagger/ieee57_runtime.py",
     "psse_env/dagger/suite_builder.py",
-    "psse_env/dagger/study_metrics.py",
     "psse_env/dagger/dataset_builder.py",
     "psse_env/providers/matpower.py",
     "psse_env/providers/scenario_generator.py",

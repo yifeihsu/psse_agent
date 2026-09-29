@@ -15,15 +15,11 @@ from psse_env import (
 )
 from psse_env.actions import action_signature
 from psse_env.dagger import (
-    AggreVaTeLite,
-    BalancedReplayBuffer,
     CounterfactualGenerator,
     DaggerRolloutCollector,
     examples_to_chat_sft,
     grouped_scenario_split,
     load_jsonl,
-    run_dagger,
-    to_pairwise_examples,
     write_jsonl,
 )
 from psse_env.dagger.error_injectors import InjectedAction
@@ -1845,75 +1841,6 @@ class DaggerCollectorTests(unittest.TestCase):
         self.assertIn(2, oracle.history_lengths)
         self.assertEqual(rows[0]["parent_state_summary"]["active_state_id"], rows[0]["next_state_summary"]["active_state_id"])
 
-    def test_aggregate_dataset_contains_all_iterations(self):
-        scenarios = (scenario for scenario in [synthetic_scenario()])
-        _, rows = run_dagger(
-            policy=_RunWLSPolicy(),
-            expert_oracle=_RunWLSOracle(),
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
-            scenarios_by_iteration=scenarios,
-            num_iterations=3,
-            beta_schedule=[0.0],
-            max_steps=1,
-            rng=random.Random(0),
-        )
-        self.assertEqual([row["iteration"] for row in rows], [0, 1, 2])
-
-    def test_generator_scenarios_are_not_silently_exhausted(self):
-        scenarios = (scenario for scenario in [synthetic_scenario()])
-        _, rows = run_dagger(
-            policy=_RunWLSPolicy(),
-            expert_oracle=_RunWLSOracle(),
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
-            scenarios_by_iteration=scenarios,
-            num_iterations=2,
-            beta_schedule=[0.0],
-            max_steps=1,
-            rng=random.Random(0),
-        )
-        self.assertEqual(len(rows), 2)
-
-    def test_best_checkpoint_is_returned(self):
-        scores = iter([1.0, 2.0, 4.0, 3.0])
-
-        def train(policy, dataset):
-            return _RunWLSPolicy(policy.version + 1)
-
-        best, _ = run_dagger(
-            policy=_RunWLSPolicy(),
-            expert_oracle=_RunWLSOracle(),
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
-            scenarios_by_iteration=[synthetic_scenario()],
-            num_iterations=3,
-            beta_schedule=[0.0],
-            max_steps=1,
-            train_policy_fn=train,
-            evaluate_fn=lambda policy, env, oracle: next(scores),
-            replay_require_late_iteration_model_quota=False,
-            rng=random.Random(0),
-        )
-        self.assertEqual(best.version, 2)
-
-    def test_initial_policy_can_remain_best_checkpoint(self):
-        scores = iter([10.0, 2.0, 1.0])
-
-        def train(policy, dataset):
-            return _RunWLSPolicy(policy.version + 1)
-
-        best, _ = run_dagger(
-            policy=_RunWLSPolicy(),
-            expert_oracle=_RunWLSOracle(),
-            env=TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE),
-            scenarios_by_iteration=[synthetic_scenario()],
-            num_iterations=2,
-            beta_schedule=[0.0],
-            max_steps=1,
-            train_policy_fn=train,
-            evaluate_fn=lambda policy, env, oracle: next(scores),
-            replay_require_late_iteration_model_quota=False,
-            rng=random.Random(0),
-        )
-        self.assertEqual(best.version, 0)
 
     def test_fixed_seed_produces_identical_rollout_json(self):
         def collect():
@@ -1962,22 +1889,6 @@ class DatasetConversionTests(unittest.TestCase):
 
 
 class ReplayAndEvaluationTests(unittest.TestCase):
-    def test_balanced_sampler_respects_state_classes(self):
-        classes = [
-            "clean_successful",
-            "rejected_candidate_recovery",
-            "accepted_partial_continuation",
-            "invalid_precondition_recovery",
-            "terminal_resolved",
-            "terminal_operator_escalation",
-            "loop_repetition",
-        ]
-        rows = [{"id": f"{name}-{index}", "state_class": name} for name in classes for index in range(10)]
-        sampled = BalancedReplayBuffer(rows).sample(20, rng=random.Random(0))
-        counts = {name: sum(row["state_class"] == name for row in sampled) for name in classes}
-        self.assertEqual(counts, dict(zip(classes, [6, 5, 4, 2, 1, 1, 1])))
-        self.assertEqual(counts["terminal_resolved"], 1)
-        self.assertEqual(counts["terminal_operator_escalation"], 1)
 
     def test_grouped_split_keeps_root_branches_together(self):
         rows = [
@@ -2198,64 +2109,7 @@ class CounterfactualTests(unittest.TestCase):
         self.assertEqual(row["executed_action"]["tool"], "commit_state")
 
 
-class AggreVaTeLiteTests(unittest.TestCase):
-    def test_valid_oracle_finalization_has_no_false_final_cost(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
-        state = env.reset(synthetic_scenario())
-        state, _ = env.step(correct_measurement(state["active_state_id"]))
-        state, _ = env.step({"tool": "run_wls", "arguments": {"state_id": state["candidate_state_id"]}})
-        state, _ = env.step({"tool": "commit_state", "arguments": {"candidate_state_id": state["candidate_state_id"]}})
-        ranking = AggreVaTeLite(env=env, oracle=ExpertPolicyOracle(), top_l=2).rank_actions(
-            state,
-            candidate_actions=[
-                {"tool": "finalize_diagnosis", "arguments": {}},
-                {"tool": "run_wls", "arguments": {"state_id": state["active_state_id"]}},
-            ],
-        )
-        finalize = next(
-            item for item in ranking["action_costs"] if item["action"]["tool"] == "finalize_diagnosis"
-        )
-        self.assertEqual(finalize["raw_cost_components"]["false_finalization"], 0.0)
-        self.assertEqual(ranking["action_costs"][0]["action"]["tool"], "finalize_diagnosis")
-
-    def test_branch_ranking_does_not_mutate_stateful_root_runner(self):
-        class StatefulRunner:
-            def __init__(self):
-                self.calls = 0
-
-            def __call__(self, state):
-                self.calls += 1
-                return {"execution_status": "success", "wls_objective": 1.0}
-
-        runner = StatefulRunner()
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, wls_runner=runner)
-        state = env.reset({"scenario_id": "stateful", "case": {}, "measurements": [1.0]})
-        AggreVaTeLite(env=env, oracle=ExpertPolicyOracle()).rank_actions(
-            state,
-            candidate_actions=[
-                {"tool": "run_wls", "arguments": {"state_id": state["active_state_id"]}}
-            ],
-        )
-        self.assertEqual(runner.calls, 0)
-
-    def test_branch_ranking_rejects_shared_closure_state(self):
-        calls = []
-
-        def closure_runner(state):
-            calls.append(state["state_id"])
-            return {"execution_status": "success", "wls_objective": 1.0}
-
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, wls_runner=closure_runner)
-        state = env.reset({"scenario_id": "closure", "case": {}, "measurements": [1.0]})
-        ranking = AggreVaTeLite(env=env, oracle=ExpertPolicyOracle()).rank_actions(
-            state,
-            candidate_actions=[
-                {"tool": "run_wls", "arguments": {"state_id": state["active_state_id"]}}
-            ],
-        )
-        self.assertEqual(calls, [])
-        self.assertIn("branch_error", ranking["action_costs"][0])
-
+class EnvironmentCloneIsolationTests(unittest.TestCase):
     def test_environment_clone_rejects_nondeepcopyable_runner(self):
         class NonCopyableRunner:
             def __deepcopy__(self, memo):
@@ -2269,54 +2123,18 @@ class AggreVaTeLiteTests(unittest.TestCase):
         with self.assertRaises(StateStoreError):
             env.clone()
 
-    def test_branch_cost_separates_correct_and_healthy_corrupting_corrections(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
-        state = env.reset(
-            {
-                "scenario_id": "rank-corrections",
-                "case": {},
-                "measurements": [9.0, 2.0],
-                "clean_measurements": [1.0, 2.0],
-                "true_measurement_errors": [{"index": 0}],
-            }
-        )
-        root_hash = env.store.episode_hash()
-        ranking = AggreVaTeLite(env=env, oracle=ExpertPolicyOracle(), top_l=2).rank_actions(
-            state,
-            candidate_actions=[
-                correct_measurement(state["active_state_id"], index=0, value=1.0),
-                correct_measurement(state["active_state_id"], index=1, value=99.0),
-            ],
-        )
-        costs = ranking["action_costs"]
-        self.assertEqual(costs[0]["action"]["arguments"]["measurement_updates"], {0: 1.0})
-        self.assertLess(costs[0]["q_cost"], costs[1]["q_cost"])
-        self.assertGreater(costs[1]["raw_cost_components"]["healthy_corruption"], 0.0)
-        self.assertEqual(env.store.episode_hash(), root_hash)
+    def test_environment_clone_rejects_closure_over_mutable_state(self):
+        calls = []
 
-    def test_top_l_branch_ranking_is_isolated_and_penalizes_false_commit(self):
-        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE)
-        state = env.reset(
-            {
-                "scenario_id": "rank",
-                "case": {},
-                "measurements": [1.0],
-                "metadata": {"remaining_anomaly_score": 0.0, "no_material_anomaly_remaining": True},
-            }
-        )
-        root_hash = env.store.episode_hash()
-        ranking = AggreVaTeLite(env=env, oracle=ExpertPolicyOracle(), top_l=2).rank_actions(
-            state,
-            candidate_actions=[
-                {"tool": "finalize_diagnosis", "arguments": {}},
-                {"tool": "commit_state", "arguments": {"candidate_state_id": "missing"}},
-            ],
-        )
-        self.assertEqual(ranking["action_costs"][0]["action"]["tool"], "finalize_diagnosis")
-        self.assertEqual(env.store.episode_hash(), root_hash)
-        self.assertFalse(env.is_terminal())
-        pairs = to_pairwise_examples(ranking)
-        self.assertEqual(pairs[0]["chosen"]["tool"], "finalize_diagnosis")
+        def closure_runner(state):
+            calls.append(state["state_id"])
+            return {"execution_status": "success", "wls_objective": 1.0}
+
+        env = TransactionalPSSEEnv(evidence_profile=AUXILIARY_EVIDENCE_PROFILE, wls_runner=closure_runner)
+        env.reset({"scenario_id": "closure", "case": {}, "measurements": [1.0]})
+        with self.assertRaises(StateStoreError):
+            env.clone()
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":

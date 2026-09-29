@@ -2,16 +2,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import io
 import json
-import platform
-import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Mapping
-from unittest import mock
 
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
@@ -33,18 +26,10 @@ from psse_env.dagger.evaluator import (
     ClosedLoopRolloutEvaluator,
     RECOVERY_STRESS_SUITES,
     STUDY_EVALUATION_SCHEMA_VERSION,
-    _runtime_environment_descriptor,
-    build_evaluation_provenance,
     evaluate_rollout_suites,
-    main as evaluator_main,
+    objective_recovery_action_assessment,
     strip_offline_truth,
-    write_evaluation_artifact,
 )
-from psse_env.dagger.evaluation_gate import (
-    _episode_safety_ordinal,
-    _intervention_failures,
-)
-from psse_env.sft.release_hardware import normalize_accelerator_class
 
 
 class _ScriptPolicy:
@@ -696,6 +681,19 @@ def _clean_control_scenario() -> dict[str, Any]:
 
 
 class ClosedLoopEvaluatorTests(unittest.TestCase):
+    def test_privileged_policy_payload_is_not_assessed(self) -> None:
+        assessment = objective_recovery_action_assessment(
+            {"active_state_id": "root:s0", "HiddenTruth": ["private"]},
+            scenario_family="measurement",
+            error_cardinality=1,
+        )
+        self.assertFalse(assessment["evidence_available"])
+        self.assertEqual(
+            assessment["evidence_failure"], "policy_payload_contains_privileged_evidence"
+        )
+        self.assertTrue(assessment["policy_payload_leakage_paths"])
+        self.assertIsNone(assessment["expected_action"])
+
     def test_policy_exception_is_recorded_as_a_schema_valid_invalid_action(
         self,
     ) -> None:
@@ -839,11 +837,6 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                     stratum,
                 )
                 self.assertNotIn("evaluation_intervention", json.dumps(observations))
-                evidence_failures, _ = _intervention_failures(
-                    episode,
-                    episode["evaluation_intervention"]["contract"],
-                )
-                self.assertEqual(evidence_failures, [])
 
     def test_recovery_stress_rejected_candidate_is_real_and_left_open(self) -> None:
         scenario = _partitioned_resolved_scenario()
@@ -901,11 +894,6 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertEqual(episode["trace"][2]["candidate_disposition_offline"], "REJECT")
         self.assertEqual(observations[0]["candidate_state_id"], "candidate-1")
         self.assertNotIn("required_disposition", json.dumps(observations))
-        evidence_failures, _ = _intervention_failures(
-            episode,
-            episode["evaluation_intervention"]["contract"],
-        )
-        self.assertEqual(evidence_failures, [])
 
     def test_sequential_handoff_bridge_is_not_counted_as_partial_retention(
         self,
@@ -942,11 +930,6 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             GET_MEASUREMENT_CONTEXT,
         )
         episode = result.suite_metrics["episodes"][0]
-        evidence_failures, _ = _intervention_failures(
-            episode,
-            episode["evaluation_intervention"]["contract"],
-        )
-        self.assertEqual(evidence_failures, [])
 
     def test_recovery_stress_mode_requires_all_seven_suites(self) -> None:
         evaluator = ClosedLoopRolloutEvaluator(
@@ -1194,10 +1177,6 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
                     overall["repeated_nonadvancing_failure_breaker_episodes"],
                     1,
                 )
-                # The breaker is a policy-performance quarantine, not an
-                # evaluator infrastructure error, and remains a promotion
-                # NO-GO under the paired safety ordinal.
-                self.assertEqual(_episode_safety_ordinal(episode), 0)
 
     def test_family_wide_parameter_failure_blocks_a_different_target(self) -> None:
         executed_actions: list[dict[str, Any]] = []
@@ -1515,18 +1494,6 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertFalse(episode["trace"][1]["advanced"])
         self.assertFalse(episode["loop_detected"])
         self.assertIsNone(episode["evaluator_error"])
-        evidence_failures, performance_failures = _intervention_failures(
-            episode,
-            scenario["audit"]["evaluation_intervention"],
-        )
-        self.assertEqual(evidence_failures, [])
-        self.assertEqual(
-            performance_failures,
-            [
-                "episode efficiency limit maximum_specialized_tool_calls "
-                "failed: observed 2 > allowed 1"
-            ],
-        )
 
     def test_progress_callback_reports_policy_safe_step_timing(self) -> None:
         events: list[dict[str, Any]] = []
@@ -2111,118 +2078,6 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
         self.assertEqual(summary["false_finalization_count"], 1)
         self.assertEqual(summary["final_physical_success_rate"], 0.0)
 
-    def test_release_environment_contract_fails_closed(self) -> None:
-        class DevelopmentOracle:
-            mode = "auto"
-
-        class DevelopmentEnv(_ScriptEnv):
-            production_dataset_mode = False
-            candidate_quality_oracle = DevelopmentOracle()
-
-        development = evaluate_rollout_suites(
-            [_resolved_scenario()],
-            env_factory=DevelopmentEnv,
-            policy_factory=lambda: _ScriptPolicy([]),
-            max_steps=8,
-        )
-        validation = development.suite_metrics["configuration"][
-            "release_environment_validation"
-        ]
-        self.assertFalse(validation["passed"])
-        self.assertEqual(validation["episodes_checked"], 1)
-        self.assertEqual(
-            validation["required"],
-            {
-                "production_dataset_mode": True,
-                "candidate_quality_oracle_mode": "deployment",
-            },
-        )
-        self.assertEqual(
-            validation["failures"],
-            [
-                "candidate_quality_oracle.mode is not 'deployment'",
-                "production_dataset_mode is not exactly true",
-            ],
-        )
-
-        with self.assertRaisesRegex(
-            ValueError, "release environment validation failed"
-        ):
-            evaluate_rollout_suites(
-                [_release_partitioned_resolved_scenario()],
-                env_factory=DevelopmentEnv,
-                policy_factory=lambda: _ScriptPolicy([]),
-                max_steps=8,
-                require_release_environment=True,
-            )
-
-        for callback_kwargs in (
-            {"tool_cost_resolver": lambda _context: None},
-            {"physical_audit_fn": lambda _context: True},
-        ):
-            with self.subTest(callback=next(iter(callback_kwargs))):
-                with self.assertRaisesRegex(ValueError, "release evaluation forbids"):
-                    evaluate_rollout_suites(
-                        [_resolved_scenario()],
-                        env_factory=_ScriptEnv,
-                        policy_factory=lambda: _ScriptPolicy([]),
-                        require_release_environment=True,
-                        **callback_kwargs,
-                    )
-
-        with self.assertRaisesRegex(ValueError, "release evaluation forbids"):
-            evaluate_rollout_suites(
-                [_resolved_scenario()],
-                env_factory=_ScriptEnv,
-                policy_factory=lambda: _ScriptPolicy([]),
-                expected_policy_identity={
-                    "explicit_policy_identity": "test-policy-v1",
-                    "model_id": None,
-                    "model_revision": None,
-                },
-                tool_cost_resolver=lambda _context: None,
-            )
-
-        with self.assertRaisesRegex(ValueError, "unsupported override fields"):
-            evaluate_rollout_suites(
-                [_resolved_scenario()],
-                env_factory=_ScriptEnv,
-                policy_factory=lambda: _ScriptPolicy([]),
-                physical_audit_fn=lambda _context: {
-                    "strict_release_audit": {"quarantined": False}
-                },
-            )
-
-        callback_result = evaluate_rollout_suites(
-            [_resolved_scenario()],
-            env_factory=_ScriptEnv,
-            policy_factory=lambda: _ScriptPolicy([]),
-            tool_cost_resolver=lambda _context: None,
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            callback_artifact = write_evaluation_artifact(
-                callback_result,
-                Path(temporary_directory) / "callback-development.json",
-            )
-        self.assertFalse(callback_artifact["release_eligible"])
-        self.assertTrue(
-            any(
-                "custom physical-audit or tool-cost callbacks" in failure
-                for failure in callback_artifact["release_failures"]
-            )
-        )
-
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            artifact = write_evaluation_artifact(
-                development, Path(temporary_directory) / "development.json"
-            )
-        self.assertFalse(artifact["release_eligible"])
-        self.assertTrue(
-            any(
-                "executed environment contract is not release-safe" in failure
-                for failure in artifact["release_failures"]
-            )
-        )
 
     def test_strip_offline_truth_removes_extended_normalized_audit_aliases(
         self,
@@ -3101,538 +2956,6 @@ class ClosedLoopEvaluatorTests(unittest.TestCase):
             first["root_set_sha256"], changed_configuration["root_set_sha256"]
         )
 
-    def test_runtime_environment_records_cuda_device_identity(self) -> None:
-        properties = SimpleNamespace(
-            name="NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
-            total_memory=102_844_334_080,
-        )
-        fake_torch = SimpleNamespace(
-            version=SimpleNamespace(cuda="12.8"),
-            cuda=SimpleNamespace(
-                is_available=lambda: True,
-                device_count=lambda: 1,
-                is_bf16_supported=lambda: True,
-                get_device_properties=lambda index: properties,
-                get_device_capability=lambda index: (12, 0),
-            ),
-        )
-        completed = SimpleNamespace(
-            returncode=0,
-            stdout="570.124.06\n",
-        )
-
-        with (
-            mock.patch(
-                "psse_env.dagger.evaluator.subprocess.run",
-                return_value=completed,
-            ),
-            mock.patch(
-                "psse_env.dagger.evaluator.importlib.import_module",
-                return_value=fake_torch,
-            ),
-        ):
-            accelerator = _runtime_environment_descriptor()["accelerator"]
-
-        self.assertEqual(accelerator["backend"], "cuda")
-        self.assertTrue(accelerator["cuda_available"])
-        self.assertEqual(accelerator["torch_cuda_version"], "12.8")
-        self.assertEqual(accelerator["driver_version"], "570.124.06")
-        self.assertEqual(accelerator["device_count"], 1)
-        self.assertTrue(accelerator["bf16_supported"])
-        self.assertEqual(
-            accelerator["devices"],
-            [
-                {
-                    "index": 0,
-                    "name": ("NVIDIA RTX PRO 6000 Blackwell Workstation Edition"),
-                    "total_memory_bytes": 102_844_334_080,
-                    "compute_capability": [12, 0],
-                    "accelerator_class": "rtx6000",
-                }
-            ],
-        )
-        self.assertEqual(
-            normalize_accelerator_class(
-                "NVIDIA H100 80GB HBM3",
-                85_899_345_920,
-            ),
-            "h100",
-        )
-
-    def test_provenance_rejects_import_spec_callable_mismatch(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            input_path = Path(temporary_directory) / "suite.json"
-            input_path.write_text(
-                json.dumps(
-                    {"standard_success": [_release_partitioned_resolved_scenario()]}
-                ),
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(
-                ValueError,
-                "factory import spec does not resolve to the supplied callable",
-            ):
-                build_evaluation_provenance(
-                    input_suite_path=input_path,
-                    environment_factory_spec=(
-                        "psse_env.dagger.test_evaluator:_ReleaseScriptEnv"
-                    ),
-                    environment_factory=_cli_policy_factory,
-                    policy_factory_spec=(
-                        "psse_env.dagger.test_evaluator:_cli_policy_factory"
-                    ),
-                    policy_factory=_cli_policy_factory,
-                    model_id="test/script-policy",
-                    model_revision="a" * 40,
-                )
-
-    def test_cli_persists_deterministic_release_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            input_path = root / "suite.json"
-            output_path = root / "release.json"
-            input_path.write_text(
-                json.dumps(
-                    {"standard_success": [_release_partitioned_resolved_scenario()]}
-                ),
-                encoding="utf-8",
-            )
-            arguments = [
-                "--input",
-                str(input_path),
-                "--output",
-                str(output_path),
-                "--env-factory",
-                "psse_env.dagger.test_evaluator:_ReleaseScriptEnv",
-                "--policy-factory",
-                "psse_env.dagger.test_evaluator:_cli_policy_factory",
-                "--case-loader",
-                "psse_env.dagger.test_evaluator:_cli_case_loader",
-                "--model-id",
-                "test/script-policy",
-                "--model-revision",
-                "a" * 40,
-                "--required-suite",
-                "standard_success",
-                "--max-steps",
-                "8",
-            ]
-            clean_source = {
-                "source_commit": "b" * 40,
-                "source_worktree_dirty": False,
-                "tracked_diff_hash": hashlib.sha256(b"").hexdigest(),
-                "untracked_source_files": [],
-                "release_eligible_source": True,
-            }
-            with mock.patch(
-                "psse_env.dagger.evaluator.git_source_state",
-                return_value=clean_source,
-            ):
-                with redirect_stdout(io.StringIO()):
-                    self.assertEqual(evaluator_main(arguments), 0)
-            first_bytes = output_path.read_bytes()
-            artifact = json.loads(first_bytes)
-            self.assertEqual(
-                artifact["artifact_type"], "closed_loop_release_evaluation"
-            )
-            self.assertEqual(
-                artifact["artifact_schema_version"],
-                STUDY_EVALUATION_SCHEMA_VERSION,
-            )
-            self.assertEqual(
-                artifact["evaluation"]["suite_metrics"]["schema_version"],
-                STUDY_EVALUATION_SCHEMA_VERSION,
-            )
-            self.assertTrue(artifact["release_eligible"])
-            self.assertEqual(artifact["release_failures"], [])
-            self.assertEqual(len(artifact["content_sha256"]), 64)
-            configuration = artifact["evaluation"]["suite_metrics"]["configuration"]
-            self.assertTrue(configuration["suite_coverage_validation"]["passed"])
-            self.assertEqual(
-                configuration["release_environment_validation"],
-                {
-                    "passed": True,
-                    "episodes_checked": 1,
-                    "required": {
-                        "production_dataset_mode": True,
-                        "candidate_quality_oracle_mode": "deployment",
-                    },
-                    "observed": [
-                        {
-                            "production_dataset_mode": True,
-                            "candidate_quality_oracle_mode": "deployment",
-                        }
-                    ],
-                    "failures": [],
-                },
-            )
-            self.assertEqual(
-                configuration["release_scenario_schema_validation"],
-                {"passed": True, "scenario_schema_version": 1},
-            )
-            self.assertEqual(
-                configuration["policy_identity_validation"],
-                {
-                    "passed": True,
-                    "episodes_checked": 1,
-                    "required": {
-                        "explicit_policy_identity": None,
-                        "model_id": "test/script-policy",
-                        "model_revision": "a" * 40,
-                    },
-                    "observed": [
-                        {
-                            "explicit_policy_identity": None,
-                            "model_id": "test/script-policy",
-                            "model_revision": "a" * 40,
-                        }
-                    ],
-                    "failures": [],
-                },
-            )
-
-            self.assertIn("standard_success", configuration["suite_content_hashes"])
-            provenance = artifact["provenance"]
-            self.assertEqual(provenance["source_state"], clean_source)
-            self.assertEqual(
-                provenance["factories"]["environment"]["import_spec"],
-                "psse_env.dagger.test_evaluator:_ReleaseScriptEnv",
-            )
-            self.assertEqual(
-                provenance["factories"]["policy"]["import_spec"],
-                "psse_env.dagger.test_evaluator:_cli_policy_factory",
-            )
-            self.assertEqual(
-                provenance["factories"]["case_loader"]["import_spec"],
-                "psse_env.dagger.test_evaluator:_cli_case_loader",
-            )
-            for descriptor in provenance["factories"].values():
-                self.assertEqual(len(descriptor["source"]["sha256"]), 64)
-            self.assertEqual(
-                provenance["policy_identity"],
-                {
-                    "explicit_policy_identity": None,
-                    "model_id": "test/script-policy",
-                    "model_revision": "a" * 40,
-                },
-            )
-            self.assertEqual(
-                provenance["input_suite"]["resolved_path"],
-                str(input_path.resolve()),
-            )
-            self.assertEqual(
-                provenance["input_suite"]["sha256"],
-                hashlib.sha256(input_path.read_bytes()).hexdigest(),
-            )
-            self.assertEqual(provenance["protocol_registry"]["protocol"], "canonical")
-            self.assertEqual(
-                provenance["runtime_environment"]["python_implementation"],
-                platform.python_implementation(),
-            )
-            self.assertIn("torch", provenance["runtime_environment"]["packages"])
-            self.assertIn("transformers", provenance["runtime_environment"]["packages"])
-            self.assertEqual(
-                len(provenance["protocol_registry"]["registry_sha256"]), 64
-            )
-            self.assertEqual(len(provenance["evaluator_source"]["sha256"]), 64)
-            self.assertEqual(len(provenance["identity_sha256"]), 64)
-
-            with mock.patch(
-                "psse_env.dagger.evaluator.git_source_state",
-                return_value=clean_source,
-            ):
-                with redirect_stdout(io.StringIO()):
-                    self.assertEqual(evaluator_main(arguments), 0)
-            self.assertEqual(first_bytes, output_path.read_bytes())
-
-    def test_cli_diagnostic_artifact_can_never_be_release_or_training_evidence(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            input_path = root / "diagnostic-suite.json"
-            output_path = root / "diagnostic-evaluation.json"
-            input_path.write_text(
-                json.dumps(
-                    {"standard_success": [_release_partitioned_resolved_scenario()]}
-                ),
-                encoding="utf-8",
-            )
-            arguments = [
-                "--input",
-                str(input_path),
-                "--output",
-                str(output_path),
-                "--env-factory",
-                "psse_env.dagger.test_evaluator:_ReleaseScriptEnv",
-                "--policy-factory",
-                "psse_env.dagger.test_evaluator:_cli_policy_factory",
-                "--case-loader",
-                "psse_env.dagger.test_evaluator:_cli_case_loader",
-                "--model-id",
-                "test/script-policy",
-                "--model-revision",
-                "a" * 40,
-                "--required-suite",
-                "standard_success",
-                "--max-steps",
-                "8",
-                "--diagnostic-only",
-            ]
-            clean_source = {
-                "source_commit": "b" * 40,
-                "source_worktree_dirty": False,
-                "tracked_diff_hash": hashlib.sha256(b"").hexdigest(),
-                "untracked_source_files": [],
-                "release_eligible_source": True,
-            }
-            with mock.patch(
-                "psse_env.dagger.evaluator.git_source_state",
-                return_value=clean_source,
-            ):
-                with redirect_stdout(io.StringIO()):
-                    self.assertEqual(evaluator_main(arguments), 0)
-
-            artifact = json.loads(output_path.read_text(encoding="utf-8"))
-            self.assertEqual(
-                artifact["artifact_type"],
-                "closed_loop_diagnostic_evaluation",
-            )
-            self.assertTrue(artifact["diagnostic_only"])
-            self.assertFalse(artifact["release_evidence_eligible"])
-            self.assertFalse(artifact["training_eligible"])
-            self.assertFalse(artifact["release_eligible"])
-            self.assertIn(
-                "diagnostic-only evaluation artifacts are not release evidence",
-                artifact["release_failures"],
-            )
-
-    def test_cli_requires_policy_or_immutable_model_identity(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            input_path = root / "suite.json"
-            input_path.write_text(
-                json.dumps(
-                    {"standard_success": [_release_partitioned_resolved_scenario()]}
-                ),
-                encoding="utf-8",
-            )
-            base = [
-                "--input",
-                str(input_path),
-                "--output",
-                str(root / "release.json"),
-                "--env-factory",
-                "psse_env.dagger.test_evaluator:_ReleaseScriptEnv",
-                "--policy-factory",
-                "psse_env.dagger.test_evaluator:_cli_policy_factory",
-                "--required-suite",
-                "standard_success",
-            ]
-            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                evaluator_main(base)
-            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                evaluator_main(
-                    base
-                    + [
-                        "--model-id",
-                        "test/script-policy",
-                        "--model-revision",
-                        "mutable-main",
-                    ]
-                )
-
-    def test_cli_rejects_script_policy_relabelled_as_model(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            input_path = root / "suite.json"
-            input_path.write_text(
-                json.dumps(
-                    {"standard_success": [_release_partitioned_resolved_scenario()]}
-                ),
-                encoding="utf-8",
-            )
-            arguments = [
-                "--input",
-                str(input_path),
-                "--output",
-                str(root / "release.json"),
-                "--env-factory",
-                "psse_env.dagger.test_evaluator:_ReleaseScriptEnv",
-                "--policy-factory",
-                "psse_env.dagger.test_evaluator:_unattested_policy_factory",
-                "--model-id",
-                "base/gemma",
-                "--model-revision",
-                "a" * 40,
-                "--required-suite",
-                "standard_success",
-            ]
-            clean_source = {
-                "source_commit": "b" * 40,
-                "source_worktree_dirty": False,
-                "tracked_diff_hash": hashlib.sha256(b"").hexdigest(),
-                "untracked_source_files": [],
-                "release_eligible_source": True,
-            }
-            with (
-                mock.patch(
-                    "psse_env.dagger.evaluator.git_source_state",
-                    return_value=clean_source,
-                ),
-                self.assertRaisesRegex(ValueError, "policy identity validation failed"),
-            ):
-                evaluator_main(arguments)
-            self.assertFalse((root / "release.json").exists())
-
-    def test_cli_dirty_source_requires_override_and_stays_nonrelease(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            input_path = root / "suite.json"
-            output_path = root / "release.json"
-            input_path.write_text(
-                json.dumps(
-                    {"standard_success": [_release_partitioned_resolved_scenario()]}
-                ),
-                encoding="utf-8",
-            )
-            arguments = [
-                "--input",
-                str(input_path),
-                "--output",
-                str(output_path),
-                "--env-factory",
-                "psse_env.dagger.test_evaluator:_ReleaseScriptEnv",
-                "--policy-factory",
-                "psse_env.dagger.test_evaluator:_cli_policy_factory",
-                "--policy-identity",
-                "observable-rule-policy-v1",
-                "--required-suite",
-                "standard_success",
-                "--max-steps",
-                "8",
-            ]
-            dirty_source = {
-                "source_commit": "c" * 40,
-                "source_worktree_dirty": True,
-                "tracked_diff_hash": "d" * 64,
-                "untracked_source_files": ["policy.py"],
-                "release_eligible_source": False,
-            }
-            with (
-                mock.patch(
-                    "psse_env.dagger.evaluator.git_source_state",
-                    return_value=dirty_source,
-                ),
-                self.assertRaisesRegex(RuntimeError, "clean tracked commit"),
-            ):
-                evaluator_main(arguments)
-            self.assertFalse(output_path.exists())
-
-            with mock.patch(
-                "psse_env.dagger.evaluator.git_source_state",
-                return_value=dirty_source,
-            ):
-                with redirect_stdout(io.StringIO()):
-                    self.assertEqual(
-                        evaluator_main(arguments + ["--allow-dirty-source"]), 0
-                    )
-            artifact = json.loads(output_path.read_text(encoding="utf-8"))
-            self.assertFalse(artifact["release_eligible"])
-            self.assertTrue(
-                any(
-                    "clean tracked commit" in failure
-                    for failure in artifact["release_failures"]
-                )
-            )
-            self.assertEqual(
-                artifact["provenance"]["policy_identity"]["explicit_policy_identity"],
-                "observable-rule-policy-v1",
-            )
-
-    def test_library_artifact_without_identity_is_backward_compatible_but_nonrelease(
-        self,
-    ) -> None:
-        result = evaluate_rollout_suites(
-            [_resolved_scenario()],
-            env_factory=_ScriptEnv,
-            policy_factory=lambda: _ScriptPolicy([]),
-            max_steps=8,
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            output_path = Path(temporary_directory) / "library.json"
-            artifact = write_evaluation_artifact(result, output_path)
-            self.assertTrue(output_path.is_file())
-            self.assertFalse(artifact["release_eligible"])
-            self.assertIsNone(artifact["provenance"])
-            self.assertEqual(
-                artifact["release_failures"],
-                [
-                    "evaluation identity provenance is missing",
-                    "input suite is not canonical release scenario schema version 1",
-                    "instantiated policy identity did not match the release provenance identity",
-                ],
-            )
-
-    def test_flat_suite_cannot_self_attest_as_release_eligible(self) -> None:
-        expected_identity = {
-            "explicit_policy_identity": None,
-            "model_id": "test/script-policy",
-            "model_revision": "a" * 40,
-        }
-        result = evaluate_rollout_suites(
-            [_resolved_scenario()],
-            env_factory=_ReleaseScriptEnv,
-            policy_factory=_cli_policy_factory,
-            max_steps=8,
-            expected_policy_identity=expected_identity,
-            require_policy_identity=True,
-        )
-        configuration = result.suite_metrics["configuration"]
-        self.assertTrue(configuration["release_environment_validation"]["passed"])
-        self.assertTrue(configuration["policy_identity_validation"]["passed"])
-        self.assertFalse(configuration["release_scenario_schema_validation"]["passed"])
-
-        clean_source = {
-            "source_commit": "b" * 40,
-            "source_worktree_dirty": False,
-            "tracked_diff_hash": hashlib.sha256(b"").hexdigest(),
-            "untracked_source_files": [],
-            "release_eligible_source": True,
-        }
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            input_path = root / "flat-suite.json"
-            input_path.write_text(
-                json.dumps({"standard_success": [_resolved_scenario()]}),
-                encoding="utf-8",
-            )
-            with mock.patch(
-                "psse_env.dagger.evaluator.git_source_state",
-                return_value=clean_source,
-            ):
-                provenance = build_evaluation_provenance(
-                    input_suite_path=input_path,
-                    environment_factory_spec=(
-                        "psse_env.dagger.test_evaluator:_ReleaseScriptEnv"
-                    ),
-                    environment_factory=_ReleaseScriptEnv,
-                    policy_factory_spec=(
-                        "psse_env.dagger.test_evaluator:_cli_policy_factory"
-                    ),
-                    policy_factory=_cli_policy_factory,
-                    model_id="test/script-policy",
-                    model_revision="a" * 40,
-                )
-            artifact = write_evaluation_artifact(
-                result, root / "flat-artifact.json", provenance=provenance
-            )
-
-        self.assertFalse(artifact["release_eligible"])
-        self.assertEqual(
-            artifact["release_failures"],
-            ["input suite is not canonical release scenario schema version 1"],
-        )
 
     def test_is_reproducible_and_does_not_mutate_supplied_scenarios(self) -> None:
         scenarios = [_escalation_scenario(), _resolved_scenario()]

@@ -61,9 +61,3 @@ def test_old_independent_stage_overrides_cannot_desynchronize_horizons(tmp_path,
     result = subprocess.run([_bash(), "-c", command, "episode_budget_probe", staged.as_posix()],
                             check=True, capture_output=True, text=True, env=env)
     assert result.stdout.splitlines() == ["40"] * len(fields)
-
-
-@pytest.mark.parametrize("name", ["submit_dagger_sft_round0.sh"])
-def test_active_release_launchers_select_current_study_template(name):
-    text = (ROOT / name).read_text()
-    assert "STUDY_MANIFEST=${STUDY_MANIFEST:-psse_env/dagger/studies/dagger_multiseed_study_v2.json}" in text

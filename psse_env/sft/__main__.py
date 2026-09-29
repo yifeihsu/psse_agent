@@ -5,6 +5,4 @@ if len(sys.argv) > 1 and sys.argv[1] == "research-train":
 
     raise SystemExit(main(sys.argv[2:]))
 
-from .cli import main
-
-raise SystemExit(main())
+raise SystemExit("usage: python -m psse_env.sft research-train [options]")

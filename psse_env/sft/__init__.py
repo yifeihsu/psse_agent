@@ -1,14 +1,12 @@
-"""Fail-closed Gemma tool-SFT preparation and training gates.
+"""Gemma 4 tool-call SFT: row validation, prompt rendering and research LoRA training.
 
-The package deliberately keeps Transformers, PEFT, TRL, datasets, and torch as
-runtime-only dependencies.  Dataset validation and fake-processor tests can be
-imported without loading a model or importing the root training script.
+Transformers, PEFT, TRL, datasets and torch stay runtime-only dependencies, so
+dataset validation and the fake-processor tests import without loading a model.
 """
 
 from .gates import (
     DatasetGateReport,
     GateError,
-    GroupedPilotReport,
     LengthAudit,
     PreparedExample,
     audit_dataset,
@@ -16,16 +14,13 @@ from .gates import (
     load_jsonl,
     parse_tool_call,
     prepare_example,
-    validate_grouped_pilot,
     validate_current_tool_registry,
 )
-from .provenance import validate_release_gate_report
 from .training import LoraSettings, TrainerSettings, validate_training_seed
 
 __all__ = [
     "DatasetGateReport",
     "GateError",
-    "GroupedPilotReport",
     "LengthAudit",
     "LoraSettings",
     "PreparedExample",
@@ -35,8 +30,6 @@ __all__ = [
     "load_jsonl",
     "parse_tool_call",
     "prepare_example",
-    "validate_grouped_pilot",
-    "validate_release_gate_report",
     "validate_training_seed",
     "validate_current_tool_registry",
 ]

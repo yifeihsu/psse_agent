@@ -1,8 +1,8 @@
-"""Tokenizer, schema, masking, and grouped-pilot go/no-go gates.
+"""Tokenizer, schema and assistant-masking checks for tool-call SFT rows.
 
-Rendering is intentionally strict.  There is no hand-written Gemma template
-fallback: production approval must use ``apply_chat_template`` from the exact,
-pinned processor/tokenizer that training will use.
+Rendering is intentionally strict: there is no hand-written Gemma template
+fallback, and rows are rendered with ``apply_chat_template`` from the processor
+that training uses.
 """
 
 from __future__ import annotations
@@ -19,20 +19,6 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 TOKEN_TYPE_INPUT_NAMES = ("token_type_ids", "mm_token_type_ids")
-
-# Deliberately duplicated as an ingestion contract instead of importing
-# recovery_probes here: recovery_probes imports the release factory, which in
-# turn imports this module and the training module.  Keeping this small fixed
-# vocabulary local avoids a module cycle while still failing closed on drift.
-_ROUND1_RECOVERY_PROBE_CONTRACT = "dagger1_observable_recovery_probe_v1"
-_ROUND1_RECOVERY_PROBE_SOURCE = "observable_recovery_probe"
-_ROUND1_RECOVERY_PROBE_ROLE = "auxiliary_training"
-_ROUND1_RECOVERY_PROBE_STRATA = frozenset(
-    {
-        "post_failure_no_candidate",
-        "unsupported_correction_recovery",
-    }
-)
 
 
 def processor_token_type_input_names(processor: Any) -> tuple[str, ...]:
@@ -142,21 +128,6 @@ class DatasetGateReport:
         if include_records:
             payload["prepared_records"] = [record.model_record() for record in self.prepared]
         return payload
-
-
-@dataclass(frozen=True)
-class GroupedPilotReport:
-    passed: bool
-    failures: tuple[str, ...]
-    total_rows: int
-    split_rows: dict[str, int]
-    split_group_counts: dict[str, int]
-    overlapping_groups: dict[str, tuple[str, ...]]
-    action_distribution: dict[str, dict[str, int]]
-    class_distribution: dict[str, dict[str, int]]
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 def load_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -1040,175 +1011,6 @@ def audit_dataset(
         action_distribution=dict(sorted(actions.items())),
         class_distribution=dict(sorted(classes.items())),
         prepared=prepared,
-    )
-
-
-def _round1_auxiliary_probe_failures(
-    row: Mapping[str, Any],
-    *,
-    generation_provenance_id: str,
-) -> tuple[str, ...]:
-    """Return why one row is not the exact authenticated probe shape.
-
-    This check does not authenticate provenance by itself.  Its caller may
-    supply only the generation ID returned by the immutable Round-1 source
-    gate; the training entrypoint enforces that ordering before calling the
-    grouped-pilot gate.
-    """
-
-    metadata = row.get("metadata")
-    if not isinstance(metadata, Mapping):
-        return ("metadata is missing",)
-
-    expected = {
-        "dataset_mode": "production",
-        "dataset_source": _ROUND1_RECOVERY_PROBE_SOURCE,
-        "collector_contract": _ROUND1_RECOVERY_PROBE_CONTRACT,
-        "state_origin": _ROUND1_RECOVERY_PROBE_SOURCE,
-        "collection_role": _ROUND1_RECOVERY_PROBE_ROLE,
-        "state_visited_by": _ROUND1_RECOVERY_PROBE_SOURCE,
-        "replay_source": _ROUND1_RECOVERY_PROBE_SOURCE,
-        "auxiliary_training_eligible": True,
-        "production_label_eligible": False,
-        "natural_on_policy_support_eligible": False,
-        "training_decision_evidence_verified": True,
-        "generation_provenance_id": generation_provenance_id,
-    }
-    failures: list[str] = []
-    for key, wanted in expected.items():
-        for container_name, container in (("row", row), ("metadata", metadata)):
-            actual = container.get(key)
-            matches = actual is wanted if isinstance(wanted, bool) else actual == wanted
-            if not matches:
-                failures.append(
-                    f"{container_name}.{key} must be {wanted!r}, got {actual!r}"
-                )
-    recovery_stratum = row.get("recovery_stratum")
-    if recovery_stratum not in _ROUND1_RECOVERY_PROBE_STRATA:
-        failures.append(
-            "row.recovery_stratum is not a reviewed recovery-probe stratum"
-        )
-    if metadata.get("recovery_stratum") != recovery_stratum:
-        failures.append("metadata.recovery_stratum does not mirror the row")
-    return tuple(failures)
-
-
-def _has_round1_recovery_probe_marker(row: Mapping[str, Any]) -> bool:
-    metadata = row.get("metadata")
-    containers = (row, metadata if isinstance(metadata, Mapping) else {})
-    return any(
-        container.get("dataset_source") == _ROUND1_RECOVERY_PROBE_SOURCE
-        or container.get("collector_contract") == _ROUND1_RECOVERY_PROBE_CONTRACT
-        or container.get("state_origin") == _ROUND1_RECOVERY_PROBE_SOURCE
-        or container.get("collection_role") == _ROUND1_RECOVERY_PROBE_ROLE
-        or container.get("state_visited_by") == _ROUND1_RECOVERY_PROBE_SOURCE
-        or container.get("replay_source") == _ROUND1_RECOVERY_PROBE_SOURCE
-        or container.get("auxiliary_training_eligible") is True
-        for container in containers
-    )
-
-
-def validate_grouped_pilot(
-    splits: Mapping[str, Sequence[Mapping[str, Any]]],
-    *,
-    group_key: str = "root_scenario_id",
-    minimum_rows: int = 32,
-    maximum_rows: int = 128,
-    require_validation: bool = True,
-    require_production_dataset_mode: bool = True,
-    require_production_label_eligible: bool = True,
-    required_protocol: str | None = None,
-    validated_round1_generation_provenance_id: str | None = None,
-) -> GroupedPilotReport:
-    failures: list[str] = []
-    trusted_round1_id = validated_round1_generation_provenance_id
-    if trusted_round1_id is not None and re.fullmatch(
-        r"[0-9a-f]{64}", trusted_round1_id
-    ) is None:
-        failures.append(
-            "validated Round-1 generation provenance ID must be lowercase 64-hex."
-        )
-        trusted_round1_id = None
-    total = sum(len(rows) for rows in splits.values())
-    if total < minimum_rows or total > maximum_rows:
-        failures.append(f"Pilot size must be in [{minimum_rows}, {maximum_rows}], got {total} rows.")
-    if not splits.get("train"):
-        failures.append("Grouped pilot has no train rows.")
-    if require_validation and not splits.get("validation"):
-        failures.append("Grouped pilot has no validation rows.")
-
-    ownership: dict[str, set[str]] = {}
-    split_groups: dict[str, set[str]] = {}
-    action_distribution: dict[str, dict[str, int]] = {}
-    class_distribution: dict[str, dict[str, int]] = {}
-    for split_name, rows in splits.items():
-        groups: set[str] = set()
-        actions: Counter[str] = Counter()
-        classes: Counter[str] = Counter()
-        for index, row in enumerate(rows):
-            probe_marked = _has_round1_recovery_probe_marker(row)
-            if require_production_label_eligible and (
-                row.get("production_label_eligible") is not True or probe_marked
-            ):
-                auxiliary_failures = (
-                    _round1_auxiliary_probe_failures(
-                        row,
-                        generation_provenance_id=trusted_round1_id,
-                    )
-                    if trusted_round1_id is not None
-                    else ("no validated Round-1 source binding was supplied",)
-                )
-                if auxiliary_failures:
-                    failures.append(
-                        f"{split_name}[{index}] is not explicitly production-label "
-                        "eligible as a non-probe row and is not an authenticated "
-                        "Round-1 recovery probe: "
-                        + "; ".join(auxiliary_failures)
-                        + "."
-                    )
-            metadata = row.get("metadata")
-            protocol = metadata.get("protocol") if isinstance(metadata, Mapping) else None
-            if required_protocol is not None and protocol != required_protocol:
-                failures.append(
-                    f"{split_name}[{index}] must use {required_protocol!r} protocol, got {protocol!r}."
-                )
-            if require_production_dataset_mode and (
-                row.get("dataset_mode") != "production"
-                or not isinstance(metadata, Mapping)
-                or metadata.get("dataset_mode") != "production"
-            ):
-                failures.append(
-                    f"{split_name}[{index}] is not tagged as a production dataset row."
-                )
-            group = row.get(group_key)
-            if not isinstance(group, str) or not group:
-                failures.append(f"{split_name}[{index}] is missing non-empty {group_key!r}.")
-                continue
-            groups.add(group)
-            ownership.setdefault(group, set()).add(split_name)
-            actions[_target_action(row)] += 1
-            classes[_class_label(row)] += 1
-        split_groups[split_name] = groups
-        action_distribution[split_name] = dict(sorted(actions.items()))
-        class_distribution[split_name] = dict(sorted(classes.items()))
-
-    overlaps = {
-        group: tuple(sorted(owners))
-        for group, owners in ownership.items()
-        if len(owners) > 1
-    }
-    if overlaps:
-        preview = ", ".join(f"{group}:{'/'.join(owners)}" for group, owners in sorted(overlaps.items())[:8])
-        failures.append(f"Root-scenario groups overlap across splits: {preview}.")
-    return GroupedPilotReport(
-        passed=not failures,
-        failures=tuple(failures),
-        total_rows=total,
-        split_rows={name: len(rows) for name, rows in splits.items()},
-        split_group_counts={name: len(groups) for name, groups in split_groups.items()},
-        overlapping_groups=overlaps,
-        action_distribution=action_distribution,
-        class_distribution=class_distribution,
     )
 
 

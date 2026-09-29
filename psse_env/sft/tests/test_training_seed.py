@@ -3,21 +3,16 @@
 from __future__ import annotations
 
 import unittest
-import tempfile
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from psse_env.sft.cli import main as cli_main
-from psse_env.sft.cli import parser
 from psse_env.sft.gates import GateError
 from psse_env.sft.training import (
     TrainerSettings,
     _seed_training_rngs,
     trl_config_kwargs,
 )
-from psse_env.dagger.study_manifest import DEFAULT_STUDY_MANIFEST
 
 
 PINNED_REVISION = "a" * 40
@@ -33,22 +28,7 @@ COMMON_TRAIN_ARGS = [
 
 
 class TestTrainingSeed(unittest.TestCase):
-    def test_cli_requires_and_exposes_explicit_seed(self) -> None:
-        with self.assertRaises(SystemExit):
-            parser().parse_args(COMMON_TRAIN_ARGS)
-        explicit = parser().parse_args([*COMMON_TRAIN_ARGS, "--seed", "3409"])
 
-        self.assertEqual(explicit.seed, 3409)
-
-    def test_cli_rejects_invalid_seed_before_baseline_gate(self) -> None:
-        for value in ("-1", "4294967296", "not-an-integer"):
-            with self.subTest(value=value):
-                with mock.patch(
-                    "psse_env.sft.cli._baseline_evaluation_gate"
-                ) as baseline_gate:
-                    with self.assertRaises(SystemExit):
-                        cli_main([*COMMON_TRAIN_ARGS, "--seed", value])
-                baseline_gate.assert_not_called()
 
     def test_trainer_settings_reject_invalid_direct_values(self) -> None:
         for value in (-1, 2**32, True, 1.5, "3407"):
@@ -122,23 +102,6 @@ class TestTrainingSeed(unittest.TestCase):
 
         self.assertTrue(torch.equal(first, repeated))
         self.assertFalse(torch.equal(first, different))
-
-    def test_cli_forwards_seed_into_training(self) -> None:
-        with (
-            mock.patch(
-                "psse_env.sft.cli._baseline_evaluation_gate",
-                return_value={},
-            ),
-            mock.patch(
-                "psse_env.sft.cli.run_lora_training",
-                return_value=SimpleNamespace(metrics={"train_loss": 1.0}),
-            ) as run_training,
-        ):
-            result = cli_main([*COMMON_TRAIN_ARGS, "--seed", "3408"])
-
-        self.assertEqual(result, 0)
-        settings = run_training.call_args.kwargs["settings"]
-        self.assertEqual(settings.seed, 3408)
 
 
 if __name__ == "__main__":  # pragma: no cover

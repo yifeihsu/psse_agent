@@ -1,12 +1,3 @@
-from .aggrevate import (
-    AggreVaTeLite,
-    BranchEvaluation,
-    CostBasedActionRanker,
-    CostWeights,
-    TopLBranchEvaluator,
-    evaluate_top_l_actions,
-    to_pairwise_examples,
-)
 from .counterfactual_generator import CounterfactualGenerator
 from .dataset_builder import (
     TOOL_JSON_SCHEMAS,
@@ -20,29 +11,22 @@ from .dataset_builder import (
     write_jsonl,
 )
 from .evaluator import (
-    ClosedLoopEvaluator,
     ClosedLoopRolloutEvaluator,
     EpisodeEvaluation,
     EvaluationResult,
     RecoveryMetrics,
-    evaluate_closed_loop,
-    evaluate_closed_loop_rollouts,
     evaluate_rollout_suites,
     recovery_score,
     summarize_episode_evaluations,
-    write_evaluation_artifact,
 )
 from .policy_adapter import LocalAliasPolicyAdapter
-from .replay_buffer import BalancedReplayBuffer, build_dagger1_training_view
 from .rollout_collector import (
     DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
     RECOMMENDED_DAGGER1_RECOVERY_STRATA,
     DaggerRolloutCollector,
-    audit_dagger1_recovery_labels,
     audit_target_aware_state_classes,
     classify_dagger1_recovery_stratum,
     observable_rank_one_target_proof,
-    run_dagger,
 )
 from .splits import grouped_scenario_split
 from .sft_audit import (
@@ -51,39 +35,25 @@ from .sft_audit import (
     audit_teacher_realizability,
     policy_observation_hash,
 )
-from .trainer import DaggerTrainer
 
 __all__ = [
-    "AggreVaTeLite",
-    "BalancedReplayBuffer",
-    "BranchEvaluation",
-    "CostBasedActionRanker",
-    "CostWeights",
     "CounterfactualGenerator",
-    "ClosedLoopEvaluator",
     "ClosedLoopRolloutEvaluator",
     "DaggerRolloutCollector",
     "DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION",
     "RECOMMENDED_DAGGER1_RECOVERY_STRATA",
-    "DaggerTrainer",
     "EpisodeEvaluation",
     "EvaluationResult",
     "LocalAliasPolicyAdapter",
     "RecoveryMetrics",
-    "TopLBranchEvaluator",
     "TOOL_JSON_SCHEMAS",
     "audit_chat_sft_rows",
     "audit_approximate_teacher_realizability",
-    "audit_dagger1_recovery_labels",
     "audit_target_aware_state_classes",
     "audit_teacher_realizability",
     "bind_controller_action",
-    "build_dagger1_training_view",
     "classify_dagger1_recovery_stratum",
     "observable_rank_one_target_proof",
-    "evaluate_top_l_actions",
-    "evaluate_closed_loop",
-    "evaluate_closed_loop_rollouts",
     "evaluate_rollout_suites",
     "examples_to_chat_sft",
     "grouped_scenario_split",
@@ -91,10 +61,7 @@ __all__ = [
     "policy_observation_hash",
     "prepare_model_policy_observation",
     "recovery_score",
-    "run_dagger",
-    "to_pairwise_examples",
     "summarize_episode_evaluations",
-    "write_evaluation_artifact",
     "validate_policy_payload",
     "validate_policy_provenance",
     "validate_tool_schemas",
