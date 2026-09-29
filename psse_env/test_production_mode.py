@@ -14,6 +14,7 @@ from psse_env.actions import (
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
+    RECOVERY_BUDGET_EXHAUSTED_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
     RUN_WLS,
@@ -475,14 +476,28 @@ class ProductionConfigurationTests(unittest.TestCase):
             def choice(items):
                 return items[0]
 
+        @_deterministic_adapter
+        def budget_handoff(state):
+            return {
+                "request": state["evidence_request"],
+                "additional_evidence_available": True,
+                "autonomous_budget_available": False,
+                "operator_review_required": True,
+            }
+
         env = _production_env()
+        env.evidence_providers[ASK_FOR_MORE_EVIDENCE] = budget_handoff
+        # The collection horizon is the budget the policy observes. A
+        # correction needs four actions (correct, verify, commit, then
+        # finalize or hand off), so six fit the commit and the handoff of its
+        # still unconfirmed resolution.
         rows = DaggerRolloutCollector(
             env=env,
             policy=RunWLSPolicy(),
             expert_oracle=ExpertPolicyOracle(),
             rng=FirstChoiceRandom(),
         ).collect_iteration(
-            scenarios=[_measurement_scenario()], iteration=0, beta=1.0, max_steps=5
+            scenarios=[_measurement_scenario()], iteration=0, beta=1.0, max_steps=6
         )
         self.assertEqual(
             [row["preferred_action"]["tool"] for row in rows],
@@ -492,9 +507,16 @@ class ProductionConfigurationTests(unittest.TestCase):
                 CORRECT_MEASUREMENTS,
                 RUN_WLS,
                 COMMIT_STATE,
+                ASK_FOR_MORE_EVIDENCE,
             ],
         )
-        self.assertEqual(rows[-1]["state_class"], "accepted_final_commit")
+        self.assertEqual(rows[4]["state_class"], "accepted_final_commit")
+        self.assertEqual(
+            rows[-1]["preferred_action"]["arguments"]["request"],
+            RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+        )
+        self.assertEqual(rows[-1]["state_class"], "terminal_operator_escalation")
+        self.assertEqual(env.terminal_outcome, "operator_escalation")
         self.assertTrue(
             all(
                 row["dataset_mode"] == "production"
