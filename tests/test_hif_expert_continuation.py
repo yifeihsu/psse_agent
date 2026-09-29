@@ -282,7 +282,14 @@ def test_provider_supplied_nonregression_certificate_is_removed_before_exposure(
 
 
 def test_real_cached_conditioned_meter_repair_crosses_both_gates_and_hands_off():
-    """Replay the former40-step deadlock without running another HIF fit."""
+    """Replay the former 40-step deadlock without running another HIF fit.
+
+    The frozen root and its fit come from the 2026-09-22 physics, before the
+    generator-regulation fix; the current OpenDSS model reproduces neither (a
+    fresh fit is not even accepted). The recorded observable-history fit and
+    its conditioned prediction are replayed; WLS, the candidate checks, the
+    controller and the expert run live.
+    """
     import importlib.util
     import json
     from pathlib import Path
@@ -292,26 +299,56 @@ def test_real_cached_conditioned_meter_repair_crosses_both_gates_and_hands_off()
     root = Path(__file__).resolve().parents[1]
     data = root / "output/hif_continuation_fix_20260922"
     if (not (data / "frozen_mixed_scenarios.json").is_file()
+        or not (data / "final_regression/r0_de51c28ced3e.json").is_file()
         or not (data / "fresh_fit_cache").is_dir()
         or importlib.util.find_spec("opendssdirect") is None):
-        pytest.skip("frozen real HIF replay and its fitted observable-history cache are unavailable")
+        pytest.skip("frozen real HIF replay and its recorded observable-history fit are unavailable")
     script = r'''
 import opendssdirect
 import json
 from pathlib import Path
 from copy import deepcopy
-from scripts.verify_hif_continuation import ObservableFitCache, make_environment
-from psse_env.providers.matpower import MatpowerDeploymentProviders
+from unittest.mock import patch
+from scripts.verify_hif_continuation import jsonable, make_environment
+from psse_env.providers.hif_continuation import accepted_fit
 from psse_env.oracle import ExpertPolicyOracle
 from psse_env.dagger.release_factories import select_observable_expert_actions
 
-def no_fitting(self, **kwargs):
-    raise RuntimeError("Test requires cached observable-history fit, not a new fit")
-MatpowerDeploymentProviders._memoized_hif_multiscan = no_fitting
 p = Path("output/hif_continuation_fix_20260922")
 row = next(row for row in json.loads((p/"frozen_mixed_scenarios.json").read_text())
            if row["execution"]["scenario_id"] == "r0_de51c28ced3e")
-cache = ObservableFitCache(p/"fresh_fit_cache")
+captured = json.loads((p/"final_regression/r0_de51c28ced3e.json").read_text())
+recorded = json.loads((p/"fresh_fit_cache"/(captured["fit_calls"][0]["cache_key"] + ".json")).read_text())
+prediction = captured["prediction"]
+
+
+class RecordedFit:
+    def __init__(self):
+        self.calls = []
+
+    def attach(self, provider):
+        def fitted(**kwargs):
+            # Same observable inputs as the recorded fit (later keyword
+            # arguments, such as require_declared_sigmas, did not exist then).
+            arguments = {key: value for key, value in kwargs.items() if key in recorded["binding"]["arguments"]}
+            assert jsonable(arguments) == recorded["binding"]["arguments"]
+            self.calls.append(kwargs)
+            return deepcopy(recorded["payload"])
+        provider._memoized_hif_multiscan = fitted
+
+
+def recorded_prediction(state, cache):
+    fit = accepted_fit(state)
+    if fit is None:
+        return None
+    used = prediction["parameters_used"]
+    assert fit["estimated"]["alpha_from_from_bus"] == used["alpha_from_from_bus"]
+    assert fit["estimated"]["r_hif_pu"] == used["r_hif_pu"]
+    return deepcopy(prediction)
+
+
+patch("psse_env.providers.matpower.conditioned_prediction", recorded_prediction).start()
+cache = RecordedFit()
 env, provider = make_environment(cache, alpha_grid_size=7, r_grid_size=9, max_scans=10,
                                  max_steps=40, normalized_residual_threshold=4.)
 env.reset(deepcopy(row["execution"]))
@@ -351,7 +388,7 @@ assert env.terminal_outcome == "operator_escalation"
 assert tools == ["run_three_phase_nlm_from_path", "estimate_hif_location_magnitude_multiscan_from_path",
                  "run_wls", "get_measurement_context", "correct_measurements", "run_wls", "commit_state",
                  "get_measurement_context", "ask_for_more_evidence"]
-assert all(call["origin"] == "cached_fresh_observable_fit" for call in cache.calls)
+assert len(cache.calls) == 1
 after = env.store.get_state(env.store.active_state_id)["measurements"]
 before = row["execution"]["measurements"]
 assert [i for i, pair in enumerate(zip(before, after)) if pair[0] != pair[1]] == [76]
