@@ -4,7 +4,8 @@ from __future__ import annotations
 from psse_env.actions import CORRECT_MEASUREMENTS, CORRECT_PARAMETERS, GET_MEASUREMENT_CONTEXT, GET_PARAMETER_CONTEXT
 from psse_env.oracle.expert_types import ExpertActionProposal
 from psse_env.oracle.hypothesis_ledger import (
-    FAMILY_BOOST, TARGET_BOOST, hypothesis_ledger, rerank_proposals, screen_hypotheses, screen_targets,
+    EXHAUSTED_FAMILY_PENALTY, FAMILY_BOOST, TARGET_BOOST, hypothesis_ledger, rerank_proposals, screen_hypotheses,
+    screen_targets,
 )
 
 ACTIVE = "s0"
@@ -104,17 +105,25 @@ def test_rerank_boosts_the_leading_family_and_its_top_target():
     assert by_action[("run_wls", None)].confidence == 0.5
 
 
-def test_rerank_drops_an_exhausted_family_and_passes_through_without_a_screen():
+def test_rerank_ranks_an_exhausted_family_last_and_passes_through_without_a_screen():
     exhausted = _policy(MIXED, rejected=[_rejected(CORRECT_PARAMETERS, line_index=13),
                                          _rejected(CORRECT_PARAMETERS, line_index=14)])
     reranked = rerank_proposals(_proposals(), exhausted)
-    tools = [p.action["tool"] for p in reranked]
-    assert CORRECT_PARAMETERS not in tools and GET_PARAMETER_CONTEXT not in tools
-    assert GET_MEASUREMENT_CONTEXT in tools and "run_wls" in tools
+    by_tool = {p.action["tool"]: p for p in reranked}
+    # The family over budget keeps its proposals (a handoff needs every
+    # supported correction tested), ranked behind the other families.
+    assert CORRECT_PARAMETERS in by_tool and GET_PARAMETER_CONTEXT in by_tool
+    assert by_tool[GET_PARAMETER_CONTEXT].confidence == 0.87 - EXHAUSTED_FAMILY_PENALTY
+    assert "ledger_budget_exhausted=parameter" in by_tool[GET_PARAMETER_CONTEXT].evidence_codes
+    assert by_tool[GET_MEASUREMENT_CONTEXT].confidence > by_tool[CORRECT_PARAMETERS].confidence
+    assert GET_MEASUREMENT_CONTEXT in by_tool and "run_wls" in by_tool
     assert [p.confidence for p in rerank_proposals(_proposals(), _policy({"status": "screen_error"}))] == \
         [p.confidence for p in _proposals()]
     reranked = rerank_proposals(_proposals(), _policy(MIXED, rejected=[
         _rejected(CORRECT_MEASUREMENTS, suspect_group=[71]), _rejected(CORRECT_MEASUREMENTS, suspect_group=[40]),
         _rejected(CORRECT_PARAMETERS, line_index=20), _rejected(CORRECT_PARAMETERS, line_index=19),
     ]))
-    assert all(p.action["tool"] not in (CORRECT_PARAMETERS, CORRECT_MEASUREMENTS) for p in reranked)
+    corrections = [p for p in reranked if p.action["tool"] in (CORRECT_PARAMETERS, CORRECT_MEASUREMENTS)]
+    assert corrections and all(p.confidence < 0.6 for p in corrections)
+    assert all("ledger_state_budget_exhausted" in p.evidence_codes or any(c.startswith("ledger_budget_exhausted") for c in p.evidence_codes)
+               for p in corrections)

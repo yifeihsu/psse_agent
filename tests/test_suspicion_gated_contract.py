@@ -148,6 +148,13 @@ def test_the_process_oracle_needs_a_phasor_suspicion_on_top_of_the_alarm():
     assert oracle.check(examined, edit)["error_detail"] != "measurement_voltage_meter_correction_requires_phase_measurements"
     power = {"tool": "correct_measurements", "arguments": {"state_id": "s0", "suspect_group": [40]}}
     assert oracle.check(state(voltage), power)["error_detail"] != "measurement_voltage_meter_correction_requires_phase_measurements"
+    # The hold needs an acquisition the gate admits (2026-10-01): a screen that
+    # explained the alarm otherwise leaves no phasor suspicion, so the voltage
+    # channel is an ordinary meter target rather than an unreachable one.
+    explained = {"status": "valid", "suspected": False, "explained": True, "phasor_suspicion": none,
+                 "voltage_meter_channels": [], "accepted_hypotheses": [{"class": "parameter", "branch_row0": 13, "parameter": "X"}]}
+    assert oracle.check(state(explained), edit)["error_detail"] != "measurement_voltage_meter_correction_requires_phase_measurements"
+    assert oracle.check(state(explained), phasors)["error_code"] == "diagnostics_require_phasor_suspicion"
 
 
 # --------------------------------------------------------------------- phasors

@@ -217,6 +217,37 @@ cell. Results land in `out/pipeline_summary.json` and `out/<round>/round_summary
 The deploy helper `research/hpc/full_pipeline_20260907/deploy_cell_from_windows.sh`
 reaches the cluster through the WSL SSH master (`scripts/start_torch_ssh_master.ps1`).
 
+**Stage 0 failure and the two fixes (2026-10-01, 18:48 UTC).** The first
+submission died 30 minutes into stage 0 on root 33 of 548, a single bad
+phase-A voltage meter (channel 7) whose screen explained the alarm by a
+branch-13 reactance instead (parameter 47.3 against meter 45.0, no voltage
+channel set aside, so no phasor suspicion). The parameter context offered no
+correction, the ledger's measurement targets were 7, 75 and 116, the D3 hold
+refused the edit of channel 7 because no phasors had been examined while the
+gate admitted no phasor acquisition to satisfy it, the two power channels
+were tried and rejected, the ledger's family budget then dropped the meter
+family, and the expert handed off with channels 7 and 6 still supported:
+the production label audit refused the handoff
+(`same_state_supported_corrections_unexhausted`) and the collector raised.
+Reproduced locally on the same root (the cell's generator arguments, 535 s
+to rebuild the 548 scenarios). Two rules were wrong, one old and one new:
+
+- *D3 needs an admissible acquisition.* The hold on a voltage-meter edit now
+  applies only while a phasor suspicion is current (the acquisition the hold
+  points at is then admissible). Without one the channel is an ordinary
+  meter target judged by verification; before, it was unreachable and every
+  handoff on such a root was invalid, for the baseline teacher too.
+- *The ledger budget orders, it does not hand off.* A family (or state)
+  over budget now ranks its remaining supported targets last instead of
+  dropping them: a production handoff is valid only once every supported
+  same-state correction was tested or is safety-blocked, so the step 3
+  wording "offers no further correction" was never admissible as a label.
+  The 160-root dev draw never reached a budget, so the step 3 and step 5
+  measurements are unaffected.
+
+With both fixes the root corrects channel 7 first, commits, and ends in the
+post-correction confirmation handoff the audit accepts (9 steps).
+
 The evaluation summaries already report success by basis
 (`summarize.py: success_basis`); under the suspicion-gated admission every
 suite root alarms the WLS, so success conditional on an alarm is the

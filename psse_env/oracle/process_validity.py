@@ -374,9 +374,14 @@ class ProcessValidityOracle:
                 tool == CORRECT_MEASUREMENTS
                 and _evidence_profile.is_suspicion_gated(state.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE))
                 and voltage_meter_edit_without_phasors(state, args)
+                and current_family_suspicion(state, "phasor")
             ):
                 # D3 (2026-09-30): a voltage-meter edit waits for the phasors
-                # that tell a bad meter from a one-bus unbalance.
+                # that tell a bad meter from a one-bus unbalance.  The hold
+                # needs an acquisition the gate admits (2026-10-01): when no
+                # phasor suspicion is current the channel is an ordinary meter
+                # target judged by verification, or the target could never be
+                # reached and a handoff would leave it outstanding.
                 error_code = "correction_route_not_actionable"
                 error_detail = "measurement_voltage_meter_correction_requires_phase_measurements"
             elif tool == CORRECT_MEASUREMENTS and not hif_meter_route_ready(state) and self._measurement_route_blocked_by_branch_dominance(

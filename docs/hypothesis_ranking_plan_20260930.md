@@ -403,4 +403,9 @@ open item for the screen. Arm 4 is configured
 (`research/hpc/full_pipeline_20260907/overrides/hypothesis_ranking_20261001.env`,
 teacher `ledger_ranked`, everything regenerated; local stage 0 passed) and
 was submitted on 2026-10-01 (cell research_full_pipeline_20261001_ranked,
-jobs 18967774 to 18967781, commit 7f8fb6a).
+jobs 18967774 to 18967781, commit 7f8fb6a). Stage 0 failed on a voltage-meter
+root the screen explained by a branch: the D3 hold had no admissible
+acquisition and the ledger budget handed off with supported targets
+outstanding. Fixed (D3 holds only under a current phasor suspicion; the
+budget ranks a family last instead of dropping it) and resubmitted; see the
+step 5 note for the second chain.

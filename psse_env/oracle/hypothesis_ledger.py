@@ -19,8 +19,13 @@ The ledger changes the expert's ordering only:
   refit ranking puts the true branch first on 5 of the 8 misranked parameter
   roots where the multiplier ranking never does);
 * a family with two verification-rejected candidates on this state, or a
-  state with four, offers no further correction; the ordinary exhaustion path
-  (phasors, spectra, handoff) follows.
+  state with four, ranks last: its remaining supported targets are tried only
+  after every other family's proposals, never dropped.  The budget orders;
+  it does not hand off.  A production handoff label is valid only once every
+  supported same-state correction was tested or is safety-blocked
+  (TransactionalPSSEEnv.assert_training_decision_evidence), and the 2026-10-01
+  cell's stage 0 failed on a root where a dropped family left two supported
+  targets outstanding.
 
 A failed execution is not a tested hypothesis and consumes no budget; a
 rejected candidate removes only its target; an accepted correction advances
@@ -58,6 +63,8 @@ DEFAULT_STATE_BUDGET = 4
 FAMILY_BOOST = 0.12
 TARGET_BOOST = 0.01
 SECOND_TARGET_BOOST = 0.005
+#: Confidence removed from the proposals of a family (or state) over budget: they rank last.
+EXHAUSTED_FAMILY_PENALTY = 0.5
 
 
 def _as_mapping(state: Any) -> Mapping[str, Any]:
@@ -269,12 +276,17 @@ def rerank_proposals(
         if family is None:
             result.append(proposal)
             continue
-        if family in exhausted or (state_exhausted and tool in CORRECTION_FAMILY):
-            # Two rejected candidates of this family on this state (or four
-            # in all): the ledger offers no more; the exhaustion path follows.
-            continue
         confidence = proposal.confidence
         evidence = list(proposal.evidence_codes)
+        if family in exhausted or (state_exhausted and tool in CORRECTION_FAMILY):
+            # Two rejected candidates of this family on this state (or four
+            # in all): its remaining targets rank behind every other family's
+            # proposals.  They stay available, because a handoff is valid only
+            # once every supported same-state correction was tested.
+            confidence -= EXHAUSTED_FAMILY_PENALTY
+            evidence.append(f"ledger_budget_exhausted={family}" if family in exhausted else "ledger_state_budget_exhausted")
+            result.append(replace(proposal, confidence=confidence, evidence_codes=evidence))
+            continue
         if family == leading:
             confidence += FAMILY_BOOST
             evidence.append(f"ledger_leading_family={family}")
@@ -293,7 +305,8 @@ def rerank_proposals(
 
 
 __all__ = [
-    "DEFAULT_FAMILY_BUDGET", "DEFAULT_STATE_BUDGET", "FAMILY_BOOST", "SCREEN_CLASS_FAMILY", "TARGET_BOOST",
+    "DEFAULT_FAMILY_BUDGET", "DEFAULT_STATE_BUDGET", "EXHAUSTED_FAMILY_PENALTY", "FAMILY_BOOST", "SCREEN_CLASS_FAMILY",
+    "TARGET_BOOST",
     "correction_target", "hypothesis_ledger", "rerank_proposals", "screen_hypotheses", "screen_targets",
     "tested_hypotheses",
 ]
