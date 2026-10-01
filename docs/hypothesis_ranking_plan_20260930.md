@@ -407,5 +407,6 @@ jobs 18967774 to 18967781, commit 7f8fb6a). Stage 0 failed on a voltage-meter
 root the screen explained by a branch: the D3 hold had no admissible
 acquisition and the ledger budget handed off with supported targets
 outstanding. Fixed (D3 holds only under a current phasor suspicion; the
-budget ranks a family last instead of dropping it) and resubmitted; see the
-step 5 note for the second chain.
+budget ranks a family last instead of dropping it, with an open acquisition
+tier taken first) and resubmitted from dbc2f88 as jobs 18987065 to 18987076;
+see the step 5 note.

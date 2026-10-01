@@ -257,10 +257,14 @@ With both fixes the root corrects channel 7 first, commits, and ends in the
 post-correction confirmation handoff the audit accepts (9 steps).
 Every one of the 548 stage-0 scenarios then passed the collector's
 training-decision check locally with the ranked teacher (eight parallel
-chunks, 0 failures). The cell was redeployed from commit 8e2414a and the
-chain resubmitted on 2026-10-01 at 22:21 UTC: d0 18985026, bc0 18985027,
-r1c 18985028, r1t 18985029, r1e 18985030, r2c 18985031, r2t 18985032,
-r2e 18985033 (the first attempt's log is kept under `logs/attempt1_failed/`).
+chunks, 0 failures, repeated after the budget refinement), and the ranked
+arm rerun on the 208 paired roots reproduces section 3 on every development
+family (two more opposite-sign mimics succeed). The cell was redeployed from
+commit dbc2f88 and the chain resubmitted on 2026-10-01 at 22:47 UTC: d0
+18987065, bc0 18987067, r1c 18987070, r1t 18987072, r1e 18987073, r2c
+18987074, r2t 18987075, r2e 18987076 (an intermediate chain from 8e2414a,
+jobs 18985026 to 18985033, was cancelled while still pending; the first
+attempt's log is kept under `logs/attempt1_failed/`).
 
 The evaluation summaries already report success by basis
 (`summarize.py: success_basis`); under the suspicion-gated admission every
