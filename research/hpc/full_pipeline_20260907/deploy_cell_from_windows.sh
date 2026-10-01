@@ -32,7 +32,8 @@ git bundle create "$BUNDLE_LOCAL" "$BASE..$BRANCH"
 SHA_LOCAL=$(sha256sum "$BUNDLE_LOCAL" | cut -d' ' -f1)
 echo "bundle $(stat -c %s "$BUNDLE_LOCAL") bytes sha256 $SHA_LOCAL"
 
-wsl -- ssh -o BatchMode=yes torch "echo ssh_ok" || { echo "no SSH master: run scripts/start_torch_ssh_master.ps1 first" >&2; exit 2; }
+# Plain ssh through the ControlMaster socket; BatchMode=yes bypasses it on this setup.
+wsl -- ssh -o NumberOfPasswordPrompts=0 torch "echo ssh_ok" || { echo "no SSH master: run scripts/start_torch_ssh_master.ps1 first" >&2; exit 2; }
 wsl -- ssh torch "set -e; mkdir -p $PIPE/logs $PIPE/out; if [ ! -d $PIPE/source/.git ]; then git clone -q $SOURCE_CELL/source $PIPE/source; fi; echo source_ready"
 wsl -- ssh torch "cat > $PIPE/deploy_${SHORT}.bundle" < "$BUNDLE_LOCAL"
 SHA_REMOTE=$(wsl -- ssh torch "sha256sum $PIPE/deploy_${SHORT}.bundle | cut -d' ' -f1")
