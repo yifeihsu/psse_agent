@@ -357,3 +357,19 @@ paired run (a verification-refuted screen explanation opens the phasors; no
 re-acquisition after a meter commit) took both arms from 156 to 159. The
 close-alternative comparison and a dedicated ranked-candidates handoff were
 deferred; the learned ranker (step 4) has a narrower job than planned.
+
+## 11. Step 4 outcome (2026-10-01)
+
+The learned ranker (`docs/hypothesis_ranking_step4_20261001.md`) trained on
+the step 1 states with parent splits reaches AUC 98 to 100% on every family,
+removes the same-sign flow-meter mimic entirely at the screen's HIF recall
+(-37.5% [-61.1, -15.8] mimics flagged, one HIF root in fifty lost), separates
+an unbalance from a voltage-meter error better than expected (AUC 92.7%
+[83.6, 99.1] on 38 roots), gains nothing on the adjacent-line ambiguity, and
+trades recall for false acquisitions rather than dominating the shipped gate
+(1.2% against 12.0% unnecessary acquisitions at 96.9% against 98.5% recall).
+Its IEEE 57 operating points do not transfer. Decision: the physics rule stays
+the admission gate; the learned scores become an ordering signal for the
+ledger expert (try the leading balanced hypothesis before an acquisition the
+model deems unlikely to be needed), to be measured with the step 3 paired
+harness. Step 5 (the DAgger cell) can start from the ledger teacher.
