@@ -181,7 +181,9 @@ after that wrong branch are injection channels next to it, not the flow
 meters; the ledger's first meter correction follows that ranking and misses
 (first meter correction on the true target: 103 of 112 meter roots for the
 ledger, 109 for the baseline, whose static residual order picks the flow
-meters), and four of those eight roots are lost. The same-sign pairs are solved 20 of 24 by
+meters), and four of those eight roots are lost (two of them are recovered
+by the final budget rule of section 4, which keeps trying supported meters
+instead of handing off: arm 3 rerun solves 19 of 24). The same-sign pairs are solved 20 of 24 by
 every arm; the four that fail do so identically in all arms (both true meters
 corrected and committed, the truth audit still refuses the final vector), so
 they do not separate the arms. Neither mimic family is in the cell's plan;
@@ -239,11 +241,17 @@ to rebuild the 548 scenarios). Two rules were wrong, one old and one new:
   handoff on such a root was invalid, for the baseline teacher too.
 - *The ledger budget orders, it does not hand off.* A family (or state)
   over budget now ranks its remaining supported targets last instead of
-  dropping them: a production handoff is valid only once every supported
-  same-state correction was tested or is safety-blocked, so the step 3
-  wording "offers no further correction" was never admissible as a label.
-  The 160-root dev draw never reached a budget, so the step 3 and step 5
-  measurements are unaffected.
+  dropping them, and when nothing but such targets is left the expert opens
+  an acquisition tier that is still admissible (phasors, then spectra)
+  before them, exactly as it did when the budget closed the routes; only
+  without an open tier are the remaining targets tried. A production
+  handoff is valid only once every supported same-state correction was
+  tested or is safety-blocked, so the step 3 wording "offers no further
+  correction" was never admissible as a label. Demotion alone would have
+  cost the ledger its harmonic and mixed-HIF savings (one or more extra
+  rejected meters before the spectra or the phasors); with the acquisition
+  tier first the paired results of section 3 are reproduced, and two
+  opposite-sign mimics the dropping budget handed off are now solved.
 
 With both fixes the root corrects channel 7 first, commits, and ends in the
 post-correction confirmation handoff the audit accepts (9 steps).

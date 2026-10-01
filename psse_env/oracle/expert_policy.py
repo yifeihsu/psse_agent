@@ -48,7 +48,7 @@ from psse_env.oracle.termination_expert import TerminationExpert
 from psse_env.oracle.hif_continuation import hif_meter_route_ready, recovery_signatures
 from psse_env.oracle.topology_expert import TopologyExpert
 from psse_env.actions import ESTIMATE_HIF_FROM_PATH, UNEXPLAINED_DISCREPANCY_REQUEST, diagnostic_tool_permitted, phasors_examined
-from psse_env.oracle.hypothesis_ledger import TOOL_FAMILY, hypothesis_ledger, rerank_proposals
+from psse_env.oracle.hypothesis_ledger import TOOL_FAMILY, budget_exhausted, hypothesis_ledger, rerank_proposals
 from psse_env.oracle.learned_ranker import LearnedRanker, acquisition_deferral, deferral_evidence_codes, resolve_ranker
 from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary, is_suspicion_gated
 from psse_env.state_store import (
@@ -456,6 +456,22 @@ class ExpertPolicyOracle:
             mandatory=False,
         )
         if ranked:
+            if self.hypothesis_ledger and all(budget_exhausted(proposal) for proposal in ranked):
+                # The ledger's budget is spent on every family still offering a
+                # target.  An acquisition tier that is still admissible
+                # (phasors, then spectra) comes first, as it did when the
+                # budget closed the routes; only without one are the remaining
+                # supported targets tried, because a handoff is valid only once
+                # every supported same-state correction was tested.
+                acquisition = self._rank_and_filter(
+                    self.diagnostics_expert.unexplained_acquisition_proposals(policy, context.history),
+                    policy,
+                    seen_signatures=seen_signatures,
+                    blocked_correction_tools=blocked_correction_tools,
+                    mandatory=False,
+                )
+                if acquisition:
+                    return acquisition
             if self.hypothesis_ledger and hypothesis_ledger(policy)["leading_family"] == "measurement":
                 # The screen explained the alarm with meters and no branch
                 # class: the ledger's order stands, the branch contexts are not

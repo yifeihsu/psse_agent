@@ -20,12 +20,14 @@ The ledger changes the expert's ordering only:
   roots where the multiplier ranking never does);
 * a family with two verification-rejected candidates on this state, or a
   state with four, ranks last: its remaining supported targets are tried only
-  after every other family's proposals, never dropped.  The budget orders;
-  it does not hand off.  A production handoff label is valid only once every
-  supported same-state correction was tested or is safety-blocked
-  (TransactionalPSSEEnv.assert_training_decision_evidence), and the 2026-10-01
-  cell's stage 0 failed on a root where a dropped family left two supported
-  targets outstanding.
+  after every other family's proposals, never dropped.  When nothing but
+  such targets is left, the expert opens an acquisition tier that is still
+  admissible (phasors, then spectra) before them, and tries them only when
+  no tier is open.  The budget orders; it does not hand off.  A production
+  handoff label is valid only once every supported same-state correction was
+  tested or is safety-blocked (TransactionalPSSEEnv.assert_training_decision_evidence),
+  and the 2026-10-01 cell's stage 0 failed on a root where a dropped family
+  left two supported targets outstanding.
 
 A failed execution is not a tested hypothesis and consumes no budget; a
 rejected candidate removes only its target; an accepted correction advances
@@ -250,6 +252,14 @@ def hypothesis_ledger(
     }
 
 
+def budget_exhausted(proposal: ExpertActionProposal) -> bool:
+    """Whether ``rerank_proposals`` demoted this proposal for a spent family or state budget."""
+    return any(
+        str(code) == "ledger_state_budget_exhausted" or str(code).startswith("ledger_budget_exhausted=")
+        for code in proposal.evidence_codes
+    )
+
+
 def rerank_proposals(
     proposals: Sequence[ExpertActionProposal], state: Any, *,
     family_budget: int = DEFAULT_FAMILY_BUDGET, state_budget: int = DEFAULT_STATE_BUDGET,
@@ -307,6 +317,6 @@ def rerank_proposals(
 __all__ = [
     "DEFAULT_FAMILY_BUDGET", "DEFAULT_STATE_BUDGET", "EXHAUSTED_FAMILY_PENALTY", "FAMILY_BOOST", "SCREEN_CLASS_FAMILY",
     "TARGET_BOOST",
-    "correction_target", "hypothesis_ledger", "rerank_proposals", "screen_hypotheses", "screen_targets",
+    "budget_exhausted", "correction_target", "hypothesis_ledger", "rerank_proposals", "screen_hypotheses", "screen_targets",
     "tested_hypotheses",
 ]
