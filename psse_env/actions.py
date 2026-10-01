@@ -195,6 +195,13 @@ MACRO_ACTIONS = {
 # explained-anomaly termination semantics.  A diagnostic explanation for a
 # family accounts for the unresolved signatures matching that family's
 # markers; families not listed here can only be resolved by corrections.
+#: Signature the balanced screen mints on a current WLS when its HIF class wins
+#: (psse_env.providers.hif_screen).  It carries the HIF marker so the routing
+#: helpers read it as an HIF suspicion; it is a reason to request phasors, not
+#: a waveform event, and since C5 (2026-10-01) it no longer closes the balanced
+#: correction routes (``blocking_waveform_signatures``).
+HIF_SCREEN_SIGNATURE = "wls_hif_suspected"
+
 ANOMALY_FAMILY_MARKERS: dict[str, tuple[str, ...]] = {
     "harmonic": ("harmonic", "harmonics", "thd", "distortion", "waveform"),
     "three_phase_unbalance": (
@@ -243,6 +250,27 @@ def waveform_anomaly_signatures(unresolved: Any) -> list[str]:
         if any(pattern.search(text) for pattern in patterns):
             found.append(str(item))
     return found
+
+
+def blocking_waveform_signatures(unresolved: Any, observation: Any = None) -> list[str]:
+    """Waveform signatures that hold the correction routes shut.
+
+    C5 (hypothesis-ranking plan, 2026-10-01): the balanced screen's HIF
+    *suspicion* (``wls_hif_suspected``) is the physics rule's reason to admit
+    the phasors, not a waveform event on the network.  While it is untested,
+    no phasors requested on the state yet, it does not close the balanced
+    routes: the ledger expert may test its leading balanced hypothesis before
+    the acquisition (one verified candidate per state), and verification, not
+    the gate, judges that candidate.  Once phasors were requested on the
+    state the suspicion is theirs to settle, and it blocks as before until the
+    refreshed WLS withdraws it or the NLM confirms the fault.  Sensor-reported
+    and phasor-confirmed waveform signatures block in every case.  Without an
+    ``observation`` the untested case is assumed.
+    """
+    signatures = waveform_anomaly_signatures(unresolved)
+    if observation is not None and phasor_ledger(observation):
+        return signatures
+    return [item for item in signatures if not str(item).startswith(HIF_SCREEN_SIGNATURE)]
 
 
 #: Telemetry channels that let the three-phase state be screened directly.

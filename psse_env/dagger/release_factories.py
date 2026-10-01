@@ -41,6 +41,7 @@ from psse_env.dagger.dataset_builder import (
 )
 from psse_env.dagger.protocol_bridge import canonical_to_internal_action, unified_tool_schemas
 from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
+from psse_env.oracle.expert_variants import expert_variant_options
 from psse_env.providers.matpower import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import DEFAULT_CHI2_ALPHA
 from psse_env.sft.gates import (
@@ -672,7 +673,9 @@ def observable_expert_policy_factory(
     # Match the deployment environment's hydrated-correction process contract,
     # without supplying the expert any environment or oracle state.
     process_oracle = ProcessValidityOracle(executor_hydrated_corrections=True)
-    return ObservableExpertPolicy(ExpertPolicyOracle(process_oracle=process_oracle))
+    # The expert arm of an evaluation is the teacher variant under study
+    # (PSSE_EXPERT_VARIANT); the baseline unless a run names one.
+    return ObservableExpertPolicy(ExpertPolicyOracle(process_oracle=process_oracle, **expert_variant_options()))
 
 
 def deterministic_case_loader(value: Any) -> dict[str, Any]:

@@ -373,3 +373,33 @@ the admission gate; the learned scores become an ordering signal for the
 ledger expert (try the leading balanced hypothesis before an acquisition the
 model deems unlikely to be needed), to be measured with the step 3 paired
 harness. Step 5 (the DAgger cell) can start from the ledger teacher.
+
+## 12. Step 5 outcome (2026-10-01)
+
+The learned ordering is built (`docs/hypothesis_ranking_step5_20261001.md`):
+`psse_env/oracle/learned_ranker.py` computes 73 policy-visible features
+(parity with the offline study on 13 fresh roots, every feature equal), the
+step 4 gradient-boosted models are exported as JSON trees
+(`psse_env/oracle/models/learned_ranker_ieee14_20261001.json`, checked
+against sklearn to 1e-16) and `ExpertPolicyOracle(hypothesis_ledger=True,
+learned_ranker=...)` defers an admitted phasor acquisition behind the
+ledger's leading balanced hypothesis, once per state, when the model's
+`needs_aux` probability is below the operating point that keeps the rule's
+recall. Building it surfaced a contract conflict: the screen's HIF suspicion
+carried the HIF marker, so the process gate, the provider contexts and the
+expert's combined stage all closed the balanced routes while it stood, and
+the deferral was inadmissible. Decision C5: an untested screen suspicion (no
+phasors requested on the state) is not a waveform signature; once phasors are
+requested it blocks as before; sensor-reported and phasor-confirmed
+signatures always block. The step 3 arms reproduce root for root under C5.
+
+Paired on the 160 development roots plus 48 flow-meter pair mimics: arm 3
+(ledger + ranker) equals arm 2 in success, corrections and rollbacks and
+spends 63 instead of 72 acquisitions, the nine saved being same-sign mimics
+with an HIF-won screen; no auxiliary root is deferred. Arm 2 and arm 3 lose
+four opposite-sign mimics to arm 1 (17 against 21 of 24): the screen's
+accepted sequence puts a branch hypothesis ahead of the meters there, an
+open item for the screen. Arm 4 is configured
+(`research/hpc/full_pipeline_20260907/overrides/hypothesis_ranking_20261001.env`,
+teacher `ledger_ranked`, everything regenerated; local stage 0 passed) and
+waits for the user's SSH login to the cluster to be submitted.

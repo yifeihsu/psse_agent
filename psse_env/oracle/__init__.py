@@ -2,6 +2,8 @@ from .candidate_quality import CandidateAssessment, CandidateDisposition, Candid
 from .diagnostics_expert import DiagnosticsExpert
 from .expert_types import ExpertActionProposal
 from .expert_policy import ExpertPolicyOracle
+from .expert_variants import current_expert_variant, expert_variant_options
+from .learned_ranker import LearnedRanker
 from .measurement_expert import MeasurementExpert
 from .parameter_expert import ParameterExpert
 from .process_validity import ProcessValidityOracle
@@ -16,10 +18,13 @@ __all__ = [
     "DiagnosticsExpert",
     "ExpertActionProposal",
     "ExpertPolicyOracle",
+    "LearnedRanker",
     "MeasurementExpert",
     "ParameterExpert",
     "ProcessValidityOracle",
     "RecoveryExpert",
     "TerminationExpert",
     "TopologyExpert",
+    "current_expert_variant",
+    "expert_variant_options",
 ]

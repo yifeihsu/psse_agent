@@ -67,6 +67,23 @@ runs under the combined rule without a rerun. The IEEE 57 pilot's own
 runtime pin (alpha 0.05 with the same residual test) stays with the pilot
 scripts.
 
+## Hypothesis-ranking cell (2026-10-01)
+
+`overrides/hypothesis_ranking_20261001.env` runs the IEEE-14 pipeline with the
+`ledger_ranked` teacher: the rule expert following the balanced screen's
+hypothesis ledger (step 3 of `docs/hypothesis_ranking_plan_20260930.md`) with
+the learned ranker's acquisition deferral (step 4 decision; the model export
+`psse_env/oracle/models/learned_ranker_ieee14_20261001.json`).  `EXPERT_VARIANT`
+in `pipeline.env` names the teacher (`baseline`, `ledger`, `ledger_ranked`) and
+is exported to every stage as `PSSE_EXPERT_VARIANT`, so the aggregate, the
+collector, the training-decision audit and the evaluation's expert arm build
+the same expert; `prerequisites.sh` checks the ranker export for the ranked
+variant, and the receipts (`d0.done`, `collection.done` through the research
+profile, `deploy.json`) record the variant so a reused stage must declare it.
+Everything is regenerated: a teacher change invalidates D0.  The CPU arms 1 to
+3 of the plan and the cell's outcome are written up in
+`docs/hypothesis_ranking_step5_20261001.md`.
+
 ## IEEE 57 transfer run (2026-09-14)
 
 `overrides/ieee57_transfer_20260914.env` generates the balanced IEEE 57 data

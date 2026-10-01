@@ -837,10 +837,13 @@ def objective_recovery_action_assessment(
     from psse_env.dagger.rollout_collector import (
         classify_dagger1_recovery_stratum,
     )
-    from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
+    from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle, expert_variant_options
 
+    # The same teacher variant the collection used (PSSE_EXPERT_VARIANT), or
+    # the audit would judge a ledger teacher's labels by the baseline's rules.
     expert = ExpertPolicyOracle(
-        process_oracle=ProcessValidityOracle(executor_hydrated_corrections=True)
+        process_oracle=ProcessValidityOracle(executor_hydrated_corrections=True),
+        **expert_variant_options(),
     )
     selection = select_observable_expert_actions(
         policy_observation=payload,

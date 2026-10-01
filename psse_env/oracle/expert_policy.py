@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from psse_env.actions import (
@@ -30,6 +30,7 @@ from psse_env.actions import (
     safe_normalize_action,
     successful_current_wls,
     terminal_explanation_signatures,
+    blocking_waveform_signatures,
     waveform_anomaly_signatures,
 )
 from psse_env.oracle.candidate_quality import CandidateQualityOracle
@@ -47,7 +48,8 @@ from psse_env.oracle.termination_expert import TerminationExpert
 from psse_env.oracle.hif_continuation import hif_meter_route_ready, recovery_signatures
 from psse_env.oracle.topology_expert import TopologyExpert
 from psse_env.actions import ESTIMATE_HIF_FROM_PATH, UNEXPLAINED_DISCREPANCY_REQUEST, diagnostic_tool_permitted, phasors_examined
-from psse_env.oracle.hypothesis_ledger import hypothesis_ledger, rerank_proposals
+from psse_env.oracle.hypothesis_ledger import TOOL_FAMILY, hypothesis_ledger, rerank_proposals
+from psse_env.oracle.learned_ranker import LearnedRanker, acquisition_deferral, deferral_evidence_codes, resolve_ranker
 from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary, is_suspicion_gated
 from psse_env.state_store import (
     SYNTHETIC_TERMINAL_COMPATIBILITY_KEY,
@@ -131,12 +133,20 @@ class ExpertPolicyOracle:
         recovery_expert: RecoveryExpert | None = None,
         termination_expert: TerminationExpert | None = None,
         hypothesis_ledger: bool = False,
+        learned_ranker: LearnedRanker | str | None = None,
     ) -> None:
         # Step 3 (2026-10-01): order the balanced families and their targets by
         # the screen's accepted sequence and cap verified candidates per family
         # and per state (psse_env.oracle.hypothesis_ledger).  Off by default so
         # the current expert stays the baseline arm.
         self.hypothesis_ledger = bool(hypothesis_ledger)
+        # Step 4 decision (2026-10-01): with the ledger, a learned ranker on the
+        # policy-visible evidence may defer an admitted phasor acquisition
+        # behind the ledger's leading balanced hypothesis, once per state
+        # (psse_env.oracle.learned_ranker).  The physics rule stays the gate.
+        self.learned_ranker = resolve_ranker(learned_ranker)
+        if self.learned_ranker is not None and not self.hypothesis_ledger:
+            raise ValueError("learned_ranker requires hypothesis_ledger=True")
         self.process_oracle = process_oracle or ProcessValidityOracle()
         # Kept as a public collaborator for callers that use the expert policy
         # and candidate assessment through one object.
@@ -215,10 +225,18 @@ class ExpertPolicyOracle:
         )
         if preferred_first_request(policy, context.history) == GET_THREE_PHASE_CONTEXT:
             stages = tuple(reversed(stages))
+        deferral = None
         if is_suspicion_gated(policy):
             # Auxiliary measurements follow a balanced suspicion, never the
             # alarm alone: phasors only on a current HIF suspicion.
             stages = (self.diagnostics_expert.suspicion_screening_proposals,)
+            deferral = acquisition_deferral(policy, self.learned_ranker) if self.hypothesis_ledger else None
+            if deferral is not None:
+                # The ranker finds an auxiliary stream unlikely to be needed:
+                # the ledger's leading balanced hypothesis is verified first;
+                # once a candidate is rejected on this state the rule's
+                # acquisition follows unchanged.
+                stages = ()
         screening: list[ExpertActionProposal] = []
         for stage in stages:
             screening = stage(policy, context.history)
@@ -374,10 +392,16 @@ class ExpertPolicyOracle:
         # Their proposals would only be context requests and WLS repeats that
         # teach a student to chase the waveform event as a meter or branch
         # fault, so the combined stage keeps the diagnostics expert alone.
-        # (Only profiles with diagnostics can hold a waveform signature.)
-        if allows_diagnostic_tools(policy) and waveform_anomaly_signatures(
-            self._get(policy, "unresolved_signatures", []) or []
-        ):
+        # (Only profiles with diagnostics can hold a waveform signature.)  While
+        # the learned ranker defers the admitted acquisition (C5), the balanced
+        # screen's HIF suspicion does not count: the balanced proposals are
+        # exactly what the ledger tries first.  Otherwise the suspicion keeps
+        # the stage on the diagnostic ladder as before.
+        standing = (
+            blocking_waveform_signatures(self._get(policy, "unresolved_signatures", []) or [], policy)
+            if deferral is not None else waveform_anomaly_signatures(self._get(policy, "unresolved_signatures", []) or [])
+        )
+        if allows_diagnostic_tools(policy) and standing:
             proposals = [
                 proposal
                 for proposal in proposals
@@ -405,6 +429,14 @@ class ExpertPolicyOracle:
             ]
         if self.hypothesis_ledger:
             proposals = rerank_proposals(proposals, policy)
+            if deferral is not None:
+                codes = deferral_evidence_codes(deferral)
+                proposals = [
+                    replace(proposal, evidence_codes=[*proposal.evidence_codes, *codes])
+                    if TOOL_FAMILY.get(safe_normalize_action(proposal.action)["tool"]) == deferral["family"]
+                    else proposal
+                    for proposal in proposals
+                ]
         diversification = self._cross_family_diversification_proposals(
             policy, context.history, proposals
         )

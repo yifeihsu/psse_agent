@@ -4,6 +4,7 @@ from typing import Any, Mapping
 
 from psse_env.actions import (
     ANOMALY_FAMILY_MARKERS,
+    blocking_waveform_signatures,
     ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
     CONTEXT_TOOLS,
@@ -317,7 +318,7 @@ class ProcessValidityOracle:
                 error_detail = (
                     f"{family}_autonomous_correction_blocked_for_operator_review"
                 )
-            elif diagnostics_enabled and waveform_anomaly_signatures(state.get("unresolved_signatures") or []) and not (
+            elif diagnostics_enabled and blocking_waveform_signatures(state.get("unresolved_signatures") or [], state) and not (
                 tool == CORRECT_MEASUREMENTS and hif_meter_route_ready(state)
             ):
                 # A waveform-level anomaly (harmonic, unbalance, HIF) is on the
@@ -326,7 +327,11 @@ class ProcessValidityOracle:
                 # itself, and a "correction" against them would only mask it,
                 # so no correction route is actionable while the signature
                 # stands.  Explanation-only families terminate by diagnosis
-                # or operator handoff, never by repair.
+                # or operator handoff, never by repair.  The balanced screen's
+                # HIF suspicion is not such a signature (C5, 2026-10-01): it
+                # admits the phasors and leaves the balanced routes to
+                # verification, so the ledger expert may test its leading
+                # hypothesis first.
                 family = _CORRECTION_CONTEXT_FAMILY[tool]
                 error_code = "correction_route_not_actionable"
                 error_detail = f"{family}_fundamental_route_blocked_by_waveform_anomaly"

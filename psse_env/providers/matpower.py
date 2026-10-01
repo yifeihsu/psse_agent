@@ -47,6 +47,7 @@ from psse_env.actions import (
     harmonic_screening_pending,
     three_phase_acquisition_pending,
     three_phase_screening_pending,
+    blocking_waveform_signatures,
     waveform_anomaly_signatures,
     ASK_FOR_MORE_EVIDENCE,
     CORRECT_MEASUREMENTS,
@@ -89,6 +90,7 @@ from psse_env.oracle.measurement_recovery_evidence import (
 )
 from psse_env.providers.hif_screen import (
     DEFAULT_HIF_SCREEN_CONFIG, HIF_SCREEN_METHOD, HIF_SCREEN_SIGNATURE, UNEXPLAINED_SCREEN_SIGNATURE,
+    compact_screen_ranking, compact_screen_report, compact_screen_targets,
     VOLTAGE_METER_SCREEN_SIGNATURE, HifScreenCache, default_hif_lines, screen_hif,
 )
 from psse_env.providers.suspicion_gated import (
@@ -1126,49 +1128,11 @@ class MatpowerDeploymentProviders:
             self._hif_prediction_cache[key] = cached
         return copy.deepcopy(cached)
 
-    @staticmethod
-    def _compact_screen_targets(best: Mapping[str, Any]) -> dict[str, Any]:
-        """Each class's best target with its refit objective, in compact form."""
-        compact: dict[str, Any] = {}
-        for name, item in best.items():
-            if not isinstance(item, Mapping):
-                continue
-            entry: dict[str, Any] = {"J": round(float(item["J"]), 3)} if item.get("J") is not None else {}
-            if name == "meter":
-                entry["channel_index0"] = int(item["channel_index0"])
-            elif name == "parameter":
-                entry["branch_row0"] = int(item["branch_row0"])
-                entry["parameter"] = str(item.get("parameter") or "")
-            elif name == "topology":
-                entry["branch_row0"] = int(item["branch_row0"])
-            else:
-                entry["branch_row0"] = int(item["branch_row0"])
-                entry["alpha_from_from_bus"] = round(float(item.get("alpha", item.get("alpha_grid", 0.0))), 3)
-            compact[str(name)] = entry
-        return compact
-
-    @staticmethod
-    def _compact_screen_ranking(best: Mapping[str, Any], top: int = 3) -> dict[str, list[dict[str, Any]]]:
-        """Top-ranked alternatives per class (targets and refit objectives only)."""
-        compact: dict[str, list[dict[str, Any]]] = {}
-        for name, item in best.items():
-            ranked = item.get("ranked") if isinstance(item, Mapping) else None
-            if not isinstance(ranked, (list, tuple)):
-                continue
-            rows: list[dict[str, Any]] = []
-            for candidate in list(ranked)[:top]:
-                if not isinstance(candidate, Mapping):
-                    continue
-                row: dict[str, Any] = {"J": round(float(candidate["J"]), 3)} if candidate.get("J") is not None else {}
-                if "channel_index0" in candidate:
-                    row["channel_index0"] = int(candidate["channel_index0"])
-                if "branch_row0" in candidate:
-                    row["branch_row0"] = int(candidate["branch_row0"])
-                if candidate.get("parameter") is not None:
-                    row["parameter"] = str(candidate["parameter"])
-                rows.append(row)
-            compact[str(name)] = rows
-        return compact
+    # The compact policy-visible report is built by psse_env.providers.hif_screen
+    # (compact_screen_report), shared with the offline study so a learned
+    # ranker reads exactly the fields the policy sees.
+    _compact_screen_targets = staticmethod(compact_screen_targets)
+    _compact_screen_ranking = staticmethod(compact_screen_ranking)
 
     def _hif_screen(self, state: Mapping[str, Any], solved: Mapping[str, Any]) -> dict[str, Any]:
         """Balanced HIF screen on this solve (suspicion_gated_diagnostics).
@@ -1204,44 +1168,12 @@ class MatpowerDeploymentProviders:
                 report = {"method": HIF_SCREEN_METHOD, "status": "screen_error", "suspected": False,
                           "error": f"{type(exc).__name__}: {exc}", "rounds": []}
             self._hif_screen_cache.put(key, report)
-        phasor_kinds = report.get("phasor_suspicion")
-        compact: dict[str, Any] = {
-            "method": report.get("method", HIF_SCREEN_METHOD),
-            "status": report.get("status"),
-            "suspected": bool(report.get("suspected")),
-            "outcome": report.get("outcome"),
-            # 2026-09-30: the accepted hypotheses in order, whether they
-            # explain the alarm, the phase-A voltage channels set aside, and
-            # the three phasor suspicions the acquisition rule reads.
-            "explained": bool(report.get("explained")),
-            "unexplained": bool(report.get("unexplained")),
-            "accepted_hypotheses": [dict(item) for item in report.get("accepted_hypotheses") or []],
-            "voltage_meter_channels": [int(c) for c in report.get("voltage_meter_channels") or []],
-            "phasor_suspicion": (
-                {str(k): bool(v) for k, v in phasor_kinds.items()} if isinstance(phasor_kinds, Mapping)
-                else {"hif": bool(report.get("suspected")), "voltage_meter": False, "unexplained": False}
-            ),
-            "rounds": [
-                {"winner": item.get("winner"), "clean_after_removal": item.get("clean_after_removal"),
-                 "set_aside_channels": list(item.get("dropped_channels") or []),
-                 "scores": {name: round(float(value), 3) for name, value in (item.get("scores") or {}).items()},
-                 # The hypothesis ledger (step 3) reads each class's best target
-                 # and its top-ranked alternatives; all computed from the solve.
-                 "best": self._compact_screen_targets(item.get("best") or {}),
-                 "ranked": self._compact_screen_ranking(item.get("best") or {})}
-                for item in report.get("rounds") or []
-            ],
-        }
-        if report.get("error"):
-            compact["error"] = report["error"]
+        # 2026-09-30: the accepted hypotheses in order, whether they explain
+        # the alarm, the phase-A voltage channels set aside, the three phasor
+        # suspicions the acquisition rule reads, and per round each class's
+        # best target with its top-ranked alternatives (the hypothesis ledger).
+        compact = compact_screen_report(report)
         if compact["suspected"]:
-            compact.update(
-                branch_row0=int(report["branch_row0"]),
-                line_index1=int(report["branch_row0"]) + 1,
-                alpha_from_from_bus=round(float(report["alpha"]), 3),
-                meter_set_aside_index0=report.get("meter_set_aside_index0"),
-                hif_variant=str(report.get("hif_variant") or "shunt"),
-            )
             observation = state.get("policy_observation")
             contexts = observation.get("fresh_context_evidence") if isinstance(observation, Mapping) else None
             phase = contexts.get("three_phase") if isinstance(contexts, Mapping) else None
@@ -4178,11 +4110,17 @@ class MatpowerDeploymentProviders:
         """Waveform-family signatures that block fundamental-frequency routes.
 
         Explained or not: the event is still on the network, so residual and
-        multiplier evidence cannot be attributed to a meter or a branch.
+        multiplier evidence cannot be attributed to a meter or a branch.  The
+        balanced screen's own HIF suspicion is not such a signature (C5,
+        2026-10-01): it admits the phasors and leaves the balanced routes to
+        verification, like the process gate and the expert's combined stage.
         """
         if not allows_diagnostic_tools(cls._state_profile(state)):
             return []
-        return waveform_anomaly_signatures(cls._observable_signatures(state))
+        observation = state.get("policy_observation")
+        return blocking_waveform_signatures(
+            cls._observable_signatures(state), observation if isinstance(observation, Mapping) else state,
+        )
 
     @staticmethod
     def _state_profile(state: Mapping[str, Any]) -> str:

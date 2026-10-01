@@ -59,6 +59,7 @@ def _metrics(row: Mapping[str, Any]) -> dict[str, Any]:
         "rollbacks": tools.count("rollback_state"),
         "commits": tools.count("commit_state"),
         "false_commits": int(row.get("false_commit_count") or 0),
+        "deferred": bool(row.get("deferred_acquisition")),
         "healthy_preserved": row.get("healthy_components_preserved", True) is not False,
         "first_hit": _first_hit(row),
     }
@@ -83,6 +84,7 @@ def compare(a: Mapping[str, Mapping[str, Any]], b: Mapping[str, Mapping[str, Any
             counter["rollbacks"] += metrics["rollbacks"]
             counter["commits"] += metrics["commits"]
             counter["false_commits"] += metrics["false_commits"]
+            counter["deferred"] += metrics["deferred"]
             counter["healthy_touched"] += 0 if metrics["healthy_preserved"] else 1
             for fam, hit in metrics["first_hit"].items():
                 entry["first_hit"][f"{label}_{fam}_n"] += 1
@@ -105,17 +107,19 @@ def compare(a: Mapping[str, Mapping[str, Any]], b: Mapping[str, Mapping[str, Any
 def render(result: Mapping[str, Any], name_a: str, name_b: str) -> str:
     lines = [f"# Paired comparison: {name_a} (A) versus {name_b} (B)\n",
              f"{result['shared']} shared roots" + (f"; only in A: {len(result['only_a'])}, only in B: {len(result['only_b'])}" if result["only_a"] or result["only_b"] else "") + ".\n",
-             "| family | n | success A | success B | mean steps A | mean steps B | phasors A/B | spectra A/B | corrections A/B | rollbacks A/B | false commits A/B |",
-             "|---|---|---|---|---|---|---|---|---|---|---|"]
+             "| family | n | success A | success B | mean steps A | mean steps B | phasors A/B | spectra A/B | deferred A/B | corrections A/B | rollbacks A/B | false commits A/B |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for family, entry in result["per_family"].items():
         a, b, n = entry["a"], entry["b"], entry["n"]
         lines.append(f"| {family} | {n} | {a.get('success', 0)} | {b.get('success', 0)} | {a.get('steps', 0) / max(1, n):.1f} | {b.get('steps', 0) / max(1, n):.1f} | "
-                     f"{a.get('phasors', 0)}/{b.get('phasors', 0)} | {a.get('spectra', 0)}/{b.get('spectra', 0)} | {a.get('corrections', 0)}/{b.get('corrections', 0)} | "
+                     f"{a.get('phasors', 0)}/{b.get('phasors', 0)} | {a.get('spectra', 0)}/{b.get('spectra', 0)} | {a.get('deferred', 0)}/{b.get('deferred', 0)} | "
+                     f"{a.get('corrections', 0)}/{b.get('corrections', 0)} | "
                      f"{a.get('rollbacks', 0)}/{b.get('rollbacks', 0)} | {a.get('false_commits', 0)}/{b.get('false_commits', 0)} |")
     t = result["totals"]
     n = max(1, t["n"])
     lines.append(f"| **all** | {t['n']} | {t['a'].get('success', 0)} | {t['b'].get('success', 0)} | {t['a'].get('steps', 0) / n:.1f} | {t['b'].get('steps', 0) / n:.1f} | "
-                 f"{t['a'].get('phasors', 0)}/{t['b'].get('phasors', 0)} | {t['a'].get('spectra', 0)}/{t['b'].get('spectra', 0)} | {t['a'].get('corrections', 0)}/{t['b'].get('corrections', 0)} | "
+                 f"{t['a'].get('phasors', 0)}/{t['b'].get('phasors', 0)} | {t['a'].get('spectra', 0)}/{t['b'].get('spectra', 0)} | {t['a'].get('deferred', 0)}/{t['b'].get('deferred', 0)} | "
+                 f"{t['a'].get('corrections', 0)}/{t['b'].get('corrections', 0)} | "
                  f"{t['a'].get('rollbacks', 0)}/{t['b'].get('rollbacks', 0)} | {t['a'].get('false_commits', 0)}/{t['b'].get('false_commits', 0)} |")
     fh = t["first_hit"]
     lines.append("\nFirst correction of a family on the true target (roots with that truth): "

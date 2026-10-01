@@ -25,6 +25,19 @@ The questions, as step 3 narrowed them:
 5. Transfer: the IEEE-14 rankers applied unchanged to the IEEE 57 study roots.
 
     python -m research.hypothesis_ranking.ranker --dataset-dir output/hypothesis_ranking_20260930/ieee14_v3 --transfer-dir output/hypothesis_ranking_20260930/ieee57_v3 --output-dir output/hypothesis_ranking_20260930/ranker
+
+Step 5 adds the deployable form.  ``--feature-set policy`` computes the
+features the expert can compute at runtime from the policy observation alone
+(``psse_env.oracle.learned_ranker.policy_visible_features`` on a pseudo
+observation built from the record: the WLS ledger fields, the ``wls_``
+signatures the provider would mint, the compact screen report), and
+``--export-model PATH`` writes the models of ``needs_aux``, ``has_hif`` and
+``has_unbalance`` (the gradient-boosted trees by default, ``--export-model-type
+logistic`` for the standardized logistic models) with their Platt scaling and
+the operating-point thresholds as JSON for ``LearnedRanker``; the export is
+checked against sklearn's own predictions before it is written:
+
+    python -m research.hypothesis_ranking.ranker --dataset-dir output/hypothesis_ranking_20260930/ieee14_v3 --transfer-dir output/hypothesis_ranking_20260930/ieee57_v3 --output-dir output/hypothesis_ranking_20260930/ranker_policy --feature-set policy --export-model psse_env/oracle/models/learned_ranker_ieee14_20261001.json
 """
 from __future__ import annotations
 
@@ -43,6 +56,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from psse_env.oracle.learned_ranker import FEATURE_SET, RANKER_CONTRACT, policy_visible_features  # noqa: E402
+from psse_env.providers.hif_screen import compact_screen_report  # noqa: E402
 from research.hypothesis_ranking.features import json_safe  # noqa: E402
 
 CLASSES = ("meter", "parameter", "topology", "hif")
@@ -52,6 +67,12 @@ TARGETS = ("has_measurement", "has_parameter", "has_topology", "has_hif", "has_u
 NEEDS_NO_PHASORS = {"measurement", "multi_measurement", "parameter", "measurement+parameter", "topology",
                     "measurement+topology", "healthy_window", "mimic_flow_pair_same_sign", "mimic_flow_pair_opposite_sign"}
 BOOTSTRAP_DRAWS = 1000
+#: Offline channel blocks (features.CHANNEL_BLOCKS) as the WLS ledger names them.
+LEDGER_BLOCKS = {"Vm": "Vm", "P": "Pinj", "Q": "Qinj", "Pf": "Pf", "Qf": "Qf", "Pt": "Pt", "Qt": "Qt"}
+#: The provider's signature budget (MatpowerDeploymentProviders top_k / residual_threshold / lambda_threshold).
+SIGNATURE_TOP_K = 5
+SIGNATURE_MIN_ABS = 3.0
+EXPORT_TARGETS = ("needs_aux", "has_hif", "has_unbalance")
 
 
 # ------------------------------------------------------------------ records
@@ -187,6 +208,75 @@ def features(record: Mapping[str, Any]) -> dict[str, float]:
     return f
 
 
+def observation_from_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """The policy observation the record's state would carry on its first WLS.
+
+    Built from the offline analysis the way the provider and the environment
+    build the real one: the WLS ledger fields, the ``wls_`` residual
+    signatures (top five normalized residuals at or above 3.0, dominance tag
+    from the residual-versus-multiplier rule), one branch-multiplier
+    signature when any multiplier reaches 3.0, the residual breadth and its
+    dominant block, the remaining anomaly score, the bus count, and the
+    compact screen report (the same compaction the provider applies).
+    """
+    analysis = record.get("analysis") or {}
+    wls = analysis.get("wls") or {}
+    screen = analysis.get("screen") or {}
+    nb, nl = int(analysis.get("nb") or 0), int(analysis.get("nl") or 0)
+    nz = 3 * nb + 4 * nl
+    top = sorted(wls.get("top_residuals") or [], key=lambda item: -abs(float(item.get("value") or 0.0)))
+    max_rn = float(wls.get("max_normalized_residual") or 0.0)
+    max_lambda = float(wls.get("max_abs_branch_multiplier") or 0.0)
+    measurement_dominant = bool(wls.get("measurement_dominant"))
+    branch_dominant = bool(wls.get("branch_dominant"))
+    signatures: list[str] = []
+    residual_tag = "wls_residual_outlier_dominant" if measurement_dominant else "wls_residual_outlier"
+    for item in top[:SIGNATURE_TOP_K]:
+        if abs(float(item["value"])) < SIGNATURE_MIN_ABS:
+            break
+        signatures.append(f"{residual_tag} index={int(item['index'])} channel={LEDGER_BLOCKS[str(item['channel'])]}")
+    if max_lambda >= SIGNATURE_MIN_ABS:
+        branch_tag = ("wls_branch_multiplier_dominant line_status_or_parameter" if branch_dominant
+                      else "wls_branch_multiplier line_status_or_parameter")
+        rows = [int(item["branch_row0"]) for item in (wls.get("top_branch_multipliers") or [])
+                if float(item.get("value") or 0.0) >= SIGNATURE_MIN_ABS][:SIGNATURE_TOP_K]
+        signatures.extend(f"{branch_tag} line={row + 1}" for row in rows)
+    compact = compact_screen_report(screen) if screen.get("status") else None
+    if compact is not None and screen.get("status") == "valid":
+        if compact["suspected"]:
+            signatures.append(f"wls_hif_suspected line={compact['line_index1']}")
+        if compact["voltage_meter_channels"]:
+            signatures.append("wls_voltage_meter_suspected channels=" + ",".join(str(c) for c in compact["voltage_meter_channels"]))
+        if compact["unexplained"]:
+            signatures.append("wls_unexplained_balanced_discrepancy")
+    ledger = {
+        "state_id": "s0", "state_hash": "offline", "successful": bool(wls.get("success", True)),
+        "evidence_source": "offline_study", "anomalous": bool(signatures),
+        "chi_square_alarm": bool(wls.get("chi_square_alarm")),
+        "normalized_residual_alarm": bool(wls.get("normalized_residual_alarm")),
+        "normalized_residual_threshold": wls.get("normalized_residual_threshold"),
+        "max_normalized_residual": max_rn,
+        "anomaly_breadth": (int(wls.get("count_abs_residual_gt3") or 0) / nz) if nz else 0.0,
+        "dominant_residual_block": LEDGER_BLOCKS[str(top[0]["channel"])] if top else None,
+        "bus_count": nb,
+    }
+    if compact is not None:
+        ledger["hif_screen"] = compact
+    return {
+        "evidence_profile": "suspicion_gated_diagnostics", "active_state_id": "s0", "candidate_state_id": None,
+        "has_open_candidate": False, "unresolved_signatures": signatures,
+        "remaining_anomaly_score": wls.get("remaining_anomaly_score"),
+        "fresh_context_evidence": {"wls": ledger}, "rejected_hypotheses": [], "accepted_corrections": [],
+        "tried_action_signatures": [], "available_evidence": [],
+    }
+
+
+def policy_features(record: Mapping[str, Any]) -> dict[str, float]:
+    """The runtime feature view of one record (what ``LearnedRanker`` computes in the expert)."""
+    nl = int((record.get("analysis") or {}).get("nl") or 0) or None
+    return policy_visible_features(observation_from_record(record), branch_count=nl)
+
+
 def rule_v3(record: Mapping[str, Any]) -> int:
     screen = (record.get("analysis") or {}).get("screen") or {}
     if screen.get("status") != "valid":
@@ -209,8 +299,9 @@ def voltage_meter_pick(record: Mapping[str, Any]) -> bool:
 # ------------------------------------------------------------------ dataset
 
 
-def load_dataset(dataset_dir: Path, *, include_children: bool) -> list[dict[str, Any]]:
+def load_dataset(dataset_dir: Path, *, include_children: bool, feature_set: str = "offline") -> list[dict[str, Any]]:
     """Alarmed, valid-screen states with their features, labels, split and parent."""
+    extract = features if feature_set == "offline" else policy_features
     rows: list[dict[str, Any]] = []
     sources = [("roots.jsonl", "root"), ("healthy_alarms.jsonl", "healthy"), ("mimic.jsonl", "mimic")]
     if include_children:
@@ -225,7 +316,7 @@ def load_dataset(dataset_dir: Path, *, include_children: bool) -> list[dict[str,
             rows.append({
                 "id": record.get("root_id"), "kind": kind, "family": record.get("family"),
                 "parent": record.get("parent_id"), "split": record.get("split") or "test",
-                "features": features(record), "labels": labels(record),
+                "features": extract(record), "labels": labels(record),
                 "rule_v3": rule_v3(record), "rule_hif": rule_hif(record), "vm_pick": voltage_meter_pick(record),
                 "needs_no_phasors_family": record.get("family") in NEEDS_NO_PHASORS,
                 "record": record,
@@ -259,20 +350,106 @@ def fit_models(x_train: np.ndarray, y_train: np.ndarray, seed: int) -> dict[str,
     return models
 
 
-def platt(scores_cal: np.ndarray, y_cal: np.ndarray) -> Callable[[np.ndarray], np.ndarray]:
-    """Platt scaling fitted on the calibration split (logit of the model probability)."""
+class PlattScaler:
+    """Platt scaling fitted on the calibration split (logistic in the logit of the model probability)."""
+
+    def __init__(self, coef: float | None, intercept: float | None) -> None:
+        self.coef = coef
+        self.intercept = intercept
+
+    def __call__(self, scores: np.ndarray) -> np.ndarray:
+        scores = np.asarray(scores, dtype=float)
+        if self.coef is None:
+            return scores
+        z = np.log(np.clip(scores, 1e-6, 1 - 1e-6) / np.clip(1 - scores, 1e-6, 1))
+        return 1.0 / (1.0 + np.exp(-(self.coef * z + self.intercept)))
+
+
+def platt(scores_cal: np.ndarray, y_cal: np.ndarray) -> PlattScaler:
     from sklearn.linear_model import LogisticRegression
 
-    z = np.log(np.clip(scores_cal, 1e-6, 1 - 1e-6) / np.clip(1 - scores_cal, 1e-6, 1))
     if len(np.unique(y_cal)) < 2:
-        return lambda s: s
+        return PlattScaler(None, None)
+    z = np.log(np.clip(scores_cal, 1e-6, 1 - 1e-6) / np.clip(1 - scores_cal, 1e-6, 1))
     model = LogisticRegression(C=1e6, max_iter=1000).fit(z.reshape(-1, 1), y_cal)
+    return PlattScaler(float(model.coef_[0][0]), float(model.intercept_[0]))
 
-    def apply(scores: np.ndarray) -> np.ndarray:
-        zz = np.log(np.clip(scores, 1e-6, 1 - 1e-6) / np.clip(1 - scores, 1e-6, 1))
-        return model.predict_proba(zz.reshape(-1, 1))[:, 1]
 
-    return apply
+def _logistic_spec(pipeline: Any) -> dict[str, Any]:
+    scaler, logit = pipeline[0], pipeline[-1]
+    scale = np.where(np.asarray(scaler.scale_, dtype=float) > 0, np.asarray(scaler.scale_, dtype=float), 1.0)
+    return {"type": "logistic", "mean": [float(v) for v in scaler.mean_], "scale": [float(v) for v in scale],
+            "coef": [float(v) for v in logit.coef_[0]], "intercept": float(logit.intercept_[0])}
+
+
+def _hgb_spec(model: Any) -> dict[str, Any]:
+    """sklearn's HistGradientBoostingClassifier as plain node lists (binary, numerical splits only)."""
+    trees: list[list[dict[str, Any]]] = []
+    for predictors in model._predictors:
+        nodes = predictors[0].nodes
+        if nodes["is_categorical"].any():
+            raise ValueError("categorical splits are not exportable")
+        trees.append([
+            {"leaf": bool(node["is_leaf"]), "value": float(node["value"]), "feature": int(node["feature_idx"]),
+             "threshold": float(node["num_threshold"]), "left": int(node["left"]), "right": int(node["right"]),
+             "missing_left": bool(node["missing_go_to_left"])}
+            for node in nodes
+        ])
+    return {"type": "hgb", "baseline": float(np.ravel(model._baseline_prediction)[0]), "trees": trees}
+
+
+def export_models(path: Path, *, model_type: str, names: Sequence[str], models: Mapping[str, Mapping[str, Any]],
+                  calibrators: Mapping[str, PlattScaler], thresholds: Mapping[str, Mapping[str, float]],
+                  test_metrics: Mapping[str, Any], system: Mapping[str, Any], provenance: Mapping[str, Any],
+                  check_x: np.ndarray) -> dict[str, Any]:
+    """Write the per-target models as the JSON ``LearnedRanker`` reads, after checking the export reproduces sklearn."""
+    from psse_env.oracle.learned_ranker import LearnedRanker
+
+    targets: dict[str, Any] = {}
+    fitted_key = "gbm" if model_type == "hgb" else "logit"
+    for target in EXPORT_TARGETS:
+        fitted = (models.get(target) or {}).get(fitted_key)
+        if fitted is None:
+            continue
+        spec = _hgb_spec(fitted) if model_type == "hgb" else _logistic_spec(fitted)
+        calibrator = calibrators.get(target) or PlattScaler(None, None)
+        spec.update(platt={"coef": calibrator.coef, "intercept": calibrator.intercept},
+                    thresholds=dict(thresholds.get(target) or {}), test=json_safe(test_metrics.get(target) or {}))
+        targets[target] = spec
+    payload = {"contract": RANKER_CONTRACT, "feature_set": FEATURE_SET, "features": list(names), "system": dict(system),
+               "targets": targets, "provenance": json_safe(provenance)}
+    ranker = LearnedRanker(payload, source="export-check")
+    for target, spec in targets.items():
+        fitted = models[target][fitted_key]
+        calibrator = calibrators.get(target) or PlattScaler(None, None)
+        expected = calibrator(fitted.predict_proba(check_x)[:, 1])
+        got = np.asarray([_runtime_probability(ranker, spec, row) for row in check_x], dtype=float)
+        worst = float(np.max(np.abs(expected - got))) if len(check_x) else 0.0
+        if worst > 1e-6:
+            raise RuntimeError(f"exported {model_type} model for {target} deviates from sklearn by {worst:.3g}")
+        spec["export_check_max_abs_difference"] = worst
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Compact: the gradient-boosted export is a few megabytes of node lists.
+    path.write_text(json.dumps(json_safe(payload), separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8")
+    return payload
+
+
+def _runtime_probability(ranker: Any, spec: Mapping[str, Any], x: np.ndarray) -> float:
+    """The runtime probability for one feature vector (bypassing the observation step)."""
+    from psse_env.oracle import learned_ranker as runtime
+
+    values = [float(v) for v in x]
+    if spec.get("type") == "hgb":
+        logit = runtime._hgb_raw_prediction(values, spec)
+    else:
+        logit = float(spec.get("intercept") or 0.0)
+        for value, mean, scale, coefficient in zip(values, spec["mean"], spec["scale"], spec["coef"]):
+            logit += float(coefficient) * ((value - float(mean)) / float(scale) if float(scale) else 0.0)
+    probability = runtime._sigmoid(logit)
+    platt = spec.get("platt") or {}
+    if platt.get("coef") is not None:
+        probability = runtime._sigmoid(float(platt["coef"]) * runtime._logit(probability) + float(platt.get("intercept") or 0.0))
+    return float(probability)
 
 
 def expected_calibration_error(probabilities: np.ndarray, y: np.ndarray, bins: int = 10) -> tuple[float, list[dict[str, float]]]:
@@ -577,6 +754,15 @@ def transfer_study(transfer_dir: Path, names: Sequence[str], models: Mapping[str
 # -------------------------------------------------------------------- main
 
 
+def _git_commit() -> str | None:
+    import subprocess
+
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip()
+    except Exception:
+        return None
+
+
 def _fmt(interval: Mapping[str, Any] | None) -> str:
     if not isinstance(interval, Mapping) or interval.get("point") is None:
         return "n/a"
@@ -593,11 +779,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--seed", type=int, default=20261001)
     parser.add_argument("--no-children", action="store_true", help="do not add the truth-corrected child states to training")
+    parser.add_argument("--feature-set", choices=("offline", "policy"), default="offline",
+                        help="offline: the step-4 study features (full screen report); policy: what the expert computes at runtime")
+    parser.add_argument("--export-model", default=None,
+                        help="write the needs_aux/has_hif/has_unbalance models as JSON for psse_env.oracle.learned_ranker (policy feature set)")
+    parser.add_argument("--export-model-type", choices=("hgb", "logistic"), default="hgb",
+                        help="which fitted model the export carries: the gradient-boosted trees (default) or the standardized logistic model")
     args = parser.parse_args(argv)
+    if args.export_model and args.feature_set != "policy":
+        parser.error("--export-model needs --feature-set policy: the runtime computes the policy-visible features only")
     started = time.perf_counter()
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    rows = load_dataset(Path(args.dataset_dir), include_children=not args.no_children)
+    rows = load_dataset(Path(args.dataset_dir), include_children=not args.no_children, feature_set=args.feature_set)
     names = sorted(rows[0]["features"])
     by_split = {split: [r for r in rows if r["split"] == split] for split in ("train", "calibration", "test")}
     # Children are training augmentation only: every evaluation reads roots, healthy alarms and mimics.
@@ -607,13 +801,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     x_cal = matrix(eval_cal, names)
     x_test = matrix(eval_test, names)
     print(f"[ranker] rows train {len(by_split['train'])} (children {sum(r['kind'] == 'child' for r in by_split['train'])}), "
-          f"calibration {len(eval_cal)}, test {len(eval_test)}, features {len(names)}", flush=True)
+          f"calibration {len(eval_cal)}, test {len(eval_test)}, features {len(names)} ({args.feature_set})", flush=True)
 
     models: dict[str, dict[str, Any]] = {}
     calibrators: dict[str, Callable] = {}
     target_metrics: dict[str, Any] = {}
     scores_test: dict[str, np.ndarray] = {}
     scores_cal: dict[str, np.ndarray] = {}
+    # The deployable logistic models beside the gradient-boosted study models.
+    logit_calibrators: dict[str, PlattScaler] = {}
+    logit_scores_test: dict[str, np.ndarray] = {}
+    logit_scores_cal: dict[str, np.ndarray] = {}
     for target in TARGETS:
         y_train = np.asarray([r["labels"][target] for r in by_split["train"]])
         y_cal = np.asarray([r["labels"][target] for r in eval_cal])
@@ -636,6 +834,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 calibrators[target] = calibrate
                 scores_test[target] = prob_test
                 scores_cal[target] = calibrate(raw_cal)
+            else:
+                logit_calibrators[target] = calibrate
+                logit_scores_test[target] = prob_test
+                logit_scores_cal[target] = calibrate(raw_cal)
         target_metrics[target] = entry
 
     acquisition = acquisition_study(eval_cal, eval_test, scores_cal["needs_aux"], scores_test["needs_aux"], args.seed)
@@ -647,6 +849,55 @@ def main(argv: Sequence[str] | None = None) -> int:
         transfer = transfer_study(Path(args.transfer_dir), names, models, calibrators,
                                   {"needs_aux": acquisition["thresholds"]["at_rule_false_rate"], "has_hif": mimic["threshold"]},
                                   args.seed)
+    # The deployed logistic models at the same operating points.
+    deployed: dict[str, Any] = {}
+    if "needs_aux" in logit_scores_test:
+        deployed["acquisition"] = acquisition_study(eval_cal, eval_test, logit_scores_cal["needs_aux"], logit_scores_test["needs_aux"], args.seed)
+    if "has_hif" in logit_scores_test:
+        deployed["hif_vs_mimic"] = hif_mimic_study(eval_cal, eval_test, logit_scores_cal["has_hif"], logit_scores_test["has_hif"], args.seed)
+    if "has_unbalance" in logit_scores_test:
+        deployed["unbalance_vs_voltage_meter"] = unbalance_vs_voltage_meter_study(eval_test, logit_scores_test["has_unbalance"], args.seed)
+    exported = None
+    if args.export_model:
+        first_valid = next((r["record"] for r in rows if (r["record"].get("analysis") or {}).get("nb")), None)
+        analysis = (first_valid or {}).get("analysis") or {}
+        case_name = str((first_valid or {}).get("case") or "")
+        system = {"case_id": Path(case_name).stem if case_name else None, "bus_count": analysis.get("nb"), "branch_count": analysis.get("nl")}
+        # The export carries the studied model's own operating points: the
+        # gradient-boosted studies above, or the logistic ones just computed.
+        source_acq = acquisition if args.export_model_type == "hgb" else deployed["acquisition"]
+        source_mimic = mimic if args.export_model_type == "hgb" else deployed["hif_vs_mimic"]
+        source_unbalance = unbalance if args.export_model_type == "hgb" else deployed["unbalance_vs_voltage_meter"]
+        model_key = "gbm" if args.export_model_type == "hgb" else "logit"
+        thresholds = {
+            "needs_aux": {"at_rule_recall": source_acq["thresholds"]["at_rule_recall"],
+                          "at_rule_false_rate": source_acq["thresholds"]["at_rule_false_rate"]},
+            "has_hif": {"at_screen_recall": source_mimic["threshold"]},
+            "has_unbalance": {},
+        }
+        test_metrics = {
+            "needs_aux": {key: source_acq[key] for key in (
+                "rule_recall", "rule_false_rate", "learned_recall_at_rule_recall", "learned_false_rate_at_rule_recall",
+                "learned_recall_at_rule_false_rate", "learned_false_rate_at_rule_false_rate", "auc", "n_test_positive",
+                "n_test_no_phasor_roots", "by_family")},
+            "has_hif": {key: source_mimic[key] for key in (
+                "screen_hif_recall", "learned_hif_recall_at_threshold", "screen_same_sign_mimic_flag_rate",
+                "learned_same_sign_mimic_flag_rate", "auc_hif_vs_mimics", "n_test_hif", "n_test_same_sign_mimics")},
+            "has_unbalance": {"auc": (target_metrics.get("has_unbalance") or {}).get(model_key, {}).get("auc"),
+                              "unbalance_vs_voltage_meter_auc": source_unbalance.get("auc")},
+        }
+        provenance = {"dataset_dir": str(args.dataset_dir), "seed": args.seed, "feature_set": args.feature_set,
+                      "rows": {k: len(v) for k, v in by_split.items()}, "eval_rows": {"calibration": len(eval_cal), "test": len(eval_test)},
+                      "trained_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "git_commit": _git_commit(),
+                      "model": ("sklearn HistGradientBoostingClassifier(max_iter=300, learning_rate=0.05, max_leaf_nodes=15, "
+                                "min_samples_leaf=10, l2_regularization=1.0), Platt on calibration" if args.export_model_type == "hgb"
+                                else "sklearn StandardScaler + LogisticRegression(C=0.5), Platt on calibration")}
+        exported = export_models(Path(args.export_model), model_type=args.export_model_type, names=names, models=models,
+                                 calibrators=(calibrators if args.export_model_type == "hgb" else logit_calibrators),
+                                 thresholds=thresholds, test_metrics=test_metrics, system=system, provenance=provenance,
+                                 check_x=x_test)
+        print(f"[ranker] exported {args.export_model_type} {sorted(exported['targets'])} to {args.export_model}", flush=True)
+
     importances: dict[str, list[tuple[str, float]]] = {}
     from sklearn.inspection import permutation_importance
 
@@ -667,6 +918,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "features": names, "targets": target_metrics, "acquisition": acquisition, "hif_vs_mimic": mimic,
         "unbalance_vs_voltage_meter": unbalance, "adjacent_line": adjacent, "transfer_ieee57": transfer,
         "permutation_importance": importances, "seconds": time.perf_counter() - started,
+        "feature_set": args.feature_set, "deployed_logistic": deployed,
+        "export_model": (str(args.export_model) if args.export_model else None),
     }
     (out / "metrics.json").write_text(json.dumps(json_safe(metrics), indent=2, sort_keys=True), encoding="utf-8")
     with (out / "test_scores.jsonl").open("w", encoding="utf-8") as stream:
@@ -675,11 +928,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "id": row["id"], "family": row["family"], "parent": row["parent"], "labels": row["labels"],
                 "rule_v3": row["rule_v3"], "rule_hif": row["rule_hif"],
                 "scores": {target: float(scores_test[target][index]) for target in scores_test},
+                "logit_scores": {target: float(logit_scores_test[target][index]) for target in logit_scores_test},
             }), sort_keys=True) + "\n")
 
-    lines = [f"# Step 4: learned ranker against the physics screen\n",
+    lines = [f"# Step 4: learned ranker against the physics screen ({args.feature_set} features)\n",
              f"Dataset `{args.dataset_dir}`; rows train {len(by_split['train'])} (incl. {sum(r['kind'] == 'child' for r in by_split['train'])} child states), "
-             f"calibration {len(eval_cal)}, test {len(eval_test)}; {len(names)} observable features; parent-bootstrap 95% intervals in brackets.\n",
+             f"calibration {len(eval_cal)}, test {len(eval_test)}; {len(names)} {args.feature_set} features; parent-bootstrap 95% intervals in brackets.\n",
              "### Per-target discrimination on the test split (AUC; GBM, logistic)\n",
              "| target | test positives | GBM AUC | logistic AUC | GBM ECE after Platt |", "|---|---|---|---|---|"]
     for target, entry in target_metrics.items():
@@ -731,6 +985,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             if t:
                 lines.append(f"| {target} | {t['n_positive']} | {_fmt(t['auc'])} | {_fmt(t['rule_recall'])} | {_fmt(t['learned_recall_ieee14_threshold'])} | "
                              f"{_fmt(t['rule_false_rate'])} | {_fmt(t['learned_false_rate_ieee14_threshold'])} |")
+    if deployed:
+        da, dm, du = deployed.get("acquisition") or {}, deployed.get("hif_vs_mimic") or {}, deployed.get("unbalance_vs_voltage_meter") or {}
+        lines += ["### 6. Deployed logistic models (what LearnedRanker computes at runtime)\n",
+                  "| quantity | rule / screen | logistic |", "|---|---|---|"]
+        if da:
+            lines += [f"| acquisition recall at the rule's false rate | {_fmt(da['rule_recall'])} | {_fmt(da['learned_recall_at_rule_false_rate'])} |",
+                      f"| unnecessary acquisitions at the rule's recall | {_fmt(da['rule_false_rate'])} | {_fmt(da['learned_false_rate_at_rule_recall'])} |",
+                      f"| recall at the rule's recall threshold (deferral operating point) | {_fmt(da['rule_recall'])} | {_fmt(da['learned_recall_at_rule_recall'])} |",
+                      f"| needs_aux AUC | | {_fmt(da['auc'])} |",
+                      f"| needs_aux thresholds (at rule recall / at rule false rate) | | {da['thresholds']['at_rule_recall']:.4f} / {da['thresholds']['at_rule_false_rate']:.4f} |"]
+        if dm:
+            lines += [f"| HIF recall at the screen's recall | {_fmt(dm['screen_hif_recall'])} | {_fmt(dm['learned_hif_recall_at_threshold'])} |",
+                      f"| same-sign mimics flagged | {_fmt(dm['screen_same_sign_mimic_flag_rate'])} | {_fmt(dm['learned_same_sign_mimic_flag_rate'])} |",
+                      f"| AUC, HIF roots against mimics | | {_fmt(dm['auc_hif_vs_mimics'])} |"]
+        if du:
+            lines += [f"| unbalance against voltage-meter pick, AUC | | {_fmt(du.get('auc'))} |"]
+        if da:
+            lines += ["", "| family | test roots | rule positive | logistic positive at rule false rate | logistic positive at rule recall |", "|---|---|---|---|---|"]
+            for family, entry in da["by_family"].items():
+                lines.append(f"| {family} | {entry['n']} | {entry['rule_positive']} | {entry['learned_positive_at_rule_false_rate']} | {entry['learned_positive_at_rule_recall']} |")
+        if exported is not None:
+            lines.append(f"\nExported `{args.export_model}` ({args.export_model_type}: {', '.join(sorted(exported['targets']))}; "
+                         "the runtime evaluation reproduces sklearn's probabilities on the test split to 1e-6).")
+        lines.append("")
     lines += ["", "### Permutation importance (test AUC drop, top 12)\n"]
     for target, items in importances.items():
         lines.append(f"- **{target}**: " + ", ".join(f"{name} {value:.3f}" for name, value in items))

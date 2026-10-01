@@ -44,6 +44,7 @@ from psse_env.dagger.rollout_collector import (  # noqa: E402
 )
 from psse_env.dagger.suite_builder import partition_release_scenario_v1  # noqa: E402
 from psse_env.oracle.expert_policy import ExpertPolicyOracle  # noqa: E402
+from psse_env.oracle.expert_variants import current_expert_variant, expert_variant_options  # noqa: E402
 from psse_env.providers.scenario_generator import DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD
 from psse_env.systems import resolve_system
 from psse_env.evidence_profile import (
@@ -1227,6 +1228,7 @@ def collect_resumable(
             expert = ExpertPolicyOracle(
                 process_oracle=env.process_oracle,
                 candidate_oracle=env.candidate_quality_oracle,
+                **expert_variant_options(),
             )
             collector = collector_class(
                 env=env,
@@ -1640,10 +1642,11 @@ class ParallelEvaluation:
             raise ValueError("workers_per_policy must be at least 1")
 
 
-#: Expert variants under study (hypothesis-ranking plan, step 3).  The
-#: ledger expert reorders families and targets by the balanced screen's
-#: accepted sequence and caps verified attempts per family and per state.
-RESEARCH_EXPERT_OPTIONS: dict[str, Any] = {"hypothesis_ledger": False}
+#: Expert variants under study (hypothesis-ranking plan, steps 3 to 5).  The
+#: variant comes from PSSE_EXPERT_VARIANT (psse_env.oracle.expert_variants)
+#: unless a harness names one here ("variant"); "learned_ranker" points the
+#: ranked variant at another model export.
+RESEARCH_EXPERT_OPTIONS: dict[str, Any] = {}
 
 
 def research_expert_policy(environment_factory: Callable[..., Any]) -> Any:
@@ -1656,11 +1659,11 @@ def research_expert_policy(environment_factory: Callable[..., Any]) -> Any:
 
     from psse_env.dagger.release_factories import ObservableExpertPolicy
 
+    options = expert_variant_options(
+        RESEARCH_EXPERT_OPTIONS.get("variant"), learned_ranker=RESEARCH_EXPERT_OPTIONS.get("learned_ranker"),
+    )
     return ObservableExpertPolicy(
-        ExpertPolicyOracle(
-            process_oracle=environment_factory().process_oracle,
-            hypothesis_ledger=bool(RESEARCH_EXPERT_OPTIONS.get("hypothesis_ledger", False)),
-        )
+        ExpertPolicyOracle(process_oracle=environment_factory().process_oracle, **options)
     )
 
 
@@ -2321,6 +2324,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "hif_search_profile": hif_search_profile,
         "evidence_profile": args.evidence_profile,
         "scenario_sources": scenario_sources,
+        # The teacher variant is pinned with the profile: an evaluation must
+        # run beside the collection it belongs to with the same expert.
+        "expert_variant": current_expert_variant(),
     }
     # The environment ablation is recorded on the report, not in the research
     # profile: the profile is pinned against the collection's configuration,

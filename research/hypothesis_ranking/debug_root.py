@@ -1,6 +1,6 @@
 """Replay one root with the research expert and print the full trace with tool errors (step 3 debugging).
 
-    python -m research.hypothesis_ranking.debug_root --roots-file output/.../step3_roots.json --scenario-id r0_... [--expert ledger] [--screen]
+    python -m research.hypothesis_ranking.debug_root --roots-file output/.../step3_roots.json --scenario-id r0_... [--expert ledger|ledger_ranked] [--screen]
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--roots-file", required=True)
     parser.add_argument("--scenario-id", required=True)
-    parser.add_argument("--expert", choices=("baseline", "ledger"), default="baseline")
+    parser.add_argument("--expert", choices=("baseline", "ledger", "ledger_ranked"), default="baseline")
     parser.add_argument("--max-steps", type=int, default=research.RESEARCH_EPISODE_BUDGET)
     parser.add_argument("--screen", action="store_true", help="also print the balanced screen's report on the root")
     args = parser.parse_args(argv)
@@ -42,7 +42,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                   "best", {k: {kk: vv for kk, vv in (v or {}).items() if kk in ("branch_row0", "channel_index0", "parameter", "J")} for k, v in (r.get("best") or {}).items()})
     research.RESEARCH_ENVIRONMENT_OPTIONS["evidence_profile"] = SUSPICION_GATED_PROFILE
     research.RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"] = 4.0
-    research.RESEARCH_EXPERT_OPTIONS["hypothesis_ledger"] = args.expert == "ledger"
+    research.RESEARCH_EXPERT_OPTIONS["variant"] = args.expert
     factory = research.resolve_environment_factory("research", SUSPICION_GATED_PROFILE)
     env = factory()
     policy = research.research_expert_policy(factory)

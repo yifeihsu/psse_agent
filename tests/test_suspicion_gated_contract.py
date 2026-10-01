@@ -308,3 +308,54 @@ def test_the_expert_requests_phasors_on_a_suspicion_and_solves(roots):
         else:
             assert not AUXILIARY & set(tools), (family, tools)
     assert json.dumps(result["suite_metrics"]["episodes"][0]["trace"][0]["policy_observation"]).count("hif_runtime") == 0
+
+
+def test_c5_the_screen_suspicion_leaves_the_balanced_routes_open(roots):
+    """C5 (2026-10-01): the screen's HIF suspicion admits the phasors but is not a waveform signature.
+
+    On an HIF-won root the measurement context still offers its corrections
+    and the process gate admits one (verification, not the gate, judges it),
+    which is what lets the ledger expert try its leading balanced hypothesis
+    before the acquisition the learned ranker defers.  Once phasors were
+    requested on the state the suspicion blocks again until they settle it.
+    """
+    factory = _environment()
+    hif_roots = [root for root in roots if root["grouping"]["scenario_family"] == "hif"]
+    for root in hif_roots:
+        env = factory()
+        state = env.reset(root["execution"])
+        active = state["active_state_id"]
+        _, wls = env.step({"tool": RUN_WLS, "arguments": {"state_id": active}})
+        screen = wls["tool_metrics"]["hif_screen"]
+        if not screen["suspected"]:
+            continue
+        assert any(str(item).startswith("wls_hif_suspected") for item in wls["tool_metrics"]["unresolved_signatures"])
+        _, context = env.step({"tool": "get_measurement_context", "arguments": {"state_id": active}})
+        assert context["execution_status"] == "success", context
+        metrics = context["tool_metrics"]
+        assert metrics["fundamental_route_blocked_by_waveform_anomaly"] == []
+        assert metrics["three_phase_screening_pending"] is False
+        if metrics.get("measurement_route_blocked_by_branch_dominance"):
+            continue
+        supported = [item for item in metrics["supported_corrections"] if item.get("tool") == "correct_measurements"]
+        assert supported, metrics
+        verdict = env.process_oracle.check(env.current_state(), supported[0], store=env.store)
+        assert verdict["process_valid"], verdict
+        # The phasors confirm the fault: the NLM's signature, a measurement, blocks the meter route again.
+        _, phasors = env.step({"tool": GET_THREE_PHASE_CONTEXT, "arguments": {"state_id": active}})
+        assert phasors["execution_status"] == "success", phasors
+        _, nlm = env.step({"tool": RUN_THREE_PHASE_NLM_FROM_PATH, "arguments": {"state_id": active}})
+        assert nlm["execution_status"] == "success", nlm
+        if nlm["tool_metrics"]["nlm_summary"]["diagnostic_classification"] != "hif_suspected":
+            continue
+        _, confirmed = env.step({"tool": "get_measurement_context", "arguments": {"state_id": active}})
+        assert confirmed["execution_status"] == "success", confirmed
+        after = confirmed["tool_metrics"]
+        # Phasors were requested on this state: the suspicion is theirs to settle and blocks again.
+        assert after["fundamental_route_blocked_by_waveform_anomaly"], after
+        assert after["supported_corrections"] == [], after
+        verdict = env.process_oracle.check(env.current_state(), supported[0], store=env.store)
+        assert verdict["process_valid"] is False, verdict
+        break
+    else:
+        pytest.skip("no HIF-won screen among the HIF roots of this draw")

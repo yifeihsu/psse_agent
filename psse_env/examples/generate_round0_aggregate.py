@@ -42,6 +42,7 @@ import psse_env.dagger.sft_audit as sft_audit_module
 import psse_env.dagger.splits as splits_module
 import psse_env.dagger.suite_builder as suite_builder_module
 import psse_env.oracle as oracle_module
+from psse_env.oracle.expert_variants import current_expert_variant, expert_variant_options
 import psse_env.providers.matpower as matpower_provider_module
 import psse_env.providers.scenario_generator as scenario_generator_module
 import psse_env.transactional_env as transactional_env_module
@@ -452,7 +453,9 @@ def build_environment(args: argparse.Namespace) -> tuple[TransactionalPSSEEnv, E
         max_steps=args.max_steps,
         history_window=4,
     )
-    oracle = ExpertPolicyOracle(process_oracle=env.process_oracle)
+    # The teacher variant under study (PSSE_EXPERT_VARIANT): baseline, the
+    # hypothesis ledger, or the ledger with the learned ranker's deferral.
+    oracle = ExpertPolicyOracle(process_oracle=env.process_oracle, **expert_variant_options())
     return env, oracle
 
 
@@ -1986,6 +1989,7 @@ def _generation_descriptor(
         "generation_config": {
             "evidence_profile": getattr(args, "evidence_profile", DEFAULT_EVIDENCE_PROFILE),
             "hif_signature_mode": getattr(args, "hif_signature_mode", "discovered"),
+            "expert_variant": current_expert_variant(),
             "seed": args.seed,
             "source_partition": BC0_AGGREGATE_SOURCE_PARTITION,
             "plan": dict(sorted(plan.items())),

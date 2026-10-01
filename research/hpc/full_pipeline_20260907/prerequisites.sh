@@ -62,6 +62,18 @@ print(f"HIF corpora declare PMU phasor sigma {expected!r} per component")
 PY
 fi
 [[ -s "$TRACE_VALIDATION" ]] || echo "note: trace validation set absent; only the BC0 suite is protected"
+# The ranked teacher reads the learned ranker export the source tree carries.
+if [[ "$EXPERT_VARIANT" == ledger_ranked ]]; then
+  RANKER_MODEL=$SRC/psse_env/oracle/models/learned_ranker_ieee14_20261001.json
+  [[ -s "$RANKER_MODEL" ]] || { echo "ledger_ranked needs the ranker export: $RANKER_MODEL" >&2; exit 2; }
+  "$PY" - "$RANKER_MODEL" <<'PY'
+import sys
+from psse_env.oracle.learned_ranker import LearnedRanker
+ranker = LearnedRanker.from_json(sys.argv[1])
+assert "needs_aux" in ranker.targets and ranker.threshold("needs_aux") is not None, "ranker export lacks the needs_aux operating point"
+print(f"ranker export ok: {sorted(ranker.targets)} on {ranker.system}")
+PY
+fi
 SNAPSHOT="$HF_HOME/hub/models--${MODEL_ID//\//--}/snapshots/$MODEL_REVISION"
 if [[ ! -s "$SNAPSHOT/config.json" || ! -e "$SNAPSHOT/model.safetensors" ]]; then
   echo "offline model snapshot missing: $SNAPSHOT" >&2
@@ -102,7 +114,7 @@ if [[ "$WITH_TESTS" == 1 ]]; then
 fi
 "$PY" - "$OUTPUT" "$actual_commit" "$WITH_TESTS" "$SRC" "$SNAPSHOT" \
   "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID" "$IMBALANCE_CORPUS" "$BC0_SUITE" \
-  "$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA" "$EVIDENCE_PROFILE" "$HIF_SIGNATURE_MODE" <<'PY'
+  "$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA" "$EVIDENCE_PROFILE" "$HIF_SIGNATURE_MODE" "$EXPERT_VARIANT" <<'PY'
 import datetime
 import hashlib
 import json
@@ -118,6 +130,7 @@ payload = {
     "contract": "research_full_pipeline_prerequisites_v1",
     "evidence_profile": sys.argv[12],
     "hif_signature_mode": sys.argv[13],
+    "expert_variant": sys.argv[14],
     "checked_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "source_commit": sys.argv[2],
     "model_snapshot": sys.argv[5],

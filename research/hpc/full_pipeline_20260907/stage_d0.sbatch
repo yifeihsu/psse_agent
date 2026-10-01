@@ -83,7 +83,7 @@ if [[ ! -s "$OUT/d0.done" ]]; then
     "${system_args[@]}" \
     "${waveform_args[@]}" \
     > "$OUT/d0_console.json"
-  "$PY" - "$D0_DIR" "$OUT/d0.done" "$EVIDENCE_PROFILE" <<'PY'
+  "$PY" - "$D0_DIR" "$OUT/d0.done" "$EVIDENCE_PROFILE" "$EXPERT_VARIANT" <<'PY'
 import hashlib
 import json
 import os
@@ -117,6 +117,7 @@ provenance = json.loads((d0 / "aggregate.generation_provenance.json").read_text(
 payload = {
     "contract": "research_full_pipeline_d0_done_v1",
     "evidence_profile": sys.argv[3],
+    "expert_variant": sys.argv[4],
     "raw_rows": len(raw),
     "raw_roots": len({root(r) for r in raw}),
     "raw_families": dict(sorted(Counter(r.get("scenario_family") for r in raw).items())),
