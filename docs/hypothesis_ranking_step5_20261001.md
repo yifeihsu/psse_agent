@@ -247,6 +247,12 @@ to rebuild the 548 scenarios). Two rules were wrong, one old and one new:
 
 With both fixes the root corrects channel 7 first, commits, and ends in the
 post-correction confirmation handoff the audit accepts (9 steps).
+Every one of the 548 stage-0 scenarios then passed the collector's
+training-decision check locally with the ranked teacher (eight parallel
+chunks, 0 failures). The cell was redeployed from commit 8e2414a and the
+chain resubmitted on 2026-10-01 at 22:21 UTC: d0 18985026, bc0 18985027,
+r1c 18985028, r1t 18985029, r1e 18985030, r2c 18985031, r2t 18985032,
+r2e 18985033 (the first attempt's log is kept under `logs/attempt1_failed/`).
 
 The evaluation summaries already report success by basis
 (`summarize.py: success_basis`); under the suspicion-gated admission every
