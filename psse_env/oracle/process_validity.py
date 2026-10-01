@@ -45,6 +45,8 @@ from psse_env.actions import (
 from psse_env.state_store import SYNTHETIC_TERMINAL_COMPATIBILITY_KEY
 from psse_env.oracle.expert_types import matching_evidence_codes
 from psse_env.oracle.anomaly_evidence import normalized_residual_alarm
+from psse_env import actions as _actions
+from psse_env import evidence_profile as _evidence_profile
 from psse_env.evidence_profile import (
     DEFAULT_EVIDENCE_PROFILE, DIAGNOSTIC_SUSPICION_REQUIREMENTS, GATED_DIAGNOSTIC_TOOLS,
     allows_diagnostic_tools, disabled_requests, disabled_tools, is_scada_only,
@@ -100,12 +102,15 @@ def current_wls_alarm(state: Any, target_state_id: Any = None) -> bool:
 
 
 def current_family_suspicion(state: Any, family: str, target_state_id: Any = None) -> bool:
-    """A balanced screen suspicion of ``family`` on the target state's current WLS.
+    """A suspicion of ``family`` on the target state's current evidence.
 
-    suspicion_gated_diagnostics admits a family's auxiliary stream only when
-    the screen that rides on the bound WLS (the active state's ledger, or an
-    open candidate's own verification) reports ``suspected``.  Screens exist
-    for HIF only; no other family can be suspected yet.
+    suspicion_gated_diagnostics admits an auxiliary stream only when the
+    screen that rides on the bound WLS (the active state's ledger, or an open
+    candidate's own verification) reports the matching suspicion
+    (``psse_env.actions.current_suspicion``): ``phasor`` for phase-resolved
+    measurements, ``hif`` for the HIF estimator, ``harmonic`` for spectra.
+    The harmonic and phasor-derived HIF suspicions read the acquisition ledger
+    and exist on the active state only.
     """
     getter = getattr(state, "get", None)
     if not callable(getter):
@@ -113,7 +118,6 @@ def current_family_suspicion(state: Any, family: str, target_state_id: Any = Non
     active_id = str(getter("active_state_id") or "")
     candidate_id = getter("candidate_state_id")
     target = str(target_state_id or active_id)
-    key = f"{family}_screen"
     if target and target == active_id:
         contexts = getter("fresh_context_evidence")
         wls = contexts.get("wls") if isinstance(contexts, Mapping) else None
@@ -123,15 +127,48 @@ def current_family_suspicion(state: Any, family: str, target_state_id: Any = Non
             and isinstance(wls.get("state_hash"), str) and wls["state_hash"]
         ):
             return False
-        report = wls.get(key)
-    elif candidate_id is not None and target == str(candidate_id):
+        return _actions.current_suspicion(state, family)
+    if candidate_id is not None and target == str(candidate_id):
         verification = getter("last_verification")
         if not isinstance(verification, Mapping) or str(verification.get("state_id") or "") != target:
             return False
-        report = verification.get(key)
-    else:
+        if family == "harmonic":
+            return False
+        return _actions.screen_phasor_suspicion(verification.get("hif_screen"), family)
+    return False
+
+
+def voltage_meter_edit_without_phasors(state: Any, arguments: Mapping[str, Any]) -> bool:
+    """A meter correction touching a phase-A voltage channel before phasors were examined.
+
+    On balanced SCADA a one-bus unbalance is indistinguishable from a bad
+    voltage meter (2026-09-30 study: every unbalance root the screen explained
+    as a meter was a Vm channel), so the suspicion-gated contract confirms the
+    channel on phasors first.  The bus count comes from the WLS ledger; a
+    ledger without it cannot decide and leaves the edit alone.
+    """
+    getter = getattr(state, "get", None)
+    if not callable(getter):
         return False
-    return isinstance(report, Mapping) and report.get("status") == "valid" and report.get("suspected") is True
+    contexts = getter("fresh_context_evidence")
+    wls = contexts.get("wls") if isinstance(contexts, Mapping) else None
+    bus_count = wls.get("bus_count") if isinstance(wls, Mapping) else None
+    if not isinstance(bus_count, int) or isinstance(bus_count, bool) or bus_count <= 0:
+        return False
+    indices: set[int] = set()
+    group = arguments.get("suspect_group")
+    if isinstance(group, (list, tuple)):
+        indices.update(int(i) for i in group if isinstance(i, int) and not isinstance(i, bool))
+    updates = arguments.get("measurement_updates")
+    if isinstance(updates, Mapping):
+        for key in updates:
+            try:
+                indices.add(int(key))
+            except (TypeError, ValueError):
+                continue
+    if not any(0 <= index < bus_count for index in indices):
+        return False
+    return not _actions.phasors_examined(state)
 
 
 _SUSPICION_ERROR_CODES = frozenset(
@@ -328,6 +365,15 @@ class ProcessValidityOracle:
                 family = _CORRECTION_CONTEXT_FAMILY[tool]
                 error_code = "correction_route_not_actionable"
                 error_detail = f"{family}_three_phase_screening_pending"
+            elif (
+                tool == CORRECT_MEASUREMENTS
+                and _evidence_profile.is_suspicion_gated(state.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE))
+                and voltage_meter_edit_without_phasors(state, args)
+            ):
+                # D3 (2026-09-30): a voltage-meter edit waits for the phasors
+                # that tell a bad meter from a one-bus unbalance.
+                error_code = "correction_route_not_actionable"
+                error_detail = "measurement_voltage_meter_correction_requires_phase_measurements"
             elif tool == CORRECT_MEASUREMENTS and not hif_meter_route_ready(state) and self._measurement_route_blocked_by_branch_dominance(
                 state, active_id
             ):
@@ -856,6 +902,10 @@ class ProcessValidityOracle:
                     },
                 }
             ]
+        if error_detail == "measurement_voltage_meter_correction_requires_phase_measurements" and active_id:
+            # The repair is the acquisition the rule asks for; the voltage
+            # channel itself is the phasor suspicion that admits it.
+            return [{"tool": GET_THREE_PHASE_CONTEXT, "arguments": {"state_id": active_id}}]
         if error_code in {
             "correction_not_supported_by_current_context",
             "correction_route_not_actionable",

@@ -46,7 +46,7 @@ from psse_env.oracle.recovery_expert import RecoveryExpert
 from psse_env.oracle.termination_expert import TerminationExpert
 from psse_env.oracle.hif_continuation import hif_meter_route_ready, recovery_signatures
 from psse_env.oracle.topology_expert import TopologyExpert
-from psse_env.actions import diagnostic_tool_permitted
+from psse_env.actions import UNEXPLAINED_DISCREPANCY_REQUEST, diagnostic_tool_permitted, phasors_examined
 from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary, is_suspicion_gated
 from psse_env.state_store import (
     SYNTHETIC_TERMINAL_COMPATIBILITY_KEY,
@@ -1092,6 +1092,13 @@ class ExpertPolicyOracle:
         )
         if not (successful_current_wls and investigation_seen):
             return []
+        # Option A (2026-09-30): before handing an unexplained alarm over,
+        # open the phase-resolved measurements and, when they come back
+        # balanced, the spectra.  The handoff follows only once both tiers
+        # have answered on this state.
+        acquisition = self.diagnostics_expert.unexplained_acquisition_proposals(policy, history)
+        if acquisition:
+            return acquisition
         # A branch fault whose ranked candidates were all tested and rejected
         # is handed over bounded to that candidate set: the operator gets a
         # diagnosis, not a generic exhaustion, and the meter route never
@@ -1120,22 +1127,30 @@ class ExpertPolicyOracle:
                     estimated_immediate_risk=0.0,
                 )
             ]
+        request = RECOVERY_OPTIONS_EXHAUSTED_REQUEST
+        evidence = [
+            "observable_recovery_options_exhausted",
+            ("unresolved_balanced_model_discrepancy_requires_operator_handoff"
+             if is_strict_boundary(policy) else "unresolved_anomaly_requires_operator_handoff"),
+        ]
+        if is_suspicion_gated(policy) and phasors_examined(policy if isinstance(policy, Mapping) else policy.as_dict()):
+            # Both acquisition tiers answered on this state and the alarm
+            # stands: the honest end of the suspicion-gated ladder.
+            request = UNEXPLAINED_DISCREPANCY_REQUEST
+            evidence = ["observable_recovery_options_exhausted", "phasors_examined_on_state",
+                        "unexplained_balanced_discrepancy_requires_operator_handoff"]
         return [
             ExpertActionProposal(
                 action={
                     "tool": ASK_FOR_MORE_EVIDENCE,
                     "arguments": {
                         "state_id": active_id,
-                        "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                        "request": request,
                     },
                 },
                 source_expert="recovery_expert",
                 confidence=1.0,
-                evidence_codes=[
-                    "observable_recovery_options_exhausted",
-                    ("unresolved_balanced_model_discrepancy_requires_operator_handoff"
-                     if is_strict_boundary(policy) else "unresolved_anomaly_requires_operator_handoff"),
-                ],
+                evidence_codes=evidence,
                 admissible=True,
                 estimated_immediate_risk=0.0,
             )

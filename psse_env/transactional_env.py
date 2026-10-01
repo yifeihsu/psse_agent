@@ -34,6 +34,7 @@ from .actions import (
     PROCESS_REJECTION_ERROR_CODES,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+    UNEXPLAINED_DISCREPANCY_REQUEST,
     ROLLBACK_STATE,
     RUN_ALTERNATIVE_TEST,
     RUN_HSE_FROM_PATH,
@@ -794,6 +795,8 @@ class TransactionalPSSEEnv:
                 # The balanced HIF screen rides on this solve; its suspicion
                 # is what admits phasors under suspicion_gated_diagnostics.
                 "hif_screen",
+                # Lets the process gate tell a voltage channel from a power one.
+                "bus_count",
             ):
                 if key in wls:
                     contexts["wls"][key] = wls[key]
@@ -1530,6 +1533,7 @@ class TransactionalPSSEEnv:
                     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
                     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
                     AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
+                    UNEXPLAINED_DISCREPANCY_REQUEST,
                 }
             ):
                 escalation_audit = self._operator_escalation_audit(
@@ -1707,6 +1711,7 @@ class TransactionalPSSEEnv:
                 HIF_CONDITIONING_UNAVAILABLE_REQUEST,
                 RECOVERY_BUDGET_EXHAUSTED_REQUEST,
                 RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                UNEXPLAINED_DISCREPANCY_REQUEST,
             }
         ):
             audit = self._operator_escalation_audit(normalized)
@@ -1997,6 +2002,7 @@ class TransactionalPSSEEnv:
             RECOVERY_BUDGET_EXHAUSTED_REQUEST,
             RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
             AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
+            UNEXPLAINED_DISCREPANCY_REQUEST,
         }
         if request not in supported_requests:
             missing.append("escalation_request_invalid")
@@ -2056,6 +2062,7 @@ class TransactionalPSSEEnv:
         if request in {
             RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
             RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+            UNEXPLAINED_DISCREPANCY_REQUEST,
         } and not (
             unresolved or score_unresolved
         ):
@@ -2150,8 +2157,30 @@ class TransactionalPSSEEnv:
         elif request in {
             RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
             RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+            UNEXPLAINED_DISCREPANCY_REQUEST,
         }:
             bound_observable_metrics(RUN_WLS)
+            if request == UNEXPLAINED_DISCREPANCY_REQUEST:
+                # The suspicion-gated ladder's honest end (2026-09-30): the
+                # phasors acquired on this state were tested and named no
+                # diagnosable event, and the spectra, when they showed a
+                # distortion, were tested by the HSE and rejected.
+                nlm_event = bound_observable_metrics(RUN_THREE_PHASE_NLM_FROM_PATH)
+                if nlm_event is not None:
+                    nlm_summary = nlm_event[1].get("nlm_summary")
+                    classification = (
+                        str(nlm_summary.get("diagnostic_classification") or "")
+                        if isinstance(nlm_summary, Mapping) else ""
+                    )
+                    if classification in {"hif_suspected", "three_phase_unbalance"}:
+                        missing.append("phasors_name_a_diagnosable_event")
+                spectra_event = bound_observable_metrics(GET_HARMONIC_CONTEXT)
+                if spectra_event is not None and spectra_event[1].get("harmonic_distortion_detected") is True:
+                    hse_event = bound_observable_metrics(RUN_HSE_FROM_PATH)
+                    if hse_event is not None:
+                        acceptance = hse_event[1].get("diagnostic_acceptance")
+                        if not (isinstance(acceptance, Mapping) and acceptance.get("accepted") is False):
+                            missing.append("hse_not_explicitly_rejected")
             measurement_signal = bool(
                 matching_evidence_codes(
                     unresolved,
@@ -2590,7 +2619,7 @@ class TransactionalPSSEEnv:
                     investigation_tools.append(telemetry_tool)
             if not investigation_tools and not post_correction_budget_deferral:
                 missing.append("same_state_investigation_evidence_missing")
-            if request == RECOVERY_OPTIONS_EXHAUSTED_REQUEST:
+            if request in {RECOVERY_OPTIONS_EXHAUSTED_REQUEST, UNEXPLAINED_DISCREPANCY_REQUEST}:
                 if (
                     missing_required_contexts
                     and not post_correction_confirmation_handoff
@@ -2639,7 +2668,7 @@ class TransactionalPSSEEnv:
             True
             if request == RECOVERY_BUDGET_EXHAUSTED_REQUEST
             else False
-            if request == AMBIGUOUS_BRANCH_CANDIDATES_REQUEST
+            if request in {AMBIGUOUS_BRANCH_CANDIDATES_REQUEST, UNEXPLAINED_DISCREPANCY_REQUEST}
             else bool(missing_required_contexts or outstanding_recovery_targets)
         )
         ledger = {
@@ -2653,6 +2682,8 @@ class TransactionalPSSEEnv:
                 if request == RECOVERY_BUDGET_EXHAUSTED_REQUEST
                 else "ambiguous_branch"
                 if request == AMBIGUOUS_BRANCH_CANDIDATES_REQUEST
+                else "unexplained_discrepancy"
+                if request == UNEXPLAINED_DISCREPANCY_REQUEST
                 else "mixed_or_unresolved"
             ),
             "candidate_lines": (

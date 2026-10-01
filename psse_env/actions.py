@@ -44,6 +44,13 @@ RECOVERY_OPTIONS_EXHAUSTED_REQUEST = (
 RECOVERY_BUDGET_EXHAUSTED_REQUEST = (
     "operator_escalation:recovery_budget_exhausted"
 )
+# The balanced routes are exhausted, the phasors acquired on the state came
+# back balanced and the spectra showed no distortion (or were refused), yet the
+# alarm stands: the diagnosis is handed over as an unexplained discrepancy,
+# the honest end of the suspicion-gated ladder (2026-09-30).
+UNEXPLAINED_DISCREPANCY_REQUEST = (
+    "operator_escalation:unexplained_balanced_discrepancy"
+)
 # A branch fault whose top-ranked line does not dominate its runner-up under
 # the parameter-ranking contract.  The ranked candidates are tested under
 # verification; once every one of them is rejected the diagnosis is handed to
@@ -369,22 +376,77 @@ def current_screen_report(state: Any, family: str) -> Mapping[str, Any]:
     return report if isinstance(report, Mapping) else {}
 
 
+def screen_phasor_suspicion(report: Any, kind: str) -> bool:
+    """Read one suspicion kind off a (compact or full) screen report.
+
+    ``hif``: an HIF won; ``voltage_meter``: a phase-A voltage channel was set
+    aside as a bad meter; ``unexplained``: no hypothesis sequence explained
+    the alarm; ``phasor``: any of the three.  A report that is not valid
+    carries no suspicion.
+    """
+    if not isinstance(report, Mapping) or report.get("status") != "valid":
+        return False
+    kinds = report.get("phasor_suspicion")
+    kinds = kinds if isinstance(kinds, Mapping) else {}
+    if kind == "hif":
+        return report.get("suspected") is True
+    if kind == "phasor":
+        return report.get("suspected") is True or any(bool(value) for value in kinds.values())
+    return bool(kinds.get(kind))
+
+
+def phasor_ledger(state: Any) -> Mapping[str, Any]:
+    """The phasor acquisition ledger bound to the active state, else empty."""
+    if not isinstance(state, Mapping):
+        return {}
+    contexts = state.get("fresh_context_evidence")
+    context = contexts.get("three_phase") if isinstance(contexts, Mapping) else None
+    if not (
+        isinstance(context, Mapping)
+        and str(context.get("state_id") or "") == str(state.get("active_state_id") or "")
+        and context.get("request_attempted") is True
+    ):
+        return {}
+    return context
+
+
+def phasors_examined(state: Any) -> bool:
+    """Phasors were acquired on the active state and the NLM has looked at them."""
+    ledger = phasor_ledger(state)
+    return bool(ledger) and ledger.get("nlm_attempted") is True
+
+
+def phasor_nlm_classification(state: Any) -> str | None:
+    """What the NLM concluded from the phasors acquired on the active state."""
+    ledger = phasor_ledger(state)
+    value = ledger.get("nlm_classification") if ledger else None
+    return str(value) if value else None
+
+
 def current_suspicion(state: Any, family: str) -> bool:
-    """Whether the balanced evidence on the active state points at ``family``.
+    """Whether the evidence on the active state points at ``family``.
 
     Under suspicion_gated_diagnostics this, together with the WLS alarm, is
-    what admits the family's auxiliary stream: phase-resolved phasors for an
-    HIF suspicion, spectra for a harmonic one.  A suspicion that the acquired
-    phasors later refuted still admits the stream it already opened.
+    what admits an auxiliary stream (``DIAGNOSTIC_SUSPICION_REQUIREMENTS``):
+    ``phasor`` for phase-resolved measurements (an HIF won, a phase-A voltage
+    channel was set aside, or the alarm stayed unexplained), ``hif`` for the
+    HIF estimator (the screen's HIF, or an HIF-like line differential the
+    acquired phasors showed), ``harmonic`` for spectra (phasors acquired on
+    this state came back balanced).  A suspicion that the acquired phasors
+    later refuted still admits the stream it already opened.
     """
-    report = current_screen_report(state, family)
-    return report.get("status") == "valid" and report.get("suspected") is True
+    report = current_screen_report(state, "hif")
+    if family == "harmonic":
+        return phasor_nlm_classification(state) == "balanced_three_phase"
+    if family == "hif":
+        return screen_phasor_suspicion(report, "hif") or phasor_nlm_classification(state) == "hif_suspected"
+    return screen_phasor_suspicion(report, family)
 
 
 def hif_suspicion_refuted(state: Any) -> bool:
     """The current HIF suspicion was tested on phasors and found no HIF."""
     report = current_screen_report(state, "hif")
-    return current_suspicion(state, "hif") and report.get("refuted_by_phase_measurements") is True
+    return screen_phasor_suspicion(report, "hif") and report.get("refuted_by_phase_measurements") is True
 
 
 def harmonic_screening_pending(

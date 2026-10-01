@@ -79,6 +79,7 @@ from psse_env.evidence_profile import (
     validate_evidence_profile,
 )
 from psse_env.oracle.process_validity import current_family_suspicion, current_wls_alarm
+from psse_env.actions import UNEXPLAINED_DISCREPANCY_REQUEST
 from psse_env.providers.hif_continuation import (
     accepted_fit as accepted_hif_fit, conditioned_prediction, current_scan,
     diagnose as diagnose_hif_meters, fit_receipt, model_fingerprint,
@@ -87,8 +88,8 @@ from psse_env.oracle.measurement_recovery_evidence import (
     measurement_targets_predating_branch_repair,
 )
 from psse_env.providers.hif_screen import (
-    DEFAULT_HIF_SCREEN_CONFIG, HIF_SCREEN_METHOD, HIF_SCREEN_SIGNATURE, HifScreenCache,
-    default_hif_lines, screen_hif,
+    DEFAULT_HIF_SCREEN_CONFIG, HIF_SCREEN_METHOD, HIF_SCREEN_SIGNATURE, UNEXPLAINED_SCREEN_SIGNATURE,
+    VOLTAGE_METER_SCREEN_SIGNATURE, HifScreenCache, default_hif_lines, screen_hif,
 )
 from psse_env.providers.suspicion_gated import (
     BALANCED_HIF_CONDITIONING_METHOD, PMU_HIF_FIT_METHOD, balanced_hif_prediction,
@@ -689,6 +690,7 @@ class MatpowerDeploymentProviders:
         if request in {
             RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
             RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+            UNEXPLAINED_DISCREPANCY_REQUEST,
         }:
             investigation_tools = {
                 GET_MEASUREMENT_CONTEXT,
@@ -755,11 +757,28 @@ class MatpowerDeploymentProviders:
                     "attempted_tools": sorted(attempted),
                     "available_evidence_channels": sorted(available),
                 }
+            unexplained = request == UNEXPLAINED_DISCREPANCY_REQUEST
+            if unexplained:
+                # The handoff of an unexplained balanced discrepancy needs the
+                # phasors to have been acquired and tested on this very state.
+                phase = (observation.get("fresh_context_evidence") or {}).get("three_phase") or {}
+                if not (
+                    isinstance(phase, Mapping)
+                    and str(phase.get("state_id") or "") == str(state.get("state_id") or "")
+                    and phase.get("nlm_attempted") is True
+                ):
+                    return self._failure(
+                        "unexplained_handoff_requires_examined_phasors",
+                        "phasors were not acquired and tested on this state",
+                    )
             return {
                 **self._binding(state),
-                "evidence_source": "deployment_diagnostic:recovery_evidence_inventory",
-                "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
-                "family": "mixed_or_unresolved",
+                "evidence_source": (
+                    "deployment_diagnostic:unexplained_discrepancy_inventory" if unexplained
+                    else "deployment_diagnostic:recovery_evidence_inventory"
+                ),
+                "request": UNEXPLAINED_DISCREPANCY_REQUEST if unexplained else RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                "family": "unexplained_discrepancy" if unexplained else "mixed_or_unresolved",
                 "additional_evidence_available": False,
                 "operator_review_required": True,
                 "attempted_tools": sorted(attempted),
@@ -1141,11 +1160,23 @@ class MatpowerDeploymentProviders:
                 report = {"method": HIF_SCREEN_METHOD, "status": "screen_error", "suspected": False,
                           "error": f"{type(exc).__name__}: {exc}", "rounds": []}
             self._hif_screen_cache.put(key, report)
+        phasor_kinds = report.get("phasor_suspicion")
         compact: dict[str, Any] = {
             "method": report.get("method", HIF_SCREEN_METHOD),
             "status": report.get("status"),
             "suspected": bool(report.get("suspected")),
             "outcome": report.get("outcome"),
+            # 2026-09-30: the accepted hypotheses in order, whether they
+            # explain the alarm, the phase-A voltage channels set aside, and
+            # the three phasor suspicions the acquisition rule reads.
+            "explained": bool(report.get("explained")),
+            "unexplained": bool(report.get("unexplained")),
+            "accepted_hypotheses": [dict(item) for item in report.get("accepted_hypotheses") or []],
+            "voltage_meter_channels": [int(c) for c in report.get("voltage_meter_channels") or []],
+            "phasor_suspicion": (
+                {str(k): bool(v) for k, v in phasor_kinds.items()} if isinstance(phasor_kinds, Mapping)
+                else {"hif": bool(report.get("suspected")), "voltage_meter": False, "unexplained": False}
+            ),
             "rounds": [
                 {"winner": item.get("winner"), "clean_after_removal": item.get("clean_after_removal"),
                  "set_aside_channels": list(item.get("dropped_channels") or []),
@@ -1161,6 +1192,7 @@ class MatpowerDeploymentProviders:
                 line_index1=int(report["branch_row0"]) + 1,
                 alpha_from_from_bus=round(float(report["alpha"]), 3),
                 meter_set_aside_index0=report.get("meter_set_aside_index0"),
+                hif_variant=str(report.get("hif_variant") or "shunt"),
             )
             observation = state.get("policy_observation")
             contexts = observation.get("fresh_context_evidence") if isinstance(observation, Mapping) else None
@@ -1937,6 +1969,7 @@ class MatpowerDeploymentProviders:
         # power-flow convergence claim.
         if is_candidate:
             metrics.update(self._steady_state_physical_evidence(solved))
+        metrics["bus_count"] = int(nb)
         if self._effective_profile(state) == SUSPICION_GATED_PROFILE and not resolved and not conditional:
             screen = self._hif_screen(state, solved)
             metrics["hif_screen"] = screen
@@ -1948,6 +1981,16 @@ class MatpowerDeploymentProviders:
                     *metrics["unresolved_signatures"],
                     f"{HIF_SCREEN_SIGNATURE} line={screen['line_index1']}",
                 ])
+            if screen.get("status") == "valid" and not waveform_sensor:
+                # The other two phasor suspicions (2026-09-30).  Neither
+                # signature carries a waveform marker: the balanced routes
+                # stay open, only a voltage-meter edit waits for the phasors.
+                minted = [f"{VOLTAGE_METER_SCREEN_SIGNATURE} index={int(channel)}"
+                          for channel in screen.get("voltage_meter_channels") or []]
+                if screen.get("unexplained"):
+                    minted.append(UNEXPLAINED_SCREEN_SIGNATURE)
+                if minted:
+                    metrics["unresolved_signatures"] = _dedupe([*metrics["unresolved_signatures"], *minted])
         if self.screen_checkpoint:
             report = self._screen_wls(state, solved)
             metrics["gnn_screen"] = report
@@ -4868,6 +4911,11 @@ class MatpowerDeploymentProviders:
                 "separation_ratio": float(top["zero_sequence_pu"]) / max(
                     float(screen["second_zero_sequence_pu"]), float(screen["zero_sequence_floor_pu"])),
             }
+            if not self._has_family_signature(state, "hif"):
+                # Phasors opened by a voltage-meter or unexplained suspicion
+                # show an HIF-like line differential: mint the HIF signature
+                # the estimator ladder keys on, as the WLS-gated path does.
+                metrics["minted_signatures"] = [f"hif_suspected_zero_sequence line={int(top['line_index1'])}"]
             return metrics
         localization = unbalance_source_localization(voltages, currents, top_k=self.top_k, sigma_pu=current_sigma)
         significant = bool(localization is not None and localization.get("significant"))

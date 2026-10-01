@@ -123,6 +123,11 @@ def _breaker_effect_class(category: str) -> str:
 # HARMONIC_DEFAULT_CANDIDATES and make_harmonic_anomaly_record).
 HARMONIC_SOURCE_CANDIDATES = (2, 3, 4, 5, 9, 10, 11, 12, 13, 14)
 HARMONIC_THD_RANGE = (0.10, 0.20)
+#: Monitored orders and complex-RMS noise of the synthesized harmonic traces
+#: (Transmission.generate_hse_traces); the clean spectra every suspicion-gated
+#: root carries use the same monitors and sigma.
+HARMONIC_MONITOR_ORDERS = (5, 7, 11, 13, 17, 19)
+HARMONIC_MONITOR_SIGMA_COMPLEX_RMS = 1e-4
 
 SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT = (
     "bc0_synthesized_measurement_decimal12_half_even_v1"
@@ -2332,6 +2337,35 @@ class Round0ScenarioGenerator:
         metadata["three_phase_sigma"] = sigma
         metadata[BRANCH_CURRENT_SIGMA_KEY] = sigma
 
+    def _attach_clean_spectra(self, scenario: dict[str, Any]) -> None:
+        """Noise-only spectra for a root whose simulation produced none (suspicion_gated_diagnostics).
+
+        Spectra open on a harmonic suspicion any alarmed root can reach (the
+        phasors acquired on it came back balanced), so every root must answer
+        a spectra request and the answer must not name the family by its
+        availability.  Monitors at every bus and the six-pulse orders of the
+        harmonic traces, Gaussian noise at the traces' per-component sigma,
+        no distortion.  A per-root random stream keeps every other draw
+        unchanged.
+        """
+        metadata = scenario.setdefault("metadata", {})
+        if metadata.get("harmonic_measurements"):
+            return
+        digest = hashlib.sha256(f"{self.seed}:{scenario['scenario_id']}:spectra".encode("utf-8")).hexdigest()
+        rng = np.random.default_rng(int(digest[:16], 16))
+        sigma = float(HARMONIC_MONITOR_SIGMA_COMPLEX_RMS) / math.sqrt(2.0)
+        rows: list[dict[str, Any]] = []
+        for bus in range(1, self.nb + 1):
+            for order in HARMONIC_MONITOR_ORDERS:
+                rows.append({
+                    "bus": int(bus), "h": int(order),
+                    "V_real": float(rng.normal(0.0, sigma)), "V_imag": float(rng.normal(0.0, sigma)),
+                    "sigma": sigma, "sigma_semantics": "per_component",
+                    "sigma_complex_rms": float(HARMONIC_MONITOR_SIGMA_COMPLEX_RMS),
+                })
+        metadata["harmonic_measurements"] = rows
+        metadata["harmonic_orders"] = [int(order) for order in HARMONIC_MONITOR_ORDERS]
+
     def _uniform_pmu_sigma(self, scenario: dict[str, Any], row: Mapping[str, Any]) -> None:
         """Re-noise a simulated window's phasors at the uniform PMU sigma.
 
@@ -3830,6 +3864,7 @@ class Round0ScenarioGenerator:
             fundamental = scenario.pop("_fundamental_state", None)
             if is_suspicion_gated(self.evidence_profile):
                 self._attach_true_state_phasors(scenario, fundamental)
+                self._attach_clean_spectra(scenario)
             if is_strict_boundary(self.evidence_profile):
                 # scada_only keeps balanced SCADA and its declarations only;
                 # wls_gated_diagnostics also keeps the auxiliary streams the

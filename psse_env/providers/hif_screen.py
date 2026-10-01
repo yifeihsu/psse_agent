@@ -6,19 +6,41 @@ complexity-penalized chi-square reduction wins:
 
 * ``meter``      one of the top normalized-residual channels left out (its
                  bias is free);
-* ``parameter``  one branch's series R or X re-estimated inside a plausible
-                 box (0 <= R <= max(20 R0, X0 / 2), X0 / 20 <= X <= 20 X0);
+* ``parameter``  one branch's series R, X, or R and X jointly re-estimated
+                 inside a plausible box (0 <= R <= max(20 R0, X0 / 2),
+                 X0 / 20 <= X <= 20 X0); the joint variant pays for two
+                 continuous parameters (2026-09-30: a corpus parameter root
+                 has both wrong, and one re-estimated parameter left 47 of
+                 250 roots alarmed);
 * ``topology``   one branch switched out (never one whose loss islands a bus);
 * ``hif``        one eligible line split at ``alpha`` into two pi sections,
                  with a new unmeasured zero-injection bus that carries a
-                 shunt conductance ``G >= 0`` estimated jointly with the state.
+                 shunt conductance ``G >= 0`` estimated jointly with the
+                 state; optionally (off by default) also with the two end buses'
+                 phase-A voltage channels set aside (a single-phase fault
+                 shifts the phase-A magnitude by its sequence effect, which
+                 the balanced shunt cannot carry), paying one continuous
+                 parameter per channel.
 
     score = J0 - J - (continuous_penalty * n_continuous
                       + discrete_penalty * ln(n_candidates))
 
-A meter win removes that channel and the test runs once more (two-round stop):
-a mixed HIF + meter root shows its HIF only after the meter is set aside, and
-stopping after the second round keeps false flags rare.  An HIF suspicion is a
+A win is applied and the test runs again on what remains: a meter win sets
+the channel aside, a parameter win installs the estimate, a topology win
+opens the branch; up to ``max_rounds`` comparisons, stopping as soon as the
+remaining model clears the alarm rule or an HIF wins (a suspicion opens
+phase-resolved measurements; the balanced rounds end there).  The HIF class
+is compared only while at most one meter has been set aside, which keeps the
+original two-round false-flag rate.  The outcome names every accepted
+hypothesis in order (``meter>hif``, ``parameter>meter``).
+
+Three outputs feed the suspicion-gated acquisition rule
+(docs/hypothesis_ranking_plan_20260930.md, step 2): ``suspected`` (an HIF
+won), ``voltage_meter_channels`` (phase-A voltage channels the rounds set
+aside: on balanced SCADA a one-bus unbalance is indistinguishable from a bad
+voltage meter, so a leading voltage-meter hypothesis is confirmed on phasors
+before the meter is edited), and ``unexplained`` (the rounds ran out or no
+hypothesis converged while the alarm stood, and no HIF won).  Each is a
 reason to request phase-resolved measurements, not a diagnosis.
 
 Verified on the 2026-09-26 feasibility dataset (IEEE 14, 1,324 alarmed roots,
@@ -51,9 +73,15 @@ BUS_I, BUS_TYPE, PD, QD, GS, BS, VM, VA, BASE_KV = 0, 1, 2, 3, 4, 5, 7, 8, 9
 F_BUS, T_BUS, BR_R, BR_X, BR_B, TAP, SHIFT, BR_STATUS = 0, 1, 2, 3, 4, 8, 9, 10
 REF = 3
 
-HIF_SCREEN_METHOD = "balanced_single_cause_refits_v1"
+HIF_SCREEN_METHOD = "balanced_sequential_refits_v2"
 #: Policy-visible signature of a current suspicion; the line is 1-based.
 HIF_SCREEN_SIGNATURE = "wls_hif_suspected"
+#: Policy-visible signatures of the other two phasor suspicions (2026-09-30):
+#: a phase-A voltage channel the rounds set aside, and an alarm no balanced
+#: hypothesis sequence explains.  Neither carries a waveform-family marker,
+#: so neither blocks the balanced routes by itself.
+VOLTAGE_METER_SCREEN_SIGNATURE = "wls_voltage_meter_suspected"
+UNEXPLAINED_SCREEN_SIGNATURE = "wls_unexplained_balanced_discrepancy"
 HIF_SCREEN_CLASSES = ("meter", "parameter", "topology", "hif")
 #: External endpoints of the 16 same-voltage IEEE 14 lines an HIF can sit on
 #: (``three_phase_nlm.hif_units.PHYSICAL_ELIGIBLE_HIF_BRANCHES``): every line
@@ -74,7 +102,19 @@ class HifScreenConfig:
     alphas: tuple[float, ...] = tuple(round(0.1 * i, 1) for i in range(1, 10))
     chi2_alpha: float = 0.01
     normalized_residual_threshold: float = 4.0
-    max_rounds: int = 2
+    #: Comparisons per screen (2026-09-30: three, so a physical win can be
+    #: followed by the meter it hid, or three meters set aside in turn).
+    max_rounds: int = 3
+    #: Joint R and X refit per branch beside the single-parameter refits.
+    parameter_rx_variant: bool = True
+    #: Split-line shunt with the end buses' phase-A voltage channels set aside,
+    #: tried on this many top-ranked candidate lines.  Off by default: on the
+    #: 2026-09-30 IEEE 14 dataset it added no HIF detection (130 of 131 with
+    #: or without it) and flagged 61 non-HIF roots (31 unbalance, 16 harmonic,
+    #: 7 multi-meter, 7 topology); the voltage-meter suspicion covers the
+    #: phase-A offset case instead.  Kept for the IEEE 57 study.
+    hif_vm_offset_variant: bool = False
+    hif_vm_offset_lines: int = 3
 
 
 DEFAULT_HIF_SCREEN_CONFIG = HifScreenConfig()
@@ -591,74 +631,140 @@ def _refined_alpha(profile: np.ndarray, index: int, alphas: Sequence[float]) -> 
 
 
 def _round(operator: _Operator, problem: _Problem, drop: list[int], base: Mapping[str, Any],
-           r_norm: np.ndarray, lines: Sequence[int], config: HifScreenConfig) -> dict[str, Any]:
-    """Every hypothesis refit on one channel set; class scores and their best candidates."""
+           r_norm: np.ndarray, lines: Sequence[int], config: HifScreenConfig, *,
+           hif_enabled: bool = True) -> dict[str, Any]:
+    """Every hypothesis refit on one channel set; class scores and their best candidates.
+
+    The parameter class is the best of three variants per live branch (R, X,
+    or R and X jointly, the joint one charged two continuous parameters).  The
+    HIF class is the best of the split-line shunt and, on the top-ranked
+    lines, the shunt with the end buses' phase-A voltage channels set aside
+    (one continuous parameter each).  ``hif_enabled`` is false once two
+    meters have been set aside.
+    """
     j0 = float(base["J"])
     va, vm = base["va"], base["vm"]
     n_stochastic = int(base["stochastic"].size)
     base_model = operator.base_model()
     best: dict[str, dict[str, Any]] = {}
     scores: dict[str, float] = {}
+    fits = 0
 
     order = [int(i) for i in np.argsort(-r_norm)[:config.meter_candidates] if r_norm[int(i)] > 0.0]
     meter = []
     for channel in order:
         fit = _fit(base_model, problem, drop + [channel], va, vm)
+        fits += 1
         meter.append((float(fit["J"]) if fit.get("success") else math.inf, channel))
     if meter:
         j_meter, channel = min(meter)
         if math.isfinite(j_meter):
             scores["meter"] = j0 - j_meter - _penalty(config, 1, n_stochastic)
-            best["meter"] = {"channel_index0": channel, "J": j_meter}
+            best["meter"] = {
+                "channel_index0": channel, "J": j_meter,
+                "ranked": [{"channel_index0": int(c), "J": float(j)} for j, c in sorted(meter) if math.isfinite(j)][:5],
+            }
 
     live = [k for k in range(operator.nl) if operator.branch[k, BR_STATUS] > 0]
-    parameter = []
+    parameter: list[tuple[float, float, int, str, Any]] = []
     for k in live:
         for which in ("R", "X"):
-            model = operator.parameter_model(k, which)
-            fit = _fit(model, problem, drop, va, vm, bounds={0: _plausible_box(operator.branch, which, k)})
+            fit = _fit(operator.parameter_model(k, which), problem, drop, va, vm,
+                       bounds={0: _plausible_box(operator.branch, which, k)})
+            fits += 1
             if fit.get("success"):
-                parameter.append((float(fit["J"]), k, which, float(fit["params"][0])))
+                parameter.append((j0 - float(fit["J"]) - _penalty(config, 1, 2 * len(live)), float(fit["J"]), k, which,
+                                  float(fit["params"][0])))
+        if config.parameter_rx_variant:
+            model = operator.base_model()
+            model.params = [("R", k), ("X", k)]
+            fit = _fit(model, problem, drop, va, vm,
+                       bounds={0: _plausible_box(operator.branch, "R", k), 1: _plausible_box(operator.branch, "X", k)})
+            fits += 1
+            if fit.get("success"):
+                parameter.append((j0 - float(fit["J"]) - _penalty(config, 2, len(live)), float(fit["J"]), k, "RX",
+                                  {"R": float(fit["params"][0]), "X": float(fit["params"][1])}))
     if parameter:
-        j_param, k, which, value = min(parameter)
-        scores["parameter"] = j0 - j_param - _penalty(config, 1, 2 * len(live))
-        best["parameter"] = {"branch_row0": k, "parameter": which, "estimate": value, "J": j_param}
+        parameter.sort(key=lambda item: -item[0])
+        score, j_param, k, which, estimate = parameter[0]
+        scores["parameter"] = float(score)
+        per_branch: dict[int, tuple[float, float, int, str, Any]] = {}
+        for item in parameter:
+            per_branch.setdefault(int(item[2]), item)
+        best["parameter"] = {
+            "branch_row0": int(k), "parameter": which, "estimate": estimate, "J": j_param,
+            "ranked": [
+                {"branch_row0": int(kk), "parameter": w, "estimate": e, "J": float(j), "score": float(s)}
+                for s, j, kk, w, e in sorted(per_branch.values(), key=lambda item: item[1])
+            ][:5],
+        }
 
     islanding = operator.islanding_branches()
     outages = [k for k in live if k not in islanding]
     topology = []
     for k in outages:
         fit = _fit(operator.outage_model(k), problem, drop, va, vm)
+        fits += 1
         if fit.get("success"):
             topology.append((float(fit["J"]), k))
     if topology:
         j_topo, k = min(topology)
         scores["topology"] = j0 - j_topo - _penalty(config, 0, len(outages))
-        best["topology"] = {"branch_row0": k, "J": j_topo}
+        best["topology"] = {
+            "branch_row0": int(k), "J": j_topo,
+            "ranked": [{"branch_row0": int(k_row), "J": float(j_row)} for j_row, k_row in sorted(topology)][:5],
+        }
 
     alphas = tuple(float(a) for a in config.alphas)
-    grid = np.full((len(lines), len(alphas)), np.nan)
-    conductance = np.full((len(lines), len(alphas)), np.nan)
-    for li, k in enumerate(lines):
-        for ai, alpha in enumerate(alphas):
-            fit = _fit(operator.split_model(k, alpha), problem, drop, va, vm, bounds={0: (0.0, math.inf)})
-            if fit.get("success"):
-                grid[li, ai] = float(fit["J"])
-                conductance[li, ai] = float(fit["params"][0])
-    if np.any(np.isfinite(grid)):
-        li, ai = np.unravel_index(np.nanargmin(grid), grid.shape)
-        j_hif = float(grid[li, ai])
-        scores["hif"] = j0 - j_hif - _penalty(config, 1, grid.size)
-        per_line = np.nanmin(np.where(np.isfinite(grid), grid, np.inf), axis=1)
-        ranked = [int(lines[i]) for i in np.argsort(per_line) if np.isfinite(per_line[i])]
-        best["hif"] = {
-            "branch_row0": int(lines[li]),
-            "alpha_grid": float(alphas[ai]),
-            "alpha": _refined_alpha(grid[li], int(ai), alphas),
-            "shunt_conductance_pu": float(conductance[li, ai]),
-            "J": j_hif,
-            "runner_up_branch_row0": ranked[1] if len(ranked) > 1 else None,
-        }
+    if hif_enabled and lines:
+        grid = np.full((len(lines), len(alphas)), np.nan)
+        conductance = np.full((len(lines), len(alphas)), np.nan)
+        for li, k in enumerate(lines):
+            for ai, alpha in enumerate(alphas):
+                fit = _fit(operator.split_model(k, alpha), problem, drop, va, vm, bounds={0: (0.0, math.inf)})
+                fits += 1
+                if fit.get("success"):
+                    grid[li, ai] = float(fit["J"])
+                    conductance[li, ai] = float(fit["params"][0])
+        if np.any(np.isfinite(grid)):
+            finite = np.where(np.isfinite(grid), grid, np.inf)
+            per_line = np.min(finite, axis=1)
+            ranked_positions = [int(i) for i in np.argsort(per_line) if np.isfinite(per_line[i])]
+            li, ai = (int(v) for v in np.unravel_index(int(np.argmin(finite)), grid.shape))
+            j_hif = float(grid[li, ai])
+            score_hif = j0 - j_hif - _penalty(config, 1, grid.size)
+            best_hif: dict[str, Any] = {
+                "variant": "shunt", "branch_row0": int(lines[li]), "alpha_grid": float(alphas[ai]),
+                "alpha": _refined_alpha(grid[li], ai, alphas), "shunt_conductance_pu": float(conductance[li, ai]),
+                "J": j_hif,
+                "runner_up_branch_row0": int(lines[ranked_positions[1]]) if len(ranked_positions) > 1 else None,
+                "ranked": [{"branch_row0": int(lines[i]), "J": float(per_line[i])} for i in ranked_positions][:5],
+            }
+            if config.hif_vm_offset_variant:
+                excluded = set(drop) | set(problem.exact)
+                for position in ranked_positions[: max(int(config.hif_vm_offset_lines), 0)]:
+                    k = int(lines[position])
+                    ai_k = int(np.argmin(finite[position]))
+                    alpha = float(alphas[ai_k])
+                    # The Vm channel of bus row b is operator channel b.
+                    offsets = [int(b) for b in (operator.branch[k, F_BUS], operator.branch[k, T_BUS]) if int(b) not in excluded]
+                    if not offsets:
+                        continue
+                    fit = _fit(operator.split_model(k, alpha), problem, drop + offsets, va, vm, bounds={0: (0.0, math.inf)})
+                    fits += 1
+                    if not fit.get("success"):
+                        continue
+                    score = j0 - float(fit["J"]) - _penalty(config, 1 + len(offsets), grid.size)
+                    if score > score_hif:
+                        score_hif = score
+                        best_hif = {
+                            **best_hif, "variant": "shunt+vm_offsets", "branch_row0": k, "alpha_grid": alpha,
+                            "alpha": _refined_alpha(grid[position], ai_k, alphas),
+                            "shunt_conductance_pu": float(fit["params"][0]), "J": float(fit["J"]),
+                            "vm_offset_channels": offsets,
+                        }
+            scores["hif"] = float(score_hif)
+            best["hif"] = best_hif
     winner = max(scores, key=scores.__getitem__) if scores else None
     return {
         "dropped_channels": list(drop),
@@ -667,7 +773,110 @@ def _round(operator: _Operator, problem: _Problem, drop: list[int], base: Mappin
         "scores": {name: float(value) for name, value in scores.items()},
         "best": best,
         "winner": winner,
-        "fits": len(order) + 2 * len(live) + len(outages) + len(lines) * len(alphas),
+        "hif_compared": bool(hif_enabled and lines),
+        "fits": fits,
+    }
+
+
+#: Free continuous parameters each class's best refit adds to the balanced
+#: fit (the same count the penalty charges).
+def _class_continuous(name: str, item: Mapping[str, Any]) -> int:
+    if name == "meter":
+        return 1
+    if name == "parameter":
+        return 2 if item.get("parameter") == "RX" else 1
+    if name == "topology":
+        return 0
+    return 1 + len(item.get("vm_offset_channels") or [])
+
+
+def _class_model(operator: _Operator, name: str, item: Mapping[str, Any], drop: Sequence[int]):
+    """The model, dropped channels and bounds of a class's best refit."""
+    fit_drop = list(drop)
+    bounds = None
+    if name == "meter":
+        model = operator.base_model()
+        fit_drop = fit_drop + [int(item["channel_index0"])]
+    elif name == "parameter":
+        k = int(item["branch_row0"])
+        if item.get("parameter") == "RX":
+            model = operator.base_model()
+            model.params = [("R", k), ("X", k)]
+            bounds = {0: _plausible_box(operator.branch, "R", k), 1: _plausible_box(operator.branch, "X", k)}
+        else:
+            model = operator.parameter_model(k, str(item["parameter"]))
+            bounds = {0: _plausible_box(operator.branch, str(item["parameter"]), k)}
+    elif name == "topology":
+        model = operator.outage_model(int(item["branch_row0"]))
+    else:
+        model = operator.split_model(int(item["branch_row0"]), float(item["alpha_grid"]))
+        fit_drop = fit_drop + [int(c) for c in item.get("vm_offset_channels") or []]
+        bounds = {0: (0.0, math.inf)}
+    return model, fit_drop, bounds
+
+
+def _class_tests(operator: _Operator, problem: _Problem, drop: Sequence[int], base: Mapping[str, Any],
+                 result: Mapping[str, Any], config: HifScreenConfig, round_dof: int) -> dict[str, Any]:
+    """Offline study fields for one compared round.
+
+    Each class's best refit is re-run once and tested against the alarm rule
+    it would have to clear (chi-square at its remaining degrees of freedom,
+    or the normalized-residual limit); the winner is also tried with one more
+    meter set aside.  Nothing here changes the decision.
+    """
+    from scipy.stats import chi2
+
+    va, vm = base["va"], base["vm"]
+    limit = config.normalized_residual_threshold
+
+    def tested(model: _Model, fit_drop: list[int], bounds, dof_after: int) -> dict[str, Any]:
+        entry: dict[str, Any] = {"dof_after": int(dof_after),
+                                 "chi2_threshold_after": float(chi2.ppf(1.0 - config.chi2_alpha, max(dof_after, 1)))}
+        fit = _fit(model, problem, fit_drop, va, vm, bounds=bounds)
+        if fit.get("success"):
+            residuals = _normalized_residuals(model, problem, fit)
+            entry.update(J_refit=float(fit["J"]), max_normalized_residual_after=float(np.max(residuals)),
+                         explains_alarm=bool(float(fit["J"]) < entry["chi2_threshold_after"]
+                                             and float(np.max(residuals)) < limit),
+                         _residuals=residuals)
+        else:
+            entry.update(J_refit=None, max_normalized_residual_after=None, explains_alarm=False,
+                         refit_error=str(fit.get("error")))
+        return entry
+
+    classes: dict[str, dict[str, Any]] = {}
+    kept: dict[str, tuple[Any, list[int], Any, dict[str, Any]]] = {}
+    for name, item in (result.get("best") or {}).items():
+        model, fit_drop, bounds = _class_model(operator, name, item, drop)
+        entry = tested(model, fit_drop, bounds, round_dof - _class_continuous(name, item))
+        entry["J_after"] = float(item["J"])
+        kept[name] = (model, fit_drop, bounds, entry)
+        classes[name] = {key: value for key, value in entry.items() if not key.startswith("_")}
+    extras: dict[str, Any] = {"winner_plus_one_meter": None}
+    winner = result.get("winner")
+    if winner in kept:
+        model, fit_drop, bounds, entry = kept[winner]
+        residuals = entry.get("_residuals")
+        if residuals is not None:
+            excluded = set(fit_drop) | set(problem.exact)
+            order = [int(i) for i in np.argsort(-residuals) if int(i) not in excluded and residuals[int(i)] > 0.0]
+            for channel in order[: config.meter_candidates]:
+                trial = tested(model, fit_drop + [channel], bounds,
+                               round_dof - _class_continuous(winner, result["best"][winner]) - 1)
+                if trial.get("J_refit") is None:
+                    continue
+                trial["channel_index0"] = channel
+                current = extras["winner_plus_one_meter"]
+                if current is None or trial["J_refit"] < current["J_refit"]:
+                    extras["winner_plus_one_meter"] = {key: value for key, value in trial.items() if not key.startswith("_")}
+    scores = {str(name): float(value) for name, value in (result.get("scores") or {}).items()}
+    ordered = sorted(scores.values(), reverse=True)
+    return {
+        "classes": classes,
+        "any_class_explains_alarm": any(entry["explains_alarm"] for entry in classes.values()),
+        "winner_explains_alarm": bool(classes.get(str(winner), {}).get("explains_alarm", False)),
+        "score_margin": (float(ordered[0] - ordered[1]) if len(ordered) > 1 else None),
+        "extras": extras,
     }
 
 
@@ -688,15 +897,16 @@ def screen_hif(
     """Run the screen on an internal-indexed balanced model (0-based buses).
 
     ``lines`` are the candidate HIF branch rows; ``va0``/``vm0`` warm-start
-    every refit (the operator's WLS state, else the case voltages); ``dof``
-    is the base solve's chi-square degrees of freedom, used for the
-    second-round stopping test.  Returns a policy-safe report: the winning
-    explanation per round, the class scores, and for a suspicion the line,
-    position and shunt conductance of the best split-line fit.
+    the first refit (the operator's WLS state, else the case voltages) and
+    each later round starts from the previous base fit; ``dof`` is the base
+    solve's chi-square degrees of freedom, used for the alarm test between
+    rounds.  Returns a policy-safe report: the compared rounds with their
+    class scores, the accepted hypotheses in order, and for a suspicion the
+    line, position and shunt conductance of the best split-line fit.
     """
     from scipy.stats import chi2
 
-    operator = _Operator(base_mva, bus, branch)
+    operator = _Operator(base_mva, bus, branch)  # working copy: accepted hypotheses modify it
     z_vector = np.asarray(z, dtype=float).reshape(-1)
     sigma_vector = np.asarray(sigma, dtype=float).reshape(-1)
     if z_vector.size != operator.nz or sigma_vector.size != operator.nz:
@@ -707,7 +917,6 @@ def screen_hif(
         va0 = np.deg2rad(operator.bus[:, VA] - operator.bus[operator.ref, VA])
         vm0 = operator.bus[:, VM]
     lines = [int(k) for k in lines if 0 <= int(k) < operator.nl and operator.branch[int(k), BR_STATUS] > 0]
-    base_model = operator.base_model()
     report: dict[str, Any] = {
         "method": HIF_SCREEN_METHOD,
         "status": "valid",
@@ -715,48 +924,141 @@ def screen_hif(
         "candidate_lines": len(lines),
         "penalties": {"continuous": config.continuous_penalty, "discrete_log": config.discrete_penalty},
         "rounds": [],
+        "accepted_hypotheses": [],
     }
     drop: list[int] = []
     base_dof = None if dof is None else int(dof)
     outcome: list[str] = []
-    for round_index in range(max(1, int(config.max_rounds))):
-        base = _fit(base_model, problem, drop, va0, vm0)
+    accepted_continuous = 0
+    va_start = np.asarray(va0, dtype=float)
+    vm_start = np.asarray(vm0, dtype=float)
+    hif_round: dict[str, Any] | None = None
+    explained = False
+    tests: dict[str, Any] | None = None
+    final_base: dict[str, Any] = {}
+    max_rounds = max(1, int(config.max_rounds))
+    for round_index in range(max_rounds + 1):
+        base = _fit(operator.base_model(), problem, drop, va_start, vm_start)
         if not base.get("success"):
-            report.update(status="base_fit_failed", outcome=">".join(outcome) or None)
-            return report
-        r_norm = _normalized_residuals(base_model, problem, base)
-        if round_index > 0:
-            # Stop when the removed meter explains the whole alarm.
-            round_dof = (base_dof if base_dof is not None else int(base["stochastic"].size) - (2 * operator.nb - 1)) - len(drop)
-            threshold = float(chi2.ppf(1.0 - config.chi2_alpha, max(round_dof, 1)))
-            if float(base["J"]) < threshold and float(np.max(r_norm)) < config.normalized_residual_threshold:
-                report["rounds"].append({"dropped_channels": list(drop), "J0": float(base["J"]),
-                                         "clean_after_removal": True})
-                break
-        result = _round(operator, problem, drop, base, r_norm, lines, config)
+            report.update(status="base_fit_failed")
+            break
+        r_norm = _normalized_residuals(operator.base_model(), problem, base)
+        va_start, vm_start = base["va"], base["vm"]
+        round_dof = (base_dof if base_dof is not None else int(base["stochastic"].size) - (2 * operator.nb - 1)) \
+            - len(drop) - accepted_continuous
+        threshold = float(chi2.ppf(1.0 - config.chi2_alpha, max(round_dof, 1)))
+        max_r = float(np.max(r_norm)) if np.size(r_norm) else 0.0
+        alarmed = bool(float(base["J"]) >= threshold or max_r >= config.normalized_residual_threshold)
+        final_base = {"round_index": round_index, "set_aside_channels": [int(i) for i in drop], "J0": float(base["J"]),
+                      "dof": int(round_dof), "chi2_threshold": threshold, "max_normalized_residual": max_r,
+                      "alarm": alarmed}
+        if round_index > 0 and not alarmed:
+            # The accepted hypotheses explain the whole alarm.
+            report["rounds"].append({"dropped_channels": list(drop), "J0": float(base["J"]), "clean_after_removal": True})
+            explained = True
+            break
+        if round_index == max_rounds:
+            break  # comparisons exhausted while the alarm stands
+        live_lines = [k for k in lines if operator.branch[k, BR_STATUS] > 0]
+        result = _round(operator, problem, drop, base, r_norm, live_lines, config, hif_enabled=len(drop) <= 1)
+        tests = _class_tests(operator, problem, drop, base, result, config, round_dof)
+        result["class_tests"] = tests
         report["rounds"].append(result)
         winner = result["winner"]
         if winner is None:
             report.update(status="no_hypothesis_converged")
             break
         outcome.append(winner)
-        if winner != "meter" or round_index == config.max_rounds - 1:
+        item = result["best"][winner]
+        if winner == "hif":
+            hif_round = result
             break
-        drop = drop + [int(result["best"]["meter"]["channel_index0"])]
+        if winner == "meter":
+            drop = drop + [int(item["channel_index0"])]
+            report["accepted_hypotheses"].append({"class": "meter", "channel_index0": int(item["channel_index0"])})
+        elif winner == "parameter":
+            k = int(item["branch_row0"])
+            if item["parameter"] == "RX":
+                operator.branch[k, BR_R] = float(item["estimate"]["R"])
+                operator.branch[k, BR_X] = float(item["estimate"]["X"])
+                accepted_continuous += 2
+            elif item["parameter"] == "R":
+                operator.branch[k, BR_R] = float(item["estimate"])
+                accepted_continuous += 1
+            else:
+                operator.branch[k, BR_X] = float(item["estimate"])
+                accepted_continuous += 1
+            report["accepted_hypotheses"].append({"class": "parameter", "branch_row0": k,
+                                                  "parameter": item["parameter"], "estimate": item["estimate"]})
+        else:
+            k = int(item["branch_row0"])
+            operator.branch[k, BR_STATUS] = 0.0
+            report["accepted_hypotheses"].append({"class": "topology", "branch_row0": k})
     report["outcome"] = ">".join(outcome) if outcome else None
-    final = report["rounds"][-1] if report["rounds"] else {}
-    if final.get("winner") == "hif":
-        hif = final["best"]["hif"]
+    report["explained"] = bool(explained)
+    report["voltage_meter_channels"] = [int(c) for c in drop if int(c) < operator.nb]
+    if hif_round is not None:
+        hif = hif_round["best"]["hif"]
+        others = [value for name, value in hif_round["scores"].items() if name != "hif"]
         report.update(
             suspected=True,
             branch_row0=int(hif["branch_row0"]),
             alpha=float(hif["alpha"]),
             shunt_conductance_pu=float(hif["shunt_conductance_pu"]),
-            meter_set_aside_index0=(int(final["dropped_channels"][-1]) if final["dropped_channels"] else None),
-            score_margin=float(final["scores"]["hif"] - max(
-                [value for name, value in final["scores"].items() if name != "hif"], default=-math.inf)),
+            hif_variant=str(hif.get("variant") or "shunt"),
+            meter_set_aside_index0=(int(drop[-1]) if drop else None),
+            score_margin=float(hif_round["scores"]["hif"] - max(others, default=-math.inf)),
         )
+    report["unexplained"] = bool(report["status"] == "valid" and not report["suspected"] and not explained)
+    report["phasor_suspicion"] = {
+        "hif": bool(report["suspected"]),
+        "voltage_meter": bool(report["voltage_meter_channels"]),
+        "unexplained": bool(report["unexplained"]),
+    }
+    _attach_offline_summary(report, final_base, tests, explained)
     return report
+
+
+def _attach_offline_summary(report: dict[str, Any], final_base: Mapping[str, Any],
+                            tests: Mapping[str, Any] | None, explained: bool) -> None:
+    """Offline study fields (hypothesis-ranking plan, steps 1 and 2).
+
+    ``final`` describes the last base solve and the last compared round's
+    class tests; ``unexplained_variants`` gives the production flag beside two
+    reference definitions (the first round alone; the winner with one more
+    meter set aside).  The compact policy-visible report copies none of this.
+    """
+    if report.get("status") != "valid" or not report.get("rounds"):
+        report["final"] = None
+        report["unexplained_variants"] = None
+        return
+    compared = [item for item in report["rounds"] if item.get("winner") is not None or item.get("scores")]
+    last = compared[-1] if compared else {}
+    first_tests = (compared[0].get("class_tests") if compared else None) or {}
+    final: dict[str, Any] = dict(final_base)
+    final.update(
+        winner=last.get("winner"),
+        scores=dict(last.get("scores") or {}),
+        explained_by_meter_removal=bool(explained and report["accepted_hypotheses"]
+                                        and all(h["class"] == "meter" for h in report["accepted_hypotheses"])),
+        explained=bool(explained),
+    )
+    if tests:
+        final.update(classes=tests["classes"], any_class_explains_alarm=tests["any_class_explains_alarm"],
+                     winner_explains_alarm=tests["winner_explains_alarm"], score_margin=tests["score_margin"],
+                     extras=tests["extras"])
+    else:
+        final.update(classes={}, any_class_explains_alarm=False, winner_explains_alarm=False, score_margin=None,
+                     extras={"winner_plus_one_meter": None})
+    report["final"] = final
+    production = bool(report["unexplained"])
+    one_more = ((tests or {}).get("extras") or {}).get("winner_plus_one_meter") or {}
+    report["unexplained_variants"] = {
+        "production": production,
+        "first_round_single_cause": bool(report["rounds"] and compared and not first_tests.get("any_class_explains_alarm", False)
+                                         and not report["suspected"]),
+        "with_one_more_meter": bool(production and not one_more.get("explains_alarm")),
+    }
 
 
 class HifScreenCache:
@@ -791,6 +1093,6 @@ class HifScreenCache:
 
 __all__ = [
     "DEFAULT_HIF_SCREEN_CONFIG", "HIF_SCREEN_CLASSES", "HIF_SCREEN_METHOD", "HIF_SCREEN_SIGNATURE",
-    "HifScreenCache", "HifScreenConfig", "IEEE14_HIF_LINE_ENDPOINTS", "default_hif_lines",
-    "ieee14_hif_lines", "screen_hif",
+    "HifScreenCache", "HifScreenConfig", "IEEE14_HIF_LINE_ENDPOINTS", "UNEXPLAINED_SCREEN_SIGNATURE",
+    "VOLTAGE_METER_SCREEN_SIGNATURE", "default_hif_lines", "ieee14_hif_lines", "screen_hif",
 ]

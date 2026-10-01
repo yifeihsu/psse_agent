@@ -54,6 +54,7 @@ from psse_env.actions import (
     current_screen_report,
     current_suspicion,
     current_wls_alarm,
+    phasor_ledger,
     diagnostic_tool_permitted,
     hif_suspicion_refuted,
     safe_normalize_action,
@@ -354,14 +355,21 @@ class DiagnosticsExpert:
     def suspicion_screening_proposals(
         self, state: Any, history: Sequence[Mapping[str, Any]] | None = None,
     ) -> list[ExpertActionProposal]:
-        """suspicion_gated_diagnostics: phasors follow a balanced HIF suspicion only.
+        """suspicion_gated_diagnostics: phasors follow a balanced suspicion.
 
-        On a current suspicion from the WLS screen the ladder acquires the
-        phase-resolved measurements, then tests the suspicion on them once.
-        A refutation is followed by a fresh WLS, which reports the suspicion
-        as refuted and mints no HIF signature, so the balanced routes open;
-        a confirmation leaves the localized HIF to the estimator rung.  With
-        no suspicion nothing auxiliary is requested at all.
+        Two suspicions are acted on as soon as the screen reports them: an HIF
+        won, or a phase-A voltage channel was set aside as a bad meter (D3,
+        2026-09-30: on balanced SCADA that is also what a one-bus unbalance
+        looks like, so the meter is confirmed on phasors before it is
+        edited).  The ladder acquires the phase-resolved measurements and
+        tests them once: an HIF-like line differential mints the HIF
+        signature the estimator rung keys on, an unbalance source is
+        explained, and a balanced result closes the question (a refuted HIF
+        suspicion is followed by a fresh WLS, which reports it refuted and
+        mints no HIF signature, so the balanced routes open; a voltage-meter
+        edit needs no refresh, the examined phasors admit it).  The third
+        suspicion, an unexplained alarm, is acted on only once the balanced
+        routes are exhausted (``ExpertPolicyOracle``).
         """
         state = policy_state_view(state)
         if not is_suspicion_gated(state):
@@ -369,18 +377,20 @@ class DiagnosticsExpert:
         active_id = state_value(state, "active_state_id")
         if not active_id or state_value(state, "has_open_candidate"):
             return []
-        if not current_suspicion(state, "hif") or hif_suspicion_refuted(state):
+        hif = bool(current_suspicion(state, "hif") and not hif_suspicion_refuted(state))
+        voltage = bool(current_suspicion(state, "voltage_meter"))
+        if not (hif or voltage):
             return []
         contexts = state_value(state, "fresh_context_evidence") or {}
-        phase = contexts.get("three_phase") if isinstance(contexts, Mapping) else None
-        phase = phase if isinstance(phase, Mapping) else {}
+        phase = phasor_ledger(state)
         report = current_screen_report(state, "hif")
-        bound = (
-            str(phase.get("state_id") or "") == str(active_id)
-            and phase.get("request_attempted") is True
-        )
-        evidence = [f"balanced_hif_suspicion line={report.get('line_index1')}"]
-        if not bound:
+        evidence = []
+        if hif:
+            evidence.append(f"balanced_hif_suspicion line={report.get('line_index1')}")
+        if voltage:
+            channels = ",".join(str(int(c)) for c in report.get("voltage_meter_channels") or [])
+            evidence.append(f"voltage_meter_suspicion channels={channels}")
+        if not phase:
             return self._permitted(state, [self._proposal(
                 GET_THREE_PHASE_CONTEXT, {"state_id": active_id}, confidence=0.97,
                 evidence=[*evidence, "phase_resolved_measurements_requested"],
@@ -390,14 +400,75 @@ class DiagnosticsExpert:
                 return []
             return self._permitted(state, [self._proposal(
                 RUN_THREE_PHASE_NLM_FROM_PATH, {"state_id": active_id}, confidence=0.97,
-                evidence=[*evidence, "hif_suspicion_tested_on_phasors"],
+                evidence=[*evidence, "suspicion_tested_on_phasors"],
             )], history)
-        if phase.get("hif_suspicion_refuted") is True:
+        if hif and phase.get("hif_suspicion_refuted") is True:
             return [self._proposal(
                 RUN_WLS, {"state_id": active_id}, confidence=0.97,
                 evidence=[*evidence, "hif_suspicion_refuted_by_phase_measurements", "balanced_solve_refresh"],
             )]
+        if current_suspicion(state, "unexplained") and current_suspicion(state, "harmonic"):
+            # The screen found no balanced hypothesis sequence that explains
+            # the alarm and the phasors show a balanced system: the spectra
+            # are the next evidence, before any correction is tried.
+            harmonic = contexts.get("harmonic") if isinstance(contexts, Mapping) else None
+            harmonic = harmonic if isinstance(harmonic, Mapping) else {}
+            if not (str(harmonic.get("state_id") or "") == str(active_id) and harmonic.get("request_attempted") is True):
+                return self._permitted(state, [self._proposal(
+                    GET_HARMONIC_CONTEXT, {"state_id": active_id}, confidence=0.96,
+                    evidence=[*evidence, "alarm_unexplained_by_balanced_hypotheses", "phasors_balanced_three_phase",
+                              "spectral_evidence_requested_second_tier"],
+                )], history)
         return []
+
+    def unexplained_acquisition_proposals(
+        self, state: Any, history: Sequence[Mapping[str, Any]] | None = None,
+    ) -> list[ExpertActionProposal]:
+        """Option A (2026-09-30): phasors, then spectra, before an unexplained handoff.
+
+        Called by the policy oracle once every balanced route on the active
+        state is exhausted while the alarm stands.  A current phasor
+        suspicion (an unexplained alarm, or any other kind whose phasors were
+        never acquired) opens the phase-resolved measurements and their one
+        NLM test; phasors that came back balanced are the harmonic suspicion
+        that opens the spectra (C2); a detected distortion then runs the
+        HSE rung through the ordinary harmonic ladder.  Returns nothing when
+        every tier has been tried on this state, which is the handoff.
+        """
+        state = policy_state_view(state)
+        if not is_suspicion_gated(state):
+            return []
+        active_id = state_value(state, "active_state_id")
+        if not active_id or state_value(state, "has_open_candidate"):
+            return []
+        contexts = state_value(state, "fresh_context_evidence") or {}
+        phase = phasor_ledger(state)
+        if not phase:
+            if not current_suspicion(state, "phasor"):
+                return []
+            return self._permitted(state, [self._proposal(
+                GET_THREE_PHASE_CONTEXT, {"state_id": active_id}, confidence=0.96,
+                evidence=["balanced_routes_exhausted", "unexplained_balanced_discrepancy",
+                          "phase_resolved_measurements_requested"],
+            )], history)
+        if phase.get("nlm_attempted") is not True:
+            if not three_phase_context_available(contexts, active_id):
+                return []
+            return self._permitted(state, [self._proposal(
+                RUN_THREE_PHASE_NLM_FROM_PATH, {"state_id": active_id}, confidence=0.96,
+                evidence=["balanced_routes_exhausted", "unexplained_balanced_discrepancy",
+                          "suspicion_tested_on_phasors"],
+            )], history)
+        if not current_suspicion(state, "harmonic"):
+            return []
+        harmonic = contexts.get("harmonic") if isinstance(contexts, Mapping) else None
+        harmonic = harmonic if isinstance(harmonic, Mapping) else {}
+        if str(harmonic.get("state_id") or "") == str(active_id) and harmonic.get("request_attempted") is True:
+            return []
+        return self._permitted(state, [self._proposal(
+            GET_HARMONIC_CONTEXT, {"state_id": active_id}, confidence=0.96,
+            evidence=["balanced_routes_exhausted", "phasors_balanced_three_phase", "spectral_evidence_requested_second_tier"],
+        )], history)
 
     def gnn_balanced_screening_proposals(
         self, state: Any, history: Sequence[Mapping[str, Any]] | None = None,

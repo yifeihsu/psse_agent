@@ -25,6 +25,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from psse_env.actions import (
     AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
+    UNEXPLAINED_DISCREPANCY_REQUEST,
     ASK_FOR_MORE_EVIDENCE,
     PARAMETER_RANKING_AMBIGUITY_CANDIDATES,
     CORRECT_MEASUREMENTS,
@@ -2393,6 +2394,70 @@ def _bounded_branch_handoff(
     return result
 
 
+_UNEXPLAINED_HANDOFF_PROBLEMS = frozenset(
+    {
+        "resolved_episode_has_remaining_true_faults",
+        "diagnostic_truth_has_no_same_family_explanation",
+    }
+)
+
+
+def _unexplained_discrepancy_handoff(
+    scenario: Mapping[str, Any],
+    final_state: Mapping[str, Any],
+    audit_problems: Sequence[str],
+) -> dict[str, Any]:
+    """Credit an operator handoff of an unexplained balanced discrepancy.
+
+    The episode ended with ``operator_escalation:unexplained_balanced_discrepancy``
+    (2026-09-30): the balanced routes were exhausted, the phasors acquired on
+    the state came back balanced and the spectra showed no accepted source.
+    The handoff is honest when the faults left are waveform-family ones the
+    admitted diagnostics did not explain (an HIF, unbalance or harmonic
+    truth), no correction-family fault remains unrepaired, no healthy
+    component was changed, and the only audit problems are those an
+    unexplained diagnostic fault necessarily produces.  A healthy root never
+    reaches here: its counterfactual audit already passes.
+    """
+
+    output = final_state.get("last_tool_output")
+    output = output if isinstance(output, Mapping) else {}
+    metrics = output.get("tool_metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    escalation = metrics.get("operator_escalation_audit")
+    escalation = escalation if isinstance(escalation, Mapping) else {}
+    result: dict[str, Any] = {
+        "contract": "unexplained_discrepancy_handoff_v1",
+        "passed": False,
+        "request": escalation.get("request"),
+        "remaining_diagnostic_truth": [],
+        "reasons": [],
+    }
+    if escalation.get("request") != UNEXPLAINED_DISCREPANCY_REQUEST:
+        result["reasons"].append("handoff_not_an_unexplained_discrepancy")
+        return result
+    hidden = scenario.get("hidden_truth")
+    hidden = hidden if isinstance(hidden, Mapping) else {}
+    families = []
+    for key, family in (
+        ("true_hif_errors", "hif"),
+        ("true_unbalance_errors", "three_phase_unbalance"),
+        ("true_harmonic_errors", "harmonic"),
+    ):
+        if _as_sequence(hidden.get(key)) or _as_sequence(scenario.get(key)):
+            families.append(family)
+    result["remaining_diagnostic_truth"] = families
+    if not families:
+        result["reasons"].append("no_diagnostic_family_truth_to_hand_off")
+    unexpected = sorted(
+        problem for problem in audit_problems if problem not in _UNEXPLAINED_HANDOFF_PROBLEMS
+    )
+    if unexpected:
+        result["reasons"].append("audit_problems_beyond_unexplained_diagnostic_fault:" + ",".join(unexpected))
+    result["passed"] = not result["reasons"]
+    return result
+
+
 def audit_truth_audited_task_success(
     scenario: Mapping[str, Any],
     final_state: Mapping[str, Any],
@@ -2506,11 +2571,17 @@ def audit_truth_audited_task_success(
     )
     basis = "counterfactual_resolution" if success else None
     bounded_handoff = None
+    unexplained_handoff = None
     if not success and evidence_known and actual_terminal_outcome == "operator_escalation":
         bounded_handoff = _bounded_branch_handoff(scenario, final_state, audit_problems)
         if bounded_handoff.get("passed") is True:
             success = True
             basis = "bounded_localization_handoff"
+        else:
+            unexplained_handoff = _unexplained_discrepancy_handoff(scenario, final_state, audit_problems)
+            if unexplained_handoff.get("passed") is True:
+                success = True
+                basis = "unexplained_discrepancy_handoff"
     reasons = list(
         dict.fromkeys(unique_evidence_reasons + ([] if success else audit_problems))
     )
@@ -2520,6 +2591,7 @@ def audit_truth_audited_task_success(
         "eligible": success,
         "basis": basis,
         "bounded_branch_handoff": bounded_handoff,
+        "unexplained_discrepancy_handoff": unexplained_handoff,
         "evidence_known": evidence_known,
         "faulted": faulted,
         "fault_presence_known": canonical_fault_presence_known,

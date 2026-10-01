@@ -20,15 +20,16 @@ SCADA_ONLY_PROFILE = "scada_only"
 #: PMU phasors on HIF and unbalance roots, spectra on harmonic roots, breaker
 #: telemetry on topology roots) and run the matching diagnostics.
 WLS_GATED_PROFILE = "wls_gated_diagnostics"
-#: Research contract of 2026-09-27. The operator sees balanced SCADA and its
-#: balanced WLS; an auxiliary stream is requested only when the balanced
-#: evidence itself points at the family that needs it.  Phase-resolved PMU
-#: phasors (and the HIF diagnostics on them) follow a current HIF suspicion
-#: from the balanced physics screen run on each WLS alarm
-#: (``psse_env.providers.hif_screen``); spectra follow a harmonic suspicion,
-#: which no balanced screen provides yet, so they are refused.  Every alarmed
-#: root carries phasors generated from its true state at one PMU sigma, so a
-#: request can never answer by availability.
+#: Research contract of 2026-09-27, extended 2026-09-30. The operator sees
+#: balanced SCADA and its balanced WLS; an auxiliary stream is requested only
+#: when the balanced evidence itself points at it.  Phase-resolved PMU
+#: phasors follow a current phasor suspicion from the balanced physics screen
+#: run on each WLS alarm (``psse_env.providers.hif_screen``): an HIF won, a
+#: phase-A voltage channel was set aside as a bad meter, or no hypothesis
+#: sequence explained the alarm (``DIAGNOSTIC_SUSPICION_REQUIREMENTS``).
+#: Spectra follow once phasors acquired on the state came back balanced.
+#: Every root carries phasors and spectra generated from its true state at
+#: the uniform sensor sigmas, so a request can never answer by availability.
 SUSPICION_GATED_PROFILE = "suspicion_gated_diagnostics"
 #: Historical reproduction: flagged roots, seeded signatures and hints allowed.
 AUXILIARY_EVIDENCE_PROFILE = "auxiliary_diagnostics"
@@ -52,11 +53,24 @@ GATED_DIAGNOSTIC_TOOLS = frozenset({
     "run_hse_from_path", "estimate_hif_location_magnitude_from_path",
     "estimate_hif_location_magnitude_multiscan_from_path",
 })
-#: The family suspicion each auxiliary diagnostic needs under
-#: suspicion_gated_diagnostics, on top of the current WLS alarm.
+#: The suspicion each auxiliary diagnostic needs under
+#: suspicion_gated_diagnostics, on top of the current WLS alarm (2026-09-30
+#: rule, docs/hypothesis_ranking_step1_20260930.md section 4):
+#:
+#: * ``phasor``   any of the balanced screen's three phasor suspicions on the
+#:                current solve: an HIF won (``suspected``), a phase-A voltage
+#:                channel was set aside as a bad meter (``voltage_meter``; on
+#:                balanced SCADA a one-bus unbalance is indistinguishable from
+#:                it, so the meter is confirmed on phasors before it is
+#:                edited), or the alarm stayed unexplained (``unexplained``);
+#: * ``hif``      the HIF suspicion itself, or an HIF-like zero-sequence line
+#:                differential the acquired phasors showed;
+#: * ``harmonic`` phasors acquired on this state came back balanced (no HIF
+#:                line differential, no unbalance source): the second-tier
+#:                acquisition of spectra.
 DIAGNOSTIC_SUSPICION_REQUIREMENTS = {
-    "get_three_phase_context": "hif",
-    "run_three_phase_nlm_from_path": "hif",
+    "get_three_phase_context": "phasor",
+    "run_three_phase_nlm_from_path": "phasor",
     "estimate_hif_location_magnitude_from_path": "hif",
     "get_harmonic_context": "harmonic",
     "run_hse_from_path": "harmonic",
