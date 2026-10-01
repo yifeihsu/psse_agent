@@ -168,7 +168,7 @@ def voltage_meter_edit_without_phasors(state: Any, arguments: Mapping[str, Any])
                 continue
     if not any(0 <= index < bus_count for index in indices):
         return False
-    return not _actions.phasors_examined(state)
+    return not _actions.phasors_examined_in_episode(state)
 
 
 _SUSPICION_ERROR_CODES = frozenset(

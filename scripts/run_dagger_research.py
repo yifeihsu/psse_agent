@@ -1640,6 +1640,12 @@ class ParallelEvaluation:
             raise ValueError("workers_per_policy must be at least 1")
 
 
+#: Expert variants under study (hypothesis-ranking plan, step 3).  The
+#: ledger expert reorders families and targets by the balanced screen's
+#: accepted sequence and caps verified attempts per family and per state.
+RESEARCH_EXPERT_OPTIONS: dict[str, Any] = {"hypothesis_ledger": False}
+
+
 def research_expert_policy(environment_factory: Callable[..., Any]) -> Any:
     """The teacher under the policy observation boundary.
 
@@ -1651,7 +1657,10 @@ def research_expert_policy(environment_factory: Callable[..., Any]) -> Any:
     from psse_env.dagger.release_factories import ObservableExpertPolicy
 
     return ObservableExpertPolicy(
-        ExpertPolicyOracle(process_oracle=environment_factory().process_oracle)
+        ExpertPolicyOracle(
+            process_oracle=environment_factory().process_oracle,
+            hypothesis_ledger=bool(RESEARCH_EXPERT_OPTIONS.get("hypothesis_ledger", False)),
+        )
     )
 
 

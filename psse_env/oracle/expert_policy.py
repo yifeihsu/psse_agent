@@ -46,7 +46,8 @@ from psse_env.oracle.recovery_expert import RecoveryExpert
 from psse_env.oracle.termination_expert import TerminationExpert
 from psse_env.oracle.hif_continuation import hif_meter_route_ready, recovery_signatures
 from psse_env.oracle.topology_expert import TopologyExpert
-from psse_env.actions import UNEXPLAINED_DISCREPANCY_REQUEST, diagnostic_tool_permitted, phasors_examined
+from psse_env.actions import ESTIMATE_HIF_FROM_PATH, UNEXPLAINED_DISCREPANCY_REQUEST, diagnostic_tool_permitted, phasors_examined
+from psse_env.oracle.hypothesis_ledger import hypothesis_ledger, rerank_proposals
 from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary, is_suspicion_gated
 from psse_env.state_store import (
     SYNTHETIC_TERMINAL_COMPATIBILITY_KEY,
@@ -129,7 +130,13 @@ class ExpertPolicyOracle:
         diagnostics_expert: DiagnosticsExpert | None = None,
         recovery_expert: RecoveryExpert | None = None,
         termination_expert: TerminationExpert | None = None,
+        hypothesis_ledger: bool = False,
     ) -> None:
+        # Step 3 (2026-10-01): order the balanced families and their targets by
+        # the screen's accepted sequence and cap verified candidates per family
+        # and per state (psse_env.oracle.hypothesis_ledger).  Off by default so
+        # the current expert stays the baseline arm.
+        self.hypothesis_ledger = bool(hypothesis_ledger)
         self.process_oracle = process_oracle or ProcessValidityOracle()
         # Kept as a public collaborator for callers that use the expert policy
         # and candidate assessment through one object.
@@ -244,7 +251,8 @@ class ExpertPolicyOracle:
         hif_continuation = self.diagnostics_expert.hif_continuation_proposals(policy)
         if hif_continuation:
             ranked = self._rank_and_filter(
-                hif_continuation, policy, seen_signatures=seen_signatures,
+                hif_continuation, policy,
+                seen_signatures=self._conditioned_route_seen_signatures(policy, seen_signatures),
                 blocked_correction_tools=blocked_correction_tools,
                 mandatory=all(proposal.action["tool"] != CORRECT_MEASUREMENTS for proposal in hif_continuation),
             )
@@ -395,6 +403,8 @@ class ExpertPolicyOracle:
                     and safe_normalize_action(proposal.action)["tool"] == RUN_WLS
                 )
             ]
+        if self.hypothesis_ledger:
+            proposals = rerank_proposals(proposals, policy)
         diversification = self._cross_family_diversification_proposals(
             policy, context.history, proposals
         )
@@ -414,6 +424,12 @@ class ExpertPolicyOracle:
             mandatory=False,
         )
         if ranked:
+            if self.hypothesis_ledger and hypothesis_ledger(policy)["leading_family"] == "measurement":
+                # The screen explained the alarm with meters and no branch
+                # class: the ledger's order stands, the branch contexts are not
+                # fetched first (the meter edits still pass the branch-dominance
+                # guard and verification).
+                return ranked
             return _structural_first_order(ranked)
         escalation = self._recovery_exhaustion_proposals(policy, context.history)
         return self._rank_and_filter(
@@ -1351,6 +1367,45 @@ class ExpertPolicyOracle:
             ):
                 investigation_seen = True
         return successful_current_wls, investigation_seen
+
+    def _conditioned_route_seen_signatures(
+        self,
+        policy: PolicyObservation | Mapping[str, Any],
+        seen_signatures: set[str],
+    ) -> set[str]:
+        """Seen signatures for the HIF-conditioned meter route.
+
+        A meter correction tried before the HIF was found was verified against
+        the unconditioned model, in which the fault itself holds the residuals
+        up; under HIF conditioning the same channel is a new hypothesis.  The
+        episode's tried actions are ordered, so the corrections recorded
+        before the first phase-resolved HIF test are released from the seen
+        set (text and semantic forms); anything tried after it stays seen.
+        """
+        if not hif_meter_route_ready(policy):
+            return seen_signatures
+        tried = [str(item) for item in (self._get(policy, "tried_action_signatures", []) or []) if item]
+        cutoff = next(
+            (index for index, item in enumerate(tried)
+             if item.startswith(f"{ESTIMATE_HIF_FROM_PATH}:") or item.startswith(f"{RUN_THREE_PHASE_NLM_FROM_PATH}:")),
+            None,
+        )
+        if cutoff is None:
+            return seen_signatures
+        active_id = self._get(policy, "active_state_id")
+        released: set[str] = set()
+        for item in tried[:cutoff]:
+            if not item.startswith(f"{CORRECT_MEASUREMENTS}:"):
+                continue
+            released.add(item)
+            semantic = (
+                self._semantic_signature_from_text(item)
+                if self._signature_applies_to_state(item, active_id)
+                else None
+            )
+            if semantic:
+                released.add(semantic)
+        return {item for item in seen_signatures if item not in released}
 
     def _seen_action_signatures(
         self,

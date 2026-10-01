@@ -115,13 +115,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=20260930)
     parser.add_argument("--families", nargs="*", default=list(FAMILIES))
     parser.add_argument("--max-steps", type=int, default=research.RESEARCH_EPISODE_BUDGET)
+    parser.add_argument("--plan", type=json.loads, default=None,
+                        help="JSON family->count; overrides --per-family/--families (e.g. the development plan)")
+    parser.add_argument("--expert", choices=("baseline", "ledger"), default="baseline",
+                        help="the current expert, or the expert with the step-3 hypothesis ledger")
+    parser.add_argument("--roots-file", default=None,
+                        help="JSON file of partitioned roots: loaded when it exists, written after generation otherwise")
     args = parser.parse_args(argv)
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
-    generator = build_generator(args.seed)
-    built = generator.build({family: int(args.per_family) for family in args.families})
-    roots = [partition_release_scenario_v1(row, split="dagger_train") for row in built]
+    plan = dict(args.plan) if args.plan else {family: int(args.per_family) for family in args.families}
+    research.RESEARCH_EXPERT_OPTIONS["hypothesis_ledger"] = args.expert == "ledger"
+    roots_file = Path(args.roots_file) if args.roots_file else None
+    if roots_file is not None and roots_file.is_file():
+        roots = json.loads(roots_file.read_text(encoding="utf-8"))
+        print(f"[e2e] {len(roots)} roots loaded from {roots_file}", flush=True)
+    else:
+        generator = build_generator(args.seed)
+        built = generator.build({str(k): int(v) for k, v in plan.items()})
+        roots = [partition_release_scenario_v1(row, split="dagger_train") for row in built]
+        if roots_file is not None:
+            roots_file.parent.mkdir(parents=True, exist_ok=True)
+            roots_file.write_text(json.dumps(json_safe(roots)), encoding="utf-8")
+            print(f"[e2e] roots saved to {roots_file}", flush=True)
     print(f"[e2e] {len(roots)} roots built in {time.perf_counter() - started:.1f} s", flush=True)
     research.RESEARCH_ENVIRONMENT_OPTIONS["evidence_profile"] = SUSPICION_GATED_PROFILE
     research.RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"] = 4.0
@@ -136,9 +153,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         **research.PAIRED_EVALUATION_CONTRACT,
     ).as_dict()
     episodes = result["suite_metrics"]["episodes"]
+    by_id = {str(root["execution"]["scenario_id"]): root for root in roots}
     summary = summarize(episodes)
-    summary.update(seed=args.seed, per_family=args.per_family, roots=len(roots), max_steps=int(args.max_steps),
-                   evidence_profile=SUSPICION_GATED_PROFILE, total_seconds=time.perf_counter() - started)
+    summary.update(seed=args.seed, per_family=args.per_family, plan=plan, expert=args.expert, roots=len(roots),
+                   max_steps=int(args.max_steps), evidence_profile=SUSPICION_GATED_PROFILE,
+                   total_seconds=time.perf_counter() - started)
     (out / "summary.json").write_text(json.dumps(json_safe(summary), indent=2, sort_keys=True), encoding="utf-8")
     with (out / "episodes.jsonl").open("w", encoding="utf-8") as stream:
         for episode in episodes:
@@ -149,9 +168,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             compact["tools"] = [str((step.get("action") or {}).get("tool")) for step in episode.get("trace") or []]
             compact["escalation_request"] = _escalation_request(episode)
             compact["basis"] = _basis(episode)
+            # The corrections attempted, in order, with their targets, and the
+            # root's truth targets: the paired comparison reads which family
+            # and target each arm tried first.
+            compact["corrections"] = [
+                {"tool": str((step.get("action") or {}).get("tool")),
+                 "arguments": {k: v for k, v in ((step.get("action") or {}).get("arguments") or {}).items() if k != "state_id"},
+                 "status": str(((step.get("tool_output") or step.get("outcome") or {}) or {}).get("execution_status"))}
+                for step in episode.get("trace") or []
+                if str((step.get("action") or {}).get("tool")) in ("correct_measurements", "correct_parameters", "correct_topology")
+            ]
+            root = by_id.get(str(episode.get("scenario_id")))
+            truth = (root or {}).get("audit", {}).get("truth", {}) if isinstance(root, Mapping) else {}
+            compact["truth"] = {
+                "measurement_indices": [m.get("index") for m in truth.get("true_measurement_errors") or [] if isinstance(m, Mapping)],
+                "parameter_lines": [p.get("line_index1") for p in truth.get("true_parameter_errors") or [] if isinstance(p, Mapping)],
+                "topology_lines": [t.get("line_index1") for t in truth.get("true_topology_errors") or [] if isinstance(t, Mapping)],
+            }
             stream.write(json.dumps(json_safe(compact), sort_keys=True) + "\n")
-    lines = ["# Expert end-to-end check under suspicion_gated_diagnostics\n",
-             f"{len(roots)} roots ({args.per_family} per family, seed {args.seed}), budget {args.max_steps} steps.\n",
+    lines = [f"# Expert end-to-end check under suspicion_gated_diagnostics ({args.expert} expert)\n",
+             f"{len(roots)} roots (plan {json.dumps(plan, sort_keys=True)}, seed {args.seed}), budget {args.max_steps} steps.\n",
              "| family | n | success | outcomes | bases | phasors | NLM | spectra | HSE | mean steps | false commits |",
              "|---|---|---|---|---|---|---|---|---|---|---|"]
     for family, entry in summary["by_family"].items():

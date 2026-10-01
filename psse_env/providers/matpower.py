@@ -1126,6 +1126,50 @@ class MatpowerDeploymentProviders:
             self._hif_prediction_cache[key] = cached
         return copy.deepcopy(cached)
 
+    @staticmethod
+    def _compact_screen_targets(best: Mapping[str, Any]) -> dict[str, Any]:
+        """Each class's best target with its refit objective, in compact form."""
+        compact: dict[str, Any] = {}
+        for name, item in best.items():
+            if not isinstance(item, Mapping):
+                continue
+            entry: dict[str, Any] = {"J": round(float(item["J"]), 3)} if item.get("J") is not None else {}
+            if name == "meter":
+                entry["channel_index0"] = int(item["channel_index0"])
+            elif name == "parameter":
+                entry["branch_row0"] = int(item["branch_row0"])
+                entry["parameter"] = str(item.get("parameter") or "")
+            elif name == "topology":
+                entry["branch_row0"] = int(item["branch_row0"])
+            else:
+                entry["branch_row0"] = int(item["branch_row0"])
+                entry["alpha_from_from_bus"] = round(float(item.get("alpha", item.get("alpha_grid", 0.0))), 3)
+            compact[str(name)] = entry
+        return compact
+
+    @staticmethod
+    def _compact_screen_ranking(best: Mapping[str, Any], top: int = 3) -> dict[str, list[dict[str, Any]]]:
+        """Top-ranked alternatives per class (targets and refit objectives only)."""
+        compact: dict[str, list[dict[str, Any]]] = {}
+        for name, item in best.items():
+            ranked = item.get("ranked") if isinstance(item, Mapping) else None
+            if not isinstance(ranked, (list, tuple)):
+                continue
+            rows: list[dict[str, Any]] = []
+            for candidate in list(ranked)[:top]:
+                if not isinstance(candidate, Mapping):
+                    continue
+                row: dict[str, Any] = {"J": round(float(candidate["J"]), 3)} if candidate.get("J") is not None else {}
+                if "channel_index0" in candidate:
+                    row["channel_index0"] = int(candidate["channel_index0"])
+                if "branch_row0" in candidate:
+                    row["branch_row0"] = int(candidate["branch_row0"])
+                if candidate.get("parameter") is not None:
+                    row["parameter"] = str(candidate["parameter"])
+                rows.append(row)
+            compact[str(name)] = rows
+        return compact
+
     def _hif_screen(self, state: Mapping[str, Any], solved: Mapping[str, Any]) -> dict[str, Any]:
         """Balanced HIF screen on this solve (suspicion_gated_diagnostics).
 
@@ -1180,7 +1224,11 @@ class MatpowerDeploymentProviders:
             "rounds": [
                 {"winner": item.get("winner"), "clean_after_removal": item.get("clean_after_removal"),
                  "set_aside_channels": list(item.get("dropped_channels") or []),
-                 "scores": {name: round(float(value), 3) for name, value in (item.get("scores") or {}).items()}}
+                 "scores": {name: round(float(value), 3) for name, value in (item.get("scores") or {}).items()},
+                 # The hypothesis ledger (step 3) reads each class's best target
+                 # and its top-ranked alternatives; all computed from the solve.
+                 "best": self._compact_screen_targets(item.get("best") or {}),
+                 "ranked": self._compact_screen_ranking(item.get("best") or {})}
                 for item in report.get("rounds") or []
             ],
         }

@@ -55,6 +55,8 @@ from psse_env.actions import (
     current_suspicion,
     current_wls_alarm,
     phasor_ledger,
+    phasors_examined_in_episode,
+    spectra_examined_in_episode,
     diagnostic_tool_permitted,
     hif_suspicion_refuted,
     safe_normalize_action,
@@ -377,12 +379,24 @@ class DiagnosticsExpert:
         active_id = state_value(state, "active_state_id")
         if not active_id or state_value(state, "has_open_candidate"):
             return []
+        contexts = state_value(state, "fresh_context_evidence") or {}
+        phase = phasor_ledger(state)
+        if phase and phase.get("nlm_attempted") is not True and three_phase_context_available(contexts, active_id):
+            # Phasors acquired on this state, for whatever suspicion, are
+            # examined before anything else.
+            return self._permitted(state, [self._proposal(
+                RUN_THREE_PHASE_NLM_FROM_PATH, {"state_id": active_id}, confidence=0.97,
+                evidence=["phase_resolved_measurements_acquired", "suspicion_tested_on_phasors"],
+            )], history)
         hif = bool(current_suspicion(state, "hif") and not hif_suspicion_refuted(state))
         voltage = bool(current_suspicion(state, "voltage_meter"))
         if not (hif or voltage):
             return []
-        contexts = state_value(state, "fresh_context_evidence") or {}
-        phase = phasor_ledger(state)
+        if voltage and not hif and not phase and phasors_examined_in_episode(state):
+            # Phasors examined on an ancestor state found no event, and only
+            # the operator's corrections have changed since: the voltage
+            # channel may be edited without acquiring them again.
+            return []
         report = current_screen_report(state, "hif")
         evidence = []
         if hif:
@@ -410,10 +424,9 @@ class DiagnosticsExpert:
         if current_suspicion(state, "unexplained") and current_suspicion(state, "harmonic"):
             # The screen found no balanced hypothesis sequence that explains
             # the alarm and the phasors show a balanced system: the spectra
-            # are the next evidence, before any correction is tried.
-            harmonic = contexts.get("harmonic") if isinstance(contexts, Mapping) else None
-            harmonic = harmonic if isinstance(harmonic, Mapping) else {}
-            if not (str(harmonic.get("state_id") or "") == str(active_id) and harmonic.get("request_attempted") is True):
+            # are the next evidence, before any correction is tried (unless
+            # an earlier state of the episode already looked at them).
+            if not spectra_examined_in_episode(state):
                 return self._permitted(state, [self._proposal(
                     GET_HARMONIC_CONTEXT, {"state_id": active_id}, confidence=0.96,
                     evidence=[*evidence, "alarm_unexplained_by_balanced_hypotheses", "phasors_balanced_three_phase",
@@ -446,12 +459,21 @@ class DiagnosticsExpert:
         if not phase:
             if not current_suspicion(state, "phasor"):
                 return []
-            return self._permitted(state, [self._proposal(
-                GET_THREE_PHASE_CONTEXT, {"state_id": active_id}, confidence=0.96,
-                evidence=["balanced_routes_exhausted", "unexplained_balanced_discrepancy",
-                          "phase_resolved_measurements_requested"],
-            )], history)
-        if phase.get("nlm_attempted") is not True:
+            refuted = current_suspicion(state, "refuted_explanation")
+            if refuted or not phasors_examined_in_episode(state):
+                # Nothing phase-resolved was examined on this state, and on
+                # an ancestor either nothing was examined or the screen's
+                # explanation has since been rejected by verification.
+                reason = ("screen_explanation_rejected_by_verification" if refuted
+                          else "unexplained_balanced_discrepancy")
+                return self._permitted(state, [self._proposal(
+                    GET_THREE_PHASE_CONTEXT, {"state_id": active_id}, confidence=0.96,
+                    evidence=["balanced_routes_exhausted", reason, "phase_resolved_measurements_requested"],
+                )], history)
+            # Phasors examined on an ancestor state found no event and only
+            # the operator's corrections have changed since: fall through to
+            # the spectra tier.
+        elif phase.get("nlm_attempted") is not True:
             if not three_phase_context_available(contexts, active_id):
                 return []
             return self._permitted(state, [self._proposal(
@@ -459,11 +481,7 @@ class DiagnosticsExpert:
                 evidence=["balanced_routes_exhausted", "unexplained_balanced_discrepancy",
                           "suspicion_tested_on_phasors"],
             )], history)
-        if not current_suspicion(state, "harmonic"):
-            return []
-        harmonic = contexts.get("harmonic") if isinstance(contexts, Mapping) else None
-        harmonic = harmonic if isinstance(harmonic, Mapping) else {}
-        if str(harmonic.get("state_id") or "") == str(active_id) and harmonic.get("request_attempted") is True:
+        if not current_suspicion(state, "harmonic") or spectra_examined_in_episode(state):
             return []
         return self._permitted(state, [self._proposal(
             GET_HARMONIC_CONTEXT, {"state_id": active_id}, confidence=0.96,

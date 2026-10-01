@@ -423,6 +423,95 @@ def phasor_nlm_classification(state: Any) -> str | None:
     return str(value) if value else None
 
 
+def _rejected_correction_targets(state: Mapping[str, Any]) -> dict[str, set[int]]:
+    """Verification-rejected correction targets bound to the active state, per screen class."""
+    active_id = str(state.get("active_state_id") or "")
+    targets: dict[str, set[int]] = {"meter": set(), "parameter": set(), "topology": set()}
+    for record in state.get("rejected_hypotheses") or []:
+        if not isinstance(record, Mapping) or record.get("rejection_kind") == "executor_failure":
+            continue
+        parent = record.get("candidate_parent_id")
+        if parent is not None and active_id and str(parent) != active_id:
+            continue
+        source = record.get("source_action")
+        if not isinstance(source, Mapping):
+            continue
+        normalized = safe_normalize_action(source)
+        arguments = normalized["arguments"]
+        if normalized["tool"] == CORRECT_MEASUREMENTS:
+            group = arguments.get("suspect_group")
+            if isinstance(group, (list, tuple)):
+                targets["meter"].update(int(i) for i in group if isinstance(i, int) and not isinstance(i, bool))
+        elif normalized["tool"] == CORRECT_PARAMETERS:
+            line = arguments.get("line_index", arguments.get("line_index1"))
+            if isinstance(line, int) and not isinstance(line, bool):
+                targets["parameter"].add(int(line) - 1)
+            row = arguments.get("branch_row0")
+            if isinstance(row, int) and not isinstance(row, bool):
+                targets["parameter"].add(int(row))
+    return targets
+
+
+def screen_explanation_refuted(state: Any) -> bool:
+    """The screen's accepted meter and branch hypotheses were all rejected by verification on this state.
+
+    The screen explained the alarm with a sequence of balanced causes; every
+    one of them that names a meter or a branch has been tried as a correction
+    on the active state and rejected.  The alarm is then unexplained in fact,
+    whatever the screen's own flag says, and the phasor tier opens
+    (hypothesis-ranking plan, step 3).  Topology hypotheses name a branch the
+    breaker correction does not, so they are not counted either way.
+    """
+    if not isinstance(state, Mapping):
+        return False
+    report = current_screen_report(state, "hif")
+    if not isinstance(report, Mapping) or report.get("status") != "valid":
+        return False
+    accepted = [item for item in report.get("accepted_hypotheses") or []
+                if isinstance(item, Mapping) and str(item.get("class")) in {"meter", "parameter"}]
+    if not accepted:
+        return False
+    rejected = _rejected_correction_targets(state)
+    for item in accepted:
+        class_name = str(item["class"])
+        target = item.get("channel_index0") if class_name == "meter" else item.get("branch_row0")
+        if not isinstance(target, int) or isinstance(target, bool) or int(target) not in rejected[class_name]:
+            return False
+    return True
+
+
+def phasors_examined_in_episode(state: Any) -> bool:
+    """Phasors were examined on this state, or earlier in the episode with no waveform event found.
+
+    A committed meter or branch correction changes the operator's model, not
+    the network, so phasors acquired and tested on an ancestor state remain
+    evidence about unbalance and HIFs.  An earlier NLM run is read from the
+    episode's tried actions; had it found an event, its waveform signature
+    would still stand.
+    """
+    if phasors_examined(state):
+        return True
+    if not isinstance(state, Mapping):
+        return False
+    tried = [str(item) for item in state.get("tried_action_signatures") or []]
+    examined = any(item.startswith(f"{RUN_THREE_PHASE_NLM_FROM_PATH}:") for item in tried) and any(
+        item.startswith(f"{GET_THREE_PHASE_CONTEXT}:") for item in tried
+    )
+    return bool(examined and not waveform_anomaly_signatures(state.get("unresolved_signatures") or []))
+
+
+def spectra_examined_in_episode(state: Any) -> bool:
+    """Spectra were requested on this state or earlier in the episode."""
+    if not isinstance(state, Mapping):
+        return False
+    contexts = state.get("fresh_context_evidence")
+    harmonic = contexts.get("harmonic") if isinstance(contexts, Mapping) else None
+    if (isinstance(harmonic, Mapping) and str(harmonic.get("state_id") or "") == str(state.get("active_state_id") or "")
+            and harmonic.get("request_attempted") is True):
+        return True
+    return any(str(item).startswith(f"{GET_HARMONIC_CONTEXT}:") for item in state.get("tried_action_signatures") or [])
+
+
 def current_suspicion(state: Any, family: str) -> bool:
     """Whether the evidence on the active state points at ``family``.
 
@@ -437,9 +526,17 @@ def current_suspicion(state: Any, family: str) -> bool:
     """
     report = current_screen_report(state, "hif")
     if family == "harmonic":
-        return phasor_nlm_classification(state) == "balanced_three_phase"
+        if phasor_nlm_classification(state) == "balanced_three_phase":
+            return True
+        # Phasors examined on an ancestor state found no event (its waveform
+        # signature would still stand): the spectra tier is open here too.
+        return bool(not phasor_ledger(state) and phasors_examined_in_episode(state))
     if family == "hif":
         return screen_phasor_suspicion(report, "hif") or phasor_nlm_classification(state) == "hif_suspected"
+    if family == "refuted_explanation":
+        return screen_explanation_refuted(state)
+    if family == "phasor":
+        return screen_phasor_suspicion(report, "phasor") or screen_explanation_refuted(state)
     return screen_phasor_suspicion(report, family)
 
 

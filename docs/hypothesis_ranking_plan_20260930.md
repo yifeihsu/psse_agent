@@ -343,3 +343,17 @@ fresh roots across the twelve families (unbalance in 4 steps, harmonic in 6),
 where before the step the 32 unbalance and harmonic development roots could
 not be credited. Step 3 (the ledger expert and the observable-verifier
 evaluation) starts from here.
+
+## 10. Step 3 outcome (2026-10-01)
+
+The ledger expert (`docs/hypothesis_ranking_step3_20261001.md`) follows the
+screen's accepted sequence and ranked targets and caps verified candidates at
+two per family and four per state. On a 160-root development draw under the
+deployment verifier it matches the step 2 expert on outcome (159 of 160 each;
+the one failure is the adjacent-line parameter root both rankings misrank) and
+costs less: 8.1 against 8.8 steps per episode, 8 against 15 rejected
+candidates, no false commit in either arm. Two shared fixes found by the
+paired run (a verification-refuted screen explanation opens the phasors; no
+re-acquisition after a meter commit) took both arms from 156 to 159. The
+close-alternative comparison and a dedicated ranked-candidates handoff were
+deferred; the learned ranker (step 4) has a narrower job than planned.
