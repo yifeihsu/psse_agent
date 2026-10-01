@@ -202,18 +202,20 @@ ranked teacher (16-root plan, 111 raw rows, every family exported,
 `expert_variant` recorded in the provenance, no model-view leak) passed; the
 remaining release findings are the known small-plan and local-build ones.
 
-**Launch status.** The cell is prepared but not submitted. Submitting needs
-the WSL SSH master to torch, which runs on the user's interactive NYU SSO
-login; the master socket had expired and every batch SSH attempt in this
-session was refused (`Permission denied (gssapi-keyex,...)`). The deployment
-is scripted end to end (`research/hpc/full_pipeline_20260907/deploy_cell_from_windows.sh <commit>`: a local
-clone of the 2026-09-24 cell's source as the new cell's source, the
-incremental bundle from the last deployed commit uploaded through ssh stdin
-and checksum-verified, `deploy_remote.sh` with the step-5 overrides and its
-dry-run prerequisites, then `submit_pipeline.sh`), so once the master is back
-(`scripts/start_torch_ssh_master.ps1`) one command launches the chain d0 ->
-bc0 -> r1c -> r1t -> r1e -> r2c -> r2t -> r2e into
-`/scratch/yx3882/research_full_pipeline_20261001_ranked`.
+**Launch status.** Deployed and submitted on 2026-10-01 at 18:02 UTC from
+commit 7f8fb6a (the step 5 commit 1ab4707 plus two fixes to the Windows
+deploy helper): cell `/scratch/yx3882/research_full_pipeline_20261001_ranked`,
+source cloned from the 2026-09-24 cell and fast-forwarded through a 701 KB
+bundle, dry-run prerequisites passed (corpora sigma, ranker export loaded by
+the cluster's python, environment pins), overrides
+`hypothesis_ranking_20261001.env`, `expert_variant: ledger_ranked` in
+`deploy.json`. One afterok chain: d0 18967774, bc0 18967775, r1c 18967776,
+r1t 18967777, r1e 18967778, r2c 18967779, r2t 18967780, r2e 18967781. Status:
+`MSYS_NO_PATHCONV=1 wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20261001_ranked/status_pipeline.sh`;
+resume after a failure with `FROM=<stage> bash submit_pipeline.sh` in the
+cell. Results land in `out/pipeline_summary.json` and `out/<round>/round_summary.json`.
+The deploy helper `research/hpc/full_pipeline_20260907/deploy_cell_from_windows.sh`
+reaches the cluster through the WSL SSH master (`scripts/start_torch_ssh_master.ps1`).
 
 The evaluation summaries already report success by basis
 (`summarize.py: success_basis`); under the suspicion-gated admission every
