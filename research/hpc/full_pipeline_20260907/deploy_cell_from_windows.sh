@@ -22,7 +22,8 @@ PIPE=${PIPE:-/scratch/yx3882/research_full_pipeline_20261001_ranked}
 SOURCE_CELL=${SOURCE_CELL:-/scratch/yx3882/research_full_pipeline_20260924_wls_gated}
 OVERRIDES=${OVERRIDES:-hypothesis_ranking_20261001.env}
 SHORT=${COMMIT:0:7}
-BUNDLE_LOCAL=${BUNDLE_LOCAL:-$REPO/output/deploy_${SHORT}.bundle}
+# Relative to the repo: with MSYS_NO_PATHCONV set, git.exe would take a POSIX /c/... path literally.
+BUNDLE_LOCAL=${BUNDLE_LOCAL:-output/deploy_${SHORT}.bundle}
 export MSYS_NO_PATHCONV=1
 
 cd "$REPO"
