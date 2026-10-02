@@ -180,7 +180,7 @@ if [[ -n "$FROZEN_STUDENT_ADAPTER" && ! -s "$OUT/bc0.done" ]]; then
   [[ -s "$FROZEN_STUDENT_ADAPTER/adapter_model.safetensors" ]] || { echo "frozen student adapter missing: $FROZEN_STUDENT_ADAPTER" >&2; exit 2; }
   mkdir -p "$BC0_DIR"
   ln -sfn "$FROZEN_STUDENT_ADAPTER" "$BC0_DIR/lora"
-  "$PY" - "$BC0_DIR" "$OUT/bc0.done" "$FROZEN_STUDENT_ADAPTER" "$EVIDENCE_PROFILE" <<'PY'
+  "$PY" - "$BC0_DIR" "$OUT/bc0.done" "$FROZEN_STUDENT_ADAPTER" "$EVIDENCE_PROFILE" "$EXPERT_VARIANT" <<'PY'
 import json
 import os
 import sys
@@ -193,6 +193,7 @@ frozen = Path(sys.argv[3]).resolve()
 payload = {
     "contract": "research_full_pipeline_bc0_reused_v1",
     "evidence_profile": sys.argv[4],
+    "expert_variant": sys.argv[5],
     "adapter_path": str(bc0 / "lora"),
     "frozen_student_adapter": str(frozen),
     "adapter_tree_sha256": checkpoint_tree_sha256(bc0 / "lora"),

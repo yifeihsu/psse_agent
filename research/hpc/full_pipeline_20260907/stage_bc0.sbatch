@@ -116,7 +116,7 @@ if [[ ! -s "$BC0_DIR/lora/adapter_model.safetensors" || ! -s "$BC0_DIR/research_
     --report-to none \
     "${resume_args[@]}"
 fi
-"$PY" - "$BC0_DIR" "$OUT/bc0.done" "$D0_DIR/aggregate.train_view.jsonl" "$VALIDATION_SUBSET" "$EVIDENCE_PROFILE" <<'PY'
+"$PY" - "$BC0_DIR" "$OUT/bc0.done" "$D0_DIR/aggregate.train_view.jsonl" "$VALIDATION_SUBSET" "$EVIDENCE_PROFILE" "$EXPERT_VARIANT" <<'PY'
 import hashlib
 import json
 import os
@@ -136,6 +136,7 @@ def count(path):
 payload = {
     "contract": "research_full_pipeline_bc0_done_v1",
     "evidence_profile": sys.argv[5],
+    "expert_variant": sys.argv[6],
     "adapter_path": str(bc0 / "lora"),
     "adapter_tree_sha256": checkpoint_tree_sha256(bc0 / "lora"),
     "train_rows": count(sys.argv[3]),
