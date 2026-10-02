@@ -33,9 +33,9 @@ def _policy_state(**overrides) -> dict:
     return state
 
 
-def _successful_step(tool: str, metrics: dict | None = None) -> dict:
+def _successful_step(tool: str, metrics: dict | None = None, **arguments) -> dict:
     return {
-        "action": {"tool": tool, "arguments": {"state_id": "episode:s0"}},
+        "action": {"tool": tool, "arguments": {"state_id": "episode:s0", **arguments}},
         "tool_output": {"execution_status": "success", "tool_metrics": metrics or {}},
     }
 
@@ -75,9 +75,9 @@ def _record_acquired_discovery_context(state: dict) -> None:
     }
 
 
-def _failed_step(tool: str, error_code: str) -> dict:
+def _failed_step(tool: str, error_code: str, **arguments) -> dict:
     return {
-        "action": {"tool": tool, "arguments": {"state_id": "episode:s0"}},
+        "action": {"tool": tool, "arguments": {"state_id": "episode:s0", **arguments}},
         "tool_output": {
             "execution_status": "failure",
             "error_code": error_code,
@@ -197,7 +197,7 @@ class DiagnosticsExpertRoutingTests(unittest.TestCase):
             [
                 _successful_step("run_three_phase_nlm_from_path", nlm_metrics),
                 _successful_step(
-                    "estimate_hif_location_magnitude_from_path", rejected
+                    "estimate_hif_location_magnitude_from_path", rejected, candidate_branch_row0=12
                 ),
             ],
         )
@@ -223,7 +223,7 @@ class DiagnosticsExpertRoutingTests(unittest.TestCase):
         history = [
             _successful_step("run_three_phase_nlm_from_path", nlm_metrics),
             _successful_step(
-                "estimate_hif_location_magnitude_multiscan_from_path", rejected
+                "estimate_hif_location_magnitude_multiscan_from_path", rejected, candidate_branch_row0=12
             ),
         ]
         follow_up = self.expert.propose(state, history)
@@ -233,7 +233,7 @@ class DiagnosticsExpertRoutingTests(unittest.TestCase):
         )
 
         history.append(
-            _successful_step("estimate_hif_location_magnitude_from_path", rejected)
+            _successful_step("estimate_hif_location_magnitude_from_path", rejected, candidate_branch_row0=12)
         )
         handoff = self.expert.propose(state, history)
         self.assertEqual(handoff[0].action["tool"], "ask_for_more_evidence")
@@ -255,6 +255,7 @@ class DiagnosticsExpertRoutingTests(unittest.TestCase):
             _failed_step(
                 "estimate_hif_location_magnitude_multiscan_from_path",
                 "hif_multiscan_failure",
+                candidate_branch_row0=12,
             ),
         ]
         follow_up = self.expert.propose(state, history)
@@ -267,6 +268,7 @@ class DiagnosticsExpertRoutingTests(unittest.TestCase):
             _failed_step(
                 "estimate_hif_location_magnitude_from_path",
                 "hif_estimation_failure",
+                candidate_branch_row0=12,
             )
         )
         # Two solver failures are an infrastructure defect.  They do not
@@ -343,6 +345,7 @@ class DiagnosticsExpertRoutingTests(unittest.TestCase):
             _successful_step(
                 "estimate_hif_location_magnitude_from_path",
                 {"diagnostic_acceptance": {"accepted": True}},
+                candidate_branch_row0=12,
             ),
         ]
         self.assertEqual(self.expert.propose(state, history), [])

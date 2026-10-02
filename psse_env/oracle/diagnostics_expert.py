@@ -56,6 +56,7 @@ from psse_env.actions import (
     current_wls_alarm,
     phasor_ledger,
     phasors_examined_in_episode,
+    process_gate_refusal,
     spectra_examined_in_episode,
     diagnostic_tool_permitted,
     hif_suspicion_refuted,
@@ -181,7 +182,16 @@ class DiagnosticsExpert:
 
         harmonic_signal = bool(harmonic_codes)
         if harmonic_signal:
-            if GET_HARMONIC_CONTEXT not in completed:
+            # The spectra request is read from the state-bound ledger as well:
+            # the bounded history window can drop it before the HSE is due,
+            # and asking again would only be refused as already tried.
+            spectra_ledger = (state_value(state, "fresh_context_evidence") or {}).get("harmonic") or {}
+            spectra_requested = (
+                isinstance(spectra_ledger, Mapping)
+                and str(spectra_ledger.get("state_id") or "") == str(active_id)
+                and spectra_ledger.get("request_attempted") is True
+            )
+            if GET_HARMONIC_CONTEXT not in completed and not spectra_requested:
                 proposals.append(
                     self._proposal(
                         GET_HARMONIC_CONTEXT,
@@ -304,7 +314,10 @@ class DiagnosticsExpert:
                     and (multiscan_record is None or multiscan_record.get("_execution_status") == "success")
                 )
             )
-            if multiscan_applicable and ESTIMATE_HIF_MULTISCAN_FROM_PATH not in completed:
+            # An estimate on another line tested another hypothesis: the rung
+            # on the localized line stays open, and the handoff below waits
+            # for it (the environment audits the latest estimate's line).
+            if multiscan_applicable and not self._estimated_on(multiscan_record, hif_branch):
                 proposals.append(
                     self._proposal(
                         ESTIMATE_HIF_MULTISCAN_FROM_PATH,
@@ -317,7 +330,7 @@ class DiagnosticsExpert:
                         ],
                     )
                 )
-            elif ESTIMATE_HIF_FROM_PATH not in completed:
+            elif not self._estimated_on(completed.get(ESTIMATE_HIF_FROM_PATH), hif_branch):
                 proposals.append(
                     self._proposal(
                         ESTIMATE_HIF_FROM_PATH,
@@ -331,6 +344,7 @@ class DiagnosticsExpert:
                 required_estimators.insert(0, ESTIMATE_HIF_MULTISCAN_FROM_PATH)
             if all(
                 self._diagnostic_rejected(completed.get(tool))
+                and self._estimated_on(completed.get(tool), hif_branch)
                 for tool in required_estimators
             ):
                 # A rejected model fit is not a clean bill of health.  End the
@@ -742,14 +756,14 @@ class DiagnosticsExpert:
             else:
                 status, metrics, error_code = None, None, None
             if status in {"success", "failure"}:
-                if (
-                    tool in {GET_HARMONIC_CONTEXT, RUN_HSE_FROM_PATH,
-                             GET_THREE_PHASE_CONTEXT, RUN_THREE_PHASE_NLM_FROM_PATH}
-                    and status == "failure" and error_code == "missing_precondition"
-                ):
+                if status == "failure" and process_gate_refusal(error_code):
+                    # Refused before any provider ran (a missing precondition,
+                    # an alarm or suspicion gate): it tested nothing, so the
+                    # rung stays open.  A provider's own failure is an answer.
                     continue
                 observed = dict(metrics) if isinstance(metrics, Mapping) else {}
                 observed["_execution_status"] = status
+                observed["_arguments"] = dict(normalized["arguments"])
                 if error_code is not None:
                     observed["_error_code"] = str(error_code)
                 completed[tool] = observed
@@ -818,6 +832,20 @@ class DiagnosticsExpert:
                 except (TypeError, ValueError):
                     continue
         return None
+
+    @staticmethod
+    def _estimated_on(record: Mapping[str, Any] | None, branch: Any) -> bool:
+        """The latest estimator attempt targeted ``branch`` (whatever its outcome)."""
+        if not isinstance(record, Mapping) or branch is None:
+            return False
+        arguments = record.get("_arguments")
+        target = arguments.get("candidate_branch_row0") if isinstance(arguments, Mapping) else None
+        if isinstance(target, bool):
+            return False
+        try:
+            return int(target) == int(branch)
+        except (TypeError, ValueError):
+            return False
 
     @staticmethod
     def _diagnostic_rejected(metrics: Mapping[str, Any] | None) -> bool:

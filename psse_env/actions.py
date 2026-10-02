@@ -156,6 +156,24 @@ PROCESS_REJECTION_ERROR_CODES = frozenset(
     }
 )
 
+
+
+def process_gate_refusal(error_code: Any) -> bool:
+    """The step was refused before any provider ran, so it tested nothing.
+
+    The process gate's own rejections, a tool the evidence profile disables,
+    and the alarm and suspicion gates of the WLS-gated profiles
+    (``diagnostics_require_*``).  A provider's own failure (an unavailable
+    scan window, a numerical failure) is an answer and is not one of these.
+    """
+    code = str(error_code or "")
+    return (
+        code in PROCESS_REJECTION_ERROR_CODES
+        or code == "evidence_profile_tool_unavailable"
+        or code.startswith("diagnostics_require_")
+    )
+
+
 STATE_MANAGEMENT_TOOLS = {
     COMMIT_STATE,
     ROLLBACK_STATE,
@@ -451,6 +469,40 @@ def phasor_nlm_classification(state: Any) -> str | None:
     return str(value) if value else None
 
 
+#: NLM classifications that name a diagnosable waveform event.  Phasors that
+#: named one cannot close the ladder as an unexplained discrepancy.
+DIAGNOSABLE_PHASOR_CLASSIFICATIONS = frozenset({"hif_suspected", "three_phase_unbalance"})
+
+
+def unexplained_handoff_supported(state: Any) -> bool:
+    """Both acquisition tiers answered on the active state and named no event.
+
+    The honest end of the suspicion-gated ladder is an unexplained
+    discrepancy only when the phasors acquired and tested on this state named
+    no diagnosable event and spectra were requested on this state too; the
+    environment audits the handoff against exactly these records.  An alarm
+    that outlives a named event (an accepted HIF estimate whose conditioned
+    WLS still flags a residual, say) or whose spectra were taken on an
+    ancestor state is an exhausted recovery instead.
+    """
+    if not phasors_examined(state):
+        return False
+    classification = phasor_nlm_classification(state)
+    if classification is None or classification in DIAGNOSABLE_PHASOR_CLASSIFICATIONS:
+        return False
+    contexts = state.get("fresh_context_evidence")
+    harmonic = contexts.get("harmonic") if isinstance(contexts, Mapping) else None
+    # The audit needs a successful spectra request on this very state: one
+    # still pending or failed, or an answer carried over a commit, is not it.
+    return bool(
+        isinstance(harmonic, Mapping)
+        and str(harmonic.get("state_id") or "") == str(state.get("active_state_id") or "")
+        and harmonic.get("request_attempted") is True
+        and not harmonic.get("carried_from_state_id")
+        and harmonic.get("harmonic_context_status") not in {"pending", "failed"}
+    )
+
+
 def _rejected_correction_targets(state: Mapping[str, Any]) -> dict[str, set[int]]:
     """Verification-rejected correction targets bound to the active state, per screen class."""
     active_id = str(state.get("active_state_id") or "")
@@ -508,6 +560,33 @@ def screen_explanation_refuted(state: Any) -> bool:
     return True
 
 
+def requested_on_earlier_state(state: Any, tool: str) -> bool:
+    """``tool`` was requested on a state of the episode other than the active one.
+
+    The active state's own acquisitions are read from its ledger, which only
+    a dispatched request creates and only a commit (which changes the active
+    state) drops; a tried action on the active state with no ledger entry was
+    refused by the gate and tested nothing.  An earlier state's ledger is gone
+    after the commit, so its tried actions are the only record left.  A
+    request that named no state is not attributed to any.
+    """
+    if not isinstance(state, Mapping):
+        return False
+    active = str(state.get("active_state_id") or "")
+    for item in state.get("tried_action_signatures") or []:
+        name, separator, encoded = str(item).partition(":")
+        if name != tool or not separator:
+            continue
+        try:
+            arguments = json.loads(encoded)
+        except (TypeError, ValueError):
+            continue
+        requested = str(arguments.get("state_id") or "") if isinstance(arguments, Mapping) else ""
+        if requested and requested != active:
+            return True
+    return False
+
+
 def phasors_examined_in_episode(state: Any) -> bool:
     """Phasors were examined on this state, or earlier in the episode with no waveform event found.
 
@@ -515,21 +594,21 @@ def phasors_examined_in_episode(state: Any) -> bool:
     the network, so phasors acquired and tested on an ancestor state remain
     evidence about unbalance and HIFs.  An earlier NLM run is read from the
     episode's tried actions; had it found an event, its waveform signature
-    would still stand.
+    would still stand.  On the active state only the ledger counts: a refused
+    request there examined nothing.
     """
     if phasors_examined(state):
         return True
     if not isinstance(state, Mapping):
         return False
-    tried = [str(item) for item in state.get("tried_action_signatures") or []]
-    examined = any(item.startswith(f"{RUN_THREE_PHASE_NLM_FROM_PATH}:") for item in tried) and any(
-        item.startswith(f"{GET_THREE_PHASE_CONTEXT}:") for item in tried
+    examined = requested_on_earlier_state(state, RUN_THREE_PHASE_NLM_FROM_PATH) and requested_on_earlier_state(
+        state, GET_THREE_PHASE_CONTEXT
     )
     return bool(examined and not waveform_anomaly_signatures(state.get("unresolved_signatures") or []))
 
 
 def spectra_examined_in_episode(state: Any) -> bool:
-    """Spectra were requested on this state or earlier in the episode."""
+    """Spectra were requested on this state (its ledger) or on an earlier state of the episode."""
     if not isinstance(state, Mapping):
         return False
     contexts = state.get("fresh_context_evidence")
@@ -537,7 +616,7 @@ def spectra_examined_in_episode(state: Any) -> bool:
     if (isinstance(harmonic, Mapping) and str(harmonic.get("state_id") or "") == str(state.get("active_state_id") or "")
             and harmonic.get("request_attempted") is True):
         return True
-    return any(str(item).startswith(f"{GET_HARMONIC_CONTEXT}:") for item in state.get("tried_action_signatures") or [])
+    return requested_on_earlier_state(state, GET_HARMONIC_CONTEXT)
 
 
 def current_suspicion(state: Any, family: str) -> bool:

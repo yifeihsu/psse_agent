@@ -12,6 +12,7 @@ from .actions import (
     ANOMALY_FAMILY_MARKERS,
     WAVEFORM_ANOMALY_FAMILIES,
     ASK_FOR_MORE_EVIDENCE,
+    DIAGNOSABLE_PHASOR_CLASSIFICATIONS,
     DIAGNOSTIC_TOOLS,
     COMMIT_STATE,
     CONTEXT_TOOLS,
@@ -2172,7 +2173,7 @@ class TransactionalPSSEEnv:
                         str(nlm_summary.get("diagnostic_classification") or "")
                         if isinstance(nlm_summary, Mapping) else ""
                     )
-                    if classification in {"hif_suspected", "three_phase_unbalance"}:
+                    if classification in DIAGNOSABLE_PHASOR_CLASSIFICATIONS:
                         missing.append("phasors_name_a_diagnosable_event")
                 spectra_event = bound_observable_metrics(GET_HARMONIC_CONTEXT)
                 if spectra_event is not None and spectra_event[1].get("harmonic_distortion_detected") is True:

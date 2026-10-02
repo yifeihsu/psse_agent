@@ -47,7 +47,10 @@ from psse_env.oracle.recovery_expert import RecoveryExpert
 from psse_env.oracle.termination_expert import TerminationExpert
 from psse_env.oracle.hif_continuation import hif_meter_route_ready, recovery_signatures
 from psse_env.oracle.topology_expert import TopologyExpert
-from psse_env.actions import ESTIMATE_HIF_FROM_PATH, UNEXPLAINED_DISCREPANCY_REQUEST, diagnostic_tool_permitted, phasors_examined
+from psse_env.actions import (
+    DIAGNOSTIC_TOOLS, ESTIMATE_HIF_FROM_PATH, UNEXPLAINED_DISCREPANCY_REQUEST, diagnostic_tool_permitted,
+    phasors_examined, process_gate_refusal, unexplained_handoff_supported,
+)
 from psse_env.oracle.hypothesis_ledger import TOOL_FAMILY, budget_exhausted, hypothesis_ledger, rerank_proposals
 from psse_env.oracle.learned_ranker import LearnedRanker, acquisition_deferral, deferral_evidence_codes, resolve_ranker
 from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary, is_suspicion_gated
@@ -1197,12 +1200,20 @@ class ExpertPolicyOracle:
             ("unresolved_balanced_model_discrepancy_requires_operator_handoff"
              if is_strict_boundary(policy) else "unresolved_anomaly_requires_operator_handoff"),
         ]
-        if is_suspicion_gated(policy) and phasors_examined(policy if isinstance(policy, Mapping) else policy.as_dict()):
-            # Both acquisition tiers answered on this state and the alarm
-            # stands: the honest end of the suspicion-gated ladder.
+        state_view = policy if isinstance(policy, Mapping) else policy.as_dict()
+        if is_suspicion_gated(policy) and unexplained_handoff_supported(state_view):
+            # Both acquisition tiers answered on this state, named no event,
+            # and the alarm stands: the honest end of the suspicion-gated
+            # ladder.
             request = UNEXPLAINED_DISCREPANCY_REQUEST
             evidence = ["observable_recovery_options_exhausted", "phasors_examined_on_state",
                         "unexplained_balanced_discrepancy_requires_operator_handoff"]
+        elif is_suspicion_gated(policy) and phasors_examined(state_view):
+            # The phasors named an event (an HIF whose estimate was accepted,
+            # say) and a residual outlived its explanation, or the spectra
+            # were taken on an ancestor state: the balanced recovery options
+            # are exhausted, the discrepancy is not unexplained.
+            evidence = [*evidence, "phasors_examined_on_state"]
         return [
             ExpertActionProposal(
                 action={
@@ -1525,20 +1536,19 @@ class ExpertPolicyOracle:
                         signatures.add(semantic)
         # A rejected prerequisite is not a performed diagnostic. Permit the
         # same request once WLS/context has established the missing evidence.
+        # Any refusal by the gate counts (a missing precondition, the alarm
+        # or a suspicion gate): no provider ran.
         latest_diagnostic: dict[str, Mapping[str, Any]] = {}
         for item in history:
             action = item.get("action") or item.get("executed_action") or {}
             normalized = safe_normalize_action(action)
-            if normalized["tool"] in {
-                GET_HARMONIC_CONTEXT, RUN_HSE_FROM_PATH,
-                GET_THREE_PHASE_CONTEXT, RUN_THREE_PHASE_NLM_FROM_PATH,
-            }:
+            if normalized["tool"] in DIAGNOSTIC_TOOLS:
                 exact = self._signature(normalized)
                 output = item.get("tool_output") or item.get("outcome") or {}
                 if exact is not None and isinstance(output, Mapping):
                     latest_diagnostic[exact] = output
         for signature, output in latest_diagnostic.items():
-            if output.get("execution_status") == "failure" and output.get("error_code") == "missing_precondition":
+            if output.get("execution_status") == "failure" and process_gate_refusal(output.get("error_code")):
                 signatures.discard(signature)
         # The durable acquisition ledger survives a truncated history window.
         # A premature rejected action appears in tried_action_signatures but
@@ -1546,6 +1556,32 @@ class ExpertPolicyOracle:
         contexts = self._get(policy, "fresh_context_evidence", {}) or {}
         phase_context = contexts.get("three_phase") or {}
         current_context = str(phase_context.get("state_id") or "") == str(active_id)
+        # The spectra follow the same rule: only a dispatched request leaves
+        # a ledger on the active state.  The HSE needs spectra acquired on the
+        # state, so an HSE attempt recorded before the latest spectra request
+        # was refused (or belongs to a retired acquisition) and tested
+        # nothing about the spectra now held.
+        harmonic_context = contexts.get("harmonic") or {}
+        spectra_current = (
+            str(harmonic_context.get("state_id") or "") == str(active_id)
+            and harmonic_context.get("request_attempted") is True
+        )
+        last_on_state: dict[str, int] = {}
+        for position, item in enumerate(self._get(policy, "tried_action_signatures", []) or []):
+            try:
+                tried_tool, tried_encoded = str(item).split(":", 1)
+                tried_arguments = json.loads(tried_encoded)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(tried_arguments, Mapping):
+                continue
+            if str(tried_arguments.get("state_id") or active_id) == str(active_id):
+                last_on_state[tried_tool] = position
+        hse_after_spectra = (
+            RUN_HSE_FROM_PATH in last_on_state
+            and GET_HARMONIC_CONTEXT in last_on_state
+            and last_on_state[RUN_HSE_FROM_PATH] > last_on_state[GET_HARMONIC_CONTEXT]
+        )
         for signature in list(signatures):
             try:
                 tool, encoded = signature.split(":", 1)
@@ -1561,6 +1597,10 @@ class ExpertPolicyOracle:
             if tool == RUN_THREE_PHASE_NLM_FROM_PATH and "three_phase" in contexts and not (
                 current_context and phase_context.get("nlm_attempted") is True
             ):
+                signatures.discard(signature)
+            if tool == GET_HARMONIC_CONTEXT and not spectra_current:
+                signatures.discard(signature)
+            if tool == RUN_HSE_FROM_PATH and not (spectra_current and hse_after_spectra):
                 signatures.discard(signature)
         return signatures - self._untested_recovery_signatures(
             policy, history, signatures, active_id=active_id
