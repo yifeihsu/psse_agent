@@ -46,7 +46,16 @@ def load_research_script(source_root: Path):
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     sys.path.insert(0, str(source_root))
-    spec.loader.exec_module(module)
+    # The script defines dataclasses under ``from __future__ import annotations``;
+    # dataclasses resolves their string annotations through sys.modules, so the
+    # module must be registered before it executes (the 2026-10-01 cell's
+    # stage 0 died here on the ParallelEvaluation dataclass added 2026-09-27).
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
     return module
 
 
