@@ -266,6 +266,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         "hif_search_profile": "research",
         "evidence_profile": args.evidence_profile,
         "scenario_sources": sources,
+        # The suite draw does not depend on the teacher, but the receipt
+        # declares the variant the stage ran under (pipeline.env checks it
+        # before reusing a stage, defaulting absent declarations to baseline).
+        "expert_variant": research.current_expert_variant(),
     }
 
     # Training: the teacher-solvable population at the production threshold.
@@ -367,6 +371,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     source = research.git_source_state(args.source_root.resolve())
     manifest = {
         "contract": "research_full_pipeline_suite_v2",
+        "expert_variant": research.current_expert_variant(),
         "seed": int(args.seed),
         "rounds": int(args.rounds),
         "round_train_plan": round_plan,
