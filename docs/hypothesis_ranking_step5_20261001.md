@@ -266,6 +266,22 @@ commit dbc2f88 and the chain resubmitted on 2026-10-01 at 22:47 UTC: d0
 jobs 18985026 to 18985033, was cancelled while still pending; the first
 attempt's log is kept under `logs/attempt1_failed/`).
 
+**Third attempt, stage 0 (2026-10-02, 01:46 UTC).** The aggregate itself
+completed: 514 roots of the 548 planned admitted, 4,421 raw rows (train
+3,350, validation 621, test 450), `expert_variant: ledger_ranked` in the
+receipt, every teacher label accepted by the audit. The stage then died in
+the suite builder: `build_suite.py` executes `scripts/run_dagger_research.py`
+from a bare module spec, and `dataclasses` resolves the script's string
+annotations through `sys.modules`, so the first dataclass raised
+`'NoneType' object has no attribute '__dict__'`. The dataclass in question
+(`ParallelEvaluation`) was added with the sharded evaluator on 2026-09-27, and
+no suite had been built since. Fixed by registering the module before it
+executes (commit 2a60b68; the cell's self-test and the local loader check
+pass), redeployed, stale dependents cancelled, and the chain resubmitted on
+2026-10-02 at 01:57 UTC with stage 0 skipping the finished aggregate and
+building the suites: d0 18996296, bc0 18996298, r1c 18996299, r1t 18996300,
+r1e 18996301, r2c 18996302, r2t 18996303, r2e 18996304.
+
 The evaluation summaries already report success by basis
 (`summarize.py: success_basis`); under the suspicion-gated admission every
 suite root alarms the WLS, so success conditional on an alarm is the
