@@ -281,6 +281,16 @@ pass), redeployed, stale dependents cancelled, and the chain resubmitted on
 2026-10-02 at 01:57 UTC with stage 0 skipping the finished aggregate and
 building the suites: d0 18996296, bc0 18996298, r1c 18996299, r1t 18996300,
 r1e 18996301, r2c 18996302, r2t 18996303, r2e 18996304.
+Stage 0 of that chain built the suites in 15 minutes (job 18996296,
+development 160 and two training draws of 122). bc0 (18996298) then failed
+two seconds in on this note's own reuse check: `pipeline.env` compares every
+receipt's `expert_variant` with the run's and reads an absent declaration as
+`baseline`, and the suite manifest (copied as `suite.done`) did not declare
+one. Fixed by recording the variant in the manifest (commit 48c5407), the
+existing receipt was amended in place (the draw does not depend on the
+teacher), and the chain resumed at bc0 on 2026-10-02 at 03:03 UTC: bc0
+19002178, r1c 19002180, r1t 19002183, r1e 19002184, r2c 19002185, r2t
+19002186, r2e 19002187.
 
 The evaluation summaries already report success by basis
 (`summarize.py: success_basis`); under the suspicion-gated admission every

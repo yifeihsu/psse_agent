@@ -410,5 +410,7 @@ outstanding. Fixed (D3 holds only under a current phasor suspicion; the
 budget ranks a family last instead of dropping it, with an open acquisition
 tier taken first) and resubmitted from dbc2f88 as jobs 18987065 to 18987076.
 That stage 0 completed the aggregate (514 roots) and died in the suite
-builder's module loader (fixed in 2a60b68); the chain continues as jobs
-18996296 to 18996304. See the step 5 note.
+builder's module loader (fixed in 2a60b68); the suites were built by job
+18996296, bc0 then tripped the suite receipt's missing variant declaration
+(fixed in 48c5407), and the chain resumed at bc0 as jobs 19002178 to
+19002187. See the step 5 note.
