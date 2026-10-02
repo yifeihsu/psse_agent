@@ -291,6 +291,15 @@ existing receipt was amended in place (the draw does not depend on the
 teacher), and the chain resumed at bc0 on 2026-10-02 at 03:03 UTC: bc0
 19002178, r1c 19002180, r1t 19002183, r1e 19002184, r2c 19002185, r2t
 19002186, r2e 19002187.
+BC0 (19002178) trained 838 steps on the 3,350-row train view in about 5
+hours of GPU time across two nodes (one preemption at step 155, resumed from
+its checkpoint), best evaluation loss 0.0019. Round 1 collection then failed
+at start on the same reuse check, this time on the BC0 receipt, which did not
+declare the variant either. Fixed in the BC0 receipt writers (commit
+46210dc), the existing receipt amended in place, and the chain resumed at
+r1c on 2026-10-02 at 09:21 UTC: r1c 19022934, r1t 19022935, r1e 19022936,
+r2c 19022937, r2t 19022938, r2e 19022939. Every receipt the chain reuses
+(`d0.done`, `suite.done`, `bc0.done`) now declares its variant.
 
 The evaluation summaries already report success by basis
 (`summarize.py: success_basis`); under the suspicion-gated admission every

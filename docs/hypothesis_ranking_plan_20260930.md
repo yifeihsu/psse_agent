@@ -412,5 +412,6 @@ tier taken first) and resubmitted from dbc2f88 as jobs 18987065 to 18987076.
 That stage 0 completed the aggregate (514 roots) and died in the suite
 builder's module loader (fixed in 2a60b68); the suites were built by job
 18996296, bc0 then tripped the suite receipt's missing variant declaration
-(fixed in 48c5407), and the chain resumed at bc0 as jobs 19002178 to
-19002187. See the step 5 note.
+(fixed in 48c5407), BC0 trained (838 steps, eval loss 0.0019), the BC0
+receipt tripped the same check (fixed in 46210dc), and the chain resumed at
+r1c as jobs 19022934 to 19022939. See the step 5 note.
