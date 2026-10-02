@@ -377,6 +377,38 @@ the first six steps) and the audit refused no label.
 Commit a76f704, deployed at 17:33 UTC; the chain resumed at r2c at 17:34 UTC:
 r2c 19052385, r2t 19052386, r2e 19052388.
 
+**Round 2 result (2026-10-02, 22:48 UTC).** r2c completed the 122 roots in
+57 minutes with no refused label (R1 disagreed with the teacher on 2.8% of
+actions; BC0 on 5.2% in round 1), r2t trained R2 for 285 steps on 1,140
+mixture rows (2.5 h), and r2e evaluated R2 against R1 on the 160
+development roots:
+
+| Development roots (160) | R1 | R2 |
+|---|---|---|
+| Successes | 158 | 156 |
+| False-commit episodes | 1 | 3 |
+| Invalid-action episodes | 5 | 5 |
+| Loop episodes | 2 | 3 |
+
+R2 gains the topology root R1 missed (r0_c241c40e5dec) and still misses the
+misranked parameter root (r0_4d7aa8a5a01f, missed by every student). It loses
+three roots, all at one decision: what follows balanced phasors on a
+voltage-meter suspicion. On harmonic root r0_061f4092fc9f the teacher itself
+tests the screen's bus-9 voltage-meter hypothesis twice (two rollbacks)
+before the spectra; R2 copies the meter edits, commits one, and loops on
+edits until the budget ends. On harmonic root r0_363c8dc4a376 (the teacher
+reads the balanced contexts before and after the phasors) R2 asks for
+spectra before the phasors and is stopped as a loop. On the true bad
+voltage-meter root r0_eb9d41e179c0 R2 requests the phasors a second time and
+loops. R1 solved all three, twice by taking the spectra before the meter
+edit. The teacher is inconsistent exactly there: on a voltage-meter
+suspicion with balanced phasors it edits the meter when the screen explained
+the alarm and asks for spectra when it did not, and the balanced evidence
+cannot tell the two cases apart. The suggested fix (spectra before a
+voltage-meter edit whenever the phasors came back balanced) makes that label
+consistent; it is the next teacher change. For comparison, the leaky
+2026-09-24 cell reached R2 157 of its own draw.
+
 The evaluation summaries already report success by basis
 (`summarize.py: success_basis`); under the suspicion-gated admission every
 fault root of the suite alarms the WLS (the 16 healthy control roots do

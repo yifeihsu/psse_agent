@@ -425,3 +425,7 @@ calls hiding the expert's own rung (fixed: a refusal tests nothing, the
 estimator rung is judged on the localized line, an acquisition on the active
 state counts through its ledger). Expert labels on every stage-0, round-1,
 round-2 and development path are unchanged. Fixed in a76f704 and resumed at r2c as jobs 19052385 to 19052388.
+Round 2 completed on 2026-10-02: R2 156 of 160 against R1 158. The three new
+misses all follow balanced phasors on a voltage-meter suspicion, where the
+teacher edits the meter on some roots and asks for spectra on others; the
+next teacher asks for spectra first.
