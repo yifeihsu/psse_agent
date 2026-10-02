@@ -415,3 +415,13 @@ builder's module loader (fixed in 2a60b68); the suites were built by job
 (fixed in 48c5407), BC0 trained (838 steps, eval loss 0.0019), the BC0
 receipt tripped the same check (fixed in 46210dc), and the chain resumed at
 r1c as jobs 19022934 to 19022939. See the step 5 note.
+
+Round 1 under the honest contract: expert 160, BC0 152, R1 158 of the 160
+development roots. Round-2 collection then stopped on a pure HIF root whose
+residual outlived the accepted estimate: the expert's unexplained-discrepancy
+handoff ignored that the phasors had named the event (fixed: the request
+mirrors the audit). An off-path probe found refused and off-target diagnostic
+calls hiding the expert's own rung (fixed: a refusal tests nothing, the
+estimator rung is judged on the localized line, an acquisition on the active
+state counts through its ledger). Expert labels on every stage-0, round-1,
+round-2 and development path are unchanged. Fixed in a76f704 and resumed at r2c as jobs 19052385 to 19052388.

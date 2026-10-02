@@ -301,9 +301,87 @@ r1c on 2026-10-02 at 09:21 UTC: r1c 19022934, r1t 19022935, r1e 19022936,
 r2c 19022937, r2t 19022938, r2e 19022939. Every receipt the chain reuses
 (`d0.done`, `suite.done`, `bc0.done`) now declares its variant.
 
+**Round 1 (2026-10-02, 14:40 UTC).** r1c (19022934) collected the 122
+round-1 roots (label yield 0.88, 1,112 mixture rows), r1t (19022935) trained
+R1 in 8,732 s, and r1e (19022936, preempted once with 397 of 480 episodes
+checkpointed) evaluated the 160 development roots under the suspicion-gated
+contract:
+
+| Development roots (160) | Expert | BC0 | R1 |
+|---|---|---|---|
+| Successes | 160 | 152 | 158 |
+| False-commit episodes | 0 | 2 | 1 |
+| Invalid-action episodes | 0 | 13 | 5 |
+| Loop episodes | 1 | 9 | 2 |
+
+Every success is terminal on the counterfactual-resolution basis. R1 misses
+one parameter root (r0_4d7aa8a5a01f, which BC0 misses too) and one topology
+root (r0_c241c40e5dec). The leaky 2026-09-24 cell (baseline teacher,
+wls_gated contract, another draw) reached expert 158, BC0 156, R1 157.
+
+**Round 2 collection failure and fixes (2026-10-02).** r2c (19022937)
+completed 17 of the 122 roots and stopped at 15:17 UTC on root
+r0_8fc3ca1bdd66, a pure HIF on which the expert's own path is refused: the
+phasors named the HIF (branch row 5, phase C), the single-scan estimate was
+accepted (259 ohm at 52 % of line 3-4), the HIF-conditioned WLS still
+flagged one to-end active-power residual (channel 93), the measurement
+context offered no correction, and the expert asked for an
+unexplained-discrepancy handoff. The step 1 rule (cc3e77d) chose that request
+whenever phasors had been examined on the state; the audit accepts it only
+when the phasors named no event and spectra were taken on the same state
+(`phasors_name_a_diagnosable_event`,
+`get_harmonic_context_successful_evidence_missing`).
+`unexplained_handoff_supported` now mirrors the audit, and otherwise the
+handoff is `recovery_options_exhausted`, the request the expert used before
+step 1, which the audit accepts.
+
+An off-path probe then looked for the same kind of failure off the expert's
+path: a scripted learner follows the expert except for one diagnostic call or
+handoff at one step, and the real collector audits every label. It found
+three ways a learner's call hid the expert's own rung, two of them
+collection-stopping:
+
+- an HSE requested before any spectra was refused by the suspicion gate but
+  counted as done, so after the spectra the expert handed off without an HSE
+  and the audit refused the label (35 of the first 1,404 probe episodes, all
+  on harmonic roots);
+- an HIF estimate on a line the phasor test did not rank retired the
+  estimator rung, so the expert declared the HIF diagnostics exhausted on that
+  line and the audit refused the label;
+- a spectra request refused before the phasors counted as spectra examined,
+  so the expert never asked again and walked the balanced routes on a
+  harmonic root (labels the audit accepts, but wrong).
+
+The fixes: a gate refusal never completes a rung or enters the expert's seen
+set (`process_gate_refusal`); the estimator rung is judged on the localized
+line; on the active state an acquisition counts only through its ledger
+(`requested_on_earlier_state` reads ancestors), an HSE counts only after the
+latest spectra request, and the harmonic rung reads the spectra request from
+the ledger once the four-step history window has dropped it. The D3 hold
+reads the same phasor helper, so a refused phasor request no longer releases
+a voltage-meter edit.
+
+Verification: on the expert's own path every stage-0 scenario (548) and
+every round-1 (122), round-2 (122) and development (160) root passes the
+label audit with an unchanged action sequence, except the failing root,
+which now ends in the accepted handoff; the 105 rows of the 17 completed
+round-2 rollouts relabel identically, so they are kept; new unit tests
+(`psse_env/oracle/test_unexplained_handoff.py`,
+`psse_env/oracle/test_refused_diagnostics.py`; four routing fixtures now record
+the estimator's line, as every recorded estimate does); full regression on
+a76f704: 2,777 passed, 2 skipped, 657 subtests; the probe rerun on the final
+code ran 4,203 single-deviation episodes on the 64 round-2 HIF, meter+HIF,
+unbalance, harmonic, single-meter and multi-meter roots (one phasor,
+phasor-test, HIF-estimate, spectra, HSE, handoff or finalize call at each of
+the first six steps) and the audit refused no label.
+Commit a76f704, deployed at 17:33 UTC; the chain resumed at r2c at 17:34 UTC:
+r2c 19052385, r2t 19052386, r2e 19052388.
+
 The evaluation summaries already report success by basis
 (`summarize.py: success_basis`); under the suspicion-gated admission every
-suite root alarms the WLS, so success conditional on an alarm is the
+fault root of the suite alarms the WLS (the 16 healthy control roots do
+not, and the screen never runs on them), so success conditional on an
+alarm is the
 full-pipeline number for this cell. The student does not see the ranker's
 probability: the deferral is a function of the observation it does see, and
 whether the student learns it is part of what arm 4 measures.
