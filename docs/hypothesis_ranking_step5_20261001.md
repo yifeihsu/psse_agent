@@ -400,8 +400,8 @@ edits until the budget ends. On harmonic root r0_363c8dc4a376 (the teacher
 reads the balanced contexts before and after the phasors) R2 asks for
 spectra before the phasors and is stopped as a loop. On the true bad
 voltage-meter root r0_eb9d41e179c0 R2 requests the phasors a second time and
-loops. R1 solved all three, twice by taking the spectra before the meter
-edit. The teacher is inconsistent exactly there: on a voltage-meter
+loops. R1 solved all three by asking for the spectra right after the
+balanced phasors. The teacher is inconsistent exactly there: on a voltage-meter
 suspicion with balanced phasors it edits the meter when the screen explained
 the alarm and asks for spectra when it did not, and the balanced evidence
 cannot tell the two cases apart. The suggested fix (spectra before a
