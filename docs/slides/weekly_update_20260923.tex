@@ -1,0 +1,397 @@
+% Weekly update, 23 September 2026.
+% Design follows docs/slides/weekly_update.tex: default Beamer, 4:3,
+% Latin Modern, blue titles/bullets, white background and original navigation.
+% Build: pdflatex -interaction=nonstopmode -halt-on-error weekly_update_20260923.tex
+\documentclass{beamer}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\definecolor{codebg}{RGB}{247,247,247}
+\definecolor{codeborder}{RGB}{220,220,220}
+\lstdefinestyle{json}{basicstyle=\ttfamily\small,backgroundcolor=\color{codebg},
+  frame=single,rulecolor=\color{codeborder},breaklines=true,showstringspaces=false}
+\newcommand{\src}[1]{\par\vfill\begin{minipage}{0.67\textwidth}\tiny\color{gray}Source: #1.\end{minipage}\par}
+\newcommand{\scope}[1]{{\small\textit{#1}}\par\vspace{0.5em}}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\renewcommand{\tabularxcolumn}[1]{>{\raggedright\arraybackslash}p{#1}}
+\pdfstringdefDisableCommands{\def\translate#1{#1}}
+\setlength{\tabcolsep}{5pt}
+
+\title{LLM-based Power-System Agent\\Weekly Update}
+\subtitle{Fault Corpora, DAgger R2\\and HIF-Conditioned Meter Repair}
+\author{Project Team}
+\date{September 23, 2026}
+
+\begin{document}
+\frame{\titlepage}
+
+% 2
+\begin{frame}{This Week's Changes}
+  \begin{itemize}
+    \setlength\itemsep{0.7em}
+    \item \textbf{Corpora:} aligned sensor noise and covariance; introduced physical HIF resistance and consistent network references.
+    \item \textbf{Completed DAgger round:} R2 achieved \textbf{141/160}, compared with R1's \textbf{140/160} on the same development roots.
+    \item \textbf{Revised runtime and audit:} the unchanged R2 checkpoint reached \textbf{157/160 correct final states}, of which \textbf{153 terminated successfully}.
+    \item \textbf{Current protocol:} SCADA-only discovery is implemented. The new physical corpora and this restricted protocol do not yet have a trained-model score.
+  \end{itemize}
+  \src{S1, S3--S5, S7. Completed scores use the September 21--22 auxiliary-assisted experiment}
+\end{frame}
+
+% 3
+\begin{frame}{Noise, WLS and Audit Consistency}
+  \begin{itemize}
+    \item Draw noise with the covariance supplied to WLS:
+      \[\sigma_V=0.001\ \mathrm{pu},\qquad \sigma_{P,Q}=0.01\ \mathrm{pu},\qquad
+        \epsilon\sim\mathcal N(0,R).\]
+    \item Detect an anomaly if either test triggers:
+      \[J=e^\mathsf{T}R^{-1}e\geq\chi^2_{\nu,0.99}
+        \quad\text{or}\quad \max_i |r_i^N|\geq4.\]
+    \item A healthy control keeps its \textbf{original noisy acquisition}; the audit no longer requires removal of ordinary sensor noise.
+    \item Mixed HIF/meter recovery is checked against the \textbf{HIF-present acquisition}, restoring only the gross-error targets.
+  \end{itemize}
+  \small Healthy non-target readings must remain unchanged. All processes use a \textbf{40-action} episode limit.
+  \src{S2, S6, S8. Sensor-level sigmas; topology projections propagate covariance. Overall dual-alarm calibration is separate}
+\end{frame}
+
+% 4
+\begin{frame}{Fault Injection Settings}
+  \small
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabularx}{\textwidth}{L{2.55cm}X}
+    \toprule
+    Family & Main experimental setting \\
+    \midrule
+    Measurement & Gross offsets $\geq10\sigma$ in current DAgger. Multiple-meter cases have 2--5 targets. \\
+    Parameter & One line, R/X/RX. Physical/reported factor in $[0.1,0.5]$ or $[2,5]$. \\
+    Topology & Binary breaker-status error and circuit re-solve; require observable impact. \\
+    HIF & Phase-to-ground resistor, 100--1000 $\Omega$ on 69-kV lines; 10 scans. \\
+    Unbalance & Dirichlet$(3,3,3)$ phase allocation, preserving total P/Q; achieved severity is measured by VUF. \\
+    Harmonic & Source-bus voltage THD 10--20\%; orders 5, 7, 11, 13, 17 and 19. \\
+    \bottomrule
+  \end{tabularx}
+  \par\vspace{0.6em}
+  \small Mixed meter+parameter/topology/HIF cases add one power-channel offset of signed 0.10--0.30 pu.
+  \src{S2, S8. Main training settings; lower-severity sensitivity populations are separate}
+\end{frame}
+
+% 5
+\begin{frame}{HIF Resistance on Physical Voltage Bases}
+  \[Z_{\rm base}=\frac{V_{\rm LL,base}^2}{S_{\rm 3\phi,base}},\qquad
+    R_{f,\rm pu}=\frac{R_{f,\Omega}}{Z_{\rm base}},\qquad S_{\rm base}=100\ \mathrm{MVA}.\]
+  \begin{center}
+    \begin{tabular}{lrrr}
+      \toprule
+      Model voltage & $Z_{\rm base}$ ($\Omega$) & 100 $\Omega$ (pu) & 500 $\Omega$ (pu) \\
+      \midrule
+      69 kV & 47.61 & 2.10 & 10.50 \\
+      13.8 kV & 1.9044 & 52.51 & 262.55 \\
+      18 kV & 3.24 & 30.86 & 154.32 \\
+      138 kV & 190.44 & 0.53 & 2.63 \\
+      \bottomrule
+    \end{tabular}
+  \end{center}
+  \begin{itemize}
+    \item IEEE-14 realization: buses 1--5 at 69 kV, bus 8 at 18 kV, remaining buses at 13.8 kV.
+    \item Main HIF corpus: seven 69-kV lines; phases A/B/C; fault position 0.25--0.75 of line length.
+    \item IEEE-57 uses a declared 138/69-kV reconstruction. The DAgger results in this deck are \textbf{IEEE-14}.
+  \end{itemize}
+  \src{S1, S10. Main DAgger DSS uses a 1-kV equivalent with explicit local-pu/ohm conversion; no arcing model}
+\end{frame}
+
+% 6
+\begin{frame}{Physical Corrections to the Corpora}
+  \begin{itemize}
+    \setlength\itemsep{0.55em}
+    \item \textbf{Network convention:} align OpenDSS exports with the balanced WLS \texttt{ybus} shunt convention and local voltage/current bases.
+    \item \textbf{Reference state:} replace the OPF reference used as physical truth with a paired OpenDSS solve at the same operating point and dispatch.
+    \item \textbf{September 23 generator fix:} restore declared reactive limits after generator kW writes. Previously, synchronous condensers lost reactive capability and created a fault-family cue.
+    \item Regenerate six HIF corpora with the same recipes and seeds. The completed audited pool increased from \textbf{118 to 131} detectable windows.
+  \end{itemize}
+  \small The completed ``20260923b'' rebuild also aligns both generators at a $10^{-8}$ solve tolerance. Earlier DAgger scores retain their original physical model.
+  \src{S1. New HIF/unbalance corpora and detection audits completed; five legacy NLM top-1 misses remain}
+\end{frame}
+
+% 7
+\begin{frame}{WLS Admission and Detection Limits}
+  \small
+  Admission margin: $J>1.25\tau_{\chi^2}$ or $\max_i|r_i^N|\geq5$.
+  \begin{center}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{lrrr}
+      \toprule
+      HIF source & Windows & Prior admitted & New admitted \\
+      \midrule
+      Main training & 84 & 25 & 27 \\
+      Main validation & 21 & 7 & 8 \\
+      Additional training & 252 & 69 & 77 \\
+      Additional validation & 63 & 17 & 19 \\
+      \midrule
+      Total & 420 & 118 & \textbf{131} \\
+      \bottomrule
+    \end{tabular}
+  \end{center}
+  \begin{itemize}
+    \item New admitted HIF bands: \textbf{113} at 100--200 $\Omega$, \textbf{18} at 200--500 $\Omega$, \textbf{0} at 500--1000 $\Omega$.
+    \item Unbalance: 160/440 admitted; 0/60 healthy-control alarms at the admission margin (September 23b audit).
+    \item Weak HIFs remain in evaluation. Three of the 131 admitted HIF windows also alarm in paired healthy data.
+  \end{itemize}
+  \src{S1. New HIF counts use September 23 physics; completed DAgger used the prior 118-window pool}
+\end{frame}
+
+% 8
+\begin{frame}{Completed DAgger Training Run}
+  \scope{Gemma 4 12B; September 21--22 auxiliary-assisted run}
+  \begin{itemize}
+    \setlength\itemsep{0.55em}
+    \item Initial expert aggregate: \textbf{5,021 rows from 506 roots}; BC0 trained on \textbf{3,784 rows}.
+    \item R2 collection: \textbf{122 episodes}, 1,099 visited states and \textbf{660 eligible learner-state labels}.
+    \item R2 mixture: \textbf{660 replay + 660 new rows}; \textbf{330 training steps} completed.
+    \item Evaluation: the same \textbf{160 development roots}, fixed seed 20260912 and a \textbf{40-action} limit.
+    \item HIF fit: $7\times9$ search, up to 10 scans. Policy generation: 32,768 input / 256 output tokens.
+  \end{itemize}
+  \small HIF was \textbf{flagged} in this run. Filtering its inputs for WLS detectability did not remove the initial HIF hint or auxiliary telemetry.
+  \src{S3, S8. Rows, visited states and physical roots are different units}
+\end{frame}
+
+% 9
+\begin{frame}{Original DAgger Results}
+  \scope{Same 160 roots and original runtime/audit}
+  \begin{center}
+    \renewcommand{\arraystretch}{1.25}
+    \begin{tabular}{lrr}
+      \toprule
+      Policy & Truth-audited success & Rate \\
+      \midrule
+      BC0 & 132/160 & 82.50\% \\
+      R1 & 140/160 & 87.50\% \\
+      R2 & \textbf{141/160} & \textbf{88.125\%} \\
+      Expert & 142/160 & 88.75\% \\
+      \bottomrule
+    \end{tabular}
+  \end{center}
+  \begin{itemize}
+    \item R1 $\rightarrow$ R2: two gains and one regression; net \textbf{+1 root / +0.625 percentage points}.
+    \item Gains: one multi-meter case and one parameter case. Regression: one mixed meter/parameter case.
+    \item R2's 141 successes comprise 56 resolved outcomes and 85 truth-correct handoffs. Waveform diagnosis does not remove the physical disturbance.
+  \end{itemize}
+  \src{S3. Development evaluation, not a new independent test set}
+\end{frame}
+
+% 10
+\begin{frame}{Reevaluation with the Revised Code}
+  \scope{Unchanged R2 weights, roots, noise, thresholds and action budget}
+  \small
+  \begin{center}
+    \renewcommand{\arraystretch}{1.3}
+    \begin{tabular}{lrrr}
+      \toprule
+      & Original & Revised & Change \\
+      \midrule
+      Expert: audit-correct & 142/160 & \textbf{158/160} & +16 \\
+      R2: audit-correct & 141/160 & \textbf{157/160} & +16 \\
+      R2: correct \emph{and terminal} & 141/160 & \textbf{153/160} & +12 \\
+      \bottomrule
+    \end{tabular}
+  \end{center}
+  \begin{itemize}
+    \setlength\itemsep{0.5em}
+    \item \textbf{Eight healthy controls:} corrected audit reference; their noisy measurements were already preserved.
+    \item \textbf{Eight mixed HIF cases:} actual meter repairs became possible after conditioning on the HIF estimate.
+    \item Four repaired R2 cases did not complete a valid handoff. All 158 expert successes terminated.
+  \end{itemize}
+  \vspace{0.3em}
+  \textbf{The +16 reflects runtime/audit changes, not another round of model training.}
+  \src{S4, S5. Auxiliary-assisted results on the frozen September 21 inputs}
+\end{frame}
+
+% 11
+\begin{frame}{Masking the HIF Contribution}
+  \scope{Implemented and evaluated with auxiliary phase/current evidence}
+  Estimate the HIF and simulate the same operating point with and without it:
+  \[\widehat{\Delta z}_{\rm HIF}
+    =\widehat z_{\rm HIF\ present}-\widehat z_{\rm HIF\ absent}.\]
+  Then run balanced WLS on a temporary conditioned vector:
+  \[\boxed{z_{\rm conditioned}=z_{\rm observed}-\widehat{\Delta z}_{\rm HIF}}.\]
+  \begin{itemize}
+    \item Retain every channel and the original covariance $R$.
+    \item Preserve raw observations; do not zero residuals or delete affected meters.
+    \item A coexisting meter error remains in the conditioned vector, including on a channel affected by HIF.
+  \end{itemize}
+  \small The current SCADA scan is excluded from HIF fitting. $R$ does not include HIF-fit uncertainty; conditional chi-square calibration remains unestablished.
+  \src{S6. The physical HIF remains on the network}
+\end{frame}
+
+% 12
+\begin{frame}{Continuing into Meter Repair}
+  \begin{enumerate}
+    \setlength\itemsep{0.35em}
+    \item Localize and fit HIF from the auxiliary measurements and other scans.
+    \item Run conditioned WLS on the current acquisition.
+    \item Obtain meter context; require a sparse discrepancy exceeding \textbf{5 measurement sigmas} outside the sampled prediction range.
+    \item Replace supported targets with their \textbf{HIF-present prediction}; preserve every other reading.
+    \item Verify the candidate, commit only a supported repair, then hand off for the remaining physical fault.
+  \end{enumerate}
+  \vspace{0.6em}
+  \small
+  \textbf{Guards:} prediction-range width $\leq2\sigma$; fresh acquisition/model binding; no thermal or topology violation. A changed voltage-limit violation cannot use the partial-repair exception.
+  \src{S6. The sampled sensitivity range is not a statistical confidence interval}
+\end{frame}
+
+% 13
+\begin{frame}{HIF-Conditioned Repair Verification}
+  \scope{September 22 expert replays on eight frozen physical roots}
+  \small
+  \begin{center}
+    \renewcommand{\arraystretch}{1.25}
+    \begin{tabularx}{\textwidth}{Xr}
+      \toprule
+      Test & Result \\
+      \midrule
+      Original HIF + meter: repair and handoff & \textbf{8/8} \\
+      Added $10\sigma$ error on strongest HIF channel: detected & 8/8 \\
+      Added-overlap cases: committed and audit-correct & \textbf{6/8} \\
+      Paired HIF-only controls: diagnosis, no meter writes & 8/8 \\
+      Non-target writes across the 24 episodes & \textbf{0} \\
+      \bottomrule
+    \end{tabularx}
+  \end{center}
+  On the original mixed roots, \textbf{conditioned} statistics changed as follows:
+  \[J:\ 246.1\text{--}847.7\ \longrightarrow\ 77.2\text{--}114.1,\qquad \tau_J=130.0\]
+  \[\max|r^N|:\ 12.24\text{--}27.46\ \longrightarrow\ 2.24\text{--}2.94.\]
+  \small Two overlap stress cases changed voltage readings that still violated limits; both were rolled back and retained as failures.
+  \src{S6. Paired variants share eight roots; these are not 24 independent physical events}
+\end{frame}
+
+\begin{frame}{Example: HIF and Meter Error Overlap}
+  \scope{September 22 auxiliary-assisted replay; frozen pre-fix physics}
+  \small At bus 1's active-power injection meter ($\sigma=0.01$ pu):
+  \begin{center}
+    \renewcommand{\arraystretch}{1.2}
+    \begin{tabular}{lr}
+      \toprule
+      Quantity & pu \\
+      \midrule
+      Predicted HIF-absent value & 1.948320 \\
+      Predicted HIF-present value & 2.100483 \\
+      Estimated HIF contribution & $+0.152163$ \\
+      Added meter error & $-0.100000$ \\
+      Observed corrupted value & 1.998634 \\
+      Conditioned value & 1.846471 \\
+      \bottomrule
+    \end{tabular}
+  \end{center}
+  \[1.998634-0.152163=1.846471\ \mathrm{pu}.\]
+  The meter bias survives compensation. Repair restores the raw target to \textbf{2.100483 pu}, preserving the HIF contribution.
+  \[J_{\rm conditioned}:\ 639.45\ \longrightarrow\ 78.47.\]
+  \src{S6, controlled-overlap root 5fb25759717c. Both faulty meters repaired; no other readings changed}
+\end{frame}
+
+% 14
+\begin{frame}{Remaining R2 Failures}
+  \scope{Revised auxiliary-assisted evaluation; unchanged checkpoint}
+  \begin{itemize}
+    \setlength\itemsep{0.6em}
+    \item \textbf{Four correct but nonterminal states:} HIF meter repairs committed, followed by unsupported handoff request strings. Repetition stopped the episodes after 16--18 actions.
+    \item \textbf{Three wrong final states:} one remaining multi-meter error, one wrong parameter branch, and one mixed case with wrong-branch and healthy-meter edits.
+  \end{itemize}
+  \small
+  \begin{center}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{lrr}
+      \toprule
+      Behavioral counter & Original R2 & Revised R2 \\
+      \midrule
+      Invalid actions & 21 & 65 \\
+      Episodes with a loop & 2 & 6 \\
+      Rejected commit attempts & 15 & 15 \\
+      False-finalization counter & 16 & 26 \\
+      \bottomrule
+    \end{tabular}
+  \end{center}
+  Original 16 finalizations completed but failed the audit. Revised 26 were rejected without mutation. Accepted wrong edits are audited separately.
+  \src{S3, S4. Repair accuracy improved while protocol reliability remained a limitation}
+\end{frame}
+
+% 15
+\begin{frame}{Current SCADA-Only Discovery Protocol}
+  \begin{itemize}
+    \setlength\itemsep{0.65em}
+    \item Every episode starts with \textbf{balanced WLS}; no seeded HIF, unbalance or harmonic flag.
+    \item Agent inputs: network model, SCADA readings, covariance and permitted SCADA history. Auxiliary phase/current and harmonic tools are blocked.
+    \item The existing HIF fit and compensation depend on auxiliary evidence and are \textbf{disabled} in this profile.
+    \item The eight frozen mixed roots still triggered both WLS alarms in the initial check, with identical actions after hidden labels and auxiliary data were changed.
+  \end{itemize}
+  \vspace{0.5em}
+  \textbf{Full SCADA-only HIF identification and repair performance is not yet measured.} Earlier scores cannot be transferred to this evidence setting.
+  \src{S7. Initial-alarm check on September 22 frozen inputs; no new training or full evaluation}
+\end{frame}
+
+% 16
+\begin{frame}{Next Experiments}
+  \begin{enumerate}
+    \setlength\itemsep{0.9em}
+    \item \textbf{Freeze the rebuilt experiment.} Bind the completed HIF/unbalance corpora to their source, model and detector settings before collecting new trajectories.
+    \item \textbf{Collect SCADA-only expert traces.} Keep weak and unresolved cases in evaluation; exclude unsupported teacher actions from training.
+    \item \textbf{Measure the new baseline.} Evaluate expert and frozen R2 on matched inputs before attributing gains to retraining.
+    \item \textbf{Develop SCADA-only HIF conditioning.} Test identifiable HIF hypotheses against competing meter errors, then validate overlap and model-uncertainty limits.
+  \end{enumerate}
+  \src{S1, S7. Planned work; the completed results in this deck use earlier frozen configurations}
+\end{frame}
+
+\appendix
+% 17
+\begin{frame}{Appendix: Success by Fault Family}
+  \footnotesize
+  \renewcommand{\arraystretch}{1.08}
+  \begin{tabularx}{\textwidth}{Xrrrrr}
+    \toprule
+    Family & $N$ & R1 & R2 & Revised R2 & Rev. expert \\
+    \midrule
+    Measurement & 16 & 16 & 16 & 16 & 16 \\
+    Multiple measurements & 12 & 10 & 11 & 11 & 12 \\
+    Parameter & 16 & 14 & 15 & 15 & 14 \\
+    Measurement + parameter & 16 & 16 & 15 & 15 & 16 \\
+    Topology & 16 & 16 & 16 & 16 & 16 \\
+    Measurement + topology & 12 & 12 & 12 & 12 & 12 \\
+    HIF & 16 & 16 & 16 & 16 & 16 \\
+    Measurement + HIF & 8 & 0 & 0 & 8 & 8 \\
+    Unbalance & 16 & 16 & 16 & 16 & 16 \\
+    Harmonic & 16 & 16 & 16 & 16 & 16 \\
+    No-error controls & 8 & 8 & 8 & 8 & 8 \\
+    Healthy telemetry controls & 8 & 0 & 0 & 8 & 8 \\
+    \midrule
+    Total & 160 & 140 & 141 & 157 & 158 \\
+    \bottomrule
+  \end{tabularx}
+  \par\vspace{0.5em}
+  \small Revised R2's mixed-HIF row contains four nonterminal states. Its correct-and-terminal total is \textbf{153/160}.
+  \src{S3--S5. Final-state truth audit on the same 160 roots; auxiliary-assisted configurations}
+\end{frame}
+
+% 18
+\begin{frame}{Appendix: Interpretation and Sources}
+  \small
+  \begin{itemize}
+    \setlength\itemsep{0.55em}
+    \item \textbf{Correct final state:} passes the task-specific truth audit; may be nonterminal. \textbf{Correct and terminal:} additionally completes a valid resolution or handoff.
+    \item \textbf{Audited completion:} a stricter stored certificate metric; revised R2 scores 136/160. It is different from 153/160 correct terminal tasks.
+    \item \textbf{Physical removal:} none of these HIF handoffs clears the physical HIF. Diagnostic success and meter repair are separate outcomes.
+    \item \textbf{Scope:} synthetic resistive HIFs, selected detectable roots, repeated development evaluation, and a new physical-model revision awaiting a matched evaluation.
+  \end{itemize}
+  \vspace{0.5em}
+  \footnotesize
+  S1: physical-corpus revision and audits. S2: injection generators.\\
+  S3: original R2 report. S4/S5: revised R2/expert reports.\\
+  S6: HIF continuation method and 24-episode replay.\\
+  S7: SCADA-only protocol. S8: pipeline/training receipts.\\
+  S10: IEEE-14/57 voltage-base conventions.\\[0.4em]
+  Exact paths, hashes, slide mappings and presenter notes are included with the LaTeX source.
+\end{frame}
+\end{document}
