@@ -267,9 +267,11 @@ def evaluate_llm(name: str, groups: Mapping[str, Sequence[Mapping[str, Any]]], p
     def decision(row: Mapping[str, Any]) -> str:
         return str((decisions.get(str(row["id"])) or {}).get("decision") or "missing")
 
-    test, probe = groups["test"], groups["probe"]
+    test = groups["test"]
+    # Every test row must be scored (a missing one counts as no request); the probe is read on the scored subset.
+    probe = [row for row in groups["probe"] if str(row["id"]) in decisions]
     seconds = [float(item["seconds"]) for item in decisions.values() if item.get("seconds") is not None]
-    result = evaluate_hard(name, groups, [decision(row) == "request" for row in test],
+    result = evaluate_hard(name, {**groups, "probe": probe}, [decision(row) == "request" for row in test],
                            [decision(row) == "request" for row in probe],
                            [decision(row) if decision(row) in data.BALANCED_FAMILIES else None for row in test],
                            float(np.median(seconds)) if seconds else None)
@@ -277,6 +279,7 @@ def evaluate_llm(name: str, groups: Mapping[str, Sequence[Mapping[str, Any]]], p
     for row in list(test) + list(probe):
         counts[decision(row)] = counts.get(decision(row), 0) + 1
     result["decisions"] = counts
+    result["probe_rows_scored"] = len(probe)
     return result
 
 

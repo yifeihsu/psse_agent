@@ -253,3 +253,17 @@ def test_llm_first_actions_enter_the_benchmark_as_hard_decisions(tmp_path):
     assert result["order"]["hit"]["point"] == pytest.approx(0.5)           # m1 right, p1 gave no balanced pick
     assert result["probe"]["meter"]["background_effect"]["point"] == pytest.approx(1.0)
     assert result["decisions"] == {"request": 3, "measurement": 3}
+
+
+def test_llm_scoring_selects_test_rows_then_a_probe_sample():
+    from research.classifier_triage import llm_score
+
+    rows = [{"id": f"r{i}"} for i in range(4)] + [{"id": f"p{i}"} for i in range(6)]
+    labels = [{"id": "r0", "kind": "root", "split": "test", "family": "hif"},
+              {"id": "r1", "kind": "root", "split": "calibration", "family": "hif"},
+              {"id": "r2", "kind": "mimic", "split": "test", "family": "mimic_flow_pair_same_sign"},
+              {"id": "r3", "kind": "healthy", "split": "test", "family": "healthy_window"}]
+    labels += [{"id": f"p{i}", "kind": "probe", "split": "test", "probe_kind": "meter",
+                "family": "probe_meter_opendss" if i < 4 else "probe_meter_opf"} for i in range(6)]
+    chosen = [row["id"] for row in llm_score.select_rows(rows, labels, probe_per_cell=2)]
+    assert chosen == ["r0", "r2", "r3", "p0", "p1", "p4", "p5"]  # no calibration row, two probes per background

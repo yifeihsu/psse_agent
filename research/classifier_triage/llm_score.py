@@ -11,6 +11,10 @@ the profile paragraph so scoring reads the prompt the fine-tune was trained
 on.  The output lists each row's first tool; ``benchmark --llm-scores``
 turns it into the request and first-family studies.  Finished ids are kept,
 so a preempted job resumes.
+
+An LLM's first action is a decision, not a score, so no threshold is fitted
+and the calibration rows are not needed: by default the test rows are scored
+first, then ``--probe-per-cell`` probe rows of each kind and background.
 """
 from __future__ import annotations
 
@@ -79,6 +83,18 @@ def score_rows(rows: Sequence[Mapping[str, Any]], act: Callable[[Mapping[str, An
     return {"rows": done}
 
 
+def select_rows(rows: Sequence[Mapping[str, Any]], labels: Sequence[Mapping[str, Any]], probe_per_cell: int) -> list[Mapping[str, Any]]:
+    """Test rows first, then up to ``probe_per_cell`` probe rows per kind and background (smallest ids)."""
+    label = {str(item["id"]): item for item in labels}
+    test = [row for row in rows if label[str(row["id"])]["kind"] != "probe" and label[str(row["id"])]["split"] == "test"]
+    cells: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for row in sorted((r for r in rows if label[str(r["id"])]["kind"] == "probe"), key=lambda r: str(r["id"])):
+        item = label[str(row["id"])]
+        cells.setdefault((str(item.get("probe_kind")), str(item["family"]).rsplit("_", 1)[-1]), []).append(row)
+    probe = [row for key in sorted(cells) for row in cells[key][:probe_per_cell]]
+    return test + probe
+
+
 def _save(output: Path, done: Mapping[str, Any]) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(".tmp")
@@ -92,10 +108,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--score", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--base-model")
+    parser.add_argument("--labels", help="score_labels.json (default: next to --score)")
+    parser.add_argument("--probe-per-cell", type=int, default=100, help="probe rows per kind and background")
+    parser.add_argument("--all-rows", action="store_true", help="score every row, calibration included")
     parser.add_argument("--limit", type=int)
     args = parser.parse_args(argv)
     with Path(args.score).open(encoding="utf-8") as stream:
         rows = [json.loads(line) for line in stream if line.strip()]
+    if not args.all_rows:
+        labels_path = Path(args.labels) if args.labels else Path(args.score).with_name("score_labels.json")
+        rows = select_rows(rows, json.loads(labels_path.read_text(encoding="utf-8")), args.probe_per_cell)
     if args.limit:
         rows = rows[:args.limit]
 
