@@ -8,6 +8,10 @@
 # the incremental git bundle uploaded through ssh stdin and checksum-verified, the
 # built datasets (output/classifier_triage_20261004/llm/<variant>) uploaded as one
 # compressed stream, then one job per variant.  SUBMIT=0 deploys without submitting.
+#
+# Remote commands that need a remote "$" (command substitution, PATH) go through a
+# heredoc on stdin: wsl hands an inline command to its shell inside double quotes,
+# so "$..." there would expand on the WSL side.
 set -euo pipefail
 COMMIT=${1:?40-hex commit to deploy}
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "commit must be 40 hex" >&2; exit 2; }
@@ -40,20 +44,36 @@ wsl -- ssh torch "set -e; mkdir -p $WORK/logs $WORK/out $WORK/data; if [ ! -d $W
 wsl -- ssh torch "cat > $WORK/deploy_${SHORT}.bundle" < "$BUNDLE_LOCAL"
 SHA_REMOTE=$(wsl -- ssh torch "sha256sum $WORK/deploy_${SHORT}.bundle | cut -d' ' -f1")
 [[ "$SHA_LOCAL" == "$SHA_REMOTE" ]] || { echo "bundle upload corrupted" >&2; exit 2; }
-wsl -- ssh torch "set -e; git -C $WORK/source fetch -q $WORK/deploy_${SHORT}.bundle $BRANCH; git -C $WORK/source checkout -q --detach FETCH_HEAD; test \"\$(git -C $WORK/source rev-parse HEAD)\" = $COMMIT; echo source_at_$SHORT"
+wsl -- ssh torch bash -s <<EOF
+set -e
+git -C $WORK/source fetch -q $WORK/deploy_${SHORT}.bundle $BRANCH
+git -C $WORK/source -c advice.detachedHead=false checkout -q --detach FETCH_HEAD
+test "\$(git -C $WORK/source rev-parse HEAD)" = "$COMMIT"
+echo source_at_$SHORT
+EOF
 
 tar czf - -C "$DATA_LOCAL" "${VARIANTS[@]}" | wsl -- ssh torch "tar xzf - -C $WORK/data"
 for variant in "${VARIANTS[@]}"; do
   LINES_LOCAL=$(wc -l < "$DATA_LOCAL/$variant/train.jsonl")
-  LINES_REMOTE=$(wsl -- ssh torch "wc -l < $WORK/data/$variant/train.jsonl")
+  LINES_REMOTE=$(wsl -- ssh torch bash -s <<EOF
+wc -l < $WORK/data/$variant/train.jsonl
+EOF
+)
   [[ "$LINES_LOCAL" -eq "$LINES_REMOTE" ]] || { echo "dataset upload of $variant is incomplete ($LINES_REMOTE of $LINES_LOCAL)" >&2; exit 2; }
 done
 echo "datasets uploaded: ${VARIANTS[*]}"
 
 if [[ "${SUBMIT:-1}" == "1" ]]; then
   for variant in "${VARIANTS[@]}"; do
-    wsl -- ssh torch "export PATH=/opt/slurm/bin:\$PATH; cd $WORK && sbatch --parsable --export=ALL,VARIANT=$variant --job-name=triage-$variant source/research/hpc/classifier_triage_20261004/llm_triage.sbatch"
+    wsl -- ssh torch bash -s <<EOF
+export PATH=/opt/slurm/bin:\$PATH
+cd $WORK
+sbatch --parsable --export=ALL,VARIANT=$variant --job-name=triage-$variant source/research/hpc/classifier_triage_20261004/llm_triage.sbatch
+EOF
   done
-  wsl -- ssh torch "export PATH=/opt/slurm/bin:\$PATH; squeue -u yx3882 -o '%.10i %.28j %.9T %.10M %.20R'"
+  wsl -- ssh torch bash -s <<EOF
+export PATH=/opt/slurm/bin:\$PATH
+squeue -u yx3882 -o '%.10i %.28j %.9T %.10M %.20R'
+EOF
 fi
 echo "logs: $WORK/logs; results: $WORK/out/<variant>/scores.json"
