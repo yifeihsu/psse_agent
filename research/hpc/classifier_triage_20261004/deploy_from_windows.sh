@@ -7,7 +7,9 @@
 # Steps: a local clone of the ranked cell's source as the work directory's source,
 # the incremental git bundle uploaded through ssh stdin and checksum-verified, the
 # built datasets (output/classifier_triage_20261004/llm/<variant>) uploaded as one
-# compressed stream, then one job per variant.  SUBMIT=0 deploys without submitting.
+# compressed stream, then one job per variant.  SUBMIT=0 deploys without submitting;
+# UPLOAD_DATA=0 keeps the datasets already on the cluster; JOB names the job script
+# (llm_triage.sbatch trains and scores, llm_probabilities.sbatch scores a trained adapter).
 #
 # Remote commands that need a remote "$" (command substitution, PATH) go through a
 # heredoc on stdin: wsl hands an inline command to its shell inside double quotes,
@@ -24,17 +26,21 @@ BASE=${BASE:-a76f704}                       # the commit the ranked cell's sourc
 WORK=${WORK:-/scratch/yx3882/classifier_triage_20261004}
 SOURCE_CELL=${SOURCE_CELL:-/scratch/yx3882/research_full_pipeline_20261001_ranked}
 DATA_LOCAL=${DATA_LOCAL:-output/classifier_triage_20261004/llm}
+JOB=${JOB:-llm_triage.sbatch}
 SHORT=${COMMIT:0:7}
 BUNDLE_LOCAL=output/deploy_triage_${SHORT}.bundle
 export MSYS_NO_PATHCONV=1
 
 cd "$REPO"
 [[ "$(git rev-parse "$BRANCH")" == "$COMMIT" ]] || { echo "$BRANCH is not at $COMMIT" >&2; exit 2; }
-for variant in "${VARIANTS[@]}"; do
-  for name in train.jsonl validation.jsonl score.jsonl score_labels.json; do
-    [[ -s "$DATA_LOCAL/$variant/$name" ]] || { echo "missing $DATA_LOCAL/$variant/$name" >&2; exit 2; }
+[[ -f "research/hpc/classifier_triage_20261004/$JOB" ]] || { echo "no job script $JOB" >&2; exit 2; }
+if [[ "${UPLOAD_DATA:-1}" == "1" ]]; then
+  for variant in "${VARIANTS[@]}"; do
+    for name in train.jsonl validation.jsonl score.jsonl score_labels.json; do
+      [[ -s "$DATA_LOCAL/$variant/$name" ]] || { echo "missing $DATA_LOCAL/$variant/$name" >&2; exit 2; }
+    done
   done
-done
+fi
 git bundle create "$BUNDLE_LOCAL" "$BASE..$BRANCH"
 SHA_LOCAL=$(sha256sum "$BUNDLE_LOCAL" | cut -d' ' -f1)
 echo "bundle $(stat -c %s "$BUNDLE_LOCAL") bytes sha256 $SHA_LOCAL"
@@ -52,23 +58,25 @@ test "\$(git -C $WORK/source rev-parse HEAD)" = "$COMMIT"
 echo source_at_$SHORT
 EOF
 
-tar czf - -C "$DATA_LOCAL" "${VARIANTS[@]}" | wsl -- ssh torch "tar xzf - -C $WORK/data"
-for variant in "${VARIANTS[@]}"; do
-  LINES_LOCAL=$(wc -l < "$DATA_LOCAL/$variant/train.jsonl")
-  LINES_REMOTE=$(wsl -- ssh torch bash -s <<EOF
+if [[ "${UPLOAD_DATA:-1}" == "1" ]]; then
+  tar czf - -C "$DATA_LOCAL" "${VARIANTS[@]}" | wsl -- ssh torch "tar xzf - -C $WORK/data"
+  for variant in "${VARIANTS[@]}"; do
+    LINES_LOCAL=$(wc -l < "$DATA_LOCAL/$variant/train.jsonl")
+    LINES_REMOTE=$(wsl -- ssh torch bash -s <<EOF
 wc -l < $WORK/data/$variant/train.jsonl
 EOF
 )
-  [[ "$LINES_LOCAL" -eq "$LINES_REMOTE" ]] || { echo "dataset upload of $variant is incomplete ($LINES_REMOTE of $LINES_LOCAL)" >&2; exit 2; }
-done
-echo "datasets uploaded: ${VARIANTS[*]}"
+    [[ "$LINES_LOCAL" -eq "$LINES_REMOTE" ]] || { echo "dataset upload of $variant is incomplete ($LINES_REMOTE of $LINES_LOCAL)" >&2; exit 2; }
+  done
+  echo "datasets uploaded: ${VARIANTS[*]}"
+fi
 
 if [[ "${SUBMIT:-1}" == "1" ]]; then
   for variant in "${VARIANTS[@]}"; do
     wsl -- ssh torch bash -s <<EOF
 export PATH=/opt/slurm/bin:\$PATH
 cd $WORK
-sbatch --parsable --export=ALL,VARIANT=$variant --job-name=triage-$variant source/research/hpc/classifier_triage_20261004/llm_triage.sbatch
+sbatch --parsable --export=ALL,VARIANT=$variant --job-name=${JOB_PREFIX:-triage}-$variant source/research/hpc/classifier_triage_20261004/$JOB
 EOF
   done
   wsl -- ssh torch bash -s <<EOF
@@ -76,4 +84,4 @@ export PATH=/opt/slurm/bin:\$PATH
 squeue -u yx3882 -o '%.10i %.28j %.9T %.10M %.20R'
 EOF
 fi
-echo "logs: $WORK/logs; results: $WORK/out/<variant>/scores.json"
+echo "logs: $WORK/logs; results: $WORK/out/<variant>/{scores.json,probabilities.json}"

@@ -267,3 +267,183 @@ def test_llm_scoring_selects_test_rows_then_a_probe_sample():
                 "family": "probe_meter_opendss" if i < 4 else "probe_meter_opf"} for i in range(6)]
     chosen = [row["id"] for row in llm_score.select_rows(rows, labels, probe_per_cell=2)]
     assert chosen == ["r0", "r2", "r3", "p0", "p1", "p4", "p5"]  # no calibration row, two probes per background
+    # A thresholded reading needs the calibration rows too: they follow the test rows.
+    chosen = [row["id"] for row in llm_score.select_rows(rows, labels, probe_per_cell=1, calibration=True)]
+    assert chosen == ["r0", "r2", "r3", "r1", "p0", "p4"]
+
+
+def test_candidate_probabilities_charge_the_token_where_the_calls_part():
+    from research.classifier_triage import llm_score
+
+    # Tokens 1, 2 open every call; "request" and "topology" share token 7 before they part.
+    targets = {"request": [1, 2, 7, 30, 99], "topology": [1, 2, 7, 31, 99], "measurement": [1, 2, 8, 99], "parameter": [1, 2, 9, 99]}
+    contexts = []
+
+    def step(ids):
+        contexts.append(list(ids))
+        if ids[-1] == 2:   # after the shared opening
+            return {7: np.log(0.6), 8: np.log(0.3), 9: np.log(0.1)}
+        if ids[-1] == 7:   # inside the shared token of request and topology
+            return {30: np.log(0.75), 31: np.log(0.25)}
+        raise AssertionError(f"unexpected context {ids}")
+
+    log_p = llm_score.candidate_log_probabilities([50, 51], targets, step)
+    assert contexts == [[50, 51, 1, 2], [50, 51, 1, 2, 7]]  # one pass per parting point, none for a call that is alone
+    assert np.exp(log_p["request"]) == pytest.approx(0.45) and np.exp(log_p["topology"]) == pytest.approx(0.15)
+    assert np.exp(log_p["measurement"]) == pytest.approx(0.3) and np.exp(log_p["parameter"]) == pytest.approx(0.1)
+    with pytest.raises(ValueError):
+        llm_score.candidate_log_probabilities([], {"a": [1, 2], "b": [1, 2, 3]}, step)
+
+
+def test_llm_probabilities_enter_the_benchmark_as_a_thresholded_score(tmp_path):
+    def row(row_id, family, needs_aux, families, first, rule):
+        return {"id": row_id, "family": family, "parent": f"parent_{row_id}", "needs_no_phasors_family": not needs_aux,
+                "labels": {"needs_aux": needs_aux}, "rule_v3": rule,
+                "triage": {"needs_aux": needs_aux, "families": families, "first": first}}
+
+    cal = [row("c1", "hif", 1, [], None, True), row("c2", "hif", 1, [], None, True),
+           row("c3", "measurement", 0, ["measurement"], "measurement", False)]
+    test = [row("h1", "hif", 1, [], None, True), row("h2", "harmonic", 1, [], None, True),
+            row("m1", "measurement", 0, ["measurement"], "measurement", False),
+            row("p1", "parameter", 0, ["parameter"], "parameter", False)]
+    probe = [{**row("q1", "probe_meter_opendss", 0, ["measurement"], "measurement", False), "probe_kind": "meter"},
+             {**row("q2", "probe_meter_opf", 0, ["measurement"], "measurement", False), "probe_kind": "meter"},
+             {**row("q3", "probe_meter_opf", 0, ["measurement"], "measurement", False), "probe_kind": "meter"}]
+
+    def p(request, measurement, parameter, topology=0.0):
+        return {"p": {"request": request, "measurement": measurement, "parameter": parameter, "topology": topology}, "seconds": 1.5}
+
+    table = {"c1": p(0.9, 0.1, 0.0), "c2": p(0.4, 0.6, 0.0), "c3": p(0.1, 0.9, 0.0),
+             "h1": p(0.8, 0.2, 0.0), "h2": p(0.3, 0.7, 0.0),       # below the calibration threshold of 0.4
+             "m1": p(0.5, 0.4, 0.1), "p1": p(0.05, 0.25, 0.7),
+             "q1": p(0.6, 0.4, 0.0), "q2": p(0.1, 0.9, 0.0)}       # q3 was not scored
+    path = tmp_path / "probabilities.json"
+    path.write_text(json.dumps({"rows": table, "meta": {"rows": 9}}))
+    result = benchmark.evaluate_llm_probabilities("llm_p", {"calibration": cal, "test": test, "probe": probe}, path)
+    assert result["request"]["thresholds"]["at_rule_recall"] == pytest.approx(0.4)   # the rule recalls both calibration positives
+    assert result["request"]["learned_recall_at_rule_recall"]["point"] == pytest.approx(0.5)
+    assert result["request"]["learned_false_rate_at_rule_recall"]["point"] == pytest.approx(0.5)  # m1 requested, p1 not
+    assert result["order"]["hit"]["point"] == pytest.approx(1.0)       # the most probable balanced action is the true family
+    assert result["probe_rows_scored"] == 2 and result["probe"]["meter"]["background_effect"]["point"] == pytest.approx(1.0)
+    assert result["largest_probability_test"] == {"request": 2, "measurement": 1, "parameter": 1}
+    path.write_text(json.dumps({"rows": {k: v for k, v in table.items() if k != "h2"}}))
+    with pytest.raises(ValueError):
+        benchmark.evaluate_llm_probabilities("llm_p", {"calibration": cal, "test": test, "probe": probe}, path)
+
+
+def test_prompt_features_read_only_what_the_prompt_lists():
+    from research.classifier_triage import prompt_control
+
+    summary = {
+        "top_residuals": [{"channel": "Pt", "channel_offset": 8, "index0": 90, "value": 20.05},
+                          {"channel": "Pf", "channel_offset": 8, "index0": 50, "value": -6.5},
+                          {"channel": "Pinj", "channel_offset": 3, "index0": 17, "value": 4.3},
+                          {"_omitted_items": 2}],
+        "top_lagrange": [{"from_bus": 4, "to_bus": 9, "lambda_index0": 17, "line_row0": 8, "parameter": "X", "value": -12.9}],
+    }
+    state = {"fresh_context_evidence": {"wls": {"anomaly_breadth": 0.05}},
+             "last_tool_output": {"observable_metrics": {"chi_square_ratio": 4.0, "max_normalized_residual": 20.05,
+                                                         "wls_summary": summary}}}
+    row = {"messages": [{"role": "system", "content": "s"}, {"role": "user", "content": json.dumps({"state": state})}]}
+    values = prompt_control.prompt_features(prompt_control.prompt_state(row))
+    assert values["residuals_listed"] == 3 and values["residuals_omitted"] == 2 and values["multipliers_listed"] == 1
+    assert values["r0_Pt"] == 1 and values["r0_offset"] == 8 and values["r1_sign"] == -1 and values["r3_log1p"] == 0
+    assert values["flow_pair_listed"] == 1 and values["flow_pair_opposite_sign"] == 1 and values["flow_pair_same_sign"] == 0
+    assert values["distinct_buses_listed"] == 1 and values["distinct_branches_listed"] == 1
+    assert values["l0_is_x"] == 1 and values["l0_line"] == 8 and values["l0_sign"] == -1 and values["l1_line"] == -1
+    assert values["top_residual_on_top_multiplier_line"] == 1
+    assert values["chi_square_ratio_log"] == pytest.approx(np.log(4.0))
+    # An empty summary (no residual at the listing threshold) still yields the same feature names.
+    empty = prompt_control.prompt_features({"last_tool_output": {"observable_metrics": {"wls_summary": {}}}})
+    assert set(empty) == set(values) and empty["residuals_listed"] == 0
+
+
+class _CharacterProcessor:
+    """One token per character, the tool-call format of the trainer's own test processor."""
+    pad_token_id = 0
+    eos_token_id = 3
+
+    def apply_chat_template(self, messages, *, tools, tokenize, add_generation_prompt, **_kwargs):
+        pieces = ["<tools>", json.dumps(tools, sort_keys=True), "</tools>"]
+        for message in messages:
+            if message["role"] == "assistant" and message.get("tool_calls"):
+                function = message["tool_calls"][0]["function"]
+                pieces += ["<assistant>", f"<|tool_call|>call:{function['name']}",
+                           json.dumps(function["arguments"], sort_keys=True), "<|end_tool_call|></assistant>"]
+            else:
+                pieces += [f"<{message['role']}>", str(message.get("content", "")), f"</{message['role']}>"]
+        if add_generation_prompt:
+            pieces.append("<assistant>")
+        return "".join(pieces)
+
+    def __call__(self, text=None, return_tensors=None, **_kwargs):
+        ids = [ord(char) for char in text]
+        if return_tensors == "pt":
+            return {"input_ids": torch.tensor([ids]), "attention_mask": torch.ones(1, len(ids), dtype=torch.long)}
+        return {"input_ids": ids, "attention_mask": [1] * len(ids)}
+
+    def decode(self, ids, **_kwargs):
+        return "".join(chr(int(value)) for value in ids)
+
+    def convert_tokens_to_ids(self, _token):
+        return None
+
+
+class _NextCharacterModel:
+    """Next-character probabilities that depend only on the text so far."""
+
+    def __init__(self):
+        self.embedding = torch.nn.Embedding(2, 2)
+        self.contexts = []
+
+    def get_input_embeddings(self):
+        return self.embedding
+
+    def forward(self, input_ids=None, attention_mask=None):
+        raise NotImplementedError
+
+    def generate(self, input_ids=None, max_new_tokens=None, **_kwargs):
+        from types import SimpleNamespace
+
+        assert max_new_tokens == 1 and input_ids.shape[0] == 1
+        text = "".join(chr(int(value)) for value in input_ids[0])
+        self.contexts.append(text)
+        probabilities = torch.full((1, 256), 1e-9)
+        if text.endswith("call:get_"):
+            for char, p in (("t", 0.6), ("m", 0.3), ("p", 0.1)):
+                probabilities[0, ord(char)] = p
+        elif text.endswith("call:get_t"):
+            for char, p in (("h", 0.75), ("o", 0.25)):
+                probabilities[0, ord(char)] = p
+        else:
+            raise AssertionError(f"unexpected context ...{text[-30:]}")
+        return SimpleNamespace(logits=(torch.log(probabilities),), scores=None)
+
+
+def test_the_first_action_scorer_reads_the_policy_prompt_and_the_parting_tokens(tmp_path):
+    from types import SimpleNamespace
+
+    from research.classifier_triage import llm_dataset, llm_score
+
+    state = {"active_state_id": "active", "evidence_profile": llm_dataset.TRIAGE_PROFILE, "remaining_budget": 39}
+    row = {"id": "a", "messages": [{"role": "system", "content": llm_dataset.triage_system_prompt()},
+                                   {"role": "user", "content": json.dumps({"state": state}, sort_keys=True)}]}
+    model = _NextCharacterModel()
+    scorer = llm_score.FirstActionScorer(SimpleNamespace(model=model, processor=_CharacterProcessor(), model_id="fake"))
+    output = tmp_path / "probabilities.json"
+    saved = llm_score.probability_rows([row], scorer, output, meta=lambda: scorer.meta, log=lambda *_: None)["rows"]
+    assert saved["a"]["p"] == pytest.approx({"request": 0.45, "topology": 0.15, "measurement": 0.3, "parameter": 0.1}, rel=1e-4)
+    # Two forward passes: where the four calls part, and inside the token "three" and "topology" share.
+    assert len(model.contexts) == 2 and model.contexts[0].endswith("<assistant><|tool_call|>call:get_")
+    tools_block = model.contexts[0].split("</tools>")[0]
+    assert llm_dataset.triage_system_prompt() in model.contexts[0]
+    assert '"name": "get_three_phase_context"' in tools_block and '"name": "run_alternative_test"' not in tools_block
+    assert scorer.meta["prompt_differs_from_training_render"] == 0 and scorer.meta["user_text_differs_from_row"] == 0
+    written = json.loads(output.read_text())
+    assert written["meta"]["rows"] == 1 and written["meta"]["forward_passes"] == 2
+    assert "".join(written["meta"]["candidate_tokens"]["active"]["request"]).startswith(
+        "<|tool_call|>call:get_three_phase_context")
+    assert written["meta"]["training_renders_checked"] == 4
+    # A second run reuses the finished row.
+    llm_score.probability_rows([row], scorer, output, meta=lambda: scorer.meta, log=lambda *_: None)
+    assert len(model.contexts) == 2

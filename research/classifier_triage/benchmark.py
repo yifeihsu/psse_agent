@@ -283,6 +283,43 @@ def evaluate_llm(name: str, groups: Mapping[str, Sequence[Mapping[str, Any]]], p
     return result
 
 
+def evaluate_llm_probabilities(name: str, groups: Mapping[str, Sequence[Mapping[str, Any]]], path: Path) -> dict[str, Any]:
+    """An LLM read as a scored classifier (``llm_score --probabilities``): its request probability, thresholded.
+
+    The threshold is set on the calibration rows like every other score's;
+    the first family is the most probable balanced first action.  The probe
+    is read on the scored subset.
+    """
+    saved = json.loads(Path(path).read_text(encoding="utf-8"))
+    table = saved["rows"]
+
+    def probability(row: Mapping[str, Any], decision: str) -> float:
+        return float(table[str(row["id"])]["p"][decision])
+
+    cal, test = groups["calibration"], groups["test"]
+    missing = [str(row["id"]) for row in list(cal) + list(test) if str(row["id"]) not in table]
+    if missing:
+        raise ValueError(f"{name}: {len(missing)} calibration or test rows have no probabilities (first: {missing[0]})")
+    probe = [row for row in groups["probe"] if str(row["id"]) in table]
+    request = request_study(cal, test, np.asarray([probability(row, "request") for row in cal]),
+                            np.asarray([probability(row, "request") for row in test]))
+    threshold = float(request["thresholds"]["at_rule_recall"])
+    seconds = [float(item["seconds"]) for item in table.values() if item.get("seconds") is not None]
+    result: dict[str, Any] = {"name": name, "request": request, "seconds_per_decision": float(np.median(seconds)) if seconds else None,
+                              "order": order_study(test, [max(data.BALANCED_FAMILIES, key=lambda f: probability(row, f)) for row in test]),
+                              "probe_rows_scored": len(probe), "scorer": saved.get("meta") or {}}
+    if probe:
+        result["probe"] = probe_study(probe, np.asarray([probability(row, "request") for row in probe]) >= threshold)
+    largest: dict[str, int] = {}
+    for row in test:
+        choice = max(table[str(row["id"])]["p"], key=lambda decision: probability(row, decision))
+        largest[choice] = largest.get(choice, 0) + 1
+    result["largest_probability_test"] = largest
+    result["probability_outside_the_four_median"] = float(np.median(
+        [1.0 - sum(float(v) for v in table[str(row["id"])]["p"].values()) for row in test]))
+    return result
+
+
 # --------------------------------------------------------------------- report
 
 def _ci(value: Mapping[str, Any] | None, percent: bool = True) -> str:
@@ -387,6 +424,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--reuse-gnn", action="store_true", help="load saved GNN scores instead of training again")
     parser.add_argument("--llm-scores", action="append", default=[], metavar="NAME=PATH",
                         help="an LLM's first actions from llm_score (repeatable)")
+    parser.add_argument("--llm-probabilities", action="append", default=[], metavar="NAME=PATH",
+                        help="an LLM's first-action probabilities from llm_score --probabilities (repeatable)")
+    parser.add_argument("--prompt-control", action="append", default=[], metavar="NAME=DIR",
+                        help="boosted trees on the fields of a rendered prompt variant (llm_dataset output; repeatable)")
     parser.add_argument("--device")
     args = parser.parse_args(argv)
     out = Path(args.output_dir)
@@ -474,10 +515,35 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "history": scored["history"], "train_rows": scored["train_rows"]})
             print(f"[benchmark] {name}: AUC by seed {[round(a, 4) for a in by_seed]}", flush=True)
 
+    for item in args.prompt_control:
+        from research.classifier_triage import prompt_control
+
+        name, _, path = item.partition("=")
+        variant = prompt_control.load_variant(Path(path))
+        table = variant["features"]
+        trained_on = set(variant["train_ids"])
+        same_rows = [row for row in split["train"] if str(row["id"]) in trained_on]
+        scores = gbm_scores(lambda row: table[str(row["id"])], same_rows, groups)
+        meta = scores.pop("_meta")
+        results.append({**evaluate(f"gbm_on_{name}", groups, scores, meta["seconds_per_decision"]),
+                        "features": meta["features"], "train_rows": len(same_rows)})
+        decisions = prompt_control.argmax_decisions(table, same_rows, groups, SEED)
+        results.append({**evaluate_hard(
+            f"gbm_on_{name}_argmax", groups, [d == "request" for d in decisions["test"]],
+            [d == "request" for d in decisions["probe"]],
+            [d if d in data.BALANCED_FAMILIES else None for d in decisions["test"]], meta["seconds_per_decision"]),
+            "train_rows": len(same_rows)})
+        print(f"[benchmark] gbm_on_{name}: {meta['features']} prompt features, {len(same_rows)} training rows", flush=True)
+
     for item in args.llm_scores:
         name, _, path = item.partition("=")
         results.append(evaluate_llm(name, groups, Path(path)))
         print(f"[benchmark] {name}: decisions {results[-1]['decisions']}", flush=True)
+
+    for item in args.llm_probabilities:
+        name, _, path = item.partition("=")
+        results.append(evaluate_llm_probabilities(name, groups, Path(path)))
+        print(f"[benchmark] {name}: request AUC {results[-1]['request']['auc']['point']:.4f}", flush=True)
 
     meta = {"train": len(split["train"]), "calibration": len(split["calibration"]), "test": len(split["test"]),
             "test_positive": int(sum(r["triage"]["needs_aux"] for r in split["test"])),
