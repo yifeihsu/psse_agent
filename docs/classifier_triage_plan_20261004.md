@@ -51,7 +51,7 @@ localizes it.
 
 | Stage | What runs | Cost | Status |
 | --- | --- | --- | --- |
-| 0 | Offline benchmark on the IEEE 14 study rows: screen rule, gradient-boosted models, GNN, LLM | CPU and one local GPU; the LLM leg needs a cluster fine-tune | GNN and tabular legs done (section 6); LLM leg open (section 8) |
+| 0 | Offline benchmark on the IEEE 14 study rows: screen rule, gradient-boosted models, GNN, LLM | CPU and one local GPU; the LLM leg needs a cluster fine-tune | GNN and tabular legs done (section 6); LLM leg running on the cluster (section 8) |
 | 1 | New evidence profile without the screen; rule expert driven by each triage source on the 160 development roots | CPU | not started |
 | 2 | One DAgger cell per arm | about a day each | not started |
 | later | IEEE 57 and 118 roots of every family; leave-one-network-out | generation plus training | not started |
@@ -210,8 +210,11 @@ HIFs are the normalized per-unit sweep and it has no balanced-fault roots):
 
 ## 8. Open
 
-- **LLM leg of stage 0.** Prepared, not run: the cluster SSH master was down
-  on 2026-10-04. `llm_dataset` renders the agent's decision after the opening
+- **LLM leg of stage 0.** Running on the cluster since 2026-10-04 05:45 UTC:
+  jobs 19142100 (`prompt_top5`) and 19142190 (`prompt_top10_signed`), work
+  directory `/scratch/yx3882/classifier_triage_20261004`, source eb4e5be,
+  submitted with `research/hpc/classifier_triage_20261004/deploy_from_windows.sh`.
+  `llm_dataset` renders the agent's decision after the opening
   WLS exactly as the DAgger pipeline does (canonical tools, compacted model
   view), with no screen report and a triage contract paragraph, and the
   truth-derived first action as the target. Two prompt variants are built
@@ -221,9 +224,12 @@ HIFs are the normalized per-unit sweep and it has no balanced-fault roots):
   (calibration, test and probes), and passes the trainer's split and protocol
   gates. `llm_score` runs the fine-tuned adapter through the pipeline's own
   policy on the scored prompts and `benchmark --llm-scores NAME=PATH` adds
-  its first actions to the tables. Remaining: one training job and one
-  scoring job per variant on the cluster (about three GPU hours each by the
-  BC0 rate), and the tokenizer-level audit that only runs there.
+  its first actions to the tables. The trainer's tokenizer audit passed on
+  the cluster for both variants (4,200 to 5,300 tokens per prompt). Each job
+  trains one pass with the BC0 recipe (about three GPU hours by the BC0
+  rate), then scores the 463 test rows and 100 probe rows per kind and
+  background (an LLM's first action needs no fitted threshold, so the
+  calibration rows are not scored).
 - **Stage 1.** The evidence profile without the screen (gate G1, the two
   fallbacks, the triage report in the observation for the GNN arm), then the
   rule expert end to end with each triage source.
