@@ -1,6 +1,8 @@
 """Triage classifier package: labels, WLS graph features, the size-agnostic model, and the benchmark studies."""
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
@@ -196,3 +198,58 @@ def test_probe_study_reports_the_background_effect():
     assert study["opf_request_rate"]["point"] == pytest.approx(0.1)
     assert study["background_effect"]["point"] == pytest.approx(0.5)
     assert study["n_opendss"] == 10 and study["n_opf"] == 10
+
+
+# ---------------------------------------------------------------------- LLM leg
+
+def test_llm_scoring_reads_first_actions_and_resumes(tmp_path):
+    from research.classifier_triage import llm_dataset, llm_score
+
+    def prompt(row_id, tool_hint):
+        state = {"active_state_id": "active", "hint": tool_hint}
+        return {"id": row_id, "messages": [{"role": "system", "content": llm_dataset.triage_system_prompt()},
+                                           {"role": "user", "content": json.dumps({"state": state})}]}
+
+    rows = [prompt("a", "get_three_phase_context"), prompt("b", "get_parameter_context"),
+            prompt("c", "finalize_diagnosis"), prompt("d", "boom")]
+    calls = []
+
+    def act(state):
+        calls.append(state["hint"])
+        if state["hint"] == "boom":
+            raise ValueError("unparseable generation")
+        return {"tool": state["hint"], "arguments": {}}
+
+    output = tmp_path / "scores.json"
+    result = llm_score.score_rows(rows, act, output, log=lambda *_: None)["rows"]
+    assert {key: value["decision"] for key, value in result.items()} == {
+        "a": "request", "b": "parameter", "c": "other", "d": "invalid"}
+    assert result["d"]["error"].startswith("ValueError")
+    # A second run reuses every finished row.
+    llm_score.score_rows(rows, act, output, log=lambda *_: None)
+    assert calls == ["get_three_phase_context", "get_parameter_context", "finalize_diagnosis", "boom"]
+    # A row that does not carry the triage prompt is refused, not scored under another contract.
+    foreign = {"id": "x", "messages": [{"role": "system", "content": "another prompt"}, rows[0]["messages"][1]]}
+    with pytest.raises(ValueError):
+        llm_score.state_of(foreign)
+
+
+def test_llm_first_actions_enter_the_benchmark_as_hard_decisions(tmp_path):
+    def row(row_id, family, needs_aux, families, first):
+        return {"id": row_id, "family": family, "parent": f"parent_{row_id}", "needs_no_phasors_family": not needs_aux,
+                "triage": {"needs_aux": needs_aux, "families": families, "first": first}}
+
+    test = [row("h1", "hif", 1, [], None), row("h2", "harmonic", 1, [], None),
+            row("m1", "measurement", 0, ["measurement"], "measurement"), row("p1", "parameter", 0, ["parameter"], "parameter")]
+    probe = [{**row("q1", "probe_meter_opendss", 0, ["measurement"], "measurement"), "probe_kind": "meter"},
+             {**row("q2", "probe_meter_opf", 0, ["measurement"], "measurement"), "probe_kind": "meter"}]
+    decisions = {"h1": "request", "h2": "measurement", "m1": "measurement", "p1": "request", "q1": "request", "q2": "measurement"}
+    path = tmp_path / "scores.json"
+    path.write_text(json.dumps({"rows": {key: {"decision": value, "seconds": 2.0} for key, value in decisions.items()}}))
+    result = benchmark.evaluate_llm("llm", {"calibration": [], "test": test, "probe": probe}, path)
+    assert result["hard"] is True and result["seconds_per_decision"] == 2.0
+    assert result["request"]["recall"]["point"] == pytest.approx(0.5)      # h2 was not requested
+    assert result["request"]["unneeded"]["point"] == pytest.approx(0.5)    # p1 was
+    assert result["order"]["hit"]["point"] == pytest.approx(0.5)           # m1 right, p1 gave no balanced pick
+    assert result["probe"]["meter"]["background_effect"]["point"] == pytest.approx(1.0)
+    assert result["decisions"] == {"request": 3, "measurement": 3}

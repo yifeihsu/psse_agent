@@ -210,9 +210,20 @@ HIFs are the normalized per-unit sweep and it has no balanced-fault roots):
 
 ## 8. Open
 
-- **LLM leg of stage 0.** A fine-tune on the cluster with truth-derived first
-  actions, on today's prompt and on the ten-signed-residual prompt, scored on
-  the same calibration and test rows and probes. Needs the cluster SSH master.
+- **LLM leg of stage 0.** Prepared, not run: the cluster SSH master was down
+  on 2026-10-04. `llm_dataset` renders the agent's decision after the opening
+  WLS exactly as the DAgger pipeline does (canonical tools, compacted model
+  view), with no screen report and a triage contract paragraph, and the
+  truth-derived first action as the target. Two prompt variants are built
+  under `output/classifier_triage_20261004/llm/`: `prompt_top5` (today's WLS
+  summary) and `prompt_top10_signed`; each has 2,035 training rows, 242
+  validation rows (the parents the GNN holds out) and 2,232 scored prompts
+  (calibration, test and probes), and passes the trainer's split and protocol
+  gates. `llm_score` runs the fine-tuned adapter through the pipeline's own
+  policy on the scored prompts and `benchmark --llm-scores NAME=PATH` adds
+  its first actions to the tables. Remaining: one training job and one
+  scoring job per variant on the cluster (about three GPU hours each by the
+  BC0 rate), and the tokenizer-level audit that only runs there.
 - **Stage 1.** The evidence profile without the screen (gate G1, the two
   fallbacks, the triage report in the observation for the GNN arm), then the
   rule expert end to end with each triage source.
@@ -243,3 +254,13 @@ python -m research.classifier_triage.transfer_look --benchmark-dir output/classi
 The benchmark takes about ten minutes with a local GPU (probe build three
 minutes, fifteen GNN trainings six). `--reuse-gnn` reloads saved GNN scores
 and scores new probe rows with the saved checkpoints.
+
+LLM leg (the two builds run locally; training and scoring need the cluster):
+
+```bash
+PSSE_LOCAL_DIAGNOSTIC_BUILD=1 python -m research.classifier_triage.llm_dataset --output-dir output/classifier_triage_20261004/llm --variant prompt_top10_signed
+```
+
+```bash
+python -m research.classifier_triage.llm_score --adapter OUT/lora --score DATA/score.jsonl --output OUT/scores.json
+```

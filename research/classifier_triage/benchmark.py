@@ -225,25 +225,58 @@ def evaluate(name: str, groups: Mapping[str, Sequence[Mapping[str, Any]]], score
     return result
 
 
-def evaluate_rule(groups: Mapping[str, Sequence[Mapping[str, Any]]]) -> dict[str, Any]:
-    """The physics screen: its rule on the test split and the probe, its first-round winner as the family pick."""
+def evaluate_hard(name: str, groups: Mapping[str, Sequence[Mapping[str, Any]]], test_flags: Sequence[float],
+                  probe_flags: Sequence[float], picks: Sequence[str | None], seconds: float | None) -> dict[str, Any]:
+    """Studies for a classifier that makes decisions, not scores: request flags and first-family picks."""
     test, probe = groups["test"], groups["probe"]
-    flags = np.asarray([row["rule_v3"] for row in test], dtype=float)
+    flags = np.asarray(test_flags, dtype=float)
     y = np.asarray([row["triage"]["needs_aux"] for row in test])
     negative = np.asarray([row["needs_no_phasors_family"] for row in test])
     parents = [str(row["parent"]) for row in test]
+    by_family: dict[str, dict[str, int]] = {}
+    for family in sorted({row["family"] for row in test}):
+        mask = np.asarray([row["family"] == family for row in test])
+        by_family[family] = {"n": int(mask.sum()), "requested": int(flags[mask].sum())}
     result: dict[str, Any] = {
-        "name": "screen_rule", "seconds_per_decision": SCREEN_SECONDS,
+        "name": name, "hard": True, "seconds_per_decision": seconds,
         "request": {
-            "rule_recall": ranker.parent_bootstrap(parents, lambda i: float(flags[i[y[i] == 1]].mean()), seed=SEED),
-            "rule_false_rate": ranker.parent_bootstrap(parents, lambda i: float(flags[i[negative[i]]].mean()), seed=SEED),
-            "n_test_positive": int((y == 1).sum()), "n_test_no_phasor_roots": int(negative.sum()),
+            "recall": ranker.parent_bootstrap(parents, lambda i: float(flags[i[y[i] == 1]].mean()), seed=SEED),
+            "unneeded": ranker.parent_bootstrap(parents, lambda i: float(flags[i[negative[i]]].mean()), seed=SEED),
+            "n_test_positive": int((y == 1).sum()), "n_test_no_phasor_roots": int(negative.sum()), "by_family": by_family,
         },
-        "order": order_study(test, [screen_first_pick(row) for row in test]),
-        "order_dominance_rule": order_study(test, [dominance_pick(row) for row in test]),
+        "order": order_study(test, list(picks)),
     }
     if probe:
-        result["probe"] = probe_study(probe, np.asarray([row["rule_v3"] for row in probe], dtype=float))
+        result["probe"] = probe_study(probe, np.asarray(probe_flags, dtype=float))
+    return result
+
+
+def evaluate_rule(groups: Mapping[str, Sequence[Mapping[str, Any]]]) -> dict[str, Any]:
+    """The physics screen: its rule on the test split and the probe, its first-round winner as the family pick."""
+    test, probe = groups["test"], groups["probe"]
+    result = evaluate_hard("screen_rule", groups, [row["rule_v3"] for row in test], [row["rule_v3"] for row in probe],
+                           [screen_first_pick(row) for row in test], SCREEN_SECONDS)
+    result["order_dominance_rule"] = order_study(test, [dominance_pick(row) for row in test])
+    return result
+
+
+def evaluate_llm(name: str, groups: Mapping[str, Sequence[Mapping[str, Any]]], path: Path) -> dict[str, Any]:
+    """An LLM's first actions (``llm_score``): a request is the phasor tool, a pick is a balanced context."""
+    decisions = json.loads(Path(path).read_text(encoding="utf-8"))["rows"]
+
+    def decision(row: Mapping[str, Any]) -> str:
+        return str((decisions.get(str(row["id"])) or {}).get("decision") or "missing")
+
+    test, probe = groups["test"], groups["probe"]
+    seconds = [float(item["seconds"]) for item in decisions.values() if item.get("seconds") is not None]
+    result = evaluate_hard(name, groups, [decision(row) == "request" for row in test],
+                           [decision(row) == "request" for row in probe],
+                           [decision(row) if decision(row) in data.BALANCED_FAMILIES else None for row in test],
+                           float(np.median(seconds)) if seconds else None)
+    counts: dict[str, int] = {}
+    for row in list(test) + list(probe):
+        counts[decision(row)] = counts.get(decision(row), 0) + 1
+    result["decisions"] = counts
     return result
 
 
@@ -264,16 +297,16 @@ def write_report(path: Path, results: Sequence[Mapping[str, Any]], meta: Mapping
              f"Rows: train {meta['train']} (with children), calibration {meta['calibration']}, test {meta['test']} "
              f"({meta['test_positive']} need phase-resolved measurements, {meta['test_negative']} need none); "
              f"probe {meta['probe']} bad-meter rows on healthy backgrounds (parents outside the train split). "
-             "Brackets are 95% parent-bootstrap intervals. Learned classifiers are thresholded on the calibration "
-             "split at the screen rule's recall.\n",
+             "Brackets are 95% parent-bootstrap intervals. Scored classifiers are thresholded on the calibration "
+             "split at the screen rule's recall; the screen rule and an LLM's first action are read at their own decision.\n",
              "## Request decision\n",
              "| classifier | AUC | recall | unneeded requests | seconds per alarm |", "| --- | --- | --- | --- | --- |"]
     for r in results:
         req = r["request"]
         seconds = r.get("seconds_per_decision")
         cost = "n/a" if seconds is None else (f"{seconds:.2f}" if seconds >= 0.01 else f"{seconds * 1000:.1f} ms")
-        if r["name"] == "screen_rule":
-            lines.append(f"| screen_rule | n/a | {_ci(req['rule_recall'])} | {_ci(req['rule_false_rate'])} | {cost} |")
+        if r.get("hard"):
+            lines.append(f"| {r['name']} | n/a | {_ci(req['recall'])} | {_ci(req['unneeded'])} | {cost} |")
         else:
             lines.append(f"| {r['name']} | {_ci(req['auc'])} | {_ci(req['learned_recall_at_rule_recall'])} | "
                          f"{_ci(req['learned_false_rate_at_rule_recall'])} | {cost} |")
@@ -349,6 +382,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--probe-vm-limit", type=int, default=600, help="voltage-meter probe attempts per background and kind")
     parser.add_argument("--skip-gnn", action="store_true")
     parser.add_argument("--reuse-gnn", action="store_true", help="load saved GNN scores instead of training again")
+    parser.add_argument("--llm-scores", action="append", default=[], metavar="NAME=PATH",
+                        help="an LLM's first actions from llm_score (repeatable)")
     parser.add_argument("--device")
     args = parser.parse_args(argv)
     out = Path(args.output_dir)
@@ -435,6 +470,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             results.append({**evaluated, "parameters": scored["parameters"], "auc_by_seed": by_seed,
                             "history": scored["history"], "train_rows": scored["train_rows"]})
             print(f"[benchmark] {name}: AUC by seed {[round(a, 4) for a in by_seed]}", flush=True)
+
+    for item in args.llm_scores:
+        name, _, path = item.partition("=")
+        results.append(evaluate_llm(name, groups, Path(path)))
+        print(f"[benchmark] {name}: decisions {results[-1]['decisions']}", flush=True)
 
     meta = {"train": len(split["train"]), "calibration": len(split["calibration"]), "test": len(split["test"]),
             "test_positive": int(sum(r["triage"]["needs_aux"] for r in split["test"])),
