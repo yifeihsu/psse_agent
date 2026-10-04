@@ -19,7 +19,11 @@ decide (docs/classifier_triage_plan_20261004.md, section 7):
 
 * ``prompt_top5``: today's WLS summary, the five largest residual
   magnitudes and the five largest multipliers;
-* ``prompt_top10_signed``: the ten largest residuals with their signs.
+* ``prompt_top10_signed``: the ten largest residuals with their signs.  The
+  model view keeps the first eight entries of a list and states how many it
+  left out, so the rendered prompt shows at most eight of them.
+
+Both list a residual only at three sigma or more.
 
 Files: ``train.jsonl`` and ``validation.jsonl`` (chat rows for
 ``python -m psse_env.sft research-train``; validation is the tenth of the

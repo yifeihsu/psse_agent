@@ -27,7 +27,14 @@ Classifiers:
 * ``gnn_values``: the GNN with observed and fitted values added (ablation);
 * ``gnn_residual_decorrelated``: ``gnn_residual`` trained with the
   background probe rows of train parents (bad meters on healthy OpenDSS and
-  OPF windows) as extra negatives.
+  OPF windows) as extra negatives;
+* ``--llm-scores``: an LLM fine-tune's greedy first action (``llm_score``),
+  read at its own decision;
+* ``--llm-probabilities``: the same fine-tune's request probability
+  (``llm_score --probabilities``), thresholded like every other score;
+* ``--prompt-control`` (``gbm_on_<variant>`` and ``..._argmax``): boosted
+  trees on the fields parsed from the LLM's rendered prompts, fitted on the
+  fine-tune's rows and targets, thresholded and at their largest class.
 
 The background probe (``data.build_probe``) asks what a classifier keys on:
 bad power meters on healthy OpenDSS references and on clean OPF windows need
@@ -338,7 +345,8 @@ def write_report(path: Path, results: Sequence[Mapping[str, Any]], meta: Mapping
              f"({meta['test_positive']} need phase-resolved measurements, {meta['test_negative']} need none); "
              f"probe {meta['probe']} bad-meter rows on healthy backgrounds (parents outside the train split). "
              "Brackets are 95% parent-bootstrap intervals. Scored classifiers are thresholded on the calibration "
-             "split at the screen rule's recall; the screen rule and an LLM's first action are read at their own decision.\n",
+             "split at the screen rule's recall; the screen rule, an LLM's first action and a control's largest class "
+             "(`_argmax`) are read at their own decision.\n",
              "## Request decision\n",
              "| classifier | AUC | recall | unneeded requests | seconds per alarm |", "| --- | --- | --- | --- | --- |"]
     for r in results:
