@@ -51,7 +51,7 @@ localizes it.
 
 | Stage | What runs | Cost | Status |
 | --- | --- | --- | --- |
-| 0 | Offline benchmark on the IEEE 14 study rows: screen rule, gradient-boosted models, GNN, LLM | CPU and one local GPU; the LLM leg needs a cluster fine-tune | done with one training pass per LLM variant (section 6); three-pass fine-tunes running (section 8) |
+| 0 | Offline benchmark on the IEEE 14 study rows: screen rule, gradient-boosted models, GNN, LLM | CPU and one local GPU; the LLM leg needs a cluster fine-tune | done (section 6): one training pass per LLM variant, then three passes |
 | 1 | New evidence profile without the screen; rule expert driven by each triage source on the 160 development roots | CPU | not started |
 | 2 | One DAgger cell per arm | about a day each | not started |
 | later | IEEE 57 and 118 roots of every family; leave-one-network-out | generation plus training | not started |
@@ -122,7 +122,8 @@ magnitudes of three sigma or more and up to five branch multipliers);
 view's list cap keeps eight. Each has 2,035 training rows and 242 validation
 rows (the parents the GNN holds out). The fine-tune is the pipeline's BC0
 recipe (Gemma 4 12B in 4-bit, rank-16 LoRA, learning rate 1e-4, one pass,
-best validation loss kept). The adapter is read two ways:
+best validation loss kept); a second pair of fine-tunes makes three passes
+with the same settings. The adapter is read two ways:
 
 - its greedy first action through the pipeline's own policy (`llm_score`),
   on the 463 test rows and 100 probe rows per kind and background;
@@ -206,15 +207,18 @@ buses 2 and 3.
 **HIF against same-sign flow-meter pairs.** The GNN's HIF head keeps 98% HIF
 recall and flags none of the 16 same-sign pairs; the screen flags 37.5%.
 
-**LLM arm** (fine-tuned Gemma 4 12B, one pass; same test rows). "Trees, same
-prompt" is the same-prompt control of section 5.
+**LLM arm** (fine-tuned Gemma 4 12B; same test rows). "Trees, same prompt" is
+the same-prompt control of section 5. Rows are one training pass unless they
+say three.
 
 | Reading | Request AUC | Recall | Unneeded requests | Balanced pick is a true family | Four-way first action correct |
 | --- | --- | --- | --- | --- | --- |
 | LLM, today's prompt, greedy first action | | 75.4% [67.5, 84.7] | 11.1% [7.9, 14.7] | 66.0% [60.3, 71.8] | 68.3% |
 | LLM, signed residuals, greedy first action | | 73.1% [65.0, 83.1] | 3.0% [1.2, 4.8] | 82.1% [78.1, 86.1] | 78.6% |
+| LLM, today's prompt, three passes, greedy first action | | 77.7% [70.1, 86.0] | 3.9% [2.0, 6.0] | 80.5% [75.9, 85.0] | 78.8% |
 | LLM, today's prompt, request probability at the calibrated threshold | 91.5% [88.5, 94.4] | 100% | 85.3% [81.4, 89.1] | 77.4% [72.2, 82.9] | |
 | LLM, signed residuals, request probability at the calibrated threshold | 95.6% [93.5, 97.5] | 99.2% [97.5, 100] | 75.7% [71.1, 80.4] | 85.2% [81.4, 88.8] | |
+| LLM, today's prompt, three passes, request probability at the calibrated threshold | 94.7% [92.5, 96.9] | 99.2% [97.5, 100] | 55.3% [50.0, 60.9] | 84.3% [80.2, 88.3] | |
 | Trees, same prompt (today's), largest class | | 95.4% [91.6, 98.6] | 1.2% [0.3, 2.4] | 96.2% [93.7, 98.4] | 95.9% |
 | Trees, same prompt (signed), largest class | | 96.9% [93.3, 100] | 1.2% [0.3, 2.5] | 94.7% [91.5, 97.4] | 95.0% |
 | Trees, same prompt (today's), calibrated threshold | 99.85% [99.67, 99.97] | 100% | 13.5% [10.0, 17.2] | 96.5% [93.9, 98.7] | |
@@ -225,28 +229,36 @@ In the greedy and largest-class rows a request on a root that needs none
 counts as a wrong pick; in the thresholded rows the pick is the most probable
 balanced action whatever the request score. The calibrated threshold is the
 one that reaches the screen rule's recall on the calibration split (99.3%).
-For the LLM's request probability that threshold is 0.003 to 0.004, which
+For the LLM's request probability that threshold is 0.003 to 0.008, which
 admits most roots. Thresholded instead at the screen rule's rate of unneeded
 requests (15.9% on the calibration split), the LLM recalls 75.4% [67.2, 85.1]
-with today's prompt and 90.0% [85.2, 94.7] with signed residuals; the trees
-on the same prompts and the GNN recall 100% there. The probability reading
-agrees with the greedy one (the most probable of the four actions is the
-greedy decision on 2,107 of the 2,126 rows scored both ways) and takes 0.95 s
-per row.
+with today's prompt, 90.0% [85.2, 94.7] with signed residuals and 87.7%
+[82.0, 93.4] with today's prompt after three passes; the trees on the same
+prompts and the GNN recall 100% there. The probability reading agrees with
+the greedy one (the most probable of the four actions is the greedy decision
+on 3,164 of the 3,189 rows scored both ways in these three runs) and takes
+0.95 s per row.
+
+Three passes help today's prompt and do not close the gap: unneeded requests
+fall from 11.1% to 3.9% and the four-way accuracy rises from 68% to 79%, but
+recall stays at 78% [70, 86]. The three-pass run with signed residuals has no
+row because its training diverged (below).
 
 Requests on the test roots that need phasors, by family:
 
-| Family | Roots | LLM, today's prompt | LLM, signed residuals | Trees, same prompt, largest class | GNN |
-| --- | --- | --- | --- | --- | --- |
-| Harmonic | 50 | 50 | 50 | 50 and 50 | 50 |
-| Unbalance | 30 | 28 | 28 | 28 and 29 | 30 |
-| HIF | 25 | 17 | 17 | 24 and 24 | 25 |
-| HIF with a bad meter | 25 | 3 | 0 | 22 and 23 | 25 |
+| Family | Roots | LLM, today's prompt | LLM, signed residuals | LLM, today's prompt, three passes | Trees, same prompt, largest class | GNN |
+| --- | --- | --- | --- | --- | --- | --- |
+| Harmonic | 50 | 50 | 50 | 50 | 50 and 50 | 50 |
+| Unbalance | 30 | 28 | 28 | 26 | 28 and 29 | 30 |
+| HIF | 25 | 17 | 17 | 18 | 24 and 24 | 25 |
+| HIF with a bad meter | 25 | 3 | 0 | 7 | 22 and 23 | 25 |
 
 On the roots it misses, the LLM opens the measurement context (31 of 32
-misses with today's prompt, 34 of 35 with signed residuals). With today's
-prompt it never opens the parameter context: 70 of the 75 parameter-first
-rows go to topology.
+misses with today's prompt, 34 of 35 with signed residuals, 28 of 29 after
+three passes). With today's prompt and one pass it never opens the parameter
+context: 70 of the 75 parameter-first rows go to topology. After three passes
+it does (65 of 75), and sends 43 of the 97 topology-first rows to the
+parameter context instead.
 
 What the fine-tune learned is mostly two cues. A depth-3 decision tree on
 the prompt fields reproduces 94% (today's prompt) and 98% (signed) of its
@@ -259,17 +271,39 @@ that do not. On the 20 HIF roots without that cue the LLM requests on 12.
 The probes show the same cue in the greedy first actions: with today's
 prompt the LLM requests on 100% of the 10 to 20 sigma voltage-meter errors
 and on 80% of the 4.5 to 9 sigma ones (bad power meters: 10%); with signed
-residuals on 59%, 25% and 2%. Neither shows a background effect.
+residuals on 59%, 25% and 2%. Neither shows a background effect. Three
+passes keep the cue (the same first split, 95% of the request decisions
+reproduced; 91% and 35% on the two voltage-meter probes, 3% on bad power
+meters).
 
-Fine-tune facts: 2.4 GPU hours per variant (RTX PRO 6000); validation loss
-per answer token 0.0335 with today's prompt (best checkpoint at step 256 of
-509) and 0.0232 with signed residuals (at the last step, and still moving:
-0.0456 at step 384). An answer is 19 to 21 tokens of which one carries the
-decision, so these are about 0.65 and 0.45 nats per decision, in line with
-the four-way accuracies. A greedy decision takes 2.3 s (one policy step,
-which the agent spends anyway). The trainer renders 19 tool schemas and the
-policy 18 (`run_alternative_test` is hidden under the profile); the
-pipeline's cells train and evaluate with a difference of the same kind.
+Fine-tune facts: 2.4 GPU hours per pass (RTX PRO 6000). An answer is 19 to
+21 tokens of which one carries the decision, so a validation loss of 0.033
+per answer token is about 0.65 nats per decision, in line with the four-way
+accuracies. A greedy decision takes 2.3 s (one policy step, which the agent
+spends anyway). The trainer renders 19 tool schemas and the policy 18
+(`run_alternative_test` is hidden under the profile); the pipeline's cells
+train and evaluate with a difference of the same kind.
+
+Validation loss per answer token (the scored adapter is the checkpoint with
+the lowest one):
+
+| Run | Steps 128, 256, 384, ... | Scored checkpoint |
+| --- | --- | --- |
+| Today's prompt, one pass | 0.0356, 0.0335, 0.0336, 0.0361 (step 509) | step 256 |
+| Signed residuals, one pass | 0.0362, 0.0325, 0.0456, 0.0232 (step 509) | step 509 |
+| Today's prompt, three passes | 0.0331, 0.0308, 0.0280, 0.0483, 0.0284, 0.0290, 0.0348, 0.0283, 0.0312, 0.0305, 0.0241, 0.0260 (step 1,527) | step 1,408 |
+| Signed residuals, three passes | 2.9063, 0.0765, 0.0698, 0.0704, 0.0677, 0.0678, 0.0666, 0.0571, 0.0545, 0.0494, 0.0510, 0.0482 (step 1,527) | step 1,527 |
+
+The three-pass run with signed residuals diverged: its training loss per
+token jumped above 8 at steps 82 to 86, where the learning rate is still near
+its peak (the three-pass schedule decays three times more slowly), and the
+run never returned to the one-pass level. The scored adapter requests on none
+of the 130 roots that need phasors, answers `get_measurement_context` on
+1,004 of 1,063 rows, produces no valid tool call on 22, and its request
+probability ranks the roots worse than chance (AUC 28.8%). It is a failed
+training run, not evidence about the prompt; the one-pass run stays the
+reference for signed residuals. Both three-pass jobs were preempted twice and
+resumed from their newest checkpoints.
 
 **Zero-shot look at IEEE 57** (the IEEE 14 weights and threshold on the 184
 alarmed rows of `ieee57_v3`: 112 HIF, 46 unbalance, 26 healthy windows; its
@@ -300,12 +334,15 @@ HIFs are the normalized per-unit sweep and it has no balanced-fault roots):
 4. Under G1 a confident miss is not recovered by the gate. The two fallbacks
    of section 2 are what keeps such a root reachable, at the price of extra
    steps.
-5. As trained here, the LLM is not a triage classifier. After one pass of the
-   pipeline's fine-tuning recipe its first action requests on about three
-   quarters of the roots that need phasors (the GNN: all of them), and its
-   request probability ranks the roots with an AUC of 92% to 96% (the GNN:
-   99.96%). A threshold does not rescue it: to reach the screen's recall the
-   LLM has to request on 76% to 85% of the roots that need nothing.
+5. As trained here, the LLM is not a triage classifier. With the pipeline's
+   fine-tuning recipe its first action requests on about three quarters of
+   the roots that need phasors (the GNN: all of them), and its request
+   probability ranks the roots with an AUC of 92% to 96% (the GNN: 99.96%). A
+   threshold does not rescue it: to reach the screen's recall the LLM has to
+   request on 55% to 85% of the roots that need nothing. Three training
+   passes instead of one make it more precise (unneeded requests 11.1% to
+   3.9% with today's prompt) and leave recall at 78% [70, 86]. The recipe is
+   also fragile on this task: one of the two three-pass runs diverged.
 6. The prompt is not what limits it. Trees fitted on the fields the prompt
    shows, on the same rows and targets, reach 95% to 97% recall with 1.2%
    unneeded requests at their own decision, and full recall at the calibrated
@@ -314,29 +351,25 @@ HIFs are the normalized per-unit sweep and it has no balanced-fault roots):
    multipliers), which finds harmonic and unbalance roots and misses an HIF
    behind a bad meter.
 7. Signed residuals help every reader of the prompt: the trees' unneeded
-   requests at full recall fall from 13.5% to 6.3%, the LLM's AUC rises from
-   91.5% to 95.6% and its recall at the screen's rate of unneeded requests
-   from 75% to 90%. The model view caps a list at eight entries; the cap has
-   to be raised for the agent's WLS summary to show ten.
+   requests at full recall fall from 13.5% to 6.3%, the one-pass LLM's AUC
+   rises from 91.5% to 95.6% and its recall at the screen's rate of unneeded
+   requests from 75% to 90%. The model view caps a list at eight entries; the
+   cap has to be raised for the agent's WLS summary to show ten.
 8. For the two arms this means: on IEEE 14 the request gate should be the
    GNN's score, with the LLM acting on its report. An LLM that classifies by
-   itself needs more than this recipe: three training passes are running
-   (section 8). If they do not close the gap, the comparison that stays
-   meaningful for the LLM is the agent with the classifier's report against
-   the agent with the screen's report, not the LLM as the classifier.
+   itself needs more than this recipe, and three passes did not supply it.
+   The comparison that stays meaningful for the LLM is the agent with the
+   classifier's report against the agent with the screen's report, not the
+   LLM as the classifier.
 
 ## 8. Open
 
-- **Longer LLM fine-tunes.** One pass is short for this task (the
-  `prompt_top5` run kept its checkpoint of step 256 of 509; the
-  `prompt_top10_signed` run was still improving at its last step). Three
-  passes of both variants are running on the cluster since 2026-10-04 09:33
-  UTC: jobs 19149103 (`prompt_top10_signed`) and 19149112 (`prompt_top5`),
-  work directory `/scratch/yx3882/classifier_triage_20261004`, outputs
-  `out/<variant>_e3`, source 200f936, 1,527 optimizer steps at about 15 s
-  each, then both scorings (about nine hours in all). Fetch with
-  `research/hpc/classifier_triage_20261004/fetch_results.sh prompt_top5_e3
-  prompt_top10_signed_e3` and add them to the benchmark command of section 9.
+- **LLM as the classifier.** Not pursued further without a decision. What
+  could still be tried: the three-pass run with signed residuals at a lower
+  learning rate (it diverged at 1e-4), more training roots (2,035 rows from
+  1,131 parents is small for a 12B model to learn a numeric pattern), or a
+  different input form (the full residual vector as a table). None of them
+  changes the GNN arm.
 - **Second decision on mixed roots.** A first action understates a closed
   loop on a root with a bad meter and an HIF: after the meter is corrected
   the agent decides again on the HIF that remains. This is not measured
@@ -390,6 +423,13 @@ directory):
 
 ```bash
 bash research/hpc/classifier_triage_20261004/deploy_from_windows.sh "$(git rev-parse HEAD)"
+```
+
+The three-pass runs were submitted from the cluster work directory, one per
+variant (results under `out/<variant>_e3`):
+
+```bash
+sbatch --export=ALL,VARIANT=prompt_top5,EPOCHS=3,RUN_TAG=_e3 --job-name=triage-prompt_top5-e3 source/research/hpc/classifier_triage_20261004/llm_triage.sbatch
 ```
 
 The results (`out/<run>/scores.json` and `probabilities.json` in the cluster
