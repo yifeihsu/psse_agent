@@ -144,12 +144,20 @@ def _basis(episode: Mapping[str, Any]) -> str:
 
 
 def _escalation_request(episode: Mapping[str, Any]) -> str | None:
+    """The request of the episode's last successful ``ask_for_more_evidence``.
+
+    Evaluator trace steps carry the status at the top level and the output as
+    ``policy_tool_output``; older traces nested both under ``tool_output``.
+    """
     trace = episode.get("trace") or []
     for step in reversed(trace):
         action = step.get("action") or {}
         if action.get("tool") == "ask_for_more_evidence":
-            output = step.get("tool_output") or step.get("outcome") or {}
-            if isinstance(output, Mapping) and output.get("execution_status") == "success":
+            output = step.get("policy_tool_output") or step.get("tool_output") or step.get("outcome") or {}
+            status = step.get("execution_status")
+            if status is None and isinstance(output, Mapping):
+                status = output.get("execution_status")
+            if status == "success":
                 return str((action.get("arguments") or {}).get("request"))
     return None
 
