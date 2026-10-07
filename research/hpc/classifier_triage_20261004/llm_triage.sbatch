@@ -22,8 +22,8 @@
 #
 # The recipe is the pipeline's BC0 one (4-bit base, rank-16 LoRA, micro-batch 1
 # with four accumulation steps, lr 1e-4, one pass, best validation loss kept);
-# EPOCHS changes the number of passes and RUN_TAG the output directory
-# (out/<variant><tag>).  Every phase resumes: training from its newest complete
+# EPOCHS changes the number of passes, LR the learning rate and RUN_TAG the
+# output directory (out/<variant><tag>).  Every phase resumes: training from its newest complete
 # checkpoint, scoring from the rows already written.
 set -euo pipefail
 WORK=/scratch/yx3882/classifier_triage_20261004
@@ -31,6 +31,7 @@ VARIANT=${VARIANT:?set VARIANT to a prompt variant directory under data/}
 SRC=$WORK/source
 DATA=$WORK/data/$VARIANT
 EPOCHS=${EPOCHS:-1}
+LR=${LR:-1e-4}
 RUN_TAG=${RUN_TAG:-}
 RUN=$WORK/out/$VARIANT$RUN_TAG
 LOGS=$WORK/logs
@@ -46,7 +47,7 @@ export HF_HUB_CACHE="$HF_HOME/hub" HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}" PYTORCH_ALLOC_CONF=expandable_segments:True
 export RESEARCH_MAX_INPUT_TOKENS=32768 RESEARCH_MAX_NEW_TOKENS=256 PSSE_LOCAL_DIAGNOSTIC_BUILD=1
 
-echo "[triage] variant $VARIANT epochs $EPOCHS run $RUN job ${SLURM_JOB_ID:-manual} restart ${SLURM_RESTART_COUNT:-0} node ${SLURMD_NODENAME:-?} $(date -u +%FT%TZ)"
+echo "[triage] variant $VARIANT epochs $EPOCHS lr $LR run $RUN job ${SLURM_JOB_ID:-manual} restart ${SLURM_RESTART_COUNT:-0} node ${SLURMD_NODENAME:-?} $(date -u +%FT%TZ)"
 echo "[triage] source $(git -C "$SRC" rev-parse HEAD)"
 [[ -s "$DATA/train.jsonl" && -s "$DATA/validation.jsonl" && -s "$DATA/score.jsonl" && -s "$DATA/score_labels.json" ]] \
   || { echo "dataset for $VARIANT is incomplete under $DATA" >&2; exit 2; }
@@ -75,7 +76,7 @@ if [[ ! -s "$RUN/lora/adapter_model.safetensors" || ! -s "$RUN/research_run.json
     --strict-prompt-length \
     --batch-size 1 \
     --gradient-accumulation-steps 4 \
-    --learning-rate 1e-4 \
+    --learning-rate "$LR" \
     --epochs "$EPOCHS" \
     --logging-steps 1 \
     --save-steps 128 \

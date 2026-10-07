@@ -1104,13 +1104,23 @@ def _compact_hif_evidence(key: str, value: Any) -> dict[str, Any]:
     return compact
 
 
-def _bounded_history_metric(key: str, value: Any) -> Any:
+#: Per-bus and per-branch tables of the current solve (``psse_env.providers.wls_tables``):
+#: kept in the last tool output, dropped from the history events, whose budget
+#: is for the sequence of actions and outcomes, not for a table per solve.
+WLS_SUMMARY_TABLE_KEYS = ("bus_table", "branch_table", "omitted")
+
+
+def _bounded_history_metric(key: str, value: Any, *, history_event: bool = False) -> Any:
     if key in {"hif_conditioning", "hif_meter_nonregression"}:
         return _compact_hif_evidence(key, value)
+    if key == "wls_summary" and history_event and isinstance(value, Mapping):
+        value = {name: item for name, item in value.items() if name not in WLS_SUMMARY_TABLE_KEYS}
     return _bounded_value(
         value,
         max_depth=6 if key in CONTEXT_DETAIL_KEYS else 3,
-        max_items=24 if key == "gnn_screen" else 8,
+        # A WLS summary with tables holds a row per bus or branch of the alarm's
+        # neighbourhood (at most 10 and 12) with up to eleven fields each.
+        max_items=24 if key == "gnn_screen" else 32 if key == "wls_summary" else 8,
         max_text_chars=160,
     )
 
@@ -1179,7 +1189,7 @@ def summarize_history(
             event["state_id"] = state_id
         compact_metrics = {
             key: _bounded_history_metric(
-                key, _first_mapping_value((metrics, tool_output), key)
+                key, _first_mapping_value((metrics, tool_output), key), history_event=True
             )
             for key in HISTORY_METRIC_KEYS
             if _first_mapping_value((metrics, tool_output), key) is not None

@@ -15,7 +15,10 @@ Parsed fields: the chi-square ratio, the largest normalized residual, the
 anomaly breadth, the listed residuals (channel, offset in the channel, value)
 and the listed branch multipliers (line, R or X, value).  The derived
 features (both ends of one line listed, their signs, the top residual on the
-top multiplier's line) are functions of those fields only.
+top multiplier's line) are functions of those fields only.  A prompt that
+carries the bus and branch tables (``prompt_tables``) adds, per table row in
+the prompt's own order, the row's values and, for a branch, the residuals of
+its two end buses read off the bus table.
 """
 from __future__ import annotations
 
@@ -30,6 +33,8 @@ from research.classifier_triage.llm_dataset import target_class
 
 RESIDUAL_SLOTS = 10
 MULTIPLIER_SLOTS = 5
+TABLE_BRANCH_SLOTS = 6
+TABLE_BUS_SLOTS = 6
 CLASSES = ("request", "measurement", "parameter", "topology")
 ID_PREFIX = "triage_"
 
@@ -99,6 +104,49 @@ def prompt_features(state: Mapping[str, Any]) -> dict[str, float]:
     features["top_residual_on_top_multiplier_line"] = float(
         bool(residuals) and bool(multipliers) and str(residuals[0]["channel"]) in ("Pf", "Qf", "Pt", "Qt")
         and int(residuals[0]["channel_offset"]) == int(multipliers[0]["line_row0"]))
+    if summary.get("branch_table") is not None or summary.get("bus_table") is not None:
+        features.update(table_features(summary))
+    return features
+
+
+def _signed_log(value: Any) -> float:
+    if value is None:
+        return 0.0
+    value = float(value)
+    return float(np.sign(value) * np.log1p(abs(value)))
+
+
+def table_features(summary: Mapping[str, Any]) -> dict[str, float]:
+    """Features of the bus and branch tables as the prompt lists them (``psse_env.providers.wls_tables``)."""
+    buses = [item for item in (summary.get("bus_table") or []) if isinstance(item, Mapping) and "bus" in item]
+    branches = [item for item in (summary.get("branch_table") or []) if isinstance(item, Mapping) and "line" in item]
+    omitted = summary.get("omitted") if isinstance(summary.get("omitted"), Mapping) else {}
+    by_bus = {int(item["bus"]): item for item in buses}
+    features: dict[str, float] = {
+        "table_buses": float(len(buses)), "table_branches": float(len(branches)),
+        "table_buses_omitted": float(omitted.get("buses") or 0), "table_branches_omitted": float(omitted.get("branches") or 0),
+    }
+    for slot in range(TABLE_BRANCH_SLOTS):
+        item = branches[slot] if slot < len(branches) else None
+        for name in ("pf", "qf", "pt", "qt", "lr", "lx"):
+            features[f"bt{slot}_{name}"] = _signed_log(item.get(name)) if item else 0.0
+        pf, pt = (float(item.get("pf") or 0.0), float(item.get("pt") or 0.0)) if item else (0.0, 0.0)
+        features[f"bt{slot}_same_sign_p"] = float(bool(item) and pf * pt > 0 and min(abs(pf), abs(pt)) >= 2.0)
+        features[f"bt{slot}_opposite_sign_p"] = float(bool(item) and pf * pt < 0 and min(abs(pf), abs(pt)) >= 2.0)
+        features[f"bt{slot}_xfmr"] = float(bool(item and item.get("xfmr")))
+        features[f"bt{slot}_out"] = float(bool(item and item.get("out")))
+        for end in ("from", "to"):
+            bus = by_bus.get(int(item[end])) if item and item.get(end) is not None else None
+            for name in ("vm", "p", "q"):
+                features[f"bt{slot}_{end}_{name}"] = _signed_log(bus.get(name)) if bus else 0.0
+            features[f"bt{slot}_{end}_listed"] = float(bus is not None)
+    for slot in range(TABLE_BUS_SLOTS):
+        item = buses[slot] if slot < len(buses) else None
+        for name in ("vm", "p", "q"):
+            features[f"bb{slot}_{name}"] = _signed_log(item.get(name)) if item else 0.0
+        features[f"bb{slot}_zero_injection"] = float(bool(item) and item.get("p") is None)
+        for kind in ("PQ", "PV", "ref"):
+            features[f"bb{slot}_{kind}"] = float(bool(item) and str(item.get("type")) == kind)
     return features
 
 

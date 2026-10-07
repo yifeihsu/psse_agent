@@ -14,16 +14,20 @@ request phase-resolved measurements when the truth holds an HIF, an
 unbalance or a harmonic source, else the context of the balanced family to
 investigate first.
 
-Two prompt variants, because what the prompt shows bounds what the LLM can
+Three prompt variants, because what the prompt shows bounds what the LLM can
 decide (docs/classifier_triage_plan_20261004.md, section 7):
 
 * ``prompt_top5``: today's WLS summary, the five largest residual
   magnitudes and the five largest multipliers;
 * ``prompt_top10_signed``: the ten largest residuals with their signs.  The
   model view keeps the first eight entries of a list and states how many it
-  left out, so the rendered prompt shows at most eight of them.
+  left out, so the rendered prompt shows at most eight of them;
+* ``prompt_tables``: today's summary plus the per-bus and per-branch tables
+  of the alarm's neighbourhood (``psse_env.providers.wls_tables``): every
+  channel of those buses and branches with its sign, and each branch's R
+  and X multipliers, the relations a graph model reads for free.
 
-Both list a residual only at three sigma or more.
+The lists show a residual only at three sigma or more.
 
 Files: ``train.jsonl`` and ``validation.jsonl`` (chat rows for
 ``python -m psse_env.sft research-train``; validation is the tenth of the
@@ -34,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import functools
 import json
 import sys
 import time
@@ -51,7 +56,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from research.classifier_triage import data  # noqa: E402
 
-VARIANTS = {"prompt_top5": (5, False), "prompt_top10_signed": (10, True)}
+#: variant -> (listed residuals, signs on the list, bus and branch tables)
+VARIANTS = {"prompt_top5": (5, False, False), "prompt_top10_signed": (10, True, False), "prompt_tables": (5, False, True)}
+DEFAULT_VARIANT = "prompt_top5"
 #: The profile the observations are generated and scored under: balanced SCADA and WLS, no screen.
 TRIAGE_PROFILE = "wls_gated_diagnostics"
 TRIAGE_PROMPT_PARAGRAPH = (
@@ -70,11 +77,30 @@ TRIAGE_PROMPT_PARAGRAPH = (
     "are unavailable. If supported recovery cannot resolve the discrepancy, request "
     "operator review without inventing a fault-family diagnosis."
 )
-def triage_system_prompt() -> str:
-    """The system prompt of every triage row (canonical preamble plus the triage contract)."""
+#: Added to the contract paragraph of the ``prompt_tables`` variant.
+TABLES_PROMPT_SENTENCE = (
+    " The WLS summary also tabulates the buses and branches near the alarm: bus_table gives "
+    "each bus's signed normalized residuals of voltage magnitude (vm) and P/Q injection (p, q; "
+    "null at a zero-injection bus), branch_table each branch's signed normalized flow residuals "
+    "at both ends (pf, qf, pt, qt) and its normalized R and X multipliers (lr, lx)."
+)
+
+
+def triage_prompt_paragraph(variant: str = DEFAULT_VARIANT) -> str:
+    """The contract paragraph of a variant (the tables variant explains its tables)."""
+    return TRIAGE_PROMPT_PARAGRAPH + (TABLES_PROMPT_SENTENCE if VARIANTS[variant][2] else "")
+
+
+def triage_system_prompt(variant: str = DEFAULT_VARIANT) -> str:
+    """The system prompt of a variant's rows (canonical preamble plus the triage contract)."""
     from psse_env.dagger.dataset_builder import CANONICAL_DAGGER_SYSTEM_PROMPT
 
-    return CANONICAL_DAGGER_SYSTEM_PROMPT + TRIAGE_PROMPT_PARAGRAPH
+    return CANONICAL_DAGGER_SYSTEM_PROMPT + triage_prompt_paragraph(variant)
+
+
+def triage_system_prompts() -> dict[str, str]:
+    """System prompt by variant."""
+    return {variant: triage_system_prompt(variant) for variant in VARIANTS}
 
 
 FIRST_ACTION = {
@@ -123,17 +149,35 @@ def _summary_residuals(payload: Mapping[str, Any], case: str, top_k: int, signed
     return listed
 
 
-def _patch_summary(node: Any, residuals: list[dict[str, Any]]) -> None:
-    """Replace every ``wls_summary.top_residuals`` in an observation tree."""
+def _patch_summary(node: Any, residuals: list[dict[str, Any]] | None = None, tables: Mapping[str, Any] | None = None) -> None:
+    """Replace ``top_residuals`` and/or add the tables in every ``wls_summary`` of an observation tree."""
     if isinstance(node, dict):
         summary = node.get("wls_summary")
         if isinstance(summary, dict) and "top_residuals" in summary:
-            summary["top_residuals"] = copy.deepcopy(residuals)
+            if residuals is not None:
+                summary["top_residuals"] = copy.deepcopy(residuals)
+            if tables is not None:
+                summary.update(copy.deepcopy(dict(tables)))
         for value in node.values():
-            _patch_summary(value, residuals)
+            _patch_summary(value, residuals, tables)
     elif isinstance(node, list):
         for value in node:
-            _patch_summary(value, residuals)
+            _patch_summary(value, residuals, tables)
+
+
+@functools.lru_cache(maxsize=16)
+def _case(case: str) -> Any:
+    from mcp_server.matpower_server import _load_python_case
+
+    return _load_python_case(case)
+
+
+def summary_tables(item: Mapping[str, Any]) -> dict[str, Any]:
+    """The bus and branch tables of a row's solve, as the provider would attach them."""
+    from psse_env.providers.wls_tables import wls_tables
+
+    payload = item["payload"]
+    return wls_tables(payload["signed_normalized_residual"], payload.get("lambda_normalized") or [], _case(str(item["case"])))
 
 
 def render_row(item: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -141,7 +185,7 @@ def render_row(item: Mapping[str, Any]) -> dict[str, Any] | None:
     from psse_env.dagger import dataset_builder
     from psse_env.state_store import policy_safe_copy
 
-    top_k, signed = VARIANTS[item["variant"]]
+    top_k, signed, tables = VARIANTS[item["variant"]]
     env = _environment()
     scenario = {"scenario_id": item["scenario_id"], "case": item["case"], "measurements": item["measurements"],
                 "metadata": copy.deepcopy(item["metadata"])}
@@ -156,8 +200,10 @@ def render_row(item: Mapping[str, Any]) -> dict[str, Any] | None:
         observation = replace(env.get_policy_observation(history), remaining_budget=MAX_STEPS - 1).as_dict()
     except Exception as exc:  # an unloadable state: dropped and counted by the caller
         return {"id": item["id"], "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
-    if (top_k, signed) != VARIANTS["prompt_top5"]:
-        _patch_summary(observation, _summary_residuals(item["payload"], item["case"], top_k, signed))
+    if (top_k, signed) != VARIANTS["prompt_top5"][:2]:
+        _patch_summary(observation, residuals=_summary_residuals(item["payload"], item["case"], top_k, signed))
+    if tables:
+        _patch_summary(observation, tables=summary_tables(item))
     target = {"tool": FIRST_ACTION[item["target"]], "arguments": {"state_id": active}}
     rows = dataset_builder.examples_to_chat_sft([{
         "example_id": f"triage_{item['id']}", "policy_observation": observation, "preferred_action": target,
@@ -169,8 +215,9 @@ def render_row(item: Mapping[str, Any]) -> dict[str, Any] | None:
     system = row["messages"][0]["content"]
     if dataset_builder.WLS_GATED_PROMPT_PARAGRAPH not in system:
         return {"id": item["id"], "error": "unexpected system prompt"}
-    row["messages"][0]["content"] = system.replace(dataset_builder.WLS_GATED_PROMPT_PARAGRAPH, TRIAGE_PROMPT_PARAGRAPH)
-    if row["messages"][0]["content"] != triage_system_prompt():
+    row["messages"][0]["content"] = system.replace(
+        dataset_builder.WLS_GATED_PROMPT_PARAGRAPH, triage_prompt_paragraph(item["variant"]))
+    if row["messages"][0]["content"] != triage_system_prompt(item["variant"]):
         return {"id": item["id"], "error": "system prompt is not the triage prompt"}
     return {"id": item["id"], "messages": row["messages"], "tools": row["tools"], "metadata": row.get("metadata") or {},
             "alarm": bool((observation.get("fresh_context_evidence") or {}).get("wls", {}).get("chi_square_alarm")
@@ -181,7 +228,9 @@ def _items(rows: Sequence[Mapping[str, Any]], variant: str) -> list[dict[str, An
     return [{
         "id": str(row["id"]), "variant": variant, "scenario_id": f"triage{index:05d}", "case": str(row["record"]["case"]),
         "measurements": [float(v) for v in row["record"]["measurements"]], "metadata": dict(row["record"].get("metadata") or {}),
-        "family": row["family"], "payload": {"signed_normalized_residual": row["payload"]["signed_normalized_residual"]},
+        "family": row["family"], "payload": {
+            "signed_normalized_residual": [float(v) for v in row["payload"]["signed_normalized_residual"]],
+            "lambda_normalized": [float(v) for v in row["payload"]["lambda_normalized"]]},
         "target": target_class(row["triage"]),
     } for index, row in enumerate(rows)]
 

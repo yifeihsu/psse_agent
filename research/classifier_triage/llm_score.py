@@ -39,19 +39,27 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from research.classifier_triage.llm_dataset import FIRST_ACTION, triage_system_prompt  # noqa: E402
+from research.classifier_triage.llm_dataset import FIRST_ACTION, triage_system_prompts  # noqa: E402
 
 #: Canonical tool name to triage decision (the canonical surface keeps these four names).
 DECISION_OF_TOOL = {tool: decision for decision, tool in FIRST_ACTION.items()}
 SAVE_EVERY = 25
 
 
+def triage_variant_of(row: Mapping[str, Any]) -> str:
+    """The prompt variant whose system prompt the row carries."""
+    system = row["messages"][0]
+    if system["role"] == "system":
+        for variant, prompt in triage_system_prompts().items():
+            if system["content"] == prompt:
+                return variant
+    raise ValueError(f"row {row.get('id')} does not carry a triage system prompt")
+
+
 def state_of(row: Mapping[str, Any]) -> dict[str, Any]:
-    """The model-visible state of a scored row, after checking it carries the triage prompt."""
-    system, user = row["messages"][0], row["messages"][1]
-    if system["role"] != "system" or system["content"] != triage_system_prompt():
-        raise ValueError(f"row {row.get('id')} does not carry the triage system prompt")
-    return json.loads(user["content"])["state"]
+    """The model-visible state of a scored row, after checking it carries a triage prompt."""
+    triage_variant_of(row)
+    return json.loads(row["messages"][1]["content"])["state"]
 
 
 def decision_of(action: Any) -> str:
@@ -211,7 +219,7 @@ class FirstActionScorer:
         validate_policy_payload(payload)
         tools = tool_schemas_for_observation(self.tools, state)
         user = json.dumps(payload, sort_keys=True, allow_nan=False)
-        messages = [{"role": "system", "content": triage_system_prompt()}, {"role": "user", "content": user}]
+        messages = [{"role": "system", "content": row["messages"][0]["content"]}, {"role": "user", "content": user}]
         # The prompt exactly as the policy renders and tokenizes it for a greedy decision.
         rendered = render_eval_text(self.bundle.processor, messages, tools, enable_thinking=False,
                                     inject_empty_thought_channel=False)
@@ -286,6 +294,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     import psse_env.dagger.research_policy_factory as factory
 
+    # The policy builds its system prompt from the observation's profile; the
+    # triage rows were trained on their variant's triage paragraph instead.
+    variants = {triage_variant_of(row) for row in rows}
+    if len(variants) != 1:
+        raise ValueError(f"scored rows carry {len(variants)} prompt variants: {sorted(variants)}")
+    system_prompt = rows[0]["messages"][0]["content"]
+    factory.system_prompt_for_observation = lambda _prompt, _observation: system_prompt
+    print(f"[llm-score] prompt variant {next(iter(variants))}, {len(rows)} rows")
+
     if args.probabilities:
         bundle, _ = factory._load_research_bundle(
             adapter_path=args.adapter, base_model=args.base_model, base_revision=None, load_in_4bit=True,
@@ -295,9 +312,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[llm-score] wrote {args.output}: {len(result['rows'])} rows, {json.dumps(scorer.meta)[:1500]}")
         return 0
 
-    # The policy builds its system prompt from the observation's profile; the
-    # triage rows were trained on the triage paragraph instead.
-    factory.system_prompt_for_observation = lambda _prompt, _observation: triage_system_prompt()
     policy = factory.research_gemma_policy_factory(args.adapter, base_model=args.base_model)
     result = score_rows(rows, policy.act_model_observation, Path(args.output))
     decisions: dict[str, int] = {}

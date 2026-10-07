@@ -447,3 +447,41 @@ def test_the_first_action_scorer_reads_the_policy_prompt_and_the_parting_tokens(
     # A second run reuses the finished row.
     llm_score.probability_rows([row], scorer, output, meta=lambda: scorer.meta, log=lambda *_: None)
     assert len(model.contexts) == 2
+
+
+def test_prompt_variants_share_the_contract_and_the_tables_variant_explains_its_tables():
+    from research.classifier_triage import llm_dataset, llm_score
+
+    prompts = llm_dataset.triage_system_prompts()
+    assert set(prompts) == set(llm_dataset.VARIANTS) == {"prompt_top5", "prompt_top10_signed", "prompt_tables"}
+    assert prompts["prompt_top5"] == prompts["prompt_top10_signed"] == llm_dataset.triage_system_prompt()
+    assert prompts["prompt_tables"] == prompts["prompt_top5"] + llm_dataset.TABLES_PROMPT_SENTENCE
+    assert "bus_table" in prompts["prompt_tables"] and "branch_table" in prompts["prompt_tables"]
+    row = {"id": "t", "messages": [{"role": "system", "content": prompts["prompt_tables"]},
+                                   {"role": "user", "content": json.dumps({"state": {"active_state_id": "active"}})}]}
+    assert llm_score.triage_variant_of(row) == "prompt_tables" and llm_score.state_of(row) == {"active_state_id": "active"}
+
+
+def test_table_features_read_the_rows_and_the_end_buses():
+    from research.classifier_triage import prompt_control
+
+    summary = {
+        "top_residuals": [], "top_lagrange": [],
+        "bus_table": [{"bus": 4, "type": "PQ", "vm": 0.1, "p": 4.3, "q": -0.2},
+                      {"bus": 9, "type": "PQ", "vm": -2.5, "p": 1.0, "q": 0.4},
+                      {"bus": 7, "type": "PQ", "vm": 1.3, "p": None, "q": None}],
+        "branch_table": [{"line": 9, "from": 4, "to": 9, "pf": 20.0, "qf": 0.1, "pt": 6.5, "qt": -0.6, "lr": -2.4, "lx": -12.9, "xfmr": True},
+                         {"line": 7, "from": 4, "to": 5, "pf": 1.8, "qf": 0.6, "pt": -2.2, "qt": -2.3, "lr": 0.0, "lx": 1.0}],
+        "omitted": {"buses": 2, "branches": 1},
+    }
+    state = {"last_tool_output": {"observable_metrics": {"chi_square_ratio": 4.0, "max_normalized_residual": 20.0, "wls_summary": summary}}}
+    values = prompt_control.prompt_features(state)
+    assert values["table_buses"] == 3 and values["table_branches"] == 2 and values["table_branches_omitted"] == 1
+    assert values["bt0_same_sign_p"] == 1 and values["bt0_opposite_sign_p"] == 0 and values["bt0_xfmr"] == 1
+    assert values["bt1_same_sign_p"] == 0 and values["bt1_opposite_sign_p"] == 0  # the smaller end is below two sigma
+    assert values["bt0_from_p"] == pytest.approx(np.log1p(4.3)) and values["bt0_to_vm"] == pytest.approx(-np.log1p(2.5))
+    assert values["bt1_to_listed"] == 0 and values["bt1_to_vm"] == 0.0            # bus 5 is not in the table
+    assert values["bb2_zero_injection"] == 1 and values["bb2_p"] == 0.0 and values["bb0_PQ"] == 1
+    assert values["bt5_pf"] == 0.0 and values["bb5_vm"] == 0.0                     # empty slots
+    without = prompt_control.prompt_features({"last_tool_output": {"observable_metrics": {"wls_summary": {}}}})
+    assert "bt0_pf" not in without
