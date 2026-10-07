@@ -1,0 +1,38 @@
+{
+ "contract": "triage_gnn_runtime_v1",
+ "method": "triage_gnn",
+ "model_id": "triage_gnn:5d6df27b1aefc3fb",
+ "view": "residual",
+ "request_threshold": 0.27817368507385254,
+ "threshold_rule": "the screen rule's recall on the calibration split (0.9928); mean of the seeds' request probabilities",
+ "families": [
+  "measurement",
+  "parameter",
+  "topology",
+  "hif",
+  "unbalance",
+  "harmonic"
+ ],
+ "first_classes": [
+  "measurement",
+  "parameter",
+  "topology"
+ ],
+ "checkpoints": [
+  "seed_0.pt",
+  "seed_1.pt",
+  "seed_2.pt",
+  "seed_3.pt",
+  "seed_4.pt"
+ ],
+ "source": {
+  "benchmark": "output\\classifier_triage_20261004\\ieee14\\benchmark.json",
+  "classifier": "gnn_residual",
+  "checkpoints": "output\\classifier_triage_20261004\\ieee14\\gnn_residual\\checkpoints",
+  "dataset": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\hypothesis_ranking_20260930\\ieee14_v3",
+  "train_rows": 2035,
+  "parameters": 706506,
+  "test_auc": 0.9996303996303997
+ },
+ "storage": "state_dict in float16, cast to float32 when loaded"
+}

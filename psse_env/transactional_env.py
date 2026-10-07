@@ -73,7 +73,7 @@ from .episode_budget import DEFAULT_EPISODE_ACTION_LIMIT, validate_episode_actio
 from .evidence_profile import (
     DEFAULT_EVIDENCE_PROFILE, GATED_DIAGNOSTIC_TOOLS, allows_diagnostic_tools,
     disabled_requests, disabled_tools, is_scada_only, is_strict_boundary, is_suspicion_gated,
-    is_wls_gated, required_suspicion, requires_wls_alarm_for_diagnostics,
+    is_suspicion_profile, is_wls_gated, required_suspicion, requires_wls_alarm_for_diagnostics,
     sanitize_execution_for_profile, sanitize_observation_for_profile, scada_signatures,
     suspicion_error_code, validate_evidence_profile,
 )
@@ -796,6 +796,9 @@ class TransactionalPSSEEnv:
                 # The balanced HIF screen rides on this solve; its suspicion
                 # is what admits phasors under suspicion_gated_diagnostics.
                 "hif_screen",
+                # The triage classifier's report rides on it the same way
+                # under classifier_gated_diagnostics.
+                "triage",
                 # Lets the process gate tell a voltage channel from a power one.
                 "bus_count",
             ):
@@ -853,7 +856,7 @@ class TransactionalPSSEEnv:
             return {
                 "status": "unavailable", "state_id": active_id, "state_hash": active_hash,
                 "method": (
-                    "balanced_split_line_shunt_compensation" if is_suspicion_gated(self.evidence_profile)
+                    "balanced_split_line_shunt_compensation" if is_suspicion_profile(self.evidence_profile)
                     else HIF_CONDITIONING_METHOD
                 ),
                 "remaining_meter_candidate_indices": [],

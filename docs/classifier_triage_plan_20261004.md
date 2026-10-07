@@ -52,7 +52,7 @@ localizes it.
 | Stage | What runs | Cost | Status |
 | --- | --- | --- | --- |
 | 0 | Offline benchmark on the IEEE 14 study rows: screen rule, gradient-boosted models, GNN, LLM | CPU and one local GPU; the LLM leg needs a cluster fine-tune | done (section 6): one training pass per LLM variant, then three passes |
-| 1 | New evidence profile without the screen; rule expert driven by each triage source on the 160 development roots | CPU | not started |
+| 1 | New evidence profile without the screen; rule expert driven by each triage source on the 160 development roots | CPU | profile built 2026-10-06 (section 10); expert end to end on the development roots running |
 | 2 | One DAgger cell per arm | about a day each | not started |
 | later | IEEE 57 and 118 roots of every family; leave-one-network-out | generation plus training | not started |
 
@@ -390,6 +390,72 @@ HIFs are the normalized per-unit sweep and it has no balanced-fault roots):
 - **Corpus format cue.** Topology roots are the only ones on the node-breaker
   operator model (exact zero-injection rows, different sigmas). Neutralized
   in the features here; the lasting fix is one operator model for all roots.
+
+## 10. Stage 1: the GNN arm's profile (built 2026-10-06)
+
+`classifier_gated_diagnostics` (`psse_env/evidence_profile.py`) is the
+suspicion-gated contract with the balanced screen taken out and the triage
+classifier put in its place. What changed, and where:
+
+- **The report.** The WLS provider loads the exported classifier once
+  (`research/classifier_triage/runtime.py`; the tracked export is
+  `psse_env/oracle/models/triage_gnn_ieee14_20261004`, five seeds in half
+  precision, 6.9 MB, threshold 0.2782 from the benchmark's calibration) and
+  after every solve writes `triage` on the WLS ledger entry beside the
+  detection metrics: method and model id, status, request score and
+  threshold, `request_admitted`, the first balanced family with its three
+  scores, the six family scores as a diagnostic, and the state binding. It
+  reads the operator's current case (a corrected model has its own
+  parameters) and the solve; nothing else. A classifier failure is an
+  unavailable report that admits nothing; the solve stands.
+- **The gate (G1).** `required_suspicion` asks the same families as under the
+  suspicion profile; `current_suspicion` answers them from the report
+  instead of the screen: `phasor` is an admitted request on the current
+  bound WLS, or the fallback `balanced_route_failed`: a balanced correction
+  bound to the active state was rejected by verification (an executor
+  failure tests nothing), or every balanced context fetched on the state
+  offered no correction. `hif` is what the phasors showed (the NLM's
+  `hif_suspected`), `harmonic` phasors that came back balanced, as before.
+  A candidate's verification solve carries the report for the candidate
+  state. Nothing is minted into the signatures.
+- **The expert.** One screening stage (`classifier_screening_proposals`):
+  an admitted request acquires the phasors, the NLM tests them once, balanced
+  phasors open the spectra. Without an admitted request the balanced ladder
+  runs with the report's first family ahead of the others
+  (`_triage_first_order`), inside what the Lagrangian dominance tags allow:
+  a dominant residual still suppresses the branch routes, a rule that is
+  right on meter-against-branch 99.4% of the time on the test split. When
+  the ladder is exhausted, `unexplained_acquisition_proposals` opens the
+  phasors through the fallback and the handoff follows as under the
+  suspicion profile.
+- **Shared contract.** The data and diagnostics contract of the suspicion
+  profile applies to both (`is_suspicion_profile`): true-state phasors and
+  clean spectra on every root at the uniform PMU sigma, the NLM and the HIF
+  estimator from the snapshot phasors, balanced split-line conditioning of an
+  accepted HIF, the HIF acquisition block and scan window dropped from the
+  metadata, the multi-scan estimator hidden. The learned ranker's deferral
+  and the D3 voltage-meter hold stay suspicion-only (they read the screen).
+- **Model view and prompt.** `triage` is a history metric and a context
+  detail key, so it survives compaction in the WLS tool output and the
+  ledger; the system prompt gets its own paragraph
+  (`CLASSIFIER_GATED_PROMPT_PARAGRAPH`), which states the gate as built.
+- **Episode check.** `research/classifier_triage/expert_e2e.py` rolls the
+  rule expert out on the pipeline's development suite under a chosen
+  profile and reports, per family, success, acquisitions, unnecessary
+  acquisitions, false commits, episode length, and the first triage report
+  (its closed-loop recall and unneeded rate beside the offline figures).
+
+Tests: `psse_env/oracle/test_classifier_gated_routing.py` (profile, gate,
+fallbacks, expert routing, verification), `research/classifier_triage/tests/test_runtime.py`
+(export, load, report), `psse_env/providers/test_wls_tables.py` (the tables
+and their model view).
+
+Known gaps: a root where the classifier does not admit phasors and the
+balanced ladder finds nothing to try ends in an operator handoff rather
+than a phasor request (the fallback needs a fetched context that offered
+nothing, or a rejected correction); the pipeline cell (`pipeline.env`) does
+not yet list the profile; the GNN is the IEEE 14 model, so the profile is
+usable on IEEE 14 roots only until a multi-network model exists.
 
 ## 9. Reproduce
 

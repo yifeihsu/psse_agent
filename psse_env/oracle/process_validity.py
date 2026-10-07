@@ -135,6 +135,10 @@ def current_family_suspicion(state: Any, family: str, target_state_id: Any = Non
             return False
         if family == "harmonic":
             return False
+        if family == "phasor" and _actions.triage_admits_request(verification.get("triage")):
+            # classifier_gated_diagnostics: the verification solve carries the
+            # classifier's report for the candidate state as the screen's.
+            return True
         return _actions.screen_phasor_suspicion(verification.get("hif_screen"), family)
     return False
 

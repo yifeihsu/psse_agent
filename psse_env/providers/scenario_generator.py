@@ -57,7 +57,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 from psse_env.evidence_profile import (
     DEFAULT_EVIDENCE_PROFILE, AUXILIARY_EVIDENCE_PROFILE,
-    allows_diagnostic_tools, is_scada_only, is_strict_boundary, is_suspicion_gated,
+    allows_diagnostic_tools, is_scada_only, is_strict_boundary, is_suspicion_profile,
     validate_evidence_profile, sanitize_execution_for_profile,
 )
 
@@ -2289,7 +2289,7 @@ class Round0ScenarioGenerator:
                 scenario["metadata"]["hif_scan_window"][BRANCH_CURRENT_SIGMA_KEY] = float(
                     current_sigma
                 )
-        if is_suspicion_gated(self.evidence_profile):
+        if is_suspicion_profile(self.evidence_profile):
             self._uniform_pmu_sigma(scenario, row)
         scenario["hidden_truth"] = {"true_hif_errors": [copy.deepcopy(label)]}
         scenario["release_audit"] = {
@@ -2522,7 +2522,7 @@ class Round0ScenarioGenerator:
                 scenario["metadata"][BRANCH_CURRENT_SIGMA_KEY] = float(
                     row[BRANCH_CURRENT_SIGMA_KEY]
                 )
-        if is_suspicion_gated(self.evidence_profile):
+        if is_suspicion_profile(self.evidence_profile):
             self._uniform_pmu_sigma(scenario, row)
         scenario["hidden_truth"] = {"true_unbalance_errors": [label]}
         scenario["release_audit"] = {
@@ -2546,7 +2546,7 @@ class Round0ScenarioGenerator:
         sigma_z = row["sigma_z"]
         voltage_sigma = float(row["three_phase_sigma"])
         current_sigma = float(row[BRANCH_CURRENT_SIGMA_KEY])
-        if is_suspicion_gated(self.evidence_profile):
+        if is_suspicion_profile(self.evidence_profile):
             voltage_sigma = current_sigma = float(PMU_PHASOR_SIGMA_PU)
         op_point = canonicalize_ieee14_operating_point(row.get("op_point") or {})
         try:
@@ -3862,7 +3862,7 @@ class Round0ScenarioGenerator:
             if scenario.get("source_realization_id"):
                 scenario["source_tier"] = "physics_synthesized_balanced"
             fundamental = scenario.pop("_fundamental_state", None)
-            if is_suspicion_gated(self.evidence_profile):
+            if is_suspicion_profile(self.evidence_profile):
                 self._attach_true_state_phasors(scenario, fundamental)
                 self._attach_clean_spectra(scenario)
             if is_strict_boundary(self.evidence_profile):

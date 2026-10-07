@@ -72,8 +72,8 @@ from psse_env.actions import (
 from psse_env.state_store import apply_modification
 from psse_env.noise_contract import resolve_state_measurement_noise, validate_shared_scada_covariance
 from psse_env.evidence_profile import (
-    AUXILIARY_EVIDENCE_PROFILE, DEFAULT_EVIDENCE_PROFILE, GATED_DIAGNOSTIC_TOOLS,
-    SCADA_ONLY_PROFILE, STRICT_BOUNDARY_PROFILES, SUSPICION_GATED_PROFILE, WLS_ALARM_GATED_PROFILES,
+    AUXILIARY_EVIDENCE_PROFILE, CLASSIFIER_GATED_PROFILE, DEFAULT_EVIDENCE_PROFILE, GATED_DIAGNOSTIC_TOOLS,
+    SCADA_ONLY_PROFILE, STRICT_BOUNDARY_PROFILES, SUSPICION_GATED_PROFILE, SUSPICION_PROFILES, WLS_ALARM_GATED_PROFILES,
     WLS_GATED_PROFILE, allows_diagnostic_tools, disabled_tools, is_strict_boundary,
     required_suspicion, requires_wls_alarm_for_diagnostics, sanitize_gated_metadata, suspicion_error_code,
     sanitize_gated_observation, sanitize_scada_metadata, sanitize_scada_observation,
@@ -501,6 +501,7 @@ class MatpowerDeploymentProviders:
         screen_checkpoint: str | None = None,
         screen_calibration: str | None = None,
         evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
+        triage_classifier: str | None = None,
     ) -> None:
         self.evidence_profile = validate_evidence_profile(evidence_profile)
         if bool(screen_checkpoint) != bool(screen_calibration):
@@ -512,6 +513,21 @@ class MatpowerDeploymentProviders:
                 f"evidence_profile={self.evidence_profile} refuses a learned WLS screen (screen_checkpoint)"
             )
         self.screen_checkpoint = str(screen_checkpoint) if screen_checkpoint else None
+        # classifier_gated_diagnostics: the triage classifier that replaces the
+        # balanced screen as the source of the phasor suspicion.  It reads the
+        # balanced solve and the operator's current case only; its report
+        # rides on the WLS ledger as ``triage`` (research.classifier_triage.runtime).
+        self.triage = None
+        from psse_env.evidence_profile import is_classifier_gated
+
+        if is_classifier_gated(self.evidence_profile):
+            from research.classifier_triage.runtime import DEFAULT_TRIAGE_CLASSIFIER, load_triage_classifier
+
+            self.triage = load_triage_classifier(triage_classifier or DEFAULT_TRIAGE_CLASSIFIER)
+        elif triage_classifier:
+            raise ValueError(
+                f"evidence_profile={self.evidence_profile} runs no triage classifier (triage_classifier)"
+            )
         self._hif_prediction_cache: dict[str, Any] = {}
         self._hif_screen_cache = HifScreenCache()
         self.hif_screen_config = DEFAULT_HIF_SCREEN_CONFIG
@@ -829,7 +845,7 @@ class MatpowerDeploymentProviders:
     # ----------------------------------------------------------------- helpers
 
     _PROFILE_STRICTNESS = {
-        SCADA_ONLY_PROFILE: 0, SUSPICION_GATED_PROFILE: 1, WLS_GATED_PROFILE: 2,
+        SCADA_ONLY_PROFILE: 0, SUSPICION_GATED_PROFILE: 1, CLASSIFIER_GATED_PROFILE: 1, WLS_GATED_PROFILE: 2,
         AUXILIARY_EVIDENCE_PROFILE: 3,
     }
 
@@ -1054,7 +1070,7 @@ class MatpowerDeploymentProviders:
         method = "paired_opendss_effect_compensation"
         if self._strict_scada(state):
             prediction = None
-        elif self._effective_profile(state) == SUSPICION_GATED_PROFILE:
+        elif self._effective_profile(state) in SUSPICION_PROFILES:
             prediction = self._balanced_conditioned_prediction(state, ppc, z, noise_options)
             method = BALANCED_HIF_CONDITIONING_METHOD
         else:
@@ -1981,7 +1997,23 @@ class MatpowerDeploymentProviders:
                 metrics["unresolved_signatures"] = _dedupe([
                     *metrics["unresolved_signatures"], "wls_gnn_phase_investigation",
                 ])
+        if self.triage is not None:
+            metrics["triage"] = self._triage_report(state, solved)
         return metrics
+
+    def _triage_report(self, state: Mapping[str, Any], solved: Mapping[str, Any]) -> dict[str, Any]:
+        """The triage classifier's reading of this solve, bound to the state it was made on.
+
+        A classifier failure is an unavailable report that admits nothing;
+        it never fails the solve.  The gate and the expert read the report
+        through ``psse_env.actions.current_triage_report``.
+        """
+        try:
+            report = self.triage.report(solved["ppc"], solved["payload"])
+        except Exception as exc:  # the solve stands whatever the classifier does
+            report = {"method": self.triage.method, "model_id": self.triage.model_id, "status": "unavailable",
+                      "reason": f"{type(exc).__name__}: {str(exc)[:160]}", "request_admitted": False}
+        return {**report, **self._binding(state)}
 
     # ----------------------------------------------------------------- contexts
 
@@ -4541,7 +4573,7 @@ class MatpowerDeploymentProviders:
         if unavailable is not None:
             return unavailable
         state = self._evidence_state(state)
-        if self._effective_profile(state) == SUSPICION_GATED_PROFILE:
+        if self._effective_profile(state) in SUSPICION_PROFILES:
             return self._suspicion_three_phase_nlm(state)
         strict = self._strict_boundary(state)
         metadata = self._metadata(state)
@@ -5025,7 +5057,7 @@ class MatpowerDeploymentProviders:
                 "hif_target_missing",
                 "estimate_hif_location_magnitude requires candidate_branch_row0",
             )
-        if self._effective_profile(state) == SUSPICION_GATED_PROFILE:
+        if self._effective_profile(state) in SUSPICION_PROFILES:
             return self._suspicion_estimate_hif(self._evidence_state(state), arguments)
         try:
             alpha_grid_size, r_grid_size, _ = validate_hif_search_limits(

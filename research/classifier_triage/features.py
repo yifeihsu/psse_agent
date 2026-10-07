@@ -71,10 +71,19 @@ def signed_log(values: np.ndarray) -> np.ndarray:
 
 @lru_cache(maxsize=64)
 def network(case_name: str) -> dict[str, Any]:
-    """The configured network of a case: topology, per-unit branch data, bus types, zero-injection buses."""
+    """The configured network of a case by name (cached; see ``network_of``)."""
     from mcp_server.matpower_server import _load_python_case
 
-    case = _load_python_case(case_name)
+    return network_of(_load_python_case(case_name))
+
+
+def network_of(case: Mapping[str, Any]) -> dict[str, Any]:
+    """The configured network of a loaded case: topology, per-unit branch data, bus types, zero-injection buses.
+
+    The provider calls this with the operator's current case (a corrected
+    model has its own parameters and status), the offline studies through
+    ``network`` by name.
+    """
     bus = np.asarray(case["bus"], dtype=float)
     branch = np.asarray(case["branch"], dtype=float)
     gen = np.asarray(case.get("gen", np.empty((0, 8))), dtype=float)
@@ -121,11 +130,14 @@ def _packets(residual: np.ndarray) -> np.ndarray:
     return np.column_stack((signed_log(residual), np.abs(residual) > RESIDUAL_FLAG)).astype(float)
 
 
-def build_graph(case_name: str, payload: Mapping[str, Any], view: str = "residual") -> dict[str, np.ndarray]:
-    """Node, directed-edge and global features of one state (see the module docstring)."""
+def build_graph(case_name: str | Mapping[str, Any], payload: Mapping[str, Any], view: str = "residual") -> dict[str, np.ndarray]:
+    """Node, directed-edge and global features of one state (see the module docstring).
+
+    ``case_name`` is a case name (cached network) or a loaded case mapping.
+    """
     if view not in VIEWS:
         raise ValueError(f"unknown feature view {view!r}")
-    net = network(str(case_name))
+    net = network_of(case_name) if isinstance(case_name, Mapping) else network(str(case_name))
     nb, nl = int(net["nb"]), int(net["nl"])
     residual = neutral_residuals(payload, net)
     if residual.size != 3 * nb + 4 * nl:

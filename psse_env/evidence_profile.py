@@ -31,20 +31,39 @@ WLS_GATED_PROFILE = "wls_gated_diagnostics"
 #: Every root carries phasors and spectra generated from its true state at
 #: the uniform sensor sigmas, so a request can never answer by availability.
 SUSPICION_GATED_PROFILE = "suspicion_gated_diagnostics"
+#: Research contract of 2026-10-06 (docs/classifier_triage_plan_20261004.md,
+#: decision G1): the same boundary as suspicion_gated_diagnostics, but the
+#: balanced hypothesis screen is replaced by a triage classifier that reads
+#: the balanced WLS solve (every channel's normalized residual, every branch's
+#: multipliers, the configured network) and rides on the WLS ledger as
+#: ``triage``.  Phase-resolved phasors follow its admitted request, or the
+#: fallbacks a thresholded classifier needs after a miss: a balanced
+#: correction tried on the state was rejected by verification, or every
+#: balanced context fetched on the state offered no correction.  Spectra
+#: follow phasors that came back balanced, as before.
+CLASSIFIER_GATED_PROFILE = "classifier_gated_diagnostics"
 #: Historical reproduction: flagged roots, seeded signatures and hints allowed.
 AUXILIARY_EVIDENCE_PROFILE = "auxiliary_diagnostics"
 DEFAULT_EVIDENCE_PROFILE = WLS_GATED_PROFILE
 EVIDENCE_PROFILES = (
-    SCADA_ONLY_PROFILE, WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE, AUXILIARY_EVIDENCE_PROFILE,
+    SCADA_ONLY_PROFILE, WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE, CLASSIFIER_GATED_PROFILE,
+    AUXILIARY_EVIDENCE_PROFILE,
 )
 #: Profiles that admit auxiliary diagnostics only behind a current balanced
 #: WLS alarm on the target state (the suspicion-gated profile adds its
 #: family suspicions on top of that alarm).
-WLS_ALARM_GATED_PROFILES = frozenset({WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE})
+WLS_ALARM_GATED_PROFILES = frozenset({WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE, CLASSIFIER_GATED_PROFILE})
+#: Profiles whose auxiliary requests need a family suspicion on top of the
+#: alarm (``DIAGNOSTIC_SUSPICION_REQUIREMENTS``); where the suspicion comes
+#: from is the profile's business (the balanced screen, or the triage
+#: classifier with its fallbacks: ``psse_env.actions.current_suspicion``).
+SUSPICION_PROFILES = frozenset({SUSPICION_GATED_PROFILE, CLASSIFIER_GATED_PROFILE})
 #: Profiles whose truth boundary is strict: no seeded fault signatures, no
 #: private family or correction hints, no precomputed diagnoses, WLS first,
 #: no synthetic terminal closure, scenario identity kept out of store metadata.
-STRICT_BOUNDARY_PROFILES = frozenset({SCADA_ONLY_PROFILE, WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE})
+STRICT_BOUNDARY_PROFILES = frozenset({
+    SCADA_ONLY_PROFILE, WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE, CLASSIFIER_GATED_PROFILE,
+})
 #: Auxiliary diagnostics that wls_gated_diagnostics permits only after a
 #: current balanced WLS alarm (chi-square or normalized residual) on the
 #: active state.
@@ -235,6 +254,22 @@ def is_suspicion_gated(value: Any = None) -> bool:
     return resolve_evidence_profile(value) == SUSPICION_GATED_PROFILE
 
 
+def is_classifier_gated(value: Any = None) -> bool:
+    """Phasors follow the triage classifier's admitted request (or its fallbacks)."""
+    return resolve_evidence_profile(value) == CLASSIFIER_GATED_PROFILE
+
+
+def is_suspicion_profile(value: Any = None) -> bool:
+    """Either profile whose auxiliary requests follow a suspicion (screen or classifier).
+
+    They share the data and diagnostics contract: every root carries
+    true-state phasors and clean spectra at the uniform PMU sigma, the NLM
+    and the HIF estimator work from the snapshot phasors, and an accepted
+    HIF is conditioned by the balanced split-line compensation.
+    """
+    return resolve_evidence_profile(value) in SUSPICION_PROFILES
+
+
 def allows_diagnostic_tools(value: Any = None) -> bool:
     """Auxiliary diagnostics exist in this profile (gated or not)."""
     return resolve_evidence_profile(value) != SCADA_ONLY_PROFILE
@@ -247,7 +282,7 @@ def requires_wls_alarm_for_diagnostics(value: Any = None) -> bool:
 
 def required_suspicion(value: Any, tool: str) -> str | None:
     """Family suspicion ``tool`` needs under the profile, if any."""
-    if resolve_evidence_profile(value) != SUSPICION_GATED_PROFILE:
+    if resolve_evidence_profile(value) not in SUSPICION_PROFILES:
         return None
     return DIAGNOSTIC_SUSPICION_REQUIREMENTS.get(str(tool))
 
@@ -262,7 +297,7 @@ def disabled_tools(value: Any = None) -> frozenset[str]:
         return SCADA_DISABLED_TOOLS
     if profile == WLS_GATED_PROFILE:
         return WLS_GATED_DISABLED_TOOLS
-    if profile == SUSPICION_GATED_PROFILE:
+    if profile in SUSPICION_PROFILES:
         return SUSPICION_GATED_DISABLED_TOOLS
     return frozenset()
 
@@ -406,15 +441,16 @@ def sanitize_gated_metadata(
     signatures, hidden truth, labels, family and scenario hints and every
     precomputed diagnosis or truth-side model handle.
 
-    Under suspicion_gated_diagnostics the HIF acquisition block and scan
-    window are dropped as well: they carry the simulator's operating point and
-    exist only on HIF windows, and that profile's HIF diagnostics work from
-    the snapshot phasors every alarmed root carries.
+    Under suspicion_gated_diagnostics and classifier_gated_diagnostics the HIF
+    acquisition block and scan window are dropped as well: they carry the
+    simulator's operating point and exist only on HIF windows, and those
+    profiles' HIF diagnostics work from the snapshot phasors every alarmed
+    root carries.
     """
     if profile not in WLS_ALARM_GATED_PROFILES:
         raise ValueError(f"sanitize_gated_metadata needs a gated profile, got {profile!r}")
     metadata = metadata if isinstance(metadata, Mapping) else {}
-    if profile == SUSPICION_GATED_PROFILE:
+    if profile in SUSPICION_PROFILES:
         metadata = {key: value for key, value in metadata.items() if key not in {"hif_runtime", "hif_scan_window"}}
     result = _selected(metadata, _GATED_METADATA_FIELDS)
     if "parameter_scans" in metadata:

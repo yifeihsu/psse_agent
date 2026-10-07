@@ -10,9 +10,11 @@ from psse_env.evidence_profile import (
     allows_diagnostic_tools,
     disabled_requests,
     disabled_tools,
+    is_classifier_gated,
     is_scada_only,
     is_strict_boundary,
     is_suspicion_gated,
+    is_suspicion_profile,
     is_wls_gated,
     required_suspicion,
     requires_wls_alarm_for_diagnostics,
@@ -374,7 +376,7 @@ def _fundamental_anomaly_trigger(
     routes to phasor acquisition and holds the balanced corrections until the
     phasors have been examined.
     """
-    if is_suspicion_gated(evidence_profile):
+    if is_suspicion_profile(evidence_profile):
         return False
     if requires_wls_alarm_for_diagnostics(evidence_profile):
         return _ledger_wls_alarm(context_evidence, active_state_id, content_bound=True)
@@ -420,6 +422,76 @@ def current_screen_report(state: Any, family: str) -> Mapping[str, Any]:
         return {}
     report = wls.get(f"{family}_screen")
     return report if isinstance(report, Mapping) else {}
+
+
+def current_triage_report(state: Any) -> Mapping[str, Any]:
+    """The triage classifier's report on the current, bound WLS of the active state, else empty.
+
+    Under classifier_gated_diagnostics the classifier runs inside ``run_wls``
+    and its report rides on the WLS ledger entry as ``triage``; it is current
+    exactly when that WLS is (``current_screen_report``).
+    """
+    contexts = state.get("fresh_context_evidence") if isinstance(state, Mapping) else None
+    wls = (contexts.get("wls") or {}) if isinstance(contexts, Mapping) else {}
+    if not (
+        isinstance(wls, Mapping)
+        and wls.get("successful") is True
+        and isinstance(wls.get("state_hash"), str) and wls["state_hash"]
+        and str(wls.get("state_id") or "") == str(state.get("active_state_id") or "")
+    ):
+        return {}
+    report = wls.get("triage")
+    return report if isinstance(report, Mapping) else {}
+
+
+def triage_admits_request(report: Any) -> bool:
+    """A valid triage report whose request score reached its threshold."""
+    return isinstance(report, Mapping) and report.get("status") == "valid" and report.get("request_admitted") is True
+
+
+def triage_first_family(report: Any) -> str | None:
+    """The balanced family a valid triage report says to investigate first."""
+    if not isinstance(report, Mapping) or report.get("status") != "valid":
+        return None
+    family = report.get("first_family")
+    return str(family) if family in ("measurement", "parameter", "topology") else None
+
+
+def balanced_route_failed(state: Any) -> bool:
+    """The classifier profile's fallback: the balanced route was tried on the active state and gave nothing.
+
+    True when a balanced correction bound to the active state was rejected by
+    verification (an executor failure tested nothing), or when every balanced
+    context fetched on this state offered no correction.  Nothing in it reads
+    truth: rejections and context ledgers are policy-visible.
+    """
+    if not isinstance(state, Mapping):
+        return False
+    active_id = str(state.get("active_state_id") or "")
+    for record in state.get("rejected_hypotheses") or []:
+        if not isinstance(record, Mapping) or record.get("rejection_kind") == "executor_failure":
+            continue
+        parent = record.get("candidate_parent_id")
+        if parent is not None and active_id and str(parent) != active_id:
+            continue
+        source = record.get("source_action")
+        if isinstance(source, Mapping) and safe_normalize_action(source)["tool"] in CORRECTION_TOOLS:
+            return True
+    fetched = [
+        family for family in ("measurement", "parameter", "topology")
+        if state.get(f"has_fresh_{family}_context") and str(state.get(f"{family}_context_state_id") or "") == active_id
+    ]
+    if not fetched:
+        return False
+    contexts = state.get("fresh_context_evidence")
+    contexts = contexts if isinstance(contexts, Mapping) else {}
+    for family in fetched:
+        ledger = contexts.get(family)
+        if not isinstance(ledger, Mapping) or str(ledger.get("state_id") or "") != active_id:
+            return False
+        if ledger.get("supported_corrections"):
+            return False
+    return True
 
 
 def screen_phasor_suspicion(report: Any, kind: str) -> bool:
@@ -638,6 +710,15 @@ def current_suspicion(state: Any, family: str) -> bool:
         # Phasors examined on an ancestor state found no event (its waveform
         # signature would still stand): the spectra tier is open here too.
         return bool(not phasor_ledger(state) and phasors_examined_in_episode(state))
+    if isinstance(state, Mapping) and is_classifier_gated(state.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE)):
+        # No balanced screen runs here: the phasor tier opens on the triage
+        # classifier's admitted request or on the balanced route having
+        # failed on this state; the HIF suspicion is what the phasors showed.
+        if family == "phasor":
+            return triage_admits_request(current_triage_report(state)) or balanced_route_failed(state)
+        if family == "hif":
+            return phasor_nlm_classification(state) == "hif_suspected"
+        return False
     if family == "hif":
         return screen_phasor_suspicion(report, "hif") or phasor_nlm_classification(state) == "hif_suspected"
     if family == "refuted_explanation":

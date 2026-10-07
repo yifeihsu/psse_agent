@@ -30,7 +30,8 @@ import math
 from typing import Any, Mapping, Sequence
 
 from psse_env.evidence_profile import (
-    allows_diagnostic_tools, disabled_tools, is_strict_boundary, is_suspicion_gated, is_wls_gated,
+    allows_diagnostic_tools, disabled_tools, is_classifier_gated, is_strict_boundary, is_suspicion_gated,
+    is_wls_gated,
 )
 
 from psse_env.actions import (
@@ -53,6 +54,8 @@ from psse_env.actions import (
     current_gnn_screen,
     current_screen_report,
     current_suspicion,
+    current_triage_report,
+    triage_admits_request,
     current_wls_alarm,
     phasor_ledger,
     phasors_examined_in_episode,
@@ -448,6 +451,58 @@ class DiagnosticsExpert:
                 )], history)
         return []
 
+    def classifier_screening_proposals(
+        self, state: Any, history: Sequence[Mapping[str, Any]] | None = None,
+    ) -> list[ExpertActionProposal]:
+        """classifier_gated_diagnostics: phasors follow the triage classifier's admitted request.
+
+        The report rides on the current WLS (``wls.triage``).  An admitted
+        request acquires the phase-resolved measurements and tests them once
+        with the NLM: an HIF-like line differential mints the HIF signature
+        the estimator rung keys on, an unbalance source is explained, and
+        phasors that came back balanced open the spectra (the second tier).
+        Without an admitted request the balanced ladder runs; its fallbacks
+        (a rejected correction on this state, or contexts that offered
+        nothing) are the unexplained acquisition tier (``ExpertPolicyOracle``).
+        """
+        state = policy_state_view(state)
+        if not is_classifier_gated(state):
+            return []
+        active_id = state_value(state, "active_state_id")
+        if not active_id or state_value(state, "has_open_candidate"):
+            return []
+        contexts = state_value(state, "fresh_context_evidence") or {}
+        phase = phasor_ledger(state)
+        if phase and phase.get("nlm_attempted") is not True:
+            if not three_phase_context_available(contexts, active_id):
+                return []
+            # Phasors acquired on this state are examined before anything else.
+            return self._permitted(state, [self._proposal(
+                RUN_THREE_PHASE_NLM_FROM_PATH, {"state_id": active_id}, confidence=0.97,
+                evidence=["phase_resolved_measurements_acquired", "triage_request_tested_on_phasors"],
+            )], history)
+        report = current_triage_report(state)
+        if not phase:
+            if not triage_admits_request(report):
+                return []
+            if phasors_examined_in_episode(state):
+                # Phasors examined on an ancestor state found no event, and
+                # only the operator's corrections have changed since.
+                return []
+            return self._permitted(state, [self._proposal(
+                GET_THREE_PHASE_CONTEXT, {"state_id": active_id}, confidence=0.97,
+                evidence=[f"triage_request_admitted score={report.get('request_score')} threshold={report.get('request_threshold')}",
+                          "phase_resolved_measurements_requested"],
+            )], history)
+        if current_suspicion(state, "harmonic") and not spectra_examined_in_episode(state):
+            # The phasors show a balanced system: the spectra are the next
+            # evidence, before any correction is tried.
+            return self._permitted(state, [self._proposal(
+                GET_HARMONIC_CONTEXT, {"state_id": active_id}, confidence=0.96,
+                evidence=["phasors_balanced_three_phase", "spectral_evidence_requested_second_tier"],
+            )], history)
+        return []
+
     def unexplained_acquisition_proposals(
         self, state: Any, history: Sequence[Mapping[str, Any]] | None = None,
     ) -> list[ExpertActionProposal]:
@@ -463,7 +518,7 @@ class DiagnosticsExpert:
         every tier has been tried on this state, which is the handoff.
         """
         state = policy_state_view(state)
-        if not is_suspicion_gated(state):
+        if not (is_suspicion_gated(state) or is_classifier_gated(state)):
             return []
         active_id = state_value(state, "active_state_id")
         if not active_id or state_value(state, "has_open_candidate"):

@@ -48,12 +48,13 @@ from psse_env.oracle.termination_expert import TerminationExpert
 from psse_env.oracle.hif_continuation import hif_meter_route_ready, recovery_signatures
 from psse_env.oracle.topology_expert import TopologyExpert
 from psse_env.actions import (
-    DIAGNOSTIC_TOOLS, ESTIMATE_HIF_FROM_PATH, UNEXPLAINED_DISCREPANCY_REQUEST, diagnostic_tool_permitted,
-    phasors_examined, process_gate_refusal, unexplained_handoff_supported,
+    DIAGNOSTIC_TOOLS, ESTIMATE_HIF_FROM_PATH, UNEXPLAINED_DISCREPANCY_REQUEST, current_triage_report,
+    diagnostic_tool_permitted, phasors_examined, process_gate_refusal, triage_first_family,
+    unexplained_handoff_supported,
 )
 from psse_env.oracle.hypothesis_ledger import TOOL_FAMILY, budget_exhausted, hypothesis_ledger, rerank_proposals
 from psse_env.oracle.learned_ranker import LearnedRanker, acquisition_deferral, deferral_evidence_codes, resolve_ranker
-from psse_env.evidence_profile import allows_diagnostic_tools, is_strict_boundary, is_suspicion_gated
+from psse_env.evidence_profile import allows_diagnostic_tools, is_classifier_gated, is_strict_boundary, is_suspicion_gated
 from psse_env.state_store import (
     SYNTHETIC_TERMINAL_COMPATIBILITY_KEY,
     OracleState,
@@ -113,6 +114,30 @@ def _structural_first_order(
     non_measurement = [p for p in ranked if path(p) != "measurement"]
     measurement = [p for p in ranked if path(p) == "measurement"]
     return non_measurement + measurement
+
+
+_TRIAGE_FAMILY_TOOLS = {
+    "measurement": MEASUREMENT_PATH_TOOLS,
+    "parameter": frozenset({CORRECT_PARAMETERS, GET_PARAMETER_CONTEXT}),
+    "topology": frozenset({CORRECT_TOPOLOGY, GET_TOPOLOGY_CONTEXT}),
+}
+
+
+def _triage_first_order(
+    ranked: list[ExpertActionProposal], family: str | None,
+) -> list[ExpertActionProposal]:
+    """The triage classifier's first balanced family ahead of the others (classifier_gated_diagnostics).
+
+    Without a current report, or when nothing of that family is proposed,
+    the structural-first order stands.
+    """
+    tools = _TRIAGE_FAMILY_TOOLS.get(str(family)) if family else None
+    if not tools:
+        return _structural_first_order(ranked)
+    first = [p for p in ranked if safe_normalize_action(p.action)["tool"] in tools]
+    if not first:
+        return _structural_first_order(ranked)
+    return first + [p for p in ranked if p not in first]
 
 
 class ExpertPolicyOracle:
@@ -240,6 +265,11 @@ class ExpertPolicyOracle:
                 # once a candidate is rejected on this state the rule's
                 # acquisition follows unchanged.
                 stages = ()
+        if is_classifier_gated(policy):
+            # Auxiliary measurements follow the triage classifier's admitted
+            # request; after a balanced miss the fallbacks open them from the
+            # exhaustion tier (unexplained_acquisition_proposals).
+            stages = (self.diagnostics_expert.classifier_screening_proposals,)
         screening: list[ExpertActionProposal] = []
         for stage in stages:
             screening = stage(policy, context.history)
@@ -481,6 +511,9 @@ class ExpertPolicyOracle:
                 # fetched first (the meter edits still pass the branch-dominance
                 # guard and verification).
                 return ranked
+            if is_classifier_gated(policy):
+                state_view = policy if isinstance(policy, Mapping) else policy.as_dict()
+                return _triage_first_order(ranked, triage_first_family(current_triage_report(state_view)))
             return _structural_first_order(ranked)
         escalation = self._recovery_exhaustion_proposals(policy, context.history)
         return self._rank_and_filter(
@@ -1201,14 +1234,14 @@ class ExpertPolicyOracle:
              if is_strict_boundary(policy) else "unresolved_anomaly_requires_operator_handoff"),
         ]
         state_view = policy if isinstance(policy, Mapping) else policy.as_dict()
-        if is_suspicion_gated(policy) and unexplained_handoff_supported(state_view):
+        if (is_suspicion_gated(policy) or is_classifier_gated(policy)) and unexplained_handoff_supported(state_view):
             # Both acquisition tiers answered on this state, named no event,
             # and the alarm stands: the honest end of the suspicion-gated
             # ladder.
             request = UNEXPLAINED_DISCREPANCY_REQUEST
             evidence = ["observable_recovery_options_exhausted", "phasors_examined_on_state",
                         "unexplained_balanced_discrepancy_requires_operator_handoff"]
-        elif is_suspicion_gated(policy) and phasors_examined(state_view):
+        elif (is_suspicion_gated(policy) or is_classifier_gated(policy)) and phasors_examined(state_view):
             # The phasors named an event (an HIF whose estimate was accepted,
             # say) and a residual outlived its explanation, or the spectra
             # were taken on an ancestor state: the balanced recovery options

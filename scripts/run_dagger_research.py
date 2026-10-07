@@ -134,6 +134,10 @@ RESEARCH_ENVIRONMENT_OPTIONS: dict[str, Any] = {
     # environment and in generated-scenario admission; None is the
     # historical chi-square-only detector.
     "normalized_residual_threshold": DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD,
+    # classifier_gated_diagnostics: the directory of the triage classifier the
+    # provider runs on every WLS solve (research.classifier_triage.runtime);
+    # None selects the tracked model.
+    "triage_classifier": None,
 }
 #: Episode horizon of the research environment and the paired evaluation,
 #: the production factory's 40-step budget (teacher V2-B).  A multi-meter
@@ -305,6 +309,7 @@ def research_diagnostic_environment_factory(
         branch_first_partial=bool(
             RESEARCH_ENVIRONMENT_OPTIONS.get("branch_first_partial", False)
         ),
+        triage_classifier=RESEARCH_ENVIRONMENT_OPTIONS.get("triage_classifier"),
         **RESEARCH_HIF_SEARCH_BUDGET,
     )
     env = TransactionalPSSEEnv(

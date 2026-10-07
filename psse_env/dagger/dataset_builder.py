@@ -25,7 +25,7 @@ from psse_env.dagger.offline_teacher_target_audit import (
 )
 from psse_env.state_store import find_forbidden_policy_paths
 from psse_env.evidence_profile import (
-    SCADA_ALLOWED_TOOLS, disabled_tools, is_scada_only, is_suspicion_gated, is_wls_gated,
+    SCADA_ALLOWED_TOOLS, disabled_tools, is_classifier_gated, is_scada_only, is_suspicion_gated, is_wls_gated,
     validate_evidence_profile,
 )
 
@@ -103,11 +103,31 @@ SUSPICION_GATED_PROMPT_PARAGRAPH = (
 )
 
 
+CLASSIFIER_GATED_PROMPT_PARAGRAPH = (
+    " Evidence profile: classifier_gated_diagnostics. Start with WLS on the configured "
+    "balanced-network model, the observed SCADA voltage magnitudes and P/Q "
+    "injections/flows and the declared sensor noise; no fault flags or precomputed "
+    "diagnoses are provided. Each WLS result carries a triage report from a classifier "
+    "that reads the balanced solve (wls.triage): a request score against its threshold, "
+    "whether a request for phase-resolved measurements is admitted, and the balanced "
+    "error family to investigate first. Phase-resolved PMU phasors and the three-phase "
+    "NLM screen may be requested while the current WLS on the active state admits the "
+    "request, or after a balanced correction on that state was rejected by verification, "
+    "or when every balanced context fetched on it offered no correction; other requests "
+    "are rejected. The HIF estimator needs an HIF the phasors showed; harmonic spectra "
+    "and HSE need phasors that came back balanced. run_alternative_test and the "
+    "multi-scan HIF estimator are unavailable. If supported recovery cannot resolve the "
+    "discrepancy, request operator review without inventing a fault-family diagnosis."
+)
+
+
 def system_prompt_for_observation(system_prompt: str, observation: Mapping[str, Any]) -> str:
     profile = observation.get("evidence_profile")
     if profile is None:
         return system_prompt
     validate_evidence_profile(profile)
+    if is_classifier_gated(profile):
+        return system_prompt + CLASSIFIER_GATED_PROMPT_PARAGRAPH
     if is_suspicion_gated(profile):
         return system_prompt + SUSPICION_GATED_PROMPT_PARAGRAPH
     if is_wls_gated(profile):
@@ -213,6 +233,7 @@ PROVENANCE_SOURCE_KEYS = frozenset(
 HISTORY_METRIC_KEYS = (
     "gnn_screen",
     "hif_screen",
+    "triage",
     "wls_objective",
     "chi_square_statistic",
     "residual_norm",
@@ -310,6 +331,7 @@ CONTEXT_DETAIL_KEYS = frozenset(
     {
         "gnn_screen",
         "hif_screen",
+        "triage",
         "measurement_findings",
         "parameter_findings",
         "topology_findings",
