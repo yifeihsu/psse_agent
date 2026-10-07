@@ -53,7 +53,7 @@ localizes it.
 | --- | --- | --- | --- |
 | 0 | Offline benchmark on the IEEE 14 study rows: screen rule, gradient-boosted models, GNN, LLM | CPU and one local GPU; the LLM leg needs a cluster fine-tune | done (section 6): one training pass per LLM variant, then three passes |
 | 1 | New evidence profile without the screen; rule expert driven by each triage source on the 160 development roots | CPU | done 2026-10-06 (section 10): classifier profile 159/160 in 4.1 min, screen profile 159/160 (baseline) and 160/160 (ledger teacher) in about 10 min |
-| 2 | One DAgger cell per arm | about a day each | not started |
+| 2 | One DAgger cell per arm | about a day each | GNN arm launched 2026-10-07 02:02 UTC (section 11); LLM arm waits for the table-prompt result |
 | later | IEEE 57 and 118 roots of every family; leave-one-network-out | generation plus training | not started |
 
 ## 5. Stage 0 design
@@ -396,9 +396,15 @@ HIFs are the normalized per-unit sweep and it has no balanced-fault roots):
 - **Stage 1.** The evidence profile without the screen (gate G1, the two
   fallbacks, the triage report in the observation for the GNN arm), then the
   rule expert end to end with each triage source.
-- **Teacher.** Spectra before a voltage-meter edit when phasors came back
-  balanced (the inconsistency that cost R2 three roots on 2026-10-02) before
-  any new cell.
+- **Teacher.** Done 2026-10-06 (commit 1003f7f): under the suspicion
+  profile, phasors that came back balanced on a voltage-meter suspicion now
+  lead to the spectra before the meter is edited, whether or not the
+  screen's hypotheses explained the alarm. On the 160 development roots the
+  Step-5 teacher stays at 160/160; the two harmonic roots it used to
+  spend 13 and 15 steps on (testing the screen's bus-9 voltage-meter
+  hypothesis twice) take 6, the true voltage-meter root and one multi-meter
+  root take one step more, mean steps 7.9 to 7.8, spectra 16 to 18. The
+  classifier profile's expert had this order from the start.
 - **Prompt text.** The suspicion-gated paragraph of the system prompt still
   describes the 2026-09-27 rule (phasors only on an HIF suspicion); it is
   replaced with the new profile.
@@ -506,6 +512,36 @@ nothing, or a rejected correction); the parameter ranking's misranked
 stratum (above); the pipeline cell (`pipeline.env`) does not yet list the
 profile; the GNN is the IEEE 14 model, so the profile is usable on IEEE 14
 roots only until a multi-network model exists.
+
+## 11. Stage 2: the DAgger cell on the classifier profile (launched 2026-10-07)
+
+Cell `/scratch/yx3882/research_full_pipeline_20261007_classifier` on torch,
+source 1003f7f, overrides
+`research/hpc/full_pipeline_20260907/overrides/classifier_gated_20261007.env`
+(`EVIDENCE_PROFILE=classifier_gated_diagnostics`, `EXPERT_VARIANT=baseline`,
+`HIF_SIGNATURE_MODE=discovered`, nothing reused from an earlier cell).
+Corpora, plans (548 D0 roots, 160 development roots, 122 roots per round),
+seeds, the 40-step budget and the training recipe are those of the
+2026-10-01 ranked cell; the teacher differs (baseline expert reading the
+triage report instead of the ledger expert reading the screen) and so does
+the profile, so D0, BC0 and both rounds are regenerated. The deploy's
+dry-run prerequisites loaded the triage export
+(`triage_gnn:5d6df27b1aefc3fb`, five seeds, threshold 0.2782) and the
+corpora' PMU sigma. Chain submitted 02:01:56 UTC: d0 19314399, bc0 19314401,
+r1c 19314404, r1t 19314405, r1e 19314407, r2c 19314408, r2t 19314409,
+r2e 19314410.
+
+Pre-flight: a 24-root expert aggregate (two roots per family) with the
+cell's exact settings ran locally under the profile without a collector or
+training-decision failure (193 raw rows); the Stage 1 check (section 10) is
+the same teacher on the development roots.
+
+What the cell measures against the 2026-10-01 ranked cell (expert 160, BC0
+152, R1 158, R2 156 of 160 on its own development draw): the student's
+success and the number of phasor and spectra requests it makes, with the
+expert arm of every evaluation being the baseline expert on the classifier
+profile. Status:
+`MSYS_NO_PATHCONV=1 wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20261007_classifier/status_pipeline.sh`.
 
 ## 9. Reproduce
 
