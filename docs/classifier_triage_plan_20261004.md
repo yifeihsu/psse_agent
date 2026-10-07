@@ -597,6 +597,17 @@ check's), so the comparison is paired: that cell (screen profile, ledger
 teacher) reached expert 160, BC0 152 and R1 158 on its round 1, R2 156 on
 round 2. Round 2 started at 14:04 UTC.
 
+**Round 2 (2026-10-07).** R1 collected the 122 round-2 roots (537 new rows,
+label yield 86.6%; mixture 1,074 rows), R2 trained 269 steps (preempted once
+near the end and resumed from checkpoint 240), and the evaluation, preempted
+once and rerun, finished at 18:29 UTC (`out/r2/round_summary.json`; the cell
+is complete, `out/pipeline_summary.json`). **R2 solves 159 of 160**, the same
+roots as R1 family by family: every family complete except parameter (15 of
+16, the misranked root). Paired against R1 on the same roots, R2 has two fewer
+episodes with an invalid action and three fewer false commits in the same
+number of false-commit episodes. On the same 160 roots the screen cell's R2
+fell to 156 from its R1's 158; under the GNN gate round 2 holds R1's 159.
+
 ## 12. Contract changes for the next cell (2026-10-07)
 
 Leakage and redundancy review of the round-1 traces (2026-10-07). No family
