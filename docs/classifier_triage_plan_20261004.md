@@ -571,6 +571,32 @@ expert arm of every evaluation being the baseline expert on the classifier
 profile. Status:
 `MSYS_NO_PATHCONV=1 wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20261007_classifier/status_pipeline.sh`.
 
+**Round 1 (2026-10-07).** Stage 0 built 525 of the 548 planned D0 roots
+(4,376 rows; train 3,304, validation 637, test 435) in 2 h 46 min, BC0
+trained 826 steps in 3 h 16 min (best validation loss 0.0048), BC0 collected
+the 122 round-1 roots in 1 h 04 min (572 new rows, label yield 86.4%, no
+invalid student action during collection), R1 trained 286 steps on the
+1,144-row mixture, and the evaluation rolled out BC0, R1 and the expert on
+the 160 development roots (`out/r1/round_summary.json`):
+
+| Development roots (160) | Expert | BC0 | R1 |
+| --- | --- | --- | --- |
+| Successes | 159 | 153 | 159 |
+| Invalid-action episodes | 0 | 10 | 3 |
+| False-commit episodes | 0 | 1 | 1 |
+| Loop episodes | 1 | 9 | 0 |
+| Mean steps | 8.01 | 9.16 | 8.02 |
+
+R1 matches the expert root for root by family; the one root both miss is
+the misranked parameter root (the development draw's only `misranked`
+stratum root, r0_4d7aa8a5a01f, which no student and no baseline expert has
+solved; section 10). BC0's losses are five of the eight HIF roots with a bad
+meter, one topology root and the misranked root. The development draw is
+the same 160 roots as the 2026-10-01 ranked cell's (and as the Stage 1
+check's), so the comparison is paired: that cell (screen profile, ledger
+teacher) reached expert 160, BC0 152 and R1 158 on its round 1, R2 156 on
+round 2. Round 2 started at 14:04 UTC.
+
 ## 9. Reproduce
 
 ```bash
