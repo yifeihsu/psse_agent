@@ -647,31 +647,49 @@ Both suspicion-family prompt paragraphs state the new closure rules
 now describes its current gate (three phasor suspicions) instead of the
 2026-09-27 rule.
 
-**Effect on the 160 development roots** (rule expert, classifier profile,
-same roots as section 10):
+**Effect on the 160 development roots** (same roots as section 10): the
+classifier profile with the baseline expert (this cell's teacher), and the
+screen profile with the ranked teacher (the 2026-10-01 cell's), each before
+and after the change. Runs under `output/classifier_triage_20261004/e2e/`
+(`classifier_baseline`, `suspicion_ledger_ranked_vmfix` before; the `_v2`
+directories after).
 
-| | Before | After |
-| --- | --- | --- |
-| Successes | 159 | 159 (the same roots) |
-| Tool calls | 1,282 | 1,161 (-9.4%) |
-| Mean calls per root | 8.01 | 7.26 |
-| HIF | 6 | 5 |
-| HIF with a bad meter | 11.4 | 9.1 |
-| Single meter, parameter or topology fault (typical root) | 7 | 6 |
-| Harmonic, unbalance, healthy | 6, 4, 2 | 6, 4, 2 |
+| | Classifier, before | Classifier, after | Screen, before | Screen, after |
+| --- | --- | --- | --- | --- |
+| Successes | 159 | 159 (the same roots) | 160 | 160 |
+| Tool calls | 1,282 | 1,161 (-9.4%) | 1,256 | 1,137 (-9.5%) |
+| Mean calls per root | 8.01 | 7.26 | 7.85 | 7.11 |
+| HIF | 6 | 5 | 6 | 5 |
+| HIF with a bad meter | 11.4 | 9.1 | 11.0 | 9.1 |
+| Single meter, parameter or topology fault (typical root) | 7 | 6 | 7 | 6 |
+| Harmonic, unbalance, healthy | 6, 4, 2 | 6, 4, 2 | 6.4, 4, 2 | 6.4, 4, 2 |
 
-Every corrected root (94) now ends commit -> confirmation handoff. A 24-root
-expert aggregate with the cell's settings builds without a label-audit
+Phasors and spectra are fetched on the same roots before and after (59 and
+18 roots under the classifier, 58 and 18 under the screen). The classifier
+profile fetched phasors twice on one root before the change (60 phasor calls,
+now 59); the screen profile never did, so change 2 matters for the classifier
+profile only.
+
+Of the 96 roots with a committed correction, 94 under the classifier and 95
+under the screen now end commit -> confirmation handoff. The misranked root
+fails under the baseline expert (section 11). Root r0_b00fbc06fd0c (HIF with
+a bad meter) keeps a chi-square alarm on the HIF-conditioned WLS after its
+meter correction (largest normalized residual 3.33, on a Pt flow channel), so
+the confirmation does not apply: in both profiles the expert looks for a
+second meter in one measurement context and then hands off with
+`recovery_options_exhausted`. That call is a check the state calls for, not a
+repeat. A 24-root expert aggregate with the cell's settings builds without a label-audit
 failure under the new contract (175 training rows instead of 193; all 14
 handoff labels are the confirmation request). Tests:
 `psse_env/oracle/test_contract_20261007.py` (the four changes, including two
 closed-loop episodes on development roots when the suite is present).
 
-Still open after the review: the misranked parameter root (38 calls, fails
-for every policy; localization), and the classifier's own errors (one
-multi-meter root admitted at the first WLS, one measurement+topology root
-admitted after its topology fix at score 0.40), which cost phasor and
-spectra calls by design of the gate.
+Still open after the review: the misranked parameter root (38 calls; the
+baseline expert and both students of this cell fail it, while the ranked
+teacher localizes it and closes in 6 calls under the new contract), and the
+classifier's own errors (one multi-meter root admitted at the first WLS, one
+measurement+topology root admitted after its topology fix at score 0.40),
+which cost phasor and spectra calls by design of the gate.
 
 ## 9. Reproduce
 
