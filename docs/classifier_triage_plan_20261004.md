@@ -53,7 +53,7 @@ localizes it.
 | --- | --- | --- | --- |
 | 0 | Offline benchmark on the IEEE 14 study rows: screen rule, gradient-boosted models, GNN, LLM | CPU and one local GPU; the LLM leg needs a cluster fine-tune | done (section 6): one training pass per LLM variant, then three passes |
 | 1 | New evidence profile without the screen; rule expert driven by each triage source on the 160 development roots | CPU | done 2026-10-06 (section 10): classifier profile 159/160 in 4.1 min, screen profile 159/160 (baseline) and 160/160 (ledger teacher) in about 10 min |
-| 2 | One DAgger cell per arm | about a day each | GNN arm launched 2026-10-07 02:02 UTC (section 11); LLM arm waits for the table-prompt result |
+| 2 | One DAgger cell per arm | about a day each | GNN arm launched 2026-10-07 02:02 UTC (section 11); no cell for the LLM as the classifier (section 7, item 8) |
 | later | IEEE 57 and 118 roots of every family; leave-one-network-out | generation plus training | not started |
 
 ## 5. Stage 0 design
@@ -217,10 +217,12 @@ say three.
 | LLM, signed residuals, greedy first action | | 73.1% [65.0, 83.1] | 3.0% [1.2, 4.8] | 82.1% [78.1, 86.1] | 78.6% |
 | LLM, today's prompt, three passes, greedy first action | | 77.7% [70.1, 86.0] | 3.9% [2.0, 6.0] | 80.5% [75.9, 85.0] | 78.8% |
 | LLM, bus and branch tables, greedy first action | | 73.8% [65.9, 83.6] | 2.4% [0.9, 4.1] | 83.3% [79.4, 87.4] | 79.3% |
+| LLM, bus and branch tables, three passes at half rate, greedy first action | | 83.1% [76.7, 90.1] | 7.8% [5.0, 11.0] | 76.4% [71.6, 81.4] | 78.0% |
 | LLM, today's prompt, request probability at the calibrated threshold | 91.5% [88.5, 94.4] | 100% | 85.3% [81.4, 89.1] | 77.4% [72.2, 82.9] | |
 | LLM, signed residuals, request probability at the calibrated threshold | 95.6% [93.5, 97.5] | 99.2% [97.5, 100] | 75.7% [71.1, 80.4] | 85.2% [81.4, 88.8] | |
 | LLM, today's prompt, three passes, request probability at the calibrated threshold | 94.7% [92.5, 96.9] | 99.2% [97.5, 100] | 55.3% [50.0, 60.9] | 84.3% [80.2, 88.3] | |
 | LLM, bus and branch tables, request probability at the calibrated threshold | 97.1% [95.9, 98.4] | 100% | 45.6% [40.2, 51.3] | 85.8% [82.0, 89.4] | |
+| LLM, bus and branch tables, three passes at half rate, request probability at the calibrated threshold | 95.7% [93.8, 97.4] | 100% | 49.2% [43.8, 54.5] | 85.2% [81.3, 89.0] | |
 | Trees, same prompt (today's), largest class | | 95.4% [91.6, 98.6] | 1.2% [0.3, 2.4] | 96.2% [93.7, 98.4] | 95.9% |
 | Trees, same prompt (signed), largest class | | 96.9% [93.3, 100] | 1.2% [0.3, 2.5] | 94.7% [91.5, 97.4] | 95.0% |
 | Trees, same prompt (tables), largest class | | 98.5% [96.0, 100] | 1.2% [0.3, 2.5] | 96.2% [93.4, 98.4] | |
@@ -250,12 +252,12 @@ row because its training diverged (below).
 
 Requests on the test roots that need phasors, by family:
 
-| Family | Roots | LLM, today's prompt | LLM, signed residuals | LLM, today's prompt, three passes | LLM, tables | Trees, same prompt, largest class | GNN |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Harmonic | 50 | 50 | 50 | 50 | 50 | 50, 50 and 50 | 50 |
-| Unbalance | 30 | 28 | 28 | 26 | 28 | 28, 29 and 29 | 30 |
-| HIF | 25 | 17 | 17 | 18 | 17 | 24, 24 and 25 | 25 |
-| HIF with a bad meter | 25 | 3 | 0 | 7 | 1 | 22, 23 and 24 | 25 |
+| Family | Roots | LLM, today's prompt | LLM, signed residuals | LLM, today's prompt, three passes | LLM, tables | LLM, tables, three passes at half rate | Trees, same prompt, largest class | GNN |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Harmonic | 50 | 50 | 50 | 50 | 50 | 50 | 50, 50 and 50 | 50 |
+| Unbalance | 30 | 28 | 28 | 26 | 28 | 28 | 28, 29 and 29 | 30 |
+| HIF | 25 | 17 | 17 | 18 | 17 | 21 | 24, 24 and 25 | 25 |
+| HIF with a bad meter | 25 | 3 | 0 | 7 | 1 | 9 | 22, 23 and 24 | 25 |
 
 The tables variant (one pass, standard rate; 2026-10-07) shows the bus and
 branch tables of the alarm's neighbourhood in the WLS summary
@@ -270,6 +272,15 @@ greedy first action requests on 73.8% of the roots that need phasors and on
 before. Trees on the same tables reach 98.5% recall with 1.2% unneeded at
 their own decision and 3.0% unneeded at full recall: the tables carry the
 information, the LLM's first action does not use it.
+
+The last run of the leg, three passes over the tables at half the rate
+(5e-5; the signed three-pass run had diverged at 1e-4), trained without a
+spike (validation loss between 0.023 and 0.038 throughout, best at step 640
+of 1,527). It moves the greedy decision along the same curve rather than up
+it: recall 83.1% [76.7, 90.1], the highest of every LLM run (9 of 25 HIF
+roots behind a bad meter, 21 of 25 HIF roots), for 7.8% unneeded requests
+instead of 2.4%, and a request AUC of 95.7%, below the one-pass run's
+97.1%. Eleven of its 1,063 greedy generations carry no tool call.
 
 On the roots it misses, the LLM opens the measurement context (31 of 32
 misses with today's prompt, 34 of 35 with signed residuals, 28 of 29 after
@@ -388,15 +399,15 @@ HIFs are the normalized per-unit sweep and it has no balanced-fault roots):
 
 ## 8. Open
 
-- **LLM as the classifier.** The one-pass tables run is in (section 6: AUC
-  97.1%, greedy recall 73.8%). The three-pass run at half the rate (job
-  19310886, `out/prompt_tables_e3lr5`) is still training (step 1,281 of
-  1,527 at 09:16 UTC on 2026-10-07, about 12:30 UTC with scoring); fetch with
-  `fetch_results.sh prompt_tables_e3lr5` and add its `--llm-scores` and
-  `--llm-probabilities` options to the benchmark. Unless that run moves the
-  greedy decision, an LLM-arm DAgger cell with the LLM as the classifier is
-  not justified by the offline evidence; the LLM's place is acting on the
-  GNN's report (the cell of section 11).
+- **LLM as the classifier.** Closed for IEEE 14 (2026-10-07). Six
+  fine-tunes over three prompt forms, one and three passes, two learning
+  rates (one run diverged): the best greedy decision is 83.1% recall at 7.8% unneeded
+  requests, the best ranking an AUC of 97.1%, against 98.5% / 1.2% for trees
+  on the same tables and 100% / 0.9% for the GNN. An LLM-arm DAgger cell
+  with the LLM as the classifier is not justified by the offline evidence;
+  the LLM's place is acting on the GNN's report (the cell of section 11).
+  Not tried: more training roots, a larger model, or a reasoning trace
+  before the decision.
 - **Stage 2 (GNN arm).** The DAgger cell on `classifier_gated_diagnostics`:
   add the profile to `pipeline.env` (and the string assertions in
   `research/test_hpc_full_pipeline.py`), the triage export as the cell's
