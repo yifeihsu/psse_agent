@@ -603,10 +603,21 @@ near the end and resumed from checkpoint 240), and the evaluation, preempted
 once and rerun, finished at 18:29 UTC (`out/r2/round_summary.json`; the cell
 is complete, `out/pipeline_summary.json`). **R2 solves 159 of 160**, the same
 roots as R1 family by family: every family complete except parameter (15 of
-16, the misranked root). Paired against R1 on the same roots, R2 has two fewer
-episodes with an invalid action and three fewer false commits in the same
-number of false-commit episodes. On the same 160 roots the screen cell's R2
-fell to 156 from its R1's 158; under the GNN gate round 2 holds R1's 159.
+16, the misranked root). The round-2 evaluation scores R1 again with exactly
+its round-1 numbers, so the two evaluations can be read side by side:
+
+| Development roots (160) | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| Successes | 159 | 153 | 159 | 159 |
+| Invalid-action episodes (invalid actions) | 0 (0) | 10 (148) | 3 (11) | 1 (4) |
+| False-commit episodes (false commits) | 0 (0) | 1 (5) | 1 (7) | 1 (4) |
+| Loop episodes | 1 | 9 | 0 | 0 |
+| Mean steps | 8.01 | 9.16 | 8.02 | 7.97 |
+| Screen cell, 2026-10-01 (successes) | 160 | 152 | 158 | 156 |
+
+On the same 160 roots the screen cell's R2 fell to 156 from its R1's 158;
+under the GNN gate round 2 holds R1's 159 with fewer invalid actions and
+false commits.
 
 ## 12. Contract changes for the next cell (2026-10-07)
 
