@@ -216,13 +216,17 @@ say three.
 | LLM, today's prompt, greedy first action | | 75.4% [67.5, 84.7] | 11.1% [7.9, 14.7] | 66.0% [60.3, 71.8] | 68.3% |
 | LLM, signed residuals, greedy first action | | 73.1% [65.0, 83.1] | 3.0% [1.2, 4.8] | 82.1% [78.1, 86.1] | 78.6% |
 | LLM, today's prompt, three passes, greedy first action | | 77.7% [70.1, 86.0] | 3.9% [2.0, 6.0] | 80.5% [75.9, 85.0] | 78.8% |
+| LLM, bus and branch tables, greedy first action | | 73.8% [65.9, 83.6] | 2.4% [0.9, 4.1] | 83.3% [79.4, 87.4] | 79.3% |
 | LLM, today's prompt, request probability at the calibrated threshold | 91.5% [88.5, 94.4] | 100% | 85.3% [81.4, 89.1] | 77.4% [72.2, 82.9] | |
 | LLM, signed residuals, request probability at the calibrated threshold | 95.6% [93.5, 97.5] | 99.2% [97.5, 100] | 75.7% [71.1, 80.4] | 85.2% [81.4, 88.8] | |
 | LLM, today's prompt, three passes, request probability at the calibrated threshold | 94.7% [92.5, 96.9] | 99.2% [97.5, 100] | 55.3% [50.0, 60.9] | 84.3% [80.2, 88.3] | |
+| LLM, bus and branch tables, request probability at the calibrated threshold | 97.1% [95.9, 98.4] | 100% | 45.6% [40.2, 51.3] | 85.8% [82.0, 89.4] | |
 | Trees, same prompt (today's), largest class | | 95.4% [91.6, 98.6] | 1.2% [0.3, 2.4] | 96.2% [93.7, 98.4] | 95.9% |
 | Trees, same prompt (signed), largest class | | 96.9% [93.3, 100] | 1.2% [0.3, 2.5] | 94.7% [91.5, 97.4] | 95.0% |
+| Trees, same prompt (tables), largest class | | 98.5% [96.0, 100] | 1.2% [0.3, 2.5] | 96.2% [93.4, 98.4] | |
 | Trees, same prompt (today's), calibrated threshold | 99.85% [99.67, 99.97] | 100% | 13.5% [10.0, 17.2] | 96.5% [93.9, 98.7] | |
 | Trees, same prompt (signed), calibrated threshold | 99.76% [99.51, 99.95] | 100% | 6.3% [3.8, 8.8] | 95.9% [92.9, 98.4] | |
+| Trees, same prompt (tables), calibrated threshold | 99.9% [99.8, 100] | 100% | 3.0% [1.2, 5.0] | 97.5% [95.3, 99.4] | |
 | GNN, residual-only (from above) | 99.96% [99.88, 100] | 100% | 0.9% [0.0, 2.1] | 96.5% [94.4, 98.7] | |
 
 In the greedy and largest-class rows a request on a root that needs none
@@ -246,12 +250,26 @@ row because its training diverged (below).
 
 Requests on the test roots that need phasors, by family:
 
-| Family | Roots | LLM, today's prompt | LLM, signed residuals | LLM, today's prompt, three passes | Trees, same prompt, largest class | GNN |
-| --- | --- | --- | --- | --- | --- | --- |
-| Harmonic | 50 | 50 | 50 | 50 | 50 and 50 | 50 |
-| Unbalance | 30 | 28 | 28 | 26 | 28 and 29 | 30 |
-| HIF | 25 | 17 | 17 | 18 | 24 and 24 | 25 |
-| HIF with a bad meter | 25 | 3 | 0 | 7 | 22 and 23 | 25 |
+| Family | Roots | LLM, today's prompt | LLM, signed residuals | LLM, today's prompt, three passes | LLM, tables | Trees, same prompt, largest class | GNN |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Harmonic | 50 | 50 | 50 | 50 | 50 | 50, 50 and 50 | 50 |
+| Unbalance | 30 | 28 | 28 | 26 | 28 | 28, 29 and 29 | 30 |
+| HIF | 25 | 17 | 17 | 18 | 17 | 24, 24 and 25 | 25 |
+| HIF with a bad meter | 25 | 3 | 0 | 7 | 1 | 22, 23 and 24 | 25 |
+
+The tables variant (one pass, standard rate; 2026-10-07) shows the bus and
+branch tables of the alarm's neighbourhood in the WLS summary
+(`psse_env/providers/wls_tables.py`, about 1,200 more prompt tokens). Its
+validation loss fell at every evaluation (0.0549, 0.0331, 0.0212, 0.0201 at
+step 509), the lowest of the one-pass runs. The tables lift the LLM's
+ranking: request AUC 97.1%, the best of every LLM run, 90.0% [85.1, 95.2]
+recall at the screen's rate of unneeded requests, and 45.6% unneeded at the
+screen's recall instead of 76% to 85%. They do not lift its decision: the
+greedy first action requests on 73.8% of the roots that need phasors and on
+1 of the 25 HIF roots behind a bad meter, the same voltage-channel cue as
+before. Trees on the same tables reach 98.5% recall with 1.2% unneeded at
+their own decision and 3.0% unneeded at full recall: the tables carry the
+information, the LLM's first action does not use it.
 
 On the roots it misses, the LLM opens the measurement context (31 of 32
 misses with today's prompt, 34 of 35 with signed residuals, 28 of 29 after
@@ -350,11 +368,14 @@ HIFs are the normalized per-unit sweep and it has no balanced-fault roots):
    voltage residual leading the list and not dwarfed by the branch
    multipliers), which finds harmonic and unbalance roots and misses an HIF
    behind a bad meter.
-7. Signed residuals help every reader of the prompt: the trees' unneeded
-   requests at full recall fall from 13.5% to 6.3%, the one-pass LLM's AUC
-   rises from 91.5% to 95.6% and its recall at the screen's rate of unneeded
-   requests from 75% to 90%. The model view caps a list at eight entries; the
-   cap has to be raised for the agent's WLS summary to show ten.
+7. Signed residuals and the bus and branch tables help every reader of the
+   prompt's ranking: the trees' unneeded requests at full recall fall from
+   13.5% (today's prompt) to 6.3% (signed) and 3.0% (tables), the one-pass
+   LLM's AUC rises from 91.5% to 95.6% and 97.1%. None of them moves the
+   LLM's greedy decision off the voltage cue (recall 73% to 75% in every
+   one-pass run). The model view caps a list at eight entries; the cap has to
+   be raised for the agent's WLS summary to show ten signed residuals (the
+   tables need no cap change, `WLS_SUMMARY_TABLE_KEYS`).
 8. For the two arms this means: on IEEE 14 the request gate should be the
    GNN's score, with the LLM acting on its report. An LLM that classifies by
    itself needs more than this recipe, and three passes did not supply it.
@@ -367,19 +388,15 @@ HIFs are the normalized per-unit sweep and it has no balanced-fault roots):
 
 ## 8. Open
 
-- **LLM as the classifier.** One more offline test is running (2026-10-06,
-  jobs 19310832 and 19310886 on torch): the `prompt_tables` variant, whose
-  WLS summary carries the per-bus and per-branch tables of the alarm's
-  neighbourhood (`psse_env/providers/wls_tables.py`, about 700 more tokens
-  per prompt), fine-tuned for one pass at the standard rate and for three
-  passes at half the rate (the signed three-pass run diverged at 1e-4),
-  with the same-prompt trees on the table rows as the control
-  (`prompt_control.table_features`). Fetch with
-  `fetch_results.sh prompt_tables prompt_tables_e3lr5` and add
-  `--prompt-control prompt_tables=output/classifier_triage_20261004/llm/prompt_tables`
-  with the `--llm-scores`/`--llm-probabilities` options to the benchmark.
-  Beyond that: more training roots, or the LLM acting on the classifier's
-  report (the GNN arm) rather than classifying itself.
+- **LLM as the classifier.** The one-pass tables run is in (section 6: AUC
+  97.1%, greedy recall 73.8%). The three-pass run at half the rate (job
+  19310886, `out/prompt_tables_e3lr5`) is still training (step 1,281 of
+  1,527 at 09:16 UTC on 2026-10-07, about 12:30 UTC with scoring); fetch with
+  `fetch_results.sh prompt_tables_e3lr5` and add its `--llm-scores` and
+  `--llm-probabilities` options to the benchmark. Unless that run moves the
+  greedy decision, an LLM-arm DAgger cell with the LLM as the classifier is
+  not justified by the offline evidence; the LLM's place is acting on the
+  GNN's report (the cell of section 11).
 - **Stage 2 (GNN arm).** The DAgger cell on `classifier_gated_diagnostics`:
   add the profile to `pipeline.env` (and the string assertions in
   `research/test_hpc_full_pipeline.py`), the triage export as the cell's
