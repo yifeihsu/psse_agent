@@ -52,7 +52,7 @@ localizes it.
 | Stage | What runs | Cost | Status |
 | --- | --- | --- | --- |
 | 0 | Offline benchmark on the IEEE 14 study rows: screen rule, gradient-boosted models, GNN, LLM | CPU and one local GPU; the LLM leg needs a cluster fine-tune | done (section 6): one training pass per LLM variant, then three passes |
-| 1 | New evidence profile without the screen; rule expert driven by each triage source on the 160 development roots | CPU | profile built 2026-10-06 (section 10); expert end to end on the development roots running |
+| 1 | New evidence profile without the screen; rule expert driven by each triage source on the 160 development roots | CPU | done 2026-10-06 (section 10): classifier profile 159/160 in 4.1 min, screen profile 159/160 (baseline) and 160/160 (ledger teacher) in about 10 min |
 | 2 | One DAgger cell per arm | about a day each | not started |
 | later | IEEE 57 and 118 roots of every family; leave-one-network-out | generation plus training | not started |
 
@@ -360,16 +360,31 @@ HIFs are the normalized per-unit sweep and it has no balanced-fault roots):
    itself needs more than this recipe, and three passes did not supply it.
    The comparison that stays meaningful for the LLM is the agent with the
    classifier's report against the agent with the screen's report, not the
-   LLM as the classifier.
+   LLM as the classifier. Stage 1 (section 10) shows the classifier
+   profile gives the rule expert the same roots as the screen profile at
+   under half the wall time; the DAgger cell on that profile is the next
+   step for the GNN arm.
 
 ## 8. Open
 
-- **LLM as the classifier.** Not pursued further without a decision. What
-  could still be tried: the three-pass run with signed residuals at a lower
-  learning rate (it diverged at 1e-4), more training roots (2,035 rows from
-  1,131 parents is small for a 12B model to learn a numeric pattern), or a
-  different input form (the full residual vector as a table). None of them
-  changes the GNN arm.
+- **LLM as the classifier.** One more offline test is running (2026-10-06,
+  jobs 19310832 and 19310886 on torch): the `prompt_tables` variant, whose
+  WLS summary carries the per-bus and per-branch tables of the alarm's
+  neighbourhood (`psse_env/providers/wls_tables.py`, about 700 more tokens
+  per prompt), fine-tuned for one pass at the standard rate and for three
+  passes at half the rate (the signed three-pass run diverged at 1e-4),
+  with the same-prompt trees on the table rows as the control
+  (`prompt_control.table_features`). Fetch with
+  `fetch_results.sh prompt_tables prompt_tables_e3lr5` and add
+  `--prompt-control prompt_tables=output/classifier_triage_20261004/llm/prompt_tables`
+  with the `--llm-scores`/`--llm-probabilities` options to the benchmark.
+  Beyond that: more training roots, or the LLM acting on the classifier's
+  report (the GNN arm) rather than classifying itself.
+- **Stage 2 (GNN arm).** The DAgger cell on `classifier_gated_diagnostics`:
+  add the profile to `pipeline.env` (and the string assertions in
+  `research/test_hpc_full_pipeline.py`), the triage export as the cell's
+  classifier, the baseline expert as teacher (the ledger variants read the
+  screen), and the teacher fix for the voltage-meter inconsistency first.
 - **Second decision on mixed roots.** A first action understates a closed
   loop on a root with a bad meter and an HIF: after the meter is corrected
   the agent decides again on the HIF that remains. This is not measured
@@ -450,12 +465,47 @@ fallbacks, expert routing, verification), `research/classifier_triage/tests/test
 (export, load, report), `psse_env/providers/test_wls_tables.py` (the tables
 and their model view).
 
+**Result on the 160 development roots** (the pipeline's `development.json`
+of the ranked cell: 16 each of harmonic, HIF, measurement, parameter,
+topology, unbalance and measurement+parameter, 12 each of multi-meter and
+measurement+topology, 8 each of measurement+HIF, healthy and
+telemetry-only; `research/classifier_triage/expert_e2e.py`, seed 20261006,
+40 steps, one CPU):
+
+| Teacher | Success | Phasors acquired (not needed) | Spectra (not needed) | Healthy components touched | Mean steps | Wall time |
+| --- | --- | --- | --- | --- | --- | --- |
+| Classifier profile, baseline expert | 159/160 | 59 (3) | 18 (2) | 5 | 8.0 | 4.1 min |
+| Screen profile, baseline expert | 159/160 | 59 (3) | 17 (1) | 5 | 8.6 | 10.0 min |
+| Screen profile, ledger expert with the ranker (the Step-5 teacher) | 160/160 | 58 (2) | 16 (0) | 4 | 7.9 | 9.4 min |
+
+"Not needed" counts phasors on roots other than HIF, HIF with a meter and
+unbalance, less the 16 harmonic roots, whose phasors are the contract's
+first tier before the spectra in every teacher. The classifier's first
+report admitted phasors on all 40 roots that need them and on 1 of the 104
+that do not (a multi-meter root at score 0.31); the other two acquisitions
+it did not need came later in their episodes, one through the fallback
+after a rejected correction and one from the report on a corrected child
+state.
+
+With the same expert, the classifier profile matches the screen profile
+root for root: the same 159 successes, the same failing root, 2.4 times
+less wall time. The one root the Step-5 teacher solves and both baseline
+teachers miss is a parameter root whose true line ranks second in the
+multiplier ranking (dominance ratio 1.02); the screen's hypothesis ledger
+names the right line, the parameter context's own ranking names the wrong
+one, which the baseline expert corrects and commits before the episode
+goes astray. That is localization inside the balanced ladder, which the
+classifier does not do (by design, section 3), not the request decision.
+Carrying the ledger's candidate ranking without the screen's refits is the
+open item for the balanced ladder.
+
 Known gaps: a root where the classifier does not admit phasors and the
 balanced ladder finds nothing to try ends in an operator handoff rather
 than a phasor request (the fallback needs a fetched context that offered
-nothing, or a rejected correction); the pipeline cell (`pipeline.env`) does
-not yet list the profile; the GNN is the IEEE 14 model, so the profile is
-usable on IEEE 14 roots only until a multi-network model exists.
+nothing, or a rejected correction); the parameter ranking's misranked
+stratum (above); the pipeline cell (`pipeline.env`) does not yet list the
+profile; the GNN is the IEEE 14 model, so the profile is usable on IEEE 14
+roots only until a multi-network model exists.
 
 ## 9. Reproduce
 
