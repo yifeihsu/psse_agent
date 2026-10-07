@@ -215,6 +215,24 @@ into a fresh directory and optionally a file from `overrides/` as
 
 `research_full_pipeline_20260921_physical` (commit 07880e1) runs the unchanged plans on the committed detectable-only corpora: 118 physical-ohm HIF windows on 69 kV lines (25 + 69 train, 7 + 17 validation; 100-1000 ohm sampled, only the windows the operator WLS discovers at margin 1.25 kept) and 160 ybus unbalance windows. Both families use the same-operating-point OpenDSS balanced reference and declare their shunt convention; Vm is the phase-A magnitude. Jobs d0 18205117 through r2e 18205131, submitted 2026-09-21T18:13Z. See docs/ieee14_hif_legacy_reconfiguration_20260919.md.
 
+### 2026-10-07 cell: classifier-gated diagnostics
+
+`overrides/classifier_gated_20261007.env`: `EVIDENCE_PROFILE=classifier_gated_diagnostics`
+with the baseline expert as teacher. The balanced hypothesis screen of the
+suspicion-gated contract is replaced by the triage GNN the source tree
+carries (`psse_env/oracle/models/triage_gnn_ieee14_20261004`,
+`research/classifier_triage/runtime.py`), which the WLS provider runs on every
+solve: its report rides on the WLS ledger as `triage`, phasors follow its
+admitted request or the fallbacks after a miss (a balanced correction rejected
+on the state, or balanced contexts that offered nothing), spectra follow
+phasors that came back balanced. Data contract, corpora, plans and seeds are
+those of the 2026-10-01 ranked cell; everything is regenerated because the
+teacher and the profile change. Design and the Stage 1 check (the rule
+expert on the development roots: 159/160 in 4.1 min against the screen's
+159 to 160/160 in about 10 min) are in `docs/classifier_triage_plan_20261004.md`,
+section 10. `prerequisites.sh` loads the triage export and refuses a
+non-baseline teacher under this profile.
+
 ### 2026-09-23 cell: WLS-gated diagnostics on the OPF-dispatched PMU corpora
 
 The evidence contract changes to `EVIDENCE_PROFILE=wls_gated_diagnostics`

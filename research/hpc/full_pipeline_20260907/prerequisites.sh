@@ -36,7 +36,7 @@ done
 # Under the WLS-gated contracts the HIF corpora must declare the PMU phasor
 # precision of the study (pipeline.env PMU_PHASOR_SIGMA) in their meta.json;
 # an empty PMU_PHASOR_SIGMA disables the check for an explicit ablation.
-if [[ ( "$EVIDENCE_PROFILE" == wls_gated_diagnostics || "$EVIDENCE_PROFILE" == suspicion_gated_diagnostics ) && -n "${PMU_PHASOR_SIGMA:-}" ]]; then
+if [[ ( "$EVIDENCE_PROFILE" == wls_gated_diagnostics || "$EVIDENCE_PROFILE" == suspicion_gated_diagnostics || "$EVIDENCE_PROFILE" == classifier_gated_diagnostics ) && -n "${PMU_PHASOR_SIGMA:-}" ]]; then
   "$PY" - "$PMU_PHASOR_SIGMA" "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID" "$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA" <<'PY'
 import json
 import math
@@ -62,6 +62,21 @@ print(f"HIF corpora declare PMU phasor sigma {expected!r} per component")
 PY
 fi
 [[ -s "$TRACE_VALIDATION" ]] || echo "note: trace validation set absent; only the BC0 suite is protected"
+# The classifier-gated profile runs the triage classifier the source tree carries.
+if [[ "$EVIDENCE_PROFILE" == classifier_gated_diagnostics ]]; then
+  TRIAGE_MODEL=$SRC/psse_env/oracle/models/triage_gnn_ieee14_20261004
+  [[ -s "$TRIAGE_MODEL/runtime.json" ]] || { echo "classifier_gated_diagnostics needs the triage export: $TRIAGE_MODEL" >&2; exit 2; }
+  if [[ "$EXPERT_VARIANT" != baseline ]]; then
+    echo "classifier_gated_diagnostics takes the baseline expert (the ledger variants read the balanced screen)" >&2; exit 2
+  fi
+  (cd "$SRC" && "$PY" - "$TRIAGE_MODEL" <<'PY'
+import sys
+from research.classifier_triage.runtime import load_triage_classifier
+classifier = load_triage_classifier(sys.argv[1])
+print(f"triage classifier {classifier.model_id}: {len(classifier.models)} seeds, threshold {classifier.threshold:.4f}")
+PY
+  )
+fi
 # The ranked teacher reads the learned ranker export the source tree carries.
 if [[ "$EXPERT_VARIANT" == ledger_ranked ]]; then
   RANKER_MODEL=$SRC/psse_env/oracle/models/learned_ranker_ieee14_20261001.json

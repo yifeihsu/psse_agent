@@ -438,15 +438,24 @@ class DiagnosticsExpert:
                 RUN_WLS, {"state_id": active_id}, confidence=0.97,
                 evidence=[*evidence, "hif_suspicion_refuted_by_phase_measurements", "balanced_solve_refresh"],
             )]
-        if current_suspicion(state, "unexplained") and current_suspicion(state, "harmonic"):
-            # The screen found no balanced hypothesis sequence that explains
-            # the alarm and the phasors show a balanced system: the spectra
-            # are the next evidence, before any correction is tried (unless
-            # an earlier state of the episode already looked at them).
+        if (voltage or current_suspicion(state, "unexplained")) and current_suspicion(state, "harmonic"):
+            # The phasors show a balanced system.  When the screen found no
+            # balanced hypothesis sequence that explains the alarm, the
+            # spectra are the next evidence before any correction is tried.
+            # On a voltage-meter suspicion too (2026-10-06): a bad voltage
+            # meter and a harmonic distortion look alike on balanced SCADA
+            # and on balanced phasors, and whether the screen's hypotheses
+            # explained the alarm is not something the balanced evidence can
+            # tell apart; the spectra are asked for before the meter is
+            # edited, so the label is the same on both roots (the 2026-10-02
+            # round-2 losses).  An earlier state of the episode that already
+            # looked at the spectra answers for this one.
             if not spectra_examined_in_episode(state):
+                reason = ("voltage_meter_suspicion_spectra_before_edit" if voltage
+                          else "alarm_unexplained_by_balanced_hypotheses")
                 return self._permitted(state, [self._proposal(
                     GET_HARMONIC_CONTEXT, {"state_id": active_id}, confidence=0.96,
-                    evidence=[*evidence, "alarm_unexplained_by_balanced_hypotheses", "phasors_balanced_three_phase",
+                    evidence=[*evidence, reason, "phasors_balanced_three_phase",
                               "spectral_evidence_requested_second_tier"],
                 )], history)
         return []
