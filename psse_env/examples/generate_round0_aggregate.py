@@ -54,6 +54,7 @@ from psse_env.actions import (
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
     FINALIZE_DIAGNOSIS,
+    POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
     RUN_WLS,
@@ -851,7 +852,7 @@ def _runtime_anchor_validation(
         require(
             anchor.get("final_action_tool") == ASK_FOR_MORE_EVIDENCE
             and anchor.get("final_action_request")
-            == RECOVERY_OPTIONS_EXHAUSTED_REQUEST
+            in {RECOVERY_OPTIONS_EXHAUSTED_REQUEST, POST_CORRECTION_CONFIRMATION_REQUEST}
             and accepted_count > 0
             and anchor.get("last_accepted_candidate_state_id") == active_state_id,
             "round0_handoff_runtime_anchor_qualified_claim_invalid",

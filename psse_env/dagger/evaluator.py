@@ -45,6 +45,7 @@ from psse_env.actions import (
     HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
     INVALID_ACTION,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+    POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
     RUN_WLS,
@@ -775,6 +776,7 @@ _OBJECTIVE_OPERATOR_HANDOFF_REQUESTS = frozenset(
         HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
         RECOVERY_BUDGET_EXHAUSTED_REQUEST,
         RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+        POST_CORRECTION_CONFIRMATION_REQUEST,
     }
 )
 
@@ -3866,7 +3868,8 @@ def _independent_handoff_process_label(
     normalized = safe_normalize_action(action)
     if not (
         normalized["tool"] == ASK_FOR_MORE_EVIDENCE
-        and normalized["arguments"].get("request") == RECOVERY_OPTIONS_EXHAUSTED_REQUEST
+        and normalized["arguments"].get("request")
+        in {RECOVERY_OPTIONS_EXHAUSTED_REQUEST, POST_CORRECTION_CONFIRMATION_REQUEST}
     ):
         return None
 

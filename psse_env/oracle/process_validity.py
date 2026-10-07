@@ -26,6 +26,7 @@ from psse_env.actions import (
     INVALID_ACTION,
     MACRO_ACTIONS,
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
     RUN_ALTERNATIVE_TEST,
@@ -900,6 +901,18 @@ class ProcessValidityOracle:
             # The controller marker names the canonical measurement-context
             # confirmation protocol.  Its repair must not vary with whichever
             # off-policy correction family the learner happened to attempt.
+            # Under the suspicion-family profiles the confirmation is the
+            # handoff itself (2026-10-07).
+            if _evidence_profile.is_suspicion_profile(state.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE)):
+                return [
+                    {
+                        "tool": ASK_FOR_MORE_EVIDENCE,
+                        "arguments": {
+                            "state_id": active_id,
+                            "request": POST_CORRECTION_CONFIRMATION_REQUEST,
+                        },
+                    }
+                ]
             if not self._context_is_fresh(state, "measurement"):
                 return [
                     {

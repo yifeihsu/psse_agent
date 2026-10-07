@@ -34,6 +34,7 @@ from .actions import (
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
     PROCESS_REJECTION_ERROR_CODES,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+    POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     UNEXPLAINED_DISCREPANCY_REQUEST,
     ROLLBACK_STATE,
@@ -420,6 +421,29 @@ def _semantic_correction_signature(action: Mapping[str, Any] | str) -> str | Non
         return None
 
 
+
+def _conditioned_wls_summary(output: Mapping[str, Any]) -> dict[str, Any]:
+    """The verdict of a conditioned WLS, as the accepted HIF estimate's output reports it."""
+    metrics = output.get("tool_metrics") if isinstance(output.get("tool_metrics"), Mapping) else {}
+    summary: dict[str, Any] = {
+        "execution_status": output.get("execution_status"),
+        "error_code": output.get("error_code"),
+    }
+    for key in (
+        "chi_square_alarm", "normalized_residual_alarm", "max_normalized_residual", "chi_square_ratio",
+        "remaining_anomaly_score", "no_material_anomaly_remaining", "globally_resolved",
+    ):
+        if key in metrics:
+            summary[key] = metrics[key]
+    conditioning = metrics.get("hif_conditioning")
+    if isinstance(conditioning, Mapping):
+        summary["hif_conditioning"] = {
+            key: conditioning[key]
+            for key in ("status", "method", "remaining_meter_candidate_indices", "failure_reasons")
+            if key in conditioning
+        }
+    return summary
+
 class TransactionalPSSEEnv:
     """Recovery-aware transactional controller around PSSE macro-actions."""
 
@@ -460,6 +484,9 @@ class TransactionalPSSEEnv:
         self.context_flags: dict[str, Any] = {}
         self.history: list[dict[str, Any]] = []
         self._non_dispatched_action_count = 0
+        # Controller-run steps (the conditioned WLS after an accepted HIF
+        # estimate) are recorded in the history but are not policy actions.
+        self._controller_initiated_count = 0
         self.terminal = False
         self.terminal_outcome: str | None = None
         self._episode_counter = 0
@@ -705,6 +732,7 @@ class TransactionalPSSEEnv:
         }
         self.history = []
         self._non_dispatched_action_count = 0
+        self._controller_initiated_count = 0
         self.terminal = False
         self.terminal_outcome = None
         return self.current_state()
@@ -759,7 +787,7 @@ class TransactionalPSSEEnv:
             self._rebind_telemetry_requests(active_id, active_hash)
         summary = self.store.decision_summary(
             candidate_state_id=self.current_candidate_id,
-            remaining_budget=max(self.max_steps - len(self.history) - self._non_dispatched_action_count, 0),
+            remaining_budget=max(self.max_steps - self._counted_action_total(), 0),
             context_flags=self.context_flags,
         )
         contexts = summary["fresh_context_evidence"]
@@ -998,7 +1026,10 @@ class TransactionalPSSEEnv:
     ) -> PolicyObservation:
         summary = self.current_state()
         window_size = self.history_window if history_window is None else int(history_window)
-        history_source = self.history if history is None else history
+        # Controller-run steps are reported inside the policy action's output.
+        history_source = (
+            [event for event in self.history if not event.get("initiated_by")] if history is None else history
+        )
         window = policy_safe_copy(list(history_source)[-window_size:])
         has_unverified_candidate = bool(summary.get("has_unverified_candidate"))
         has_verified_candidate = bool(summary.get("has_verified_candidate"))
@@ -1135,7 +1166,7 @@ class TransactionalPSSEEnv:
         count = validate_episode_action_limit(count)
         if self.store.active_state_id is None:
             raise ValueError("setup action accounting requires an initialized episode")
-        if len(self.history) + self._non_dispatched_action_count + count > self.max_steps:
+        if self._counted_action_total() + count > self.max_steps:
             raise ValueError("non-dispatched actions exceed the remaining episode action budget")
         self._non_dispatched_action_count += count
 
@@ -1143,9 +1174,14 @@ class TransactionalPSSEEnv:
         """Compatibility entry point for synthetic pre-policy setup attempts."""
         self.account_non_dispatched_actions(count)
 
+    def _counted_action_total(self) -> int:
+        """Policy actions executed or accounted so far (controller-run steps excluded)."""
+        return (len(self.history) - getattr(self, "_controller_initiated_count", 0)
+                + self._non_dispatched_action_count)
+
     def step(self, action: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         normalized = safe_normalize_action(action)
-        counted_actions = len(self.history) + self._non_dispatched_action_count
+        counted_actions = self._counted_action_total()
         if counted_actions >= self.max_steps:
             # The final allowed action was already executed and recorded.
             # Reject subsequent calls without another dispatch or transition.
@@ -1158,7 +1194,7 @@ class TransactionalPSSEEnv:
                 state_mutated=False,
                 valid_next_actions=[],
                 tool_metrics={"episode_action_limit": self.max_steps,
-                              "executed_action_count": len(self.history),
+                              "executed_action_count": len(self.history) - self._controller_initiated_count,
                               "non_dispatched_action_count": self._non_dispatched_action_count,
                               "counted_action_count": counted_actions,
                               "remaining_budget": 0},
@@ -1250,7 +1286,72 @@ class TransactionalPSSEEnv:
             source_state_id=before_active_id,
             source_candidate_id=before_candidate_id,
         )
+        combined = self._conditioned_wls_after_accepted_hif(normalized, output)
+        if combined is not None:
+            output = combined
         return self.current_state(), output
+
+    def _conditioned_wls_after_accepted_hif(
+        self, action: Mapping[str, Any], output: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Run the conditioned WLS inside the step of an accepted HIF estimate (2026-10-07).
+
+        Under the suspicion-family profiles an accepted HIF fit is a diagnosis
+        only: whether a meter error coexists with it, and whether it accounts
+        for the alarm, is read off the WLS conditioned on the fit
+        (``psse_env.oracle.hif_continuation``).  The estimate is never acted on
+        without that check, so the controller runs it in the same step: the
+        solve is recorded in the controller history like any WLS (every ledger
+        and audit reads it there), its verdict is returned inside the
+        estimate's own output as ``conditioned_wls``, and it does not count
+        against the policy's action budget or appear as a policy action in the
+        history window.  Returns the combined output, or ``None`` when the
+        step was not an accepted HIF estimate or the check could not run (the
+        policy then runs the WLS itself, as before).
+        """
+        if not (
+            is_suspicion_profile(self.evidence_profile)
+            and action.get("tool") == ESTIMATE_HIF_FROM_PATH
+            and output.get("execution_status") == "success"
+            and not self.terminal
+            and self.current_candidate_id is None
+        ):
+            return None
+        metrics = output.get("tool_metrics") if isinstance(output.get("tool_metrics"), Mapping) else {}
+        acceptance = metrics.get("diagnostic_acceptance")
+        explanation = metrics.get("anomaly_explanation")
+        if not (
+            isinstance(acceptance, Mapping) and acceptance.get("accepted") is True
+            and isinstance(explanation, Mapping) and explanation.get("family") == "hif"
+            and accepted_hif_explanation(self.context_flags)
+        ):
+            return None
+        active_id = str(self.store.active_state_id)
+        wls_action = {"tool": RUN_WLS, "arguments": {"state_id": active_id}}
+        validity_state = self.current_state()
+        validity_state["require_context_supported_corrections"] = bool(self.production_dataset_mode)
+        validity_state["audited_evaluation_setup_correction"] = bool(self._audited_evaluation_setup_correction)
+        validity_state["configured_evidence_tools"] = self._configured_evidence_tools()
+        if not self.process_oracle.check(validity_state, wls_action, store=self.store)["process_valid"]:
+            return None
+        try:
+            wls_output = self.dispatch_valid_action(wls_action)
+        except Exception:
+            return None
+        estimate_event = self.history[-1]
+        self._record_transition(wls_action, wls_output, source_state_id=active_id, source_candidate_id=None)
+        self.history[-1]["initiated_by"] = "controller_after_accepted_hif_estimate"
+        self._controller_initiated_count += 1
+        combined = copy.deepcopy(dict(output))
+        combined_metrics = dict(combined.get("tool_metrics") or {})
+        combined_metrics["conditioned_wls"] = _conditioned_wls_summary(wls_output)
+        combined["tool_metrics"] = policy_safe_copy(combined_metrics)
+        # The policy's last action is the estimate, and its output now carries the check.
+        estimate_event["tool_output"] = policy_safe_copy(combined)
+        self.context_flags["last_tool"] = action["tool"]
+        self.context_flags["last_tool_status"] = combined["execution_status"]
+        self.context_flags["last_tool_output"] = policy_safe_copy(combined)
+        return combined
 
     def record_noop_failure(
         self,
@@ -1536,6 +1637,7 @@ class TransactionalPSSEEnv:
                     HIF_CONDITIONING_UNAVAILABLE_REQUEST,
                     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
                     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                    POST_CORRECTION_CONFIRMATION_REQUEST,
                     AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
                     UNEXPLAINED_DISCREPANCY_REQUEST,
                 }
@@ -1715,6 +1817,7 @@ class TransactionalPSSEEnv:
                 HIF_CONDITIONING_UNAVAILABLE_REQUEST,
                 RECOVERY_BUDGET_EXHAUSTED_REQUEST,
                 RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                POST_CORRECTION_CONFIRMATION_REQUEST,
                 UNEXPLAINED_DISCREPANCY_REQUEST,
             }
         ):
@@ -1994,6 +2097,8 @@ class TransactionalPSSEEnv:
         arguments = normalized["arguments"]
         if arguments.get("request") == HIF_CONDITIONING_UNAVAILABLE_REQUEST:
             return self._hif_conditioning_unavailable_audit(normalized, provider_metrics)
+        if arguments.get("request") == POST_CORRECTION_CONFIRMATION_REQUEST:
+            return self._post_correction_confirmation_audit(normalized, provider_metrics)
         summary = self.current_state()
         active_id = str(summary.get("active_state_id") or "")
         target_id = str(arguments.get("state_id") or active_id)
@@ -2731,6 +2836,91 @@ class TransactionalPSSEEnv:
             "ledger": ledger,
         }
 
+    def _post_correction_confirmation_audit(
+        self, action: Mapping[str, Any], provider_metrics: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """The confirmation handoff of a quiet corrected state (2026-10-07).
+
+        Admits the request only when the controller's confirmation marker is
+        the one unexplained signature, a correction was committed, the current
+        bound WLS of the active state is quiet and no candidate is open.  No
+        same-state investigation is required: on a quiet state the measurement
+        context has nothing to offer, and the request names a confirmation,
+        not an exhaustion.  The ledger carries the fields the post-correction
+        handoff certificate reads.
+        """
+        summary = self.current_state()
+        active_id = str(summary.get("active_state_id") or "")
+        arguments = action.get("arguments") if isinstance(action.get("arguments"), Mapping) else {}
+        missing: list[str] = []
+        if action.get("tool") != ASK_FOR_MORE_EVIDENCE:
+            missing.append("escalation_tool_invalid")
+        if str(arguments.get("state_id") or active_id) != active_id or not active_id:
+            missing.append("escalation_state_not_active")
+        if summary.get("has_open_candidate"):
+            missing.append("open_candidate_present")
+        if not callable(self.evidence_providers.get(ASK_FOR_MORE_EVIDENCE)):
+            missing.append("operator_escalation_provider_missing")
+        try:
+            active_hash = str(self.store.state_hash(active_id))
+        except Exception:
+            active_hash = ""
+            missing.append("active_state_missing")
+        unresolved = unexplained_signatures(
+            summary.get("unresolved_signatures") or [], summary.get("explained_anomalies") or [],
+        )
+        accepted = summary.get("accepted_corrections") or []
+        if not accepted:
+            missing.append("accepted_correction_missing")
+        if POST_CORRECTION_CONFIRMATION_SIGNATURE not in unresolved:
+            missing.append("post_correction_confirmation_marker_missing")
+        if terminal_explanation_signatures(unresolved):
+            missing.append("unexplained_anomaly_signature_present")
+        score = summary.get("remaining_anomaly_score")
+        try:
+            if score is not None and float(score) >= float(self.process_oracle.anomaly_threshold):
+                missing.append("remaining_anomaly_score_unresolved")
+        except (TypeError, ValueError):
+            missing.append("remaining_anomaly_score_invalid")
+        if normalized_residual_alarm(summary):
+            missing.append("normalized_residual_alarm_present")
+        if self._latest_bound_successful_tool_metrics((RUN_WLS, VERIFY_CANDIDATE)) is None:
+            missing.append("current_wls_missing")
+        if provider_metrics is not None:
+            if str(provider_metrics.get("state_id") or "") != active_id or provider_metrics.get("state_hash") != active_hash:
+                missing.append("escalation_provider_state_unbound")
+            if not _observable_provenance_source(provider_metrics.get("evidence_source")):
+                missing.append("escalation_provider_source_not_observable")
+            if provider_metrics.get("request") != POST_CORRECTION_CONFIRMATION_REQUEST:
+                missing.append("escalation_provider_request_mismatch")
+            if provider_metrics.get("additional_evidence_available") is not False:
+                missing.append("additional_evidence_not_explicitly_exhausted")
+            if provider_metrics.get("operator_review_required") is not True:
+                missing.append("operator_review_not_required")
+        ledger = {
+            "request": POST_CORRECTION_CONFIRMATION_REQUEST,
+            "active_state_id": active_id,
+            "active_state_hash": active_hash,
+            "family": "post_correction_confirmation",
+            "candidate_lines": [],
+            "unexplained_signature_count": len(unresolved),
+            "required_estimators": [],
+            "rejected_estimators": [],
+            "investigation_tools": [],
+            "supported_recovery_target_count": 0,
+            "exhausted_recovery_target_count": 0,
+            "outstanding_recovery_targets": [],
+            "safety_blocked_recovery_targets": [],
+            "missing_required_contexts": [],
+            "additional_evidence_available": False,
+            "autonomous_budget_available": None,
+            "post_correction_confirmation_deferred": False,
+            "post_correction_confirmation_handoff": True,
+            "accepted_correction_count": len(accepted),
+            "operator_review_required": True,
+        }
+        return {"sufficient": not missing, "missing": list(dict.fromkeys(missing)), "ledger": ledger}
+
     def _hif_conditioning_unavailable_audit(
         self, action: Mapping[str, Any], provider_metrics: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
@@ -3387,6 +3577,7 @@ class TransactionalPSSEEnv:
         branch.context_flags = copy.deepcopy(self.context_flags)
         branch.history = copy.deepcopy(self.history)
         branch._non_dispatched_action_count = self._non_dispatched_action_count
+        branch._controller_initiated_count = self._controller_initiated_count
         branch._oracle_payload = copy.deepcopy(self._oracle_payload)
         # Counterfactual execution must not mutate stateful solver/oracle
         # collaborators owned by the live rollout environment.

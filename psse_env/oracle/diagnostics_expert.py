@@ -31,7 +31,7 @@ from typing import Any, Mapping, Sequence
 
 from psse_env.evidence_profile import (
     allows_diagnostic_tools, disabled_tools, is_classifier_gated, is_strict_boundary, is_suspicion_gated,
-    is_wls_gated,
+    is_suspicion_profile, is_wls_gated,
 )
 
 from psse_env.actions import (
@@ -59,6 +59,7 @@ from psse_env.actions import (
     current_wls_alarm,
     phasor_ledger,
     phasors_examined_in_episode,
+    phasors_tested_in_episode,
     process_gate_refusal,
     spectra_examined_in_episode,
     diagnostic_tool_permitted,
@@ -115,7 +116,13 @@ class DiagnosticsExpert:
                 evidence=["hif_conditioning_unavailable", "physical_fault_still_present", "operator_handoff_required"])])
         if not hif_meter_route_ready(state):
             return []
-        if hif_conditioned_closure_ready(state) and not state_value(state, "accepted_corrections", []):
+        if hif_conditioned_closure_ready(state) and (
+            not state_value(state, "accepted_corrections", []) or is_suspicion_profile(state)
+        ):
+            # Quiet conditioned WLS and no conditional meter candidate.  Under
+            # the suspicion-family profiles a committed meter correction does
+            # not need another measurement context to say so (2026-10-07):
+            # the post-correction confirmation handoff follows.
             return []
         contexts = state_value(state, "fresh_context_evidence") or {}
         measurement = contexts.get("measurement") or {}
@@ -494,9 +501,10 @@ class DiagnosticsExpert:
         if not phase:
             if not triage_admits_request(report):
                 return []
-            if phasors_examined_in_episode(state):
-                # Phasors examined on an ancestor state found no event, and
-                # only the operator's corrections have changed since.
+            if phasors_tested_in_episode(state):
+                # Phasors were acquired and tested on an ancestor state, and
+                # only the operator's corrections have changed since: they
+                # show the same event, so they are not acquired again.
                 return []
             return self._permitted(state, [self._proposal(
                 GET_THREE_PHASE_CONTEXT, {"state_id": active_id}, confidence=0.97,
@@ -536,6 +544,10 @@ class DiagnosticsExpert:
         phase = phasor_ledger(state)
         if not phase:
             if not current_suspicion(state, "phasor"):
+                return []
+            if is_classifier_gated(state) and phasors_tested_in_episode(state):
+                # The fallback does not re-acquire phasors already tested in
+                # the episode either (see classifier_screening_proposals).
                 return []
             refuted = current_suspicion(state, "refuted_explanation")
             if refuted or not phasors_examined_in_episode(state):

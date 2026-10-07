@@ -45,7 +45,7 @@ def _report(*, admitted, score=None, first="measurement", status="valid"):
         score = 0.91 if admitted else 0.03
     return {"method": "triage_gnn", "model_id": "triage_gnn:test", "status": status, "request_score": score,
             "request_threshold": threshold, "request_admitted": bool(admitted), "first_family": first,
-            "family_scores": {"measurement": 0.5, "parameter": 0.1, "topology": 0.1, "hif": score, "unbalance": 0.05, "harmonic": 0.02},
+            "first_family_scores": {"measurement": 0.5, "parameter": 0.3, "topology": 0.2},
             "state_id": ACTIVE, "state_hash": HASH}
 
 

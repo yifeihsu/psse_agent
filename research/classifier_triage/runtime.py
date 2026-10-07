@@ -6,9 +6,13 @@
 Under ``classifier_gated_diagnostics`` the WLS provider loads the exported
 directory once and, after every solve, writes a ``triage`` report on the WLS
 ledger entry: the mean request probability of the seeds against the
-calibrated threshold (decision G1), the balanced family to investigate
-first, and the six family scores as a diagnostic.  The report reads nothing
-but the solve and the operator's current case; it never sees truth.
+calibrated threshold (decision G1) and the balanced family to investigate
+first.  The report reads nothing but the solve and the operator's current
+case; it never sees truth.  The six family heads are not reported
+(2026-10-07): on IEEE 14 the waveform families are told apart from a bad
+voltage meter on balanced data only through simulator artifacts, so their
+scores stay out of the policy's view; ``TriageClassifier.scores`` still
+returns them for offline study.
 
 ``export`` turns the benchmark's per-seed checkpoints into the runtime
 directory: ``runtime.json`` (contract, view, threshold and where it came
@@ -106,8 +110,7 @@ class TriageClassifier:
             "request_admitted": bool(scores["needs_aux"] >= self.threshold),
             "first_family": FIRST_CLASSES[int(np.argmax(scores["first"]))],
             "first_family_scores": {name: round(float(v), 3) for name, v in zip(FIRST_CLASSES, scores["first"])},
-            "family_scores": {name: round(float(v), 3) for name, v in zip(FAMILY_HEADS, scores["family"])},
-            "score_interpretation": "mean of the seeds' probabilities; family scores are diagnostic only",
+            "score_interpretation": "mean of the seeds' probabilities",
         }
 
 

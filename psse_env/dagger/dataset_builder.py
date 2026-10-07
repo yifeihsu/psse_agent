@@ -86,20 +86,30 @@ WLS_GATED_PROMPT_PARAGRAPH = (
     "recovery cannot resolve the discrepancy, request operator review without "
     "inventing a fault-family diagnosis."
 )
+#: Shared by the two suspicion-family profiles (2026-10-07): what follows an
+#: accepted HIF estimate and a committed correction.
+SUSPICION_FAMILY_CLOSURE_SENTENCES = (
+    " An accepted HIF estimate reports the WLS conditioned on it (conditioned_wls). "
+    "After a committed correction leaves the WLS quiet, request operator confirmation "
+    "(operator_escalation:post_correction_confirmation) instead of finalizing."
+)
 SUSPICION_GATED_PROMPT_PARAGRAPH = (
     " Evidence profile: suspicion_gated_diagnostics. Start with WLS on the configured "
     "balanced-network model, the observed SCADA voltage magnitudes and P/Q "
     "injections/flows and the declared sensor noise; no fault flags or precomputed "
     "diagnoses are provided. Each WLS alarm is screened against single-cause balanced "
     "explanations (a meter, a branch parameter, a line outage, or a high-impedance "
-    "fault on a line). Phase-resolved PMU phasors, the three-phase NLM screen and the "
-    "HIF estimator may be requested only while the current WLS on the active state "
-    "reports an HIF suspicion (wls_hif_suspected); other requests are rejected, and "
-    "the phasors can show that the suspicion was wrong. Harmonic spectra and HSE "
-    "need a harmonic suspicion, which no balanced screen raises. run_alternative_test "
-    "and the multi-scan HIF estimator are unavailable. If supported recovery cannot "
-    "resolve the discrepancy, request operator review without inventing a "
-    "fault-family diagnosis."
+    "fault on a line). Phase-resolved PMU phasors and the three-phase NLM screen may "
+    "be requested while the current WLS on the active state reports a phasor "
+    "suspicion: an HIF won the screen, a phase-A voltage channel was set aside as a "
+    "bad meter, or no balanced explanation accounts for the alarm; other requests are "
+    "rejected, and the phasors can show that the suspicion was wrong. The HIF "
+    "estimator needs an HIF suspicion; harmonic spectra and HSE need phasors that came "
+    "back balanced."
+    + SUSPICION_FAMILY_CLOSURE_SENTENCES
+    + " run_alternative_test and the multi-scan HIF estimator are unavailable. If "
+    "supported recovery cannot resolve the discrepancy, request operator review "
+    "without inventing a fault-family diagnosis."
 )
 
 
@@ -115,9 +125,11 @@ CLASSIFIER_GATED_PROMPT_PARAGRAPH = (
     "request, or after a balanced correction on that state was rejected by verification, "
     "or when every balanced context fetched on it offered no correction; other requests "
     "are rejected. The HIF estimator needs an HIF the phasors showed; harmonic spectra "
-    "and HSE need phasors that came back balanced. run_alternative_test and the "
-    "multi-scan HIF estimator are unavailable. If supported recovery cannot resolve the "
-    "discrepancy, request operator review without inventing a fault-family diagnosis."
+    "and HSE need phasors that came back balanced."
+    + SUSPICION_FAMILY_CLOSURE_SENTENCES
+    + " run_alternative_test and the multi-scan HIF estimator are unavailable. If "
+    "supported recovery cannot resolve the discrepancy, request operator review "
+    "without inventing a fault-family diagnosis."
 )
 
 
@@ -234,6 +246,7 @@ HISTORY_METRIC_KEYS = (
     "gnn_screen",
     "hif_screen",
     "triage",
+    "conditioned_wls",
     "wls_objective",
     "chi_square_statistic",
     "residual_norm",
@@ -332,6 +345,7 @@ CONTEXT_DETAIL_KEYS = frozenset(
         "gnn_screen",
         "hif_screen",
         "triage",
+        "conditioned_wls",
         "measurement_findings",
         "parameter_findings",
         "topology_findings",

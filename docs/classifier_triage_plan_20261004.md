@@ -597,6 +597,82 @@ check's), so the comparison is paired: that cell (screen profile, ledger
 teacher) reached expert 160, BC0 152 and R1 158 on its round 1, R2 156 on
 round 2. Round 2 started at 14:04 UTC.
 
+## 12. Contract changes for the next cell (2026-10-07)
+
+Leakage and redundancy review of the round-1 traces (2026-10-07). No family
+leak was found in the policy's view: every root carries phasors and spectra
+at one sigma, the family-independent fields are identical across the 13
+families in the rendered prompts, signatures appear only from the agent's
+own diagnostics, and the probes show no simulator-background effect. HIF,
+harmonic, unbalance and healthy traces were already at the minimum the gates
+allow. Four changes were approved by the user and are in the code; the cell
+of section 11 keeps its teacher (source 1003f7f).
+
+1. **Triage report without family scores.** `research/classifier_triage/runtime.py`:
+   the policy-visible report keeps the request score, threshold, admission
+   and the first balanced family. The six family heads stay offline
+   (`TriageClassifier.scores`): on IEEE 14, harmonic and unbalance are told
+   apart from a bad voltage meter on balanced data only through simulator
+   artifacts.
+2. **No phasor re-acquisition (classifier profile).** `phasors_tested_in_episode`
+   (`psse_env/actions.py`): phasors acquired and NLM-tested on an earlier
+   state of the episode are not acquired again on a corrected child, by the
+   admitted request or by the fallback. Root r0_b00fbc06fd0c (HIF with a bad
+   meter) went from 14 to 10 calls.
+3. **One confirmation handoff after a correction (both suspicion-family
+   profiles).** When a committed correction leaves the WLS quiet, the
+   controller still does not let the agent declare the case resolved (an edit
+   that only silences the alarm must not close the case), but the agent now
+   hands off at once with `operator_escalation:post_correction_confirmation`
+   (`POST_CORRECTION_CONFIRMATION_REQUEST`) instead of fetching a measurement
+   context on the quiet state and asking with `recovery_options_exhausted`.
+   The environment audits the request on its own terms
+   (`_post_correction_confirmation_audit`: committed correction, the
+   confirmation marker as the only unexplained signature, quiet current WLS,
+   no open candidate), the provider reports it, and the expert, the process
+   repair, the collector, the target audit, the evaluator and the release
+   handoff certificate accept it. Under an accepted HIF the conditional-meter
+   context is skipped the same way when the conditioned WLS is quiet with no
+   candidate left. The older profiles keep the context-then-handoff path.
+4. **The conditioned WLS inside the HIF estimate (both suspicion-family
+   profiles).** After an accepted HIF estimate the environment runs the WLS
+   conditioned on it in the same step (`_conditioned_wls_after_accepted_hif`):
+   the solve is recorded in the controller history (every ledger and audit
+   reads it), its verdict is returned in the estimate's output as
+   `conditioned_wls`, and it neither counts against the policy's action
+   budget nor appears in the policy's history window.
+
+Both suspicion-family prompt paragraphs state the new closure rules
+(`SUSPICION_FAMILY_CLOSURE_SENTENCES`); the suspicion-gated paragraph also
+now describes its current gate (three phasor suspicions) instead of the
+2026-09-27 rule.
+
+**Effect on the 160 development roots** (rule expert, classifier profile,
+same roots as section 10):
+
+| | Before | After |
+| --- | --- | --- |
+| Successes | 159 | 159 (the same roots) |
+| Tool calls | 1,282 | 1,161 (-9.4%) |
+| Mean calls per root | 8.01 | 7.26 |
+| HIF | 6 | 5 |
+| HIF with a bad meter | 11.4 | 9.1 |
+| Single meter, parameter or topology fault (typical root) | 7 | 6 |
+| Harmonic, unbalance, healthy | 6, 4, 2 | 6, 4, 2 |
+
+Every corrected root (94) now ends commit -> confirmation handoff. A 24-root
+expert aggregate with the cell's settings builds without a label-audit
+failure under the new contract (175 training rows instead of 193; all 14
+handoff labels are the confirmation request). Tests:
+`psse_env/oracle/test_contract_20261007.py` (the four changes, including two
+closed-loop episodes on development roots when the suite is present).
+
+Still open after the review: the misranked parameter root (38 calls, fails
+for every policy; localization), and the classifier's own errors (one
+multi-meter root admitted at the first WLS, one measurement+topology root
+admitted after its topology fix at score 0.40), which cost phasor and
+spectra calls by design of the gate.
+
 ## 9. Reproduce
 
 ```bash

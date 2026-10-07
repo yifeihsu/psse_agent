@@ -46,6 +46,16 @@ RECOVERY_OPTIONS_EXHAUSTED_REQUEST = (
 RECOVERY_BUDGET_EXHAUSTED_REQUEST = (
     "operator_escalation:recovery_budget_exhausted"
 )
+# A committed correction left the WLS quiet.  The controller does not let the
+# agent certify a case resolved after editing its own model (an edit that only
+# silences the alarm must not close the case), so the corrected state is handed
+# to the operator for confirmation.  Under the suspicion-family profiles this
+# is one request right after the commit (2026-10-07); the older path fetched a
+# measurement context on the quiet state first and asked with
+# RECOVERY_OPTIONS_EXHAUSTED_REQUEST.
+POST_CORRECTION_CONFIRMATION_REQUEST = (
+    "operator_escalation:post_correction_confirmation"
+)
 # The balanced routes are exhausted, the phasors acquired on the state came
 # back balanced and the spectra showed no distortion (or were refused), yet the
 # alarm stands: the diagnosis is handed over as an unexplained discrepancy,
@@ -677,6 +687,25 @@ def phasors_examined_in_episode(state: Any) -> bool:
         state, GET_THREE_PHASE_CONTEXT
     )
     return bool(examined and not waveform_anomaly_signatures(state.get("unresolved_signatures") or []))
+
+
+def phasors_tested_in_episode(state: Any) -> bool:
+    """Phasors were acquired and NLM-tested on this state or on an earlier state of the episode.
+
+    Unlike ``phasors_examined_in_episode`` this counts an earlier examination
+    whatever it found: a committed meter or branch correction changes the
+    operator's model, not the network, so the phasors of an ancestor state
+    still show the same event.  Under classifier_gated_diagnostics a request
+    the classifier admits on a corrected child state therefore does not
+    acquire the phasors again (2026-10-07).
+    """
+    if phasors_examined(state):
+        return True
+    return bool(
+        isinstance(state, Mapping)
+        and requested_on_earlier_state(state, RUN_THREE_PHASE_NLM_FROM_PATH)
+        and requested_on_earlier_state(state, GET_THREE_PHASE_CONTEXT)
+    )
 
 
 def spectra_examined_in_episode(state: Any) -> bool:

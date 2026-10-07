@@ -64,6 +64,7 @@ from psse_env.actions import (
     HIF_CONDITIONING_UNAVAILABLE_REQUEST,
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+    POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     RUN_HSE_FROM_PATH,
     RUN_THREE_PHASE_NLM_FROM_PATH,
@@ -683,6 +684,36 @@ class MatpowerDeploymentProviders:
             str(signature).split(":", 1)[0]
             for signature in observation.get("tried_action_signatures") or []
         }
+        if request == POST_CORRECTION_CONFIRMATION_REQUEST:
+            # The corrected state is quiet: the request asks the operator to
+            # confirm the committed corrections, it reports no exhaustion.
+            unresolved = unexplained_signatures(
+                observation.get("unresolved_signatures") or [],
+                observation.get("explained_anomalies") or [],
+            )
+            score = observation.get("remaining_anomaly_score")
+            try:
+                score_unresolved = score is not None and float(score) >= 1.0
+            except (TypeError, ValueError):
+                score_unresolved = False
+            accepted = observation.get("accepted_corrections") or []
+            if not (accepted and POST_CORRECTION_CONFIRMATION_SIGNATURE in unresolved and not score_unresolved):
+                return self._failure(
+                    "post_correction_confirmation_unsupported",
+                    "no committed correction awaits confirmation on a quiet state",
+                )
+            available = {str(item) for item in observation.get("available_evidence") or []}
+            return {
+                **self._binding(state),
+                "evidence_source": "deployment_diagnostic:post_correction_confirmation_inventory",
+                "request": POST_CORRECTION_CONFIRMATION_REQUEST,
+                "family": "post_correction_confirmation",
+                "additional_evidence_available": False,
+                "operator_review_required": True,
+                "accepted_correction_count": len(accepted),
+                "attempted_tools": sorted(attempted),
+                "available_evidence_channels": sorted(available),
+            }
         if request == AMBIGUOUS_BRANCH_CANDIDATES_REQUEST:
             candidates = self._ambiguous_branch_candidates(observation)
             if candidates is None:

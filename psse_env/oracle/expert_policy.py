@@ -24,6 +24,7 @@ from psse_env.actions import (
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
     PROCESS_REJECTION_ERROR_CODES,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+    POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     RUN_WLS,
     action_signature,
@@ -54,7 +55,9 @@ from psse_env.actions import (
 )
 from psse_env.oracle.hypothesis_ledger import TOOL_FAMILY, budget_exhausted, hypothesis_ledger, rerank_proposals
 from psse_env.oracle.learned_ranker import LearnedRanker, acquisition_deferral, deferral_evidence_codes, resolve_ranker
-from psse_env.evidence_profile import allows_diagnostic_tools, is_classifier_gated, is_strict_boundary, is_suspicion_gated
+from psse_env.evidence_profile import (
+    allows_diagnostic_tools, is_classifier_gated, is_strict_boundary, is_suspicion_gated, is_suspicion_profile,
+)
 from psse_env.state_store import (
     SYNTHETIC_TERMINAL_COMPATIBILITY_KEY,
     OracleState,
@@ -1128,23 +1131,30 @@ class ExpertPolicyOracle:
                 policy, history, active_id=active_id
             )
         )
-        if not (successful_current_wls and investigation_seen):
-            return []
+        if is_suspicion_profile(policy):
+            # 2026-10-07: the quiet corrected state goes to the operator in one
+            # request; a measurement context on it would offer nothing.
+            if not successful_current_wls:
+                return []
+            request = POST_CORRECTION_CONFIRMATION_REQUEST
+            evidence = ["committed_correction_left_wls_quiet", "operator_confirmation_required"]
+        else:
+            if not (successful_current_wls and investigation_seen):
+                return []
+            request = RECOVERY_OPTIONS_EXHAUSTED_REQUEST
+            evidence = ["post_correction_confirmation_complete", "operator_confirmation_required"]
         return [
             ExpertActionProposal(
                 action={
                     "tool": ASK_FOR_MORE_EVIDENCE,
                     "arguments": {
                         "state_id": active_id,
-                        "request": RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                        "request": request,
                     },
                 },
                 source_expert="recovery_expert",
                 confidence=1.0,
-                evidence_codes=[
-                    "post_correction_confirmation_complete",
-                    "operator_confirmation_required",
-                ],
+                evidence_codes=evidence,
                 admissible=True,
                 estimated_immediate_risk=0.0,
             )

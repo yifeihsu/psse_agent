@@ -32,6 +32,7 @@ from psse_env.actions import (
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
+    POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
 )
 from psse_env.private_target_matching import (
@@ -357,13 +358,14 @@ def observable_post_correction_handoff_certificate(
         action.get("tool") == ASK_FOR_MORE_EVIDENCE,
         "handoff_final_action_mismatch",
     )
+    handoff_request = arguments.get("request")
     require(
-        arguments.get("request") == RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+        handoff_request in {RECOVERY_OPTIONS_EXHAUSTED_REQUEST, POST_CORRECTION_CONFIRMATION_REQUEST},
         "handoff_action_request_mismatch",
     )
     require(
-        metrics.get("request") == RECOVERY_OPTIONS_EXHAUSTED_REQUEST
-        and escalation.get("request") == RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+        metrics.get("request") == handoff_request
+        and escalation.get("request") == handoff_request,
         "handoff_output_request_mismatch",
     )
     require(

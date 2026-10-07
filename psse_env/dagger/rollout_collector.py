@@ -13,6 +13,7 @@ from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
+    POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     invalid_action,
     safe_normalize_action,
@@ -257,6 +258,7 @@ def classify_dagger1_recovery_stratum(
             HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
             RECOVERY_BUDGET_EXHAUSTED_REQUEST,
             RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            POST_CORRECTION_CONFIRMATION_REQUEST,
         }
     ):
         return "multi_measurement_safe_handoff"
@@ -497,6 +499,7 @@ def classify_state_example(
             HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
             RECOVERY_BUDGET_EXHAUSTED_REQUEST,
             RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+            POST_CORRECTION_CONFIRMATION_REQUEST,
         }
     ):
         return "terminal_operator_escalation"
@@ -589,6 +592,7 @@ def audit_target_aware_state_classes(
                 HIF_DIAGNOSTICS_EXHAUSTED_REQUEST,
                 RECOVERY_BUDGET_EXHAUSTED_REQUEST,
                 RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+                POST_CORRECTION_CONFIRMATION_REQUEST,
             }
         ):
             required = "terminal_operator_escalation"
