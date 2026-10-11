@@ -56,6 +56,9 @@ system_args=(--system "$SYSTEM" --admission-mode "$ADMISSION_MODE" --evidence-pr
   --normalized-residual-threshold "$NORMALIZED_RESIDUAL_THRESHOLD" --progress-basis "$PROGRESS_BASIS")
 if [[ -n "$MEASUREMENT_CORPUS" ]]; then system_args+=(--measurement-corpus "$MEASUREMENT_CORPUS"); fi
 if [[ -n "$BALANCED_ARTIFACT_DIR" ]]; then system_args+=(--balanced-artifact-dir "$BALANCED_ARTIFACT_DIR"); fi
+# UNVERIFIED_EXPERT_LABEL_POLICY=stop (pipeline.env): an unverifiable expert label ends its episode.
+label_args=()
+if [[ "${UNVERIFIED_EXPERT_LABEL_POLICY:-abort}" == stop ]]; then label_args+=(--stop-episode-on-unverified-expert-label); fi
 # The waveform corpora of the configured system (pipeline.env: the IEEE 14
 # files, or those an override names for a system with a three-phase route).
 waveform_corpus_files
@@ -84,6 +87,7 @@ if [[ ! -s "$OUT/d0.done" ]]; then
     --topology-effects "$TOPOLOGY_EFFECTS" \
     "${system_args[@]}" \
     "${waveform_args[@]}" \
+    "${label_args[@]}" \
     > "$OUT/d0_console.json"
   "$PY" - "$D0_DIR" "$OUT/d0.done" "$EVIDENCE_PROFILE" "$EXPERT_VARIANT" <<'PY'
 import hashlib

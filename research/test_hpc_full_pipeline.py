@@ -83,6 +83,7 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
         "ADMISSION_MODE", "NORMALIZED_RESIDUAL_THRESHOLD", "CORPUS_COUNTS", "CORPUS_NUM_SCANS",
         "FROZEN_STUDENT_ADAPTER", "ZEROSHOT_EVAL_NAME", "EVIDENCE_PROFILE", "HIF_SIGNATURE_MODE",
         "PMU_PHASOR_SIGMA", "TRIAGE_CLASSIFIER", "CORPUS_LOAD_SCALE_MIN", "CORPUS_LOAD_SCALE_MAX", "PROGRESS_BASIS",
+        "UNVERIFIED_EXPERT_LABEL_POLICY",
     ):
         assert name in declared, name
     assert 'export PSSE_HIF_WORKERS="${SLURM_CPUS_PER_TASK:-8}"' in text
@@ -98,6 +99,8 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
     assert text.index("waveform_corpus_files()") < text.index('--hif-sample-paths "${HIF_CORPUS_FILES[@]}"')
     assert '--progress-basis "$PROGRESS_BASIS"' in text and "PROGRESS_BASIS=${PROGRESS_BASIS:-chi_square_statistic}" in text
     assert '--triage-classifier "$TRIAGE_CLASSIFIER"' in text
+    assert 'UNVERIFIED_EXPERT_LABEL_POLICY=${UNVERIFIED_EXPERT_LABEL_POLICY:-abort}' in text
+    assert '== stop ]]; then COLLECTION_ARGS+=(--stop-episode-on-unverified-expert-label); fi' in text
 
 
 def test_plans_cover_every_family_and_respect_corpus_capacity() -> None:
@@ -328,6 +331,7 @@ def test_stage_zero_passes_the_system_selection_to_both_draws() -> None:
     assert 'system_args=(--system "$SYSTEM" --admission-mode "$ADMISSION_MODE"' in text
     assert text.count('"${system_args[@]}"') == 2
     assert '--progress-basis "$PROGRESS_BASIS")' in text
+    assert 'label_args+=(--stop-episode-on-unverified-expert-label)' in text and '"${label_args[@]}"' in text
     # The waveform corpora of the configured system (pipeline.env's HIF_CORPUS_FILES), one --hif-corpus each.
     assert 'for corpus in "${HIF_CORPUS_FILES[@]}"; do waveform_args+=(--hif-corpus "$corpus"); done' in text
     assert 'waveform_args+=(--imbalance-corpus "$IMBALANCE_CORPUS")' in text
@@ -386,6 +390,7 @@ def test_zero_shot_stage_and_frozen_student_wiring() -> None:
     assert re.search(r"^SYSTEM=case118$", transfer, flags=re.MULTILINE)
     assert re.search(r"^EVIDENCE_PROFILE=classifier_gated_diagnostics$", transfer, flags=re.MULTILINE)
     assert re.search(r"^PROGRESS_BASIS=chi_square_excess$", transfer, flags=re.MULTILINE)
+    assert re.search(r"^UNVERIFIED_EXPERT_LABEL_POLICY=stop$", transfer, flags=re.MULTILINE)
     assert re.search(r"^TRIAGE_CLASSIFIER=\$SRC/psse_env/oracle/models/triage_gnn_joint_20261011$", transfer, flags=re.MULTILINE)
     assert re.search(r"^CORPUS_LOAD_SCALE_MAX=1\.25$", transfer, flags=re.MULTILINE)
     assert re.search(r"^FROZEN_STUDENT_ADAPTER=/scratch/", transfer, flags=re.MULTILINE)

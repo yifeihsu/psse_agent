@@ -978,6 +978,7 @@ def collect_round0(
     episode_handoff_assessments: list[dict[str, Any]] = []
     episode_handoff_runtime_anchors: list[dict[str, Any]] = []
     quarantined_rows = 0
+    unverified_expert_labels: list[dict[str, Any]] = []
 
     for scenario in scenarios:
         execution_scenario = _truth_free_execution_scenario(scenario)
@@ -987,6 +988,9 @@ def collect_round0(
             expert_oracle=oracle,
             rng=collector_rng,
             supervision_policy=BC0_OBSERVABLE_SEQUENTIAL_SUPERVISION,
+            stop_episode_on_unverified_expert_label=bool(
+                getattr(args, "stop_episode_on_unverified_expert_label", False)
+            ),
         )
         rows = collector.collect_iteration(
             scenarios=[execution_scenario],
@@ -994,6 +998,16 @@ def collect_round0(
             beta=1.0,
             max_steps=args.max_steps,
         )
+        for diagnostic in collector.unverified_expert_labels:
+            unverified_expert_labels.append(
+                {
+                    "scenario_family": str(scenario.get("scenario_family") or "unknown"),
+                    "physical_root_fingerprint": str(
+                        scenario.get("physical_root_fingerprint") or ""
+                    ),
+                    **dict(diagnostic),
+                }
+            )
         for row in rows:
             row["episode_terminal_outcome"] = env.terminal_outcome
             labels = row.get("labels")
@@ -1094,6 +1108,7 @@ def collect_round0(
         "episode_handoff_assessments": episode_handoff_assessments,
         "episode_handoff_runtime_anchors": episode_handoff_runtime_anchors,
         "quarantined_rows": quarantined_rows,
+        "unverified_expert_labels": unverified_expert_labels,
     }
 
 
@@ -3230,6 +3245,14 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         auxiliary_path = output_dir / "aggregate.auxiliary_counterfactual.raw.jsonl"
         write_jsonl(auxiliary_path, auxiliary_rows)
         dataset_paths.append(auxiliary_path)
+    if collected["unverified_expert_labels"]:
+        # Expert labels the environment could not verify (the research
+        # tolerance ended those episodes): the audit's missing list and the
+        # state, for the teacher/audit disagreement to be read later.
+        write_jsonl(
+            output_dir / "unverified_expert_labels.jsonl",
+            collected["unverified_expert_labels"],
+        )
     for name, rows in exported.items():
         split_path = output_dir / f"aggregate.{name}.jsonl"
         write_jsonl(split_path, rows)
@@ -3298,6 +3321,7 @@ def generate(args: argparse.Namespace) -> dict[str, Any]:
         "production_label_eligible_rows": len(eligible_rows),
         "auxiliary_ineligible_rows": len(auxiliary_rows),
         "quarantined_rows": collected["quarantined_rows"],
+        "unverified_expert_labels": len(collected["unverified_expert_labels"]),
         "quarantined_episodes": quarantined_episodes,
         "episode_handoff_assessments": collected[
             "episode_handoff_assessments"
@@ -3515,6 +3539,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--counterfactuals-per-scenario", type=int, default=3)
     parser.add_argument(
+        "--stop-episode-on-unverified-expert-label",
+        action="store_true",
+        help=(
+            "Research tolerance: when the environment cannot verify an expert label from "
+            "observable evidence, end that episode and record the disagreement "
+            "(unverified_expert_labels.jsonl) instead of aborting the aggregate, the release default"
+        ),
+    )
+    parser.add_argument(
         "--evaluation-suite",
         type=Path,
         default=DEFAULT_EVALUATION_SUITE_PATH,
@@ -3664,6 +3697,7 @@ def main() -> None:
                 "episode_rows": report["episode_rows"],
                 "recovery_rows": report["recovery_rows"],
                 "quarantined_rows": report["quarantined_rows"],
+                "unverified_expert_labels": report["unverified_expert_labels"],
                 "split_rows": report["split_rows"],
                 "state_classes": report["state_class_distribution"],
             },

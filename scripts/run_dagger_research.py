@@ -1188,6 +1188,7 @@ def collect_resumable(
     policy_factory: Callable[[], Any],
     environment_factory: Callable[..., Any],
     learner_adapter_path: str,
+    stop_episode_on_unverified_expert_label: bool = False,
     collector_class: type[DaggerRolloutCollector] = DaggerRolloutCollector,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not 0.25 <= float(beta) <= 0.5:
@@ -1248,6 +1249,7 @@ def collect_resumable(
                 rng=random.Random(episode_seed),
                 supervision_policy=DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
                 forbidden_physical_roots=forbidden,
+                stop_episode_on_unverified_expert_label=bool(stop_episode_on_unverified_expert_label),
             )
             rows = collector.collect_iteration(
                 scenarios=[scenario],
@@ -1256,6 +1258,15 @@ def collect_resumable(
                 max_steps=int(max_steps),
                 collection_role="training",
             )
+            unverified_labels = list(getattr(collector, "unverified_expert_labels", None) or [])
+            if unverified_labels:
+                _write_json(
+                    output_dir / "unverified_expert_labels" / f"{root}.json",
+                    {
+                        "physical_root_fingerprint": root,
+                        "labels": [dict(item) for item in unverified_labels],
+                    },
+                )
         except Exception as exc:
             failure = {
                 "physical_root_fingerprint": root,
@@ -2049,6 +2060,14 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--seed", type=int, default=20260720)
     result.add_argument("--beta", type=float, default=0.25)
+    result.add_argument(
+        "--stop-episode-on-unverified-expert-label",
+        action="store_true",
+        help=(
+            "Research tolerance: end an episode at an expert label the environment cannot "
+            "verify and record it under unverified_expert_labels/ instead of stopping the collection"
+        ),
+    )
     result.add_argument("--max-steps", type=int, default=DEFAULT_EPISODE_ACTION_LIMIT)
     result.add_argument("--d1-cap", type=int, default=150)
     result.add_argument("--d1-share", type=float, default=0.25)
@@ -2403,6 +2422,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         seed=args.seed,
         beta=args.beta,
         max_steps=args.max_steps,
+        stop_episode_on_unverified_expert_label=bool(
+            getattr(args, "stop_episode_on_unverified_expert_label", False)
+        ),
         policy_factory=lambda: research_gemma_policy_factory(
             adapter,
             base_model=model_spec.model_id,

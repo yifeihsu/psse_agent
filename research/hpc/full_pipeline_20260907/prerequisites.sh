@@ -67,9 +67,10 @@ print(f"HIF corpora declare PMU phasor sigma {expected!r} per component")
 PY
 fi
 [[ -s "$TRACE_VALIDATION" ]] || echo "note: trace validation set absent; only the BC0 suite is protected"
-# The classifier-gated profile runs the triage classifier the source tree carries.
+# The classifier-gated profile runs the configured triage classifier (pipeline.env
+# TRIAGE_CLASSIFIER; empty selects the tracked IEEE 14 export).
 if [[ "$EVIDENCE_PROFILE" == classifier_gated_diagnostics ]]; then
-  TRIAGE_MODEL=$SRC/psse_env/oracle/models/triage_gnn_ieee14_20261004
+  TRIAGE_MODEL=${TRIAGE_CLASSIFIER:-$SRC/psse_env/oracle/models/triage_gnn_ieee14_20261004}
   [[ -s "$TRIAGE_MODEL/runtime.json" ]] || { echo "classifier_gated_diagnostics needs the triage export: $TRIAGE_MODEL" >&2; exit 2; }
   if [[ "$EXPERT_VARIANT" != baseline ]]; then
     echo "classifier_gated_diagnostics takes the baseline expert (the ledger variants read the balanced screen)" >&2; exit 2
