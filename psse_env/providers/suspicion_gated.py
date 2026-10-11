@@ -77,6 +77,7 @@ def zero_sequence_line_screen(
     sigma_pu: float,
     detection_sigmas: float = DIFFERENTIAL_DETECTION_SIGMAS,
     top_k: int = 5,
+    line_parameters: Mapping[int, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Rank lines by the zero-sequence part of their terminal differential current.
 
@@ -85,9 +86,11 @@ def zero_sequence_line_screen(
     ``sqrt(2) * sigma`` per component and its zero-sequence average
     ``sqrt(2 / 3) * sigma``.  The floor is ``detection_sigmas`` of that.
     The faulted phase is the one whose differential departs most from the
-    balanced (positive-sequence) pattern.
+    balanced (positive-sequence) pattern.  ``line_parameters`` is the
+    operator's line table (``line_parameters_from_case``); the IEEE 14 table
+    is the default.
     """
-    differentials = line_differential_phasors(voltage_rows, current_rows)
+    differentials = line_differential_phasors(voltage_rows, current_rows, line_parameters=line_parameters)
     if not differentials:
         return None
     sigma = max(float(sigma_pu), 1e-12)
@@ -133,6 +136,7 @@ def pmu_hif_estimate(
     voltage_sigma_pu: float,
     draws: int = 24,
     seed: int = 20260927,
+    line_parameters: Mapping[int, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Two-terminal closed form with a perturbation sensitivity range.
 
@@ -140,7 +144,8 @@ def pmu_hif_estimate(
     phasors with fresh noise at the declared sigmas added on top.  It
     describes how noise moves the estimate; it is not a calibrated interval.
     """
-    estimate = two_terminal_hif_estimate(voltage_rows, current_rows, branch_row0=int(branch_row0), phase=str(phase))
+    estimate = two_terminal_hif_estimate(voltage_rows, current_rows, branch_row0=int(branch_row0), phase=str(phase),
+                                         line_parameters=line_parameters)
     if estimate is None:
         return None
     from three_phase_nlm.measurement_noise import add_voltage_phasor_noise
@@ -151,7 +156,8 @@ def pmu_hif_estimate(
     for _ in range(max(int(draws), 0)):
         voltages = add_voltage_phasor_noise(voltage_rows, rng, float(voltage_sigma_pu))
         currents = add_branch_current_noise(current_rows, rng, float(sigma_pu))
-        varied = two_terminal_hif_estimate(voltages, currents, branch_row0=int(branch_row0), phase=str(phase))
+        varied = two_terminal_hif_estimate(voltages, currents, branch_row0=int(branch_row0), phase=str(phase),
+                                           line_parameters=line_parameters)
         if varied is None:
             continue
         if math.isfinite(varied["alpha_from_from_bus"]) and math.isfinite(varied["r_hif_pu"]) and varied["r_hif_pu"] > 0:

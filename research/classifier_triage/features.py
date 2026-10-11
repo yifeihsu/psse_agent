@@ -14,6 +14,16 @@ One node per bus row and two directed edges per branch row, as in
 * ``values``: the same plus observed and fitted values, the estimated voltage
   and the angle difference across each branch.  Kept as an ablation that
   measures what those inputs add.
+* ``residual_v2`` (2026-10-11): the residual view with network-free global
+  statistics.  The legacy globals carry the network's size: the chi-square
+  ratio divides the same excess objective by a threshold that grows with the
+  degrees of freedom (a 12-sigma meter reads 0.48 on IEEE 14 and 0.02 on
+  IEEE 118), and the >3 / >4 sigma fractions divide a count by the channel
+  count.  ``residual_v2`` replaces them by the excess objective J - dof on the
+  admission floor's scale and by the >3 / >4 sigma counts in excess of what
+  chance produces on that many channels (0.0027 n and 6.3e-5 n), so the same
+  error gives the same globals on every network.  Checkpoints record their
+  view; the IEEE 14 export of 2026-10-04 is a ``residual`` model.
 
 Two format cues are neutralized in both views.  The topology roots treat the
 zero-injection bus as exact rows (residual identically zero) while every
@@ -31,21 +41,30 @@ from functools import lru_cache
 from typing import Any, Mapping
 
 import numpy as np
-from scipy.stats import chi2
+from scipy.stats import chi2, norm
+
+from psse_env.wls_admission import DEFAULT_EXCESS_FLOOR
 
 BUS_TYPE, PD, QD, GS, BS = 1, 2, 3, 4, 5
 F_BUS, T_BUS, BR_R, BR_X, BR_B, TAP, SHIFT, BR_STATUS = 0, 1, 2, 3, 4, 8, 9, 10
 GEN_BUS, GEN_STATUS = 0, 7
-VIEWS = ("residual", "values")
+VIEWS = ("residual", "residual_v2", "values")
+RESIDUAL_VIEWS = ("residual", "residual_v2")
 RESIDUAL_FLAG = 3.0
 CHI2_ALPHA = 0.01
 BLOCKS = ("Vm", "Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt")
 LLM_TOP_K = 5
+#: Scale of the excess-energy global (the admission floor: one unit is one admitted error's worth).
+EXCESS_ENERGY_SCALE = DEFAULT_EXCESS_FLOOR
+#: Chance rates of a standard-normal residual beyond 3 and 4 sigma.
+CHANCE_RATE_GT3 = float(2.0 * norm.sf(3.0))
+CHANCE_RATE_GT4 = float(2.0 * norm.sf(4.0))
 
 NODE_FEATURES = {
     "residual": ("vm.r", "vm.flag", "pinj.r", "pinj.flag", "qinj.r", "qinj.flag", "bus_pq", "bus_pv", "bus_ref",
                  "zero_injection", "log1p_degree", "g_shunt_pu", "b_shunt_pu"),
 }
+NODE_FEATURES["residual_v2"] = NODE_FEATURES["residual"]
 NODE_FEATURES["values"] = NODE_FEATURES["residual"] + (
     "vm.z", "vm.h", "pinj.z", "pinj.h", "qinj.z", "qinj.h", "vm_estimated")
 EDGE_FEATURES = {
@@ -53,15 +72,22 @@ EDGE_FEATURES = {
                  "lambda_r", "lambda_r.flag", "lambda_x", "lambda_x.flag", "r_pu", "x_pu", "b_pu", "tap",
                  "cos_shift", "sin_shift", "status", "is_transformer", "orientation"),
 }
+EDGE_FEATURES["residual_v2"] = EDGE_FEATURES["residual"]
 EDGE_FEATURES["values"] = EDGE_FEATURES["residual"] + (
     "p_src.z", "p_src.h", "q_src.z", "q_src.h", "p_dst.z", "p_dst.h", "q_dst.z", "q_dst.h",
     "cos_angle_difference", "sin_angle_difference")
-GLOBAL_FEATURES = ("log_chi_square_ratio", "log1p_max_residual", "fraction_residual_gt3", "fraction_residual_gt4",
-                   "log1p_max_multiplier")
+LEGACY_GLOBAL_FEATURES = ("log_chi_square_ratio", "log1p_max_residual", "fraction_residual_gt3", "fraction_residual_gt4",
+                          "log1p_max_multiplier")
+GLOBAL_FEATURES = {
+    "residual": LEGACY_GLOBAL_FEATURES,
+    "values": LEGACY_GLOBAL_FEATURES,
+    "residual_v2": ("signed_log_excess_energy", "log1p_max_residual", "log1p_excess_count_gt3", "log1p_excess_count_gt4",
+                    "log1p_max_multiplier"),
+}
 
 
 def dims(view: str) -> tuple[int, int, int]:
-    return len(NODE_FEATURES[view]), len(EDGE_FEATURES[view]), len(GLOBAL_FEATURES)
+    return len(NODE_FEATURES[view]), len(EDGE_FEATURES[view]), len(GLOBAL_FEATURES[view])
 
 
 def signed_log(values: np.ndarray) -> np.ndarray:
@@ -170,12 +196,22 @@ def build_graph(case_name: str | Mapping[str, Any], payload: Mapping[str, Any], 
     edge_index[:, 0::2] = np.stack((net["source"], net["destination"]))
     edge_index[:, 1::2] = np.stack((net["destination"], net["source"]))
     magnitude = np.abs(residual)
-    threshold = float(chi2.ppf(1.0 - CHI2_ALPHA, max(int(payload["dof"]), 1)))
-    u = np.asarray([
-        np.log(max(float(payload["objective"]), 1e-9) / threshold), np.log1p(magnitude.max()),
-        float(np.mean(magnitude > 3.0)), float(np.mean(magnitude > 4.0)),
-        np.log1p(float(np.max(np.abs(lambdas))) if lambdas.size else 0.0),
-    ], dtype=float)
+    objective, dof = float(payload["objective"]), max(int(payload["dof"]), 1)
+    max_multiplier = float(np.max(np.abs(lambdas))) if lambdas.size else 0.0
+    if view == "residual_v2":
+        live = magnitude.size - 2 * int(np.count_nonzero(net["zero_injection"]))  # channels that can exceed a flag
+        u = np.asarray([
+            float(signed_log(np.asarray((objective - dof) / EXCESS_ENERGY_SCALE))), np.log1p(magnitude.max()),
+            np.log1p(max(float(np.count_nonzero(magnitude > 3.0)) - CHANCE_RATE_GT3 * live, 0.0)),
+            np.log1p(max(float(np.count_nonzero(magnitude > 4.0)) - CHANCE_RATE_GT4 * live, 0.0)),
+            np.log1p(max_multiplier),
+        ], dtype=float)
+    else:
+        threshold = float(chi2.ppf(1.0 - CHI2_ALPHA, dof))
+        u = np.asarray([
+            np.log(max(objective, 1e-9) / threshold), np.log1p(magnitude.max()),
+            float(np.mean(magnitude > 3.0)), float(np.mean(magnitude > 4.0)), np.log1p(max_multiplier),
+        ], dtype=float)
     graph = {"x": x, "edge_index": edge_index, "edge_attr": edge_attr, "u": u,
              "edge_pair": np.repeat(np.arange(nl, dtype=np.int64), 2)}
     if not all(np.all(np.isfinite(graph[name])) for name in ("x", "edge_attr", "u")):

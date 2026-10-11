@@ -139,3 +139,38 @@ def test_load_scaled_regulated_reference_limits_more_units(source):
     scaled = deepcopy(source)
     scaled["bus"][:, [PD, QD]] *= 0.8
     assert len(solve_reference(scaled, PV_GENERATORS)["reactive_limited_gen_rows0"]) == 16
+
+
+def test_unbalanced_newton_state_is_accepted_at_the_fallback_tolerance(tmp_path, source):
+    # At the AC-OPF dispatch of load 0.904 OpenDSS's own iteration is unstable (the compile needs
+    # the Newton fallback). A Dirichlet phase split at bus 34 leaves the Newton state's KCL at the
+    # ~1e-8 A floating-point floor, which the model's 1e-12 tolerance rejects; the state is a fixed
+    # point to ~1e-8 and is accepted at runtime.ACCEPTANCE_TOLERANCE with the device laws met.
+    from pypower.idx_bus import BUS_I
+    from pypower.idx_gen import PG
+
+    from Transmission.generate_measurements import scale_loads, solve_ac_opf
+
+    scale = 0.9044828314940185
+    physical = apply_ieee118_voltage_bases(source)
+    solved = solve_ac_opf(scale_loads(physical, scale))
+    dispatched = deepcopy(physical)
+    dispatched["bus"][:, [PD, QD]] *= scale
+    row_of = {int(b): i for i, b in enumerate(solved["bus"][:, BUS_I])}
+    dispatched["gen"][:, PG] = solved["gen"][:, PG]
+    dispatched["gen"][:, VG] = [solved["bus"][row_of[int(b)], VM] for b in dispatched["gen"][:, GEN_BUS]]
+    model = export_model(dispatched, tmp_path / "opf", case_id="case118",
+                         voltage_profile=IEEE118_VOLTAGE_BASE_PROFILE_ID, generator_control="pv_q_limits")
+    dss = runtime.compile_model(_master(model))
+    assert dss in runtime._NEWTON_CIRCUITS and dss not in runtime._LOOSELY_ACCEPTED
+    loads = sorted((row for row in model["registry"]["loads"] if row["bus"] == 34), key=lambda row: row["phase"])
+    totals = [sum(row[key] for row in loads) for key in ("kw", "kvar")]
+    for row, fraction in zip(loads, (0.3142794481823389, 0.3644210720929666, 0.3212994797246946)):
+        dss.Text.Command(f"Edit {row['element']} kW={totals[0] * fraction:.16g} kvar={totals[1] * fraction:.16g}")
+    runtime.solve(dss)
+    assert dss.Solution.Converged() and dss in runtime._LOOSELY_ACCEPTED
+    assert dss.Solution.Convergence() == pytest.approx(1e-12)  # the model's tolerance is restored
+    control = runtime.device_control_deviation(dss)
+    assert control["passed"] and control["regulated_generators"]["loose_acceptance"]
+    runtime.solve(dss)  # a later solve starts from a strict check again
+    assert dss.Solution.Converged()

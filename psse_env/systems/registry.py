@@ -32,6 +32,10 @@ _CASE14_FAMILIES = (
     "multi_measurement", "measurement+parameter", "measurement+topology",
     "measurement+hif", "three_phase_unbalance", "telemetry_no_disturbance",
 )
+# IEEE 118 (2026-10-11): the balanced families plus the waveform families its
+# three-phase OpenDSS model can produce (research/classifier_triage/ieee118_dataset);
+# no node-breaker topology model exists for it.
+_CASE118_FAMILIES = _BALANCED_FAMILIES + ("harmonic", "hif", "measurement+hif", "three_phase_unbalance")
 
 
 def _read_case(path: Path) -> dict[str, Any]:
@@ -222,7 +226,8 @@ def _resolve_canonical(case_id: str) -> SystemSpec:
     return SystemSpec(
         case_id=case_id, case_path=case_id, nb=nb, nl=nl, nz=3 * nb + 4 * nl,
         state_count=2 * nb - 1, base_case_hash=_case_hash(case),
-        supported_families=_CASE14_FAMILIES if case_id == "case14" else _BALANCED_FAMILIES,
+        supported_families=(_CASE14_FAMILIES if case_id == "case14" else _CASE118_FAMILIES if case_id == "case118"
+                            else _BALANCED_FAMILIES),
         buses=buses, branches=tuple(branches),
         source_provenance=MappingProxyType(provenance), _asset_path=asset_path,
     )

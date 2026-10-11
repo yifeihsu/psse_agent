@@ -1,0 +1,206 @@
+{
+ "contract": "triage_gnn_runtime_v1",
+ "method": "triage_gnn",
+ "model_id": "triage_gnn:d6d3d8fe72199ec1",
+ "view": "residual_v2",
+ "request_threshold": 0.09552223980426788,
+ "threshold_rule": "per network, the recall target 0.9928 of the IEEE 14 export on that network's calibration split; mean of the seeds' request probabilities",
+ "families": [
+  "measurement",
+  "parameter",
+  "topology",
+  "hif",
+  "unbalance",
+  "harmonic"
+ ],
+ "first_classes": [
+  "measurement",
+  "parameter",
+  "topology"
+ ],
+ "checkpoints": [
+  "seed_0.pt",
+  "seed_1.pt",
+  "seed_2.pt",
+  "seed_3.pt",
+  "seed_4.pt"
+ ],
+ "source": {
+  "ieee14_dataset": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\hypothesis_ranking_20260930\\ieee14_v3",
+  "ieee118_dataset": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\classifier_triage_20261011\\ieee118_v2",
+  "admission_rule": "excess_energy",
+  "train_rows": 3987,
+  "validation_rows": 471,
+  "parameters": 706506,
+  "seeds": 5,
+  "history": [
+   {
+    "seed": 0,
+    "best_epoch": 23,
+    "validation_loss": 0.12393010396613184
+   },
+   {
+    "seed": 1,
+    "best_epoch": 22,
+    "validation_loss": 0.11891436867906283
+   },
+   {
+    "seed": 2,
+    "best_epoch": 17,
+    "validation_loss": 0.13564809514585321
+   },
+   {
+    "seed": 3,
+    "best_epoch": 17,
+    "validation_loss": 0.10374976204205977
+   },
+   {
+    "seed": 4,
+    "best_epoch": 26,
+    "validation_loss": 0.14114192618559374
+   }
+  ],
+  "test": {
+   "case14": {
+    "recall": {
+     "point": 0.9922480620155039,
+     "low": 0.9749947478991596,
+     "high": 1.0
+    },
+    "unneeded_request_rate": {
+     "point": 0.009009009009009009,
+     "low": 0.0,
+     "high": 0.020833333333333332
+    },
+    "auc": {
+     "point": 0.9998137672556277,
+     "low": 0.9993749624097835,
+     "high": 1.0
+    },
+    "by_family": {
+     "harmonic": {
+      "requested": 50,
+      "n": 50
+     },
+     "healthy_window": {
+      "requested": 0,
+      "n": 15
+     },
+     "hif": {
+      "requested": 25,
+      "n": 25
+     },
+     "measurement": {
+      "requested": 2,
+      "n": 54
+     },
+     "measurement+hif": {
+      "requested": 24,
+      "n": 25
+     },
+     "measurement+parameter": {
+      "requested": 0,
+      "n": 48
+     },
+     "measurement+topology": {
+      "requested": 0,
+      "n": 48
+     },
+     "mimic_flow_pair_opposite_sign": {
+      "requested": 0,
+      "n": 17
+     },
+     "mimic_flow_pair_same_sign": {
+      "requested": 1,
+      "n": 16
+     },
+     "multi_measurement": {
+      "requested": 0,
+      "n": 36
+     },
+     "parameter": {
+      "requested": 0,
+      "n": 48
+     },
+     "three_phase_unbalance": {
+      "requested": 29,
+      "n": 29
+     },
+     "topology": {
+      "requested": 0,
+      "n": 51
+     }
+    }
+   },
+   "case118": {
+    "recall": {
+     "point": 0.9821428571428571,
+     "low": 0.9649110953058322,
+     "high": 0.9949494949494949
+    },
+    "unneeded_request_rate": {
+     "point": 0.013201320132013201,
+     "low": 0.0,
+     "high": 0.03313478165152304
+    },
+    "auc": {
+     "point": 0.9993012056307671,
+     "low": 0.998475916341484,
+     "high": 0.9998243731964007
+    },
+    "by_family": {
+     "harmonic": {
+      "requested": 87,
+      "n": 88
+     },
+     "healthy_window": {
+      "requested": 0,
+      "n": 47
+     },
+     "hif": {
+      "requested": 124,
+      "n": 125
+     },
+     "measurement": {
+      "requested": 1,
+      "n": 56
+     },
+     "measurement+hif": {
+      "requested": 123,
+      "n": 125
+     },
+     "measurement+parameter": {
+      "requested": 1,
+      "n": 52
+     },
+     "mimic_flow_pair_opposite_sign": {
+      "requested": 0,
+      "n": 20
+     },
+     "mimic_flow_pair_same_sign": {
+      "requested": 0,
+      "n": 18
+     },
+     "multi_measurement": {
+      "requested": 1,
+      "n": 56
+     },
+     "parameter": {
+      "requested": 1,
+      "n": 54
+     },
+     "three_phase_unbalance": {
+      "requested": 51,
+      "n": 54
+     }
+    }
+   }
+  },
+  "seconds": 318.7836057000095
+ },
+ "storage": "state_dict in float16, cast to float32 when loaded",
+ "request_thresholds": {
+  "case14": 0.09552223980426788,
+  "case118": 0.3383789658546448
+ }
+}

@@ -110,7 +110,7 @@ from psse_env.providers import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import Round0ScenarioGenerator
 from psse_env.sft.provenance import file_sha256, git_source_state, stable_json_sha256
 from psse_env.systems import SystemSpec, resolve_system
-from psse_env.transactional_env import TransactionalPSSEEnv
+from psse_env.transactional_env import DEFAULT_PROGRESS_BASIS, PROGRESS_BASES, TransactionalPSSEEnv
 
 DEFAULT_SEED = 20260719
 BC0_AGGREGATE_SOURCE_PARTITION = "train"
@@ -453,6 +453,7 @@ def build_environment(args: argparse.Namespace) -> tuple[TransactionalPSSEEnv, E
         production_dataset_mode=True,
         max_steps=args.max_steps,
         history_window=4,
+        progress_basis=_progress_basis(args),
     )
     # The teacher variant under study (PSSE_EXPERT_VARIANT): baseline, the
     # hypothesis ledger, or the ledger with the learned ranker's deferral.
@@ -2006,6 +2007,7 @@ def _generation_descriptor(
             ),
             "chi2_alpha": args.chi2_alpha,
             "normalized_residual_threshold": _normalized_residual_threshold(args),
+            "progress_basis": _progress_basis(args),
             "hif_alpha_grid": args.hif_alpha_grid,
             "hif_r_grid": args.hif_r_grid,
             "hif_max_scans": args.hif_max_scans,
@@ -2779,6 +2781,11 @@ def _system_spec(args: argparse.Namespace) -> SystemSpec:
     return resolve_system(str(getattr(args, "system", None) or "case14"))
 
 
+def _progress_basis(args: argparse.Namespace) -> str:
+    """The basis of a candidate's global progress in the expert's environment (psse_env.transactional_env)."""
+    return str(getattr(args, "progress_basis", None) or DEFAULT_PROGRESS_BASIS)
+
+
 def _normalized_residual_threshold(args: argparse.Namespace) -> float | None:
     """The local residual test shared by admission and the expert's environment."""
     if getattr(args, "chi_square_only", False):
@@ -2825,10 +2832,11 @@ def _validate_plan_for_system(
                 f"--system {spec.case_id} requires --measurement-corpus and "
                 "--balanced-artifact-dir from a fresh balanced corpus"
             )
-        if getattr(args, "hif_corpus", None) or getattr(args, "imbalance_corpus", None):
+        waveform_sources = getattr(args, "hif_corpus", None) or getattr(args, "imbalance_corpus", None)
+        if waveform_sources and "hif" not in spec.supported_families:
             raise ValueError(
-                "--hif-corpus and --imbalance-corpus are IEEE 14 waveform "
-                f"sources; {spec.case_id} has no three-phase route"
+                "--hif-corpus and --imbalance-corpus are waveform sources of a system with a three-phase "
+                f"route (the IEEE 14 sources or the IEEE 118 corpora); {spec.case_id} has none"
             )
     return spec
 
@@ -2876,14 +2884,20 @@ def _scenario_generator_kwargs(
             ],
         )
     else:
-        # The fresh corpus carries its own parameter cases; a balanced-only
-        # system has no waveform source to bind.
+        # The fresh corpus carries its own parameter cases.  A system with a
+        # three-phase route (IEEE 118, 2026-10-11) binds the waveform corpora
+        # named on the command line; a balanced-only system has none.
+        waveform = "hif" in spec.supported_families
+        hif_corpora = [Path(path) for path in (getattr(args, "hif_corpus", None) or [])] if waveform else []
+        imbalance = getattr(args, "imbalance_corpus", None) if waveform else None
         kwargs.update(
-            hif_sample_paths=[],
-            imbalance_sample_path=None,
+            hif_sample_paths=hif_corpora,
+            imbalance_sample_path=(Path(imbalance) if imbalance else None),
             balanced_artifact_dir=Path(args.balanced_artifact_dir),
             artifact_allowlist=None,
         )
+        if hif_corpora or imbalance:
+            kwargs["waveform_signature_mode"] = {"hif": getattr(args, "hif_signature_mode", "discovered")}
     return kwargs
 
 
@@ -3597,6 +3611,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help=(
             "Artifact directory of a fresh balanced corpus "
             "(psse_env.providers.balanced_corpus); required for a non-IEEE14 system"
+        ),
+    )
+    parser.add_argument(
+        "--progress-basis",
+        choices=PROGRESS_BASES,
+        default=DEFAULT_PROGRESS_BASIS,
+        help=(
+            "Basis of a candidate's global progress in the expert's environment: the whole "
+            "chi-square statistic (historical) or its excess over the degrees of freedom "
+            "(network-size independent; see psse_env.transactional_env)"
         ),
     )
     parser.add_argument(

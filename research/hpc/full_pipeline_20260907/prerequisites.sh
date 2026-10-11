@@ -29,8 +29,11 @@ if [[ -n "$(git -C "$SRC" status --porcelain --untracked-files=no)" ]]; then
   git -C "$SRC" status --short --untracked-files=no >&2
   exit 2
 fi
+# An empty corpus slot (a system whose waveform corpora fill fewer than the
+# four IEEE 14 slots, 2026-10-11) is not an input.
 for path in "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID" "$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA" "$IMBALANCE_CORPUS" \
   "$SRC/data/measurements_5class_merged.jsonl" "$BC0_SUITE"; do
+  [[ -z "$path" ]] && continue
   [[ -s "$path" ]] || { echo "missing or empty input: $path" >&2; exit 2; }
 done
 # Under the WLS-gated contracts the HIF corpora must declare the PMU phasor
@@ -45,6 +48,8 @@ from pathlib import Path
 expected = float(sys.argv[1])
 problems = []
 for samples in sys.argv[2:]:
+    if not samples:
+        continue  # an empty corpus slot
     meta_path = Path(samples).with_name("meta.json")
     if not meta_path.is_file():
         problems.append(f"{meta_path}: missing")
@@ -139,7 +144,9 @@ import tempfile
 from importlib import metadata
 from pathlib import Path
 output = Path(sys.argv[1])
-def sha(path: str) -> str:
+def sha(path: str) -> str | None:
+    if not path:
+        return None  # an empty corpus slot
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 payload = {
     "contract": "research_full_pipeline_prerequisites_v1",

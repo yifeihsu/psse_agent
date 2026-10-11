@@ -235,6 +235,43 @@ def case14_line_parameters() -> dict[int, dict[str, Any]]:
     return out
 
 
+def line_parameters_from_case(
+    case: Mapping[str, Any], *, kv_ll_by_bus: Mapping[int, float] | None = None,
+) -> dict[int, dict[str, Any]]:
+    """The ``case14_line_parameters`` table for any MATPOWER-style case (2026-10-11).
+
+    A branch is a line when it carries no tap and no phase shift.  ``kv_ll``
+    is the from-bus's line-to-line base from ``kv_ll_by_bus`` or, failing
+    that, the case's ``BASE_KV`` column when it is positive; it feeds the
+    estimate's physical-ohm receipt.  Element names follow ``Line.f-t``.
+    """
+    from pypower.idx_brch import BR_B, BR_R, BR_X, F_BUS, SHIFT, T_BUS, TAP  # type: ignore
+    from pypower.idx_bus import BASE_KV, BUS_I  # type: ignore
+
+    bus = np.asarray(case["bus"], dtype=float)
+    branch = np.asarray(case["branch"], dtype=float)
+    base_kv = {int(row[BUS_I]): float(row[BASE_KV]) for row in bus} if bus.shape[1] > BASE_KV else {}
+    out: dict[int, dict[str, Any]] = {}
+    for row0 in range(branch.shape[0]):
+        from_bus, to_bus = int(branch[row0, F_BUS]), int(branch[row0, T_BUS])
+        kv = None
+        if kv_ll_by_bus is not None and from_bus in kv_ll_by_bus:
+            kv = float(kv_ll_by_bus[from_bus])
+        elif base_kv.get(from_bus, 0.0) > 0.0:
+            kv = base_kv[from_bus]
+        out[row0] = {
+            "r": float(branch[row0, BR_R]),
+            "x": float(branch[row0, BR_X]),
+            "b": float(branch[row0, BR_B]),
+            "from_bus": from_bus,
+            "to_bus": to_bus,
+            "is_line": bool(float(branch[row0, TAP]) == 0.0 and float(branch[row0, SHIFT]) == 0.0),
+            "dss_element": f"Line.{from_bus}-{to_bus}",
+            "kv_ll": kv,
+        }
+    return out
+
+
 def zbase_ohm(*, base_mva: float = S_BASE_MVA, kv_ll: float = KV_LL_BASE) -> float:
     """Impedance base ``kV_LL**2 / MVA``; the default is the normalized model base."""
     return (float(kv_ll) * 1000.0) ** 2 / (float(base_mva) * 1e6)
@@ -376,9 +413,12 @@ def bus_shunt_power_unbalance(
     load's phase imbalance.
 
     When ``sigma_pu`` is given, each bus also gets a noise floor for its
-    absolute spread: the shunt injection sums ``n`` terminal currents, so its
-    per-component noise is ``sigma * sqrt(n)`` and the power spread noise is
-    about ``|V| * sigma * sqrt(n)``.  Buses whose spread does not clear
+    absolute spread.  Phasor noise is absolute (``sigma`` per component of
+    every voltage and current phasor), so the per-phase power noise is
+    ``|V| * sigma * sqrt(n)`` from the shunt injection summing ``n`` terminal
+    currents plus ``|I| * sigma`` from the bus voltage itself; the second
+    term rules at a heavily loaded bus (an IEEE 118 generator bus carries
+    4 pu, 2026-10-11).  Buses whose spread does not clear
     ``detection_sigmas`` times that floor are marked insignificant and ranked
     below every significant bus, which keeps unloaded buses (whose relative
     spread is noise over the power floor) from outranking real sources.
@@ -407,9 +447,8 @@ def bus_shunt_power_unbalance(
         if sigma_pu is not None and float(sigma_pu) > 0.0:
             noise_floor = (
                 float(detection_sigmas)
-                * float(abs(v1))
                 * float(sigma_pu)
-                * math.sqrt(float(max(incident.get(bus, 1), 1)))
+                * (float(abs(v1)) * math.sqrt(float(max(incident.get(bus, 1), 1))) + float(abs(i1)))
             )
             significant = bool(spread >= noise_floor)
         records.append(
@@ -670,6 +709,8 @@ def two_terminal_hif_estimate(
         return None
     impedance = vx / i_fault
     r_pu = float(impedance.real)
+    if kv_ll is None and params.get("kv_ll"):
+        kv_ll = float(params["kv_ll"])  # the operator's line table names its own base (line_parameters_from_case)
     base = resolve_hif_resistance_base(int(branch_row0), kv_ll, base_mva=base_mva)
     z_base = float(base["impedance_base_ohm"])
     # Self-consistency: the fault-point voltage mismatch relative to the
@@ -1005,6 +1046,7 @@ __all__ = [
     "branch_current_rows_valid",
     "bus_shunt_power_unbalance",
     "case14_line_parameters",
+    "line_parameters_from_case",
     "line_differential_currents",
     "line_differential_null_test",
     "line_differential_phasors",

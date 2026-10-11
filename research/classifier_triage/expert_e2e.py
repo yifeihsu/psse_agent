@@ -30,6 +30,7 @@ import scripts.run_dagger_research as research  # noqa: E402
 from psse_env.actions import GET_HARMONIC_CONTEXT, GET_THREE_PHASE_CONTEXT  # noqa: E402
 from psse_env.dagger.evaluator import evaluate_rollout_suites  # noqa: E402
 from psse_env.dagger.release_factories import deterministic_case_loader  # noqa: E402
+from psse_env.transactional_env import DEFAULT_PROGRESS_BASIS, PROGRESS_BASES  # noqa: E402
 from psse_env.evidence_profile import (  # noqa: E402
     CLASSIFIER_GATED_PROFILE, SUSPICION_GATED_PROFILE, WLS_GATED_PROFILE, validate_evidence_profile,
 )
@@ -113,6 +114,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--per-family", type=int, default=None, help="at most this many roots of each family")
     parser.add_argument("--max-steps", type=int, default=research.RESEARCH_EPISODE_BUDGET)
     parser.add_argument("--seed", type=int, default=20261006)
+    parser.add_argument("--progress-basis", choices=PROGRESS_BASES, default=DEFAULT_PROGRESS_BASIS,
+                        help="basis of a candidate's global progress in the environment (psse_env.transactional_env)")
     args = parser.parse_args(argv)
     started = time.perf_counter()
     out = Path(args.output_dir)
@@ -124,6 +127,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     research.RESEARCH_ENVIRONMENT_OPTIONS["evidence_profile"] = profile
     research.RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"] = 4.0
     research.RESEARCH_ENVIRONMENT_OPTIONS["triage_classifier"] = args.triage_model
+    research.RESEARCH_ENVIRONMENT_OPTIONS["progress_basis"] = args.progress_basis
     research.RESEARCH_EXPERT_OPTIONS["variant"] = args.expert
     factory = research.resolve_environment_factory("research", profile)
 
@@ -142,7 +146,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             episode["family"] = family_of.get(str(episode.get("scenario_id")), str(episode.get("family")))
     summary = summarize(episodes)
     summary["triage"] = triage_summary(episodes)
-    summary.update(profile=profile, expert=args.expert, triage_model=args.triage_model, suite=str(args.suite), roots=len(roots),
+    summary.update(profile=profile, expert=args.expert, triage_model=args.triage_model, progress_basis=args.progress_basis,
+                   suite=str(args.suite), roots=len(roots),
                    seed=args.seed, max_steps=int(args.max_steps), total_seconds=time.perf_counter() - started)
     (out / "summary.json").write_text(json.dumps(json_safe(summary), indent=2, sort_keys=True), encoding="utf-8")
     with (out / "episodes.jsonl").open("w", encoding="utf-8") as stream:

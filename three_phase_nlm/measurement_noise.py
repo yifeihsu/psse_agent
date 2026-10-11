@@ -109,8 +109,9 @@ def generated_noise_contract(
 def _validate_declared_waveform_row(row: dict[str, Any]) -> dict[str, Any]:
     sigma = np.asarray(row.get("sigma_z"), dtype=float)
     observed = np.asarray(row.get("z_obs"), dtype=float)
-    if sigma.shape != (122,) or observed.shape != sigma.shape or not np.all(np.isfinite(observed)):
-        raise ValueError("waveform row requires 122 finite z_obs values and explicit sigma_z")
+    # One SCADA channel per sigma entry; the count is the system's (122 on IEEE 14, 1,098 on IEEE 118).
+    if sigma.ndim != 1 or sigma.size == 0 or observed.shape != sigma.shape or not np.all(np.isfinite(observed)):
+        raise ValueError("waveform row requires finite z_obs values, one per explicit sigma_z entry")
     if not np.all(np.isfinite(sigma)) or np.any(sigma <= 0):
         raise ValueError("waveform row sigma_z must be finite and positive")
     voltage_sigma = positive_sigma(row.get("three_phase_sigma"), field="three_phase_sigma")

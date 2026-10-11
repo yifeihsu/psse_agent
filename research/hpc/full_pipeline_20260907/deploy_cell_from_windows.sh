@@ -43,6 +43,7 @@ wsl -- ssh torch bash -s -- "$PIPE/deploy_${SHORT}.bundle" "$BRANCH" "$COMMIT" "
   < "$REPO/research/hpc/full_pipeline_20260907/deploy_remote.sh"
 wsl -- ssh torch "cat $PIPE/deploy.json"
 echo "deployed; submitting the chain"
-# SUBMIT_FROM=<stage> resumes a chain whose earlier receipts exist (d0 bc0 r1c r1t r1e r2c r2t r2e).
-wsl -- ssh torch "cd $PIPE && FROM=${SUBMIT_FROM:-} bash submit_pipeline.sh"
+# SUBMIT_FROM=<stage> resumes a chain whose earlier receipts exist (d0 bc0 r1c r1t r1e r2c r2t r2e);
+# CHAIN="d0 r1c zs" submits that sequence instead (a frozen-student zero-shot cell).
+wsl -- ssh torch "cd $PIPE && FROM=${SUBMIT_FROM:-} CHAIN='${CHAIN:-}' bash submit_pipeline.sh"
 echo "status: MSYS_NO_PATHCONV=1 wsl -- ssh torch bash $PIPE/status_pipeline.sh"

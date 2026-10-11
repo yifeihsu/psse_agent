@@ -33,6 +33,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from psse_env.actions import INVALID_ACTION  # noqa: E402
 from psse_env.episode_budget import DEFAULT_EPISODE_ACTION_LIMIT  # noqa: E402
+from psse_env.transactional_env import DEFAULT_PROGRESS_BASIS, PROGRESS_BASES  # noqa: E402
 from psse_env.dagger.dataset_builder import (  # noqa: E402
     examples_to_chat_sft,
     load_jsonl,
@@ -138,6 +139,10 @@ RESEARCH_ENVIRONMENT_OPTIONS: dict[str, Any] = {
     # provider runs on every WLS solve (research.classifier_triage.runtime);
     # None selects the tracked model.
     "triage_classifier": None,
+    # Basis of a candidate's global progress against the partial-progress
+    # floors: the whole chi-square statistic (historical) or its excess over
+    # the degrees of freedom (network-size independent; 2026-10-11).
+    "progress_basis": DEFAULT_PROGRESS_BASIS,
 }
 #: Episode horizon of the research environment and the paired evaluation,
 #: the production factory's 40-step budget (teacher V2-B).  A multi-meter
@@ -201,10 +206,10 @@ def resolve_scenario_sources(
                 f"{spec.case_id} does not support families {unsupported}; "
                 f"supported: {list(spec.supported_families)}"
             )
-        if hif_sample_paths or imbalance_sample_path:
+        if (hif_sample_paths or imbalance_sample_path) and "hif" not in spec.supported_families:
             raise ValueError(
-                "HIF/unbalance corpora are IEEE 14 sources; "
-                f"{spec.case_id} has no three-phase route"
+                "HIF/unbalance corpora are waveform sources of a system with a three-phase route "
+                f"(the IEEE 14 sources or the IEEE 118 corpora); {spec.case_id} has none"
             )
         if measurement_corpus is None or balanced_artifact_dir is None:
             raise ValueError(
@@ -317,6 +322,7 @@ def research_diagnostic_environment_factory(
         production_dataset_mode=True,
         max_steps=RESEARCH_EPISODE_BUDGET,
         history_window=4,
+        progress_basis=str(RESEARCH_ENVIRONMENT_OPTIONS.get("progress_basis") or DEFAULT_PROGRESS_BASIS),
     )
     if env.production_dataset_mode is not True:
         raise RuntimeError("research environment did not enter production dataset mode")
@@ -2133,6 +2139,16 @@ def parser() -> argparse.ArgumentParser:
         help="Generator admission; omitted keeps the teacher-solvable default",
     )
     result.add_argument(
+        "--progress-basis",
+        choices=PROGRESS_BASES,
+        default=DEFAULT_PROGRESS_BASIS,
+        help=(
+            "Basis of a candidate's global progress in the research environment: the whole "
+            "chi-square statistic (historical) or its excess over the degrees of freedom "
+            "(network-size independent; psse_env.transactional_env)"
+        ),
+    )
+    result.add_argument(
         "--normalized-residual-threshold",
         type=float,
         default=DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD,
@@ -2160,6 +2176,9 @@ def parser() -> argparse.ArgumentParser:
               "hints; after a current WLS alarm the agent may request the auxiliary streams the ground truth "
               "generated for the root; scada_only: balanced SCADA/model evidence only; auxiliary_diagnostics: "
               "explicit historical sensor-assisted experiments"))
+    result.add_argument("--triage-classifier", default=None,
+        help=("classifier_gated_diagnostics: runtime directory of the triage classifier the provider runs on every "
+              "WLS solve (default: the tracked IEEE 14 export)"))
     result.add_argument(
         "--unbalance-signature-mode",
         choices=WAVEFORM_SIGNATURE_MODES,
@@ -2320,9 +2339,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     RESEARCH_ENVIRONMENT_OPTIONS["branch_first_partial"] = bool(args.branch_first_partial)
     RESEARCH_ENVIRONMENT_OPTIONS["evidence_profile"] = args.evidence_profile
+    RESEARCH_ENVIRONMENT_OPTIONS["triage_classifier"] = (
+        str(Path(args.triage_classifier).resolve()) if getattr(args, "triage_classifier", None) else None
+    )
     RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"] = (
         None if args.chi_square_only else float(args.normalized_residual_threshold)
     )
+    RESEARCH_ENVIRONMENT_OPTIONS["progress_basis"] = str(getattr(args, "progress_basis", None) or DEFAULT_PROGRESS_BASIS)
     environment_factory = resolve_environment_factory(hif_search_profile, args.evidence_profile)
     research_profile = {
         "plan_preset": str(args.plan_preset),

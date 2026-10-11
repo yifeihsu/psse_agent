@@ -82,7 +82,7 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
         "TOPOLOGY_EFFECTS", "SYSTEM", "MEASUREMENT_CORPUS", "BALANCED_ARTIFACT_DIR",
         "ADMISSION_MODE", "NORMALIZED_RESIDUAL_THRESHOLD", "CORPUS_COUNTS", "CORPUS_NUM_SCANS",
         "FROZEN_STUDENT_ADAPTER", "ZEROSHOT_EVAL_NAME", "EVIDENCE_PROFILE", "HIF_SIGNATURE_MODE",
-        "PMU_PHASOR_SIGMA",
+        "PMU_PHASOR_SIGMA", "TRIAGE_CLASSIFIER", "CORPUS_LOAD_SCALE_MIN", "CORPUS_LOAD_SCALE_MAX", "PROGRESS_BASIS",
     ):
         assert name in declared, name
     assert 'export PSSE_HIF_WORKERS="${SLURM_CPUS_PER_TASK:-8}"' in text
@@ -91,9 +91,13 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
     assert '--development-scenarios "$DEVELOPMENT_SUITE"' in text
     assert "--hif-search-profile research" in text
     # The recorded research_profile names the HIF corpora the suites were
-    # drawn from (IEEE-14 cells only; the corpora are IEEE-14 sources).
-    assert '--hif-sample-paths "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID"' in text
-    assert text.index('if [[ "$SYSTEM" == case14 ]]; then') < text.index("--hif-sample-paths")
+    # drawn from: the non-empty HIF_CORPUS_* files of the configured system
+    # (2026-10-11: any system with a three-phase route, not IEEE 14 only).
+    assert 'for corpus in "${HIF_CORPUS_TRAIN:-}" "${HIF_CORPUS_VALID:-}" "${HIF_CORPUS_TRAIN_EXTRA:-}" "${HIF_CORPUS_VALID_EXTRA:-}"; do' in text
+    assert '--hif-sample-paths "${HIF_CORPUS_FILES[@]}"' in text
+    assert text.index("waveform_corpus_files()") < text.index('--hif-sample-paths "${HIF_CORPUS_FILES[@]}"')
+    assert '--progress-basis "$PROGRESS_BASIS"' in text and "PROGRESS_BASIS=${PROGRESS_BASIS:-chi_square_statistic}" in text
+    assert '--triage-classifier "$TRIAGE_CLASSIFIER"' in text
 
 
 def test_plans_cover_every_family_and_respect_corpus_capacity() -> None:
@@ -163,7 +167,7 @@ def test_hif_corpora_are_the_physical_ohm_regeneration() -> None:
         text,
         flags=re.MULTILINE,
     )
-    assert '"$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA"' in text
+    assert '"${HIF_CORPUS_TRAIN_EXTRA:-}" "${HIF_CORPUS_VALID_EXTRA:-}"' in text  # waveform_corpus_files lists them
     # The unbalance corpus is the 2026-09-23opf OPF-dispatched regeneration of the
     # 2026-09-21 WLS-convention corpus (162 admitted windows) and the collection
     # stage names it so the recorded profile states which rows were used.
@@ -323,12 +327,15 @@ def test_stage_zero_passes_the_system_selection_to_both_draws() -> None:
     text = (CELL / "stage_d0.sbatch").read_text(encoding="utf-8")
     assert 'system_args=(--system "$SYSTEM" --admission-mode "$ADMISSION_MODE"' in text
     assert text.count('"${system_args[@]}"') == 2
-    assert 'if [[ "$SYSTEM" == case14 ]]; then' in text
-    assert "--hif-corpus" in text and "--imbalance-corpus" in text
+    assert '--progress-basis "$PROGRESS_BASIS")' in text
+    # The waveform corpora of the configured system (pipeline.env's HIF_CORPUS_FILES), one --hif-corpus each.
+    assert 'for corpus in "${HIF_CORPUS_FILES[@]}"; do waveform_args+=(--hif-corpus "$corpus"); done' in text
+    assert 'waveform_args+=(--imbalance-corpus "$IMBALANCE_CORPUS")' in text
     # The suite builder reads the same HIF corpora as the aggregate.
-    assert 'suite_waveform_args=(--hif-sample-paths "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID")' in text
-    assert 'suite_waveform_args+=("$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA")' in text
-    assert '--hif-corpus "$HIF_CORPUS_TRAIN_EXTRA" --hif-corpus "$HIF_CORPUS_VALID_EXTRA"' in text
+    assert 'suite_waveform_args=(--hif-sample-paths "${HIF_CORPUS_FILES[@]}")' in text
+    assert 'suite_waveform_args+=(--imbalance-sample-path "$IMBALANCE_CORPUS")' in text
+    # The balanced corpus of a non-IEEE 14 system takes the configured load-scale range.
+    assert '--load-scale-min "$CORPUS_LOAD_SCALE_MIN" --load-scale-max "$CORPUS_LOAD_SCALE_MAX"' in text
     build_suite_call = text[text.index('"$PY" "$PIPE/build_suite.py"'):]
     build_suite_call = build_suite_call[: build_suite_call.index("suite_console.json")]
     assert '"${suite_waveform_args[@]}"' in build_suite_call
@@ -367,10 +374,29 @@ def test_zero_shot_stage_and_frozen_student_wiring() -> None:
     ieee118 = (CELL / "overrides" / "ieee118_balanced_20260925.env").read_text(encoding="utf-8")
     assert "\r" not in ieee118
     assert re.search(r"^SYSTEM=case118$", ieee118, flags=re.MULTILINE)
+    balanced = {"no_error", "measurement", "multi_measurement", "parameter", "measurement+parameter"}
     for name in ("D0_PLAN", "ROUND_TRAIN_PLAN", "DEVELOPMENT_PLAN"):
         match = re.search(rf"^{name}='(\{{.*\}})'$", ieee118, flags=re.MULTILINE)
         assert match, name
-        assert set(json.loads(match.group(1))) == set(resolve_system("case118").supported_families)
+        assert set(json.loads(match.group(1))) == balanced
+    # 2026-10-11: the agentic transfer cell runs every IEEE 118 family but topology under the
+    # classifier-gated profile with the joint gate and the excess progress basis.
+    transfer = (CELL / "overrides" / "ieee118_transfer_20261011.env").read_text(encoding="utf-8")
+    assert "\r" not in transfer
+    assert re.search(r"^SYSTEM=case118$", transfer, flags=re.MULTILINE)
+    assert re.search(r"^EVIDENCE_PROFILE=classifier_gated_diagnostics$", transfer, flags=re.MULTILINE)
+    assert re.search(r"^PROGRESS_BASIS=chi_square_excess$", transfer, flags=re.MULTILINE)
+    assert re.search(r"^TRIAGE_CLASSIFIER=\$SRC/psse_env/oracle/models/triage_gnn_joint_20261011$", transfer, flags=re.MULTILINE)
+    assert re.search(r"^CORPUS_LOAD_SCALE_MAX=1\.25$", transfer, flags=re.MULTILINE)
+    assert re.search(r"^FROZEN_STUDENT_ADAPTER=/scratch/", transfer, flags=re.MULTILINE)
+    assert re.search(r"^HIF_CORPUS_TRAIN=\$PIPE/corpora/hif_samples\.jsonl$", transfer, flags=re.MULTILINE)
+    assert re.search(r"^IMBALANCE_CORPUS=\$PIPE/corpora/unbalance_samples\.jsonl$", transfer, flags=re.MULTILINE)
+    supported = set(resolve_system("case118").supported_families)
+    assert supported == balanced | {"harmonic", "hif", "measurement+hif", "three_phase_unbalance"}
+    for name in ("D0_PLAN", "ROUND_TRAIN_PLAN", "DEVELOPMENT_PLAN"):
+        match = re.search(rf"^{name}='(\{{.*\}})'$", transfer, flags=re.MULTILINE)
+        assert match, name
+        assert set(json.loads(match.group(1))) == supported
 
 
 def test_evidence_profile_default_is_suspicion_gated_and_every_guard_accepts_it() -> None:

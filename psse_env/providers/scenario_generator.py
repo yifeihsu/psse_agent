@@ -68,6 +68,7 @@ from mcp_server.matpower_server import (  # noqa: E402  (repo-root package)
 )
 from tools.lagrangian_correct_port import make_ybus  # noqa: E402
 from trace_protocol import chi2_threshold  # noqa: E402
+from psse_env import wls_admission  # noqa: E402
 from three_phase_nlm.branch_current_analysis import (  # noqa: E402
     BRANCH_CURRENT_CHANNEL,
     BRANCH_CURRENT_SIGMA_KEY,
@@ -490,6 +491,8 @@ class Round0ScenarioGenerator:
         chi2_alpha: float = DEFAULT_CHI2_ALPHA,
         normalized_residual_threshold: float | None = None,
         anomaly_margin: float = 1.25,
+        admission_rule: str = "chi_square_margin",
+        admission_excess_floor: float = wls_admission.DEFAULT_EXCESS_FLOOR,
         topology_noise_scale: float = 1.0,
         enforce_topology_ranking: bool = True,
         topology_effects: Sequence[str] = ("dangling_line_terminal", "bus_split"),
@@ -516,9 +519,14 @@ class Round0ScenarioGenerator:
         if self.system.case_id != "case14":
             if corpus_path is None or balanced_artifact_dir is None:
                 raise ValueError("non-IEEE14 systems require an explicit fresh corpus and artifact directory")
-            if hif_sample_paths or imbalance_sample_path or waveform_signature_mode:
+            # Waveform roots need corpora generated on the system's own
+            # three-phase model (the registry lists the families it has);
+            # the IEEE 14 corpora are never a fallback here.
+            waveform_supported = "hif" in self.system.supported_families
+            if (hif_sample_paths or imbalance_sample_path or waveform_signature_mode) and not waveform_supported:
                 raise ValueError("waveform/three-phase sources are unsupported for this system")
-            hif_sample_paths = []
+            if not hif_sample_paths:
+                hif_sample_paths = []
         if source_partition not in (None, "train", "evaluation"):
             raise ValueError(
                 "source_partition must be None, 'train', or 'evaluation'"
@@ -539,7 +547,10 @@ class Round0ScenarioGenerator:
             else []
         )
         self.imbalance_sample_path = Path(
-            imbalance_sample_path or DEFAULT_IMBALANCE_SAMPLE_PATH
+            imbalance_sample_path
+            # The IEEE 14 corpus is the default on IEEE 14 only; elsewhere an
+            # absent corpus is a directory path, never a file.
+            or (DEFAULT_IMBALANCE_SAMPLE_PATH if self.system.case_id == "case14" else "")
         )
         self.balanced_artifact_dir = Path(
             balanced_artifact_dir or DEFAULT_BALANCED_ARTIFACT_DIR
@@ -570,6 +581,19 @@ class Round0ScenarioGenerator:
             None if normalized_residual_threshold is None else float(normalized_residual_threshold)
         )
         self.anomaly_margin = float(anomaly_margin)
+        # How the margin is applied (psse_env.wls_admission): a multiple of the
+        # chi-square threshold, which scales with the network's degrees of
+        # freedom, or an excess-energy floor, which does not.
+        if admission_rule not in wls_admission.ADMISSION_RULES:
+            raise ValueError(f"admission_rule must be one of {wls_admission.ADMISSION_RULES}")
+        if (
+            isinstance(admission_excess_floor, bool)
+            or not math.isfinite(float(admission_excess_floor))
+            or float(admission_excess_floor) <= 0.0
+        ):
+            raise ValueError("admission_excess_floor must be positive")
+        self.admission_rule = str(admission_rule)
+        self.admission_excess_floor = float(admission_excess_floor)
         self.topology_noise_scale = float(topology_noise_scale)
         # A topology root is admitted only if the node/breaker estimator ranks
         # the true breaker first on the reported statuses, so the substation
@@ -886,16 +910,19 @@ class Round0ScenarioGenerator:
         except (TypeError, ValueError, KeyError) as exc:
             raise ScenarioRejected("waveform_noise_contract_invalid", f"{row.get('id')}: {exc}") from exc
 
-    @staticmethod
-    def _observable_waveform_scan(scan: Mapping[str, Any]) -> dict[str, Any]:
+    def _observable_waveform_scan(self, scan: Mapping[str, Any]) -> dict[str, Any]:
         """Allowlist measurements/configuration; clean copies and labels stay offline."""
-        from three_phase_nlm.hif_operating_point import canonicalize_ieee14_operating_point
         allowed = ("scan_index", "z_obs", "three_phase_voltages", BRANCH_CURRENT_CHANNEL,
                    BRANCH_CURRENT_SIGMA_KEY, "sigma_z", "three_phase_sigma", "topology_id",
                    "noise_contract", "time_tag", "measurement_convention")
         observed = {key: copy.deepcopy(scan[key]) for key in allowed if key in scan}
         if "op_point" in scan:
-            observed["op_point"] = canonicalize_ieee14_operating_point(scan["op_point"])
+            if self.system.case_id == "case14":
+                from three_phase_nlm.hif_operating_point import canonicalize_ieee14_operating_point
+
+                observed["op_point"] = canonicalize_ieee14_operating_point(scan["op_point"])
+            else:
+                observed["op_point"] = copy.deepcopy(dict(scan["op_point"] or {}))
         return observed
 
     def _hif_rows(self) -> list[dict[str, Any]]:
@@ -1019,11 +1046,14 @@ class Round0ScenarioGenerator:
             self._wls_dof_cache[key] = int(payload.get("dof", self.nz - self.state_count))
         return self._wls_cache[key]
 
-    def _cached_chi2_limit(self, case: str, z: Sequence[float], *, sigma_z=None, exact_measurement_indices=None) -> float:
+    def _wls_dof(self, case: str, z: Sequence[float], *, sigma_z=None, exact_measurement_indices=None) -> int:
+        """Degrees of freedom of a cached solve (the layout's when the solve is not cached)."""
         noise_key = (None if sigma_z is None else tuple(float(v) for v in sigma_z), tuple(exact_measurement_indices or []))
         key = (case, hashlib.sha256(np.asarray(z, dtype=float).tobytes()).hexdigest(), noise_key)
-        dof = getattr(self, "_wls_dof_cache", {}).get(key, self.nz - self.state_count)
-        return float(chi2_threshold(max(1, int(dof)), self.chi2_alpha))
+        return max(1, int(getattr(self, "_wls_dof_cache", {}).get(key, self.nz - self.state_count)))
+
+    def _cached_chi2_limit(self, case: str, z: Sequence[float], **noise_options) -> float:
+        return float(chi2_threshold(self._wls_dof(case, z, **noise_options), self.chi2_alpha))
 
     def _chi2_statistic(self, case: str, z: Sequence[float], **noise_options) -> float:
         return self._wls_detection(case, z, **noise_options)[0]
@@ -1054,13 +1084,23 @@ class Round0ScenarioGenerator:
         if not self.validate or self.admission_mode == "physical":
             return
         statistic = self._chi2_statistic(case, z, **noise_options)
-        chi_detectable = statistic > self.anomaly_margin * self._cached_chi2_limit(case, z, **noise_options)
-        if chi_detectable or self._residual_alarm(case, z, margin=self.anomaly_margin, **noise_options):
+        maximum = self._max_normalized_residual(case, z, **noise_options)
+        dof = self._wls_dof(case, z, **noise_options)
+        if wls_admission.admitted(
+            statistic, dof, maximum, rule=self.admission_rule, alpha=self.chi2_alpha,
+            residual_threshold=self.normalized_residual_threshold, margin=self.anomaly_margin,
+            excess_floor=self.admission_excess_floor,
+        ):
             return
-        raise ScenarioRejected(
-            "anomaly_not_detectable",
-            f"{family}: {self._detection_detail(case, z, **noise_options)} with margin {self.anomaly_margin:.2f}",
-        )
+        if self.admission_rule == "chi_square_margin":
+            detail = f"{self._detection_detail(case, z, **noise_options)} with margin {self.anomaly_margin:.2f}"
+        else:
+            detail = wls_admission.describe(
+                statistic, dof, maximum, rule=self.admission_rule, alpha=self.chi2_alpha,
+                residual_threshold=self.normalized_residual_threshold, margin=self.anomaly_margin,
+                excess_floor=self.admission_excess_floor,
+            )
+        raise ScenarioRejected("anomaly_not_detectable", f"{family}: {detail}")
 
     def _require_clean(self, case: str, z: Sequence[float], family: str, **noise_options) -> None:
         """A corrected configuration must clear both tests, as the environment requires."""
@@ -1755,6 +1795,37 @@ class Round0ScenarioGenerator:
         ppc["bus"][:, 3] *= load_scale
         return ppc
 
+    def _scaled_system_case(self, load_scale: float) -> dict[str, Any]:
+        """The configured system at scaled loads (IEEE 14 keeps its pypower source and random stream)."""
+        if self.system.case_id == "case14":
+            return self._scaled_case14(load_scale)
+        ppc = copy.deepcopy(self.system.load_case())  # the registry's case carries the OPF cost data
+        ppc["bus"] = np.array(ppc["bus"], dtype=float, copy=True)
+        ppc["bus"][:, 2] *= load_scale
+        ppc["bus"][:, 3] *= load_scale
+        return ppc
+
+    def _harmonic_source_candidates(self) -> tuple[int, ...]:
+        """Harmonic source buses: IEEE 14's fixed list, else every non-slack bus with load."""
+        if self.system.case_id == "case14":
+            return HARMONIC_SOURCE_CANDIDATES
+        bus = np.asarray(self._clean_case()["bus"], dtype=float)
+        return tuple(int(row[0]) for row in bus if (row[2] != 0.0 or row[3] != 0.0) and int(row[1]) != 3)
+
+    def _reference_bus_row(self) -> int:
+        bus = np.asarray(self._clean_case()["bus"], dtype=float)
+        return int(np.flatnonzero(bus[:, 1].astype(int) == 3)[0])
+
+    def _line_parameters(self) -> Mapping[int, Mapping[str, Any]] | None:
+        """The system's line table for the PMU-based observability checks (IEEE 14 keeps its own)."""
+        if self.system.case_id == "case14":
+            return None
+        if getattr(self, "_line_parameter_table", None) is None:
+            from three_phase_nlm.branch_current_analysis import line_parameters_from_case
+
+            self._line_parameter_table = line_parameters_from_case(self._clean_case())
+        return self._line_parameter_table
+
     def _draw_load_scale(self) -> float:
         low, high = SYNTHESIZED_LOAD_SCALE_RANGE
         return float(self._rng.uniform(low, high))
@@ -2048,10 +2119,10 @@ class Round0ScenarioGenerator:
         from Transmission.generate_hse_traces import build_trace
 
         load_scale = self._draw_load_scale()
-        solution = self._solve_ac_opf(self._scaled_case14(load_scale))
+        solution = self._solve_ac_opf(self._scaled_system_case(load_scale))
         if solution is None:
             raise ScenarioRejected("opf_diverged", f"harmonic load_scale={load_scale:.3f}")
-        source_bus = int(self._rng.choice(HARMONIC_SOURCE_CANDIDATES))
+        source_bus = int(self._rng.choice(self._harmonic_source_candidates()))
         thd_target = float(self._rng.uniform(*HARMONIC_THD_RANGE))
         trace = build_trace(
             source_bus,
@@ -2150,6 +2221,10 @@ class Round0ScenarioGenerator:
         scenario["metadata"]["harmonic_measurements"] = [
             dict(item) for item in harmonic_measurements
         ]
+        if self.system.case_id != "case14":
+            # The HSE grounds the harmonic voltages at the reference bus; the
+            # provider reads its row here (its default, row 0, is IEEE 14's).
+            scenario["metadata"]["slack_bus"] = self._reference_bus_row()
         if row.get("harmonic_orders"):
             scenario["metadata"]["harmonic_orders"] = [
                 int(order) for order in row["harmonic_orders"]
@@ -2460,7 +2535,8 @@ class Round0ScenarioGenerator:
             localization = unbalance_source_localization(
                 voltages, currents, top_k=1, sigma_pu=sigma
             )
-            null_test = line_differential_null_test(voltages, currents, sigma_pu=sigma)
+            null_test = line_differential_null_test(voltages, currents, sigma_pu=sigma,
+                                                    line_parameters=self._line_parameters())
             hif_like = bool(
                 isinstance(null_test, Mapping)
                 and null_test.get("hif_like_differential_present")
@@ -4055,6 +4131,9 @@ class Round0ScenarioGenerator:
                 if self.normalized_residual_threshold is not None
                 else "chi_square_only"
             ),
+            "anomaly_margin": self.anomaly_margin,
+            "admission_rule": self.admission_rule,
+            "admission_excess_floor": self.admission_excess_floor,
             "source_partition": copy.deepcopy(self._source_partition_metadata),
             "parameter_ranking_admission": {
                 "contract": PARAMETER_RANKING_CONTRACT,

@@ -42,7 +42,8 @@ if [[ "$SYSTEM" != case14 && -z "$MEASUREMENT_CORPUS" ]]; then
     rm -rf "$CORPUS_DIR"
     (cd "$SRC" && "$PY" scripts/build_balanced_corpus.py --system "$SYSTEM" \
       --output-dir "$CORPUS_DIR" --seed "$SEED_D0" --counts "$CORPUS_COUNTS" \
-      --num-scans "$CORPUS_NUM_SCANS" > "$OUT/corpus_console.json")
+      --num-scans "$CORPUS_NUM_SCANS" --load-scale-min "$CORPUS_LOAD_SCALE_MIN" --load-scale-max "$CORPUS_LOAD_SCALE_MAX" \
+      > "$OUT/corpus_console.json")
   fi
   MEASUREMENT_CORPUS=$CORPUS_DIR/samples.jsonl
   BALANCED_ARTIFACT_DIR=$CORPUS_DIR
@@ -52,14 +53,15 @@ fi
 # a non-IEEE14 system, the shared normalized-residual threshold, and the
 # IEEE-14 waveform corpora for case14 only.
 system_args=(--system "$SYSTEM" --admission-mode "$ADMISSION_MODE" --evidence-profile "$EVIDENCE_PROFILE" --hif-signature-mode "$HIF_SIGNATURE_MODE"
-  --normalized-residual-threshold "$NORMALIZED_RESIDUAL_THRESHOLD")
+  --normalized-residual-threshold "$NORMALIZED_RESIDUAL_THRESHOLD" --progress-basis "$PROGRESS_BASIS")
 if [[ -n "$MEASUREMENT_CORPUS" ]]; then system_args+=(--measurement-corpus "$MEASUREMENT_CORPUS"); fi
 if [[ -n "$BALANCED_ARTIFACT_DIR" ]]; then system_args+=(--balanced-artifact-dir "$BALANCED_ARTIFACT_DIR"); fi
+# The waveform corpora of the configured system (pipeline.env: the IEEE 14
+# files, or those an override names for a system with a three-phase route).
+waveform_corpus_files
 waveform_args=()
-if [[ "$SYSTEM" == case14 ]]; then
-  waveform_args=(--hif-corpus "$HIF_CORPUS_TRAIN" --hif-corpus "$HIF_CORPUS_VALID" --imbalance-corpus "$IMBALANCE_CORPUS")
-  waveform_args+=(--hif-corpus "$HIF_CORPUS_TRAIN_EXTRA" --hif-corpus "$HIF_CORPUS_VALID_EXTRA")
-fi
+for corpus in "${HIF_CORPUS_FILES[@]}"; do waveform_args+=(--hif-corpus "$corpus"); done
+if [[ -n "$IMBALANCE_CORPUS" ]]; then waveform_args+=(--imbalance-corpus "$IMBALANCE_CORPUS"); fi
 
 cd "$SRC"
 reuse_previous_stage d0 d0.done
@@ -147,11 +149,8 @@ if [[ ! -s "$OUT/suite.done" ]]; then
   protected=(--protected-suite "$BC0_SUITE")
   if [[ -s "$TRACE_VALIDATION" ]]; then protected+=(--protected-suite "$TRACE_VALIDATION"); fi
   suite_waveform_args=()
-  if [[ "$SYSTEM" == case14 ]]; then
-    suite_waveform_args=(--hif-sample-paths "$HIF_CORPUS_TRAIN" "$HIF_CORPUS_VALID")
-    suite_waveform_args+=("$HIF_CORPUS_TRAIN_EXTRA" "$HIF_CORPUS_VALID_EXTRA")
-    suite_waveform_args+=(--imbalance-sample-path "$IMBALANCE_CORPUS")
-  fi
+  if (( ${#HIF_CORPUS_FILES[@]} )); then suite_waveform_args=(--hif-sample-paths "${HIF_CORPUS_FILES[@]}"); fi
+  if [[ -n "$IMBALANCE_CORPUS" ]]; then suite_waveform_args+=(--imbalance-sample-path "$IMBALANCE_CORPUS"); fi
   "$PY" "$PIPE/build_suite.py" \
     --source-root "$SRC" \
     --d0-raw "$D0_DIR/aggregate.raw.jsonl" \

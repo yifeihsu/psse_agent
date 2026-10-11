@@ -67,16 +67,33 @@ class TriageClassifier:
             raise ValueError("a triage classifier needs at least one model")
         if tuple(manifest.get("families") or ()) != tuple(FAMILY_HEADS) or tuple(manifest.get("first_classes") or ()) != tuple(FIRST_CLASSES):
             raise ValueError("runtime manifest does not match the model's family heads")
-        if manifest.get("view") != "residual":
-            raise ValueError("the runtime classifier supports the residual view only")
+        if manifest.get("view") not in features.RESIDUAL_VIEWS:
+            raise ValueError(f"the runtime classifier supports the residual views {features.RESIDUAL_VIEWS} only")
         threshold = float(manifest["request_threshold"])
         if not 0.0 < threshold < 1.0:
             raise ValueError("request_threshold must lie strictly between 0 and 1")
+        # A model trained on several networks carries one threshold per network
+        # (keyed ``case{bus count}``); ``request_threshold`` is the fallback.
+        thresholds = {str(key): float(value) for key, value in (manifest.get("request_thresholds") or {}).items()}
+        if any(not 0.0 < value < 1.0 for value in thresholds.values()):
+            raise ValueError("every request_thresholds entry must lie strictly between 0 and 1")
         self.models = list(models)
         self.manifest = dict(manifest)
         self.view = str(manifest["view"])
         self.threshold = threshold
+        self.thresholds = thresholds
         self.model_id = str(manifest["model_id"])
+
+    @staticmethod
+    def case_key(case: Mapping[str, Any] | str) -> str:
+        """``case14``, ``case118``: a case name as given, a loaded case by its bus count."""
+        if isinstance(case, Mapping):
+            return f"case{int(np.asarray(case['bus']).shape[0])}"
+        name = str(case).replace("\\", "/").rsplit("/", 1)[-1]
+        return name.split(".")[0].lower()
+
+    def threshold_for(self, case: Mapping[str, Any] | str) -> float:
+        return self.thresholds.get(self.case_key(case), self.threshold)
 
     def scores(self, case: Mapping[str, Any] | str, feature_payload: Mapping[str, Any]) -> dict[str, Any]:
         """Mean probabilities of the seeds on one solve."""
@@ -101,13 +118,14 @@ class TriageClassifier:
         if not (np.isfinite(scores["needs_aux"]) and np.all(np.isfinite(scores["family"])) and np.all(np.isfinite(scores["first"]))):
             return {"method": METHOD, "model_id": self.model_id, "status": "unavailable",
                     "reason": "nonfinite scores", "request_admitted": False}
+        threshold = self.threshold_for(case)
         return {
             "method": METHOD,
             "model_id": self.model_id,
             "status": "valid",
             "request_score": round(scores["needs_aux"], 4),
-            "request_threshold": round(self.threshold, 4),
-            "request_admitted": bool(scores["needs_aux"] >= self.threshold),
+            "request_threshold": round(threshold, 4),
+            "request_admitted": bool(scores["needs_aux"] >= threshold),
             "first_family": FIRST_CLASSES[int(np.argmax(scores["first"]))],
             "first_family_scores": {name: round(float(v), 3) for name, v in zip(FIRST_CLASSES, scores["first"])},
             "score_interpretation": "mean of the seeds' probabilities",
@@ -153,6 +171,44 @@ def load_triage_classifier(directory: str | Path) -> TriageClassifier:
         raise FileNotFoundError(f"no runtime.json under {root}")
     stamp = tuple(sorted((item.name, item.stat().st_size, item.stat().st_mtime_ns) for item in root.iterdir() if item.is_file()))
     return _load(str(root), stamp)
+
+
+def export_checkpoints(checkpoint_dir: Path, output: Path, *, threshold: float, threshold_rule: str,
+                       source: Mapping[str, Any], thresholds: Mapping[str, float] | None = None) -> dict[str, Any]:
+    """Write a runtime directory from per-seed checkpoints with a given threshold (and per-network thresholds)."""
+    import torch
+
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    names = []
+    view = None
+    for path in sorted(Path(checkpoint_dir).glob("seed_*.pt")):
+        saved = torch.load(path, map_location="cpu", weights_only=False)
+        view = saved["view"] if view is None else view
+        if saved["view"] != view:
+            raise ValueError("checkpoints of mixed views")
+        torch.save({"state_dict": {key: value.half() for key, value in saved["state_dict"].items()}, "config": saved["config"],
+                    "view": saved["view"], "seed": saved["seed"], "settings": saved.get("settings")}, output / path.name)
+        names.append(path.name)
+    if not names:
+        raise FileNotFoundError(f"no seed checkpoints under {checkpoint_dir}")
+    manifest = {
+        "contract": RUNTIME_CONTRACT,
+        "method": METHOD,
+        "model_id": _model_id([output / name for name in names], float(threshold)),
+        "view": view,
+        "request_threshold": float(threshold),
+        "threshold_rule": threshold_rule,
+        "families": list(FAMILY_HEADS),
+        "first_classes": list(FIRST_CLASSES),
+        "checkpoints": names,
+        "source": dict(source),
+        "storage": "state_dict in float16, cast to float32 when loaded",
+    }
+    if thresholds:
+        manifest["request_thresholds"] = {str(key): float(value) for key, value in thresholds.items()}
+    (output / "runtime.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    return manifest
 
 
 def export_runtime(checkpoint_dir: Path, benchmark_json: Path, output: Path, *, classifier_name: str = "gnn_residual") -> dict[str, Any]:

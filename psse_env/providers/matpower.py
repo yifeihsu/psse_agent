@@ -524,7 +524,11 @@ class MatpowerDeploymentProviders:
         if is_classifier_gated(self.evidence_profile):
             from research.classifier_triage.runtime import DEFAULT_TRIAGE_CLASSIFIER, load_triage_classifier
 
-            self.triage = load_triage_classifier(triage_classifier or DEFAULT_TRIAGE_CLASSIFIER)
+            # PSSE_TRIAGE_CLASSIFIER names the export for stages that build the
+            # providers without the runner's option (the expert aggregate).
+            self.triage = load_triage_classifier(
+                triage_classifier or os.environ.get("PSSE_TRIAGE_CLASSIFIER") or DEFAULT_TRIAGE_CLASSIFIER
+            )
         elif triage_classifier:
             raise ValueError(
                 f"evidence_profile={self.evidence_profile} runs no triage classifier (triage_classifier)"
@@ -4918,6 +4922,21 @@ class MatpowerDeploymentProviders:
             return None, self._sigma_undeclared(state, "three_phase_sigma", tool)
         return (voltages, currents, float(current_sigma), float(voltage_sigma)), None
 
+    def _line_parameters(self, state: Mapping[str, Any]) -> Mapping[int, Mapping[str, Any]] | None:
+        """The operator's line table for the PMU rungs; ``None`` keeps the IEEE 14 table on case14."""
+        from three_phase_nlm.branch_current_analysis import line_parameters_from_case
+
+        case_path = str(self._case_path(state))
+        name = case_path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if name.split(".")[0] == "case14":
+            return None
+        cache = getattr(self, "_line_parameter_cache", None)
+        if cache is None:
+            cache = self._line_parameter_cache = {}
+        if case_path not in cache:
+            cache[case_path] = line_parameters_from_case(_load_python_case(case_path))
+        return cache[case_path]
+
     def _suspicion_three_phase_nlm(self, state: Mapping[str, Any]) -> dict[str, Any]:
         """Test a balanced HIF suspicion on the acquired snapshot phasors.
 
@@ -4931,7 +4950,8 @@ class MatpowerDeploymentProviders:
         if failure is not None:
             return failure
         voltages, currents, current_sigma, _voltage_sigma = acquired
-        screen = zero_sequence_line_screen(voltages, currents, sigma_pu=current_sigma, top_k=self.top_k)
+        screen = zero_sequence_line_screen(voltages, currents, sigma_pu=current_sigma, top_k=self.top_k,
+                                           line_parameters=self._line_parameters(state))
         if screen is None:
             return self._failure("nlm_runtime_missing", "no line carries terminal phasors at both ends")
         screen_summary = {
@@ -5012,14 +5032,16 @@ class MatpowerDeploymentProviders:
             return failure
         voltages, currents, current_sigma, voltage_sigma = acquired
         row0 = int(arguments["candidate_branch_row0"])
-        screen = zero_sequence_line_screen(voltages, currents, sigma_pu=current_sigma, top_k=10**6)
+        line_parameters = self._line_parameters(state)
+        screen = zero_sequence_line_screen(voltages, currents, sigma_pu=current_sigma, top_k=10**6,
+                                           line_parameters=line_parameters)
         line = next((item for item in (screen or {}).get("top_lines") or [] if item["branch_row0"] == row0), None)
         if line is None:
             return self._failure("hif_target_unsupported", f"branch row {row0} is not a line with terminal phasors")
         phase = str(arguments.get("candidate_phase") or line["phase"]).strip().upper()
         estimate = pmu_hif_estimate(
             voltages, currents, branch_row0=row0, phase=phase, sigma_pu=current_sigma,
-            voltage_sigma_pu=voltage_sigma,
+            voltage_sigma_pu=voltage_sigma, line_parameters=line_parameters,
         )
         if estimate is None:
             return self._failure("hif_estimation_failure", f"no two-terminal estimate on branch row {row0} phase {phase}")

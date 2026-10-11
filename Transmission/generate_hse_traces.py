@@ -94,6 +94,10 @@ def build_trace(
             or not 1 <= source_bus_1based <= nb):
         raise ValueError("source_bus_1based must identify one bus in the supplied network")
     source_bus_1based = int(source_bus_1based)
+    # The ideal source that holds zero harmonic voltage is the case's reference bus
+    # (BUS_TYPE 3); row 0 when no reference row is declared, the legacy behaviour.
+    reference_rows = np.flatnonzero(bus[:, 1] == 3)
+    slack_row = int(reference_rows[0]) if reference_rows.size else 0
     
     # 1. Fundamental
     V1 = fundamental_bus_voltages(bus)
@@ -106,7 +110,7 @@ def build_trace(
     
     # Inject at unit scale to find scaling factor
     Iinj_unit = make_harmonic_current_injections(nb, src_idx, spectrum, I1_load, rng, inj_scale=1.0)
-    V_unit = solve_all_harmonics(bus, branch, harmonic_orders, Iinj_unit, BASE_MVA, slack_bus=0)
+    V_unit = solve_all_harmonics(bus, branch, harmonic_orders, Iinj_unit, BASE_MVA, slack_bus=slack_row)
     
     # 3. Scale to Target THD
     # The requested severity is source-bus voltage THD, not network maximum.
@@ -122,7 +126,7 @@ def build_trace(
     Iinj_final = {h: scale * Ivec for h, Ivec in Iinj_unit.items()}
     Iinj_final[1] = Ybus1 @ V1 # Fundamental injection for SCADA consistency (net)
     
-    V_final = solve_all_harmonics(bus, branch, harmonic_orders, Iinj_final, BASE_MVA, slack_bus=0)
+    V_final = solve_all_harmonics(bus, branch, harmonic_orders, Iinj_final, BASE_MVA, slack_bus=slack_row)
     V_final[1] = V1 # Ensure fundamental is correct
     
     # 4. Generate SCADA Measurements (Legacy Transducer)

@@ -444,6 +444,18 @@ def _conditioned_wls_summary(output: Mapping[str, Any]) -> dict[str, Any]:
         }
     return summary
 
+# Basis of a candidate's ``global_progress`` under the dual anomaly test.
+# ``chi_square_statistic`` (the historical rule) measures the fraction of the
+# whole statistic a correction removes; the statistic's noise baseline (its
+# degrees of freedom) grows with the network, so one correct repair of a
+# multi-error root removes 20-30% of it on IEEE 14 but 7-10% on IEEE 118 and
+# the partial-progress floors reject it there.  ``chi_square_excess`` measures
+# the fraction of the excess over the degrees of freedom, the anomaly energy
+# itself, which is network-size independent (2026-10-11).
+PROGRESS_BASES = ("chi_square_statistic", "chi_square_excess")
+DEFAULT_PROGRESS_BASIS = "chi_square_statistic"
+
+
 class TransactionalPSSEEnv:
     """Recovery-aware transactional controller around PSSE macro-actions."""
 
@@ -465,8 +477,12 @@ class TransactionalPSSEEnv:
         max_steps: int = DEFAULT_EPISODE_ACTION_LIMIT,
         history_window: int = 4,
         evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
+        progress_basis: str = DEFAULT_PROGRESS_BASIS,
     ) -> None:
         self.evidence_profile = validate_evidence_profile(evidence_profile)
+        if progress_basis not in PROGRESS_BASES:
+            raise ValueError(f"progress_basis must be one of {PROGRESS_BASES}, got {progress_basis!r}")
+        self.progress_basis = str(progress_basis)
         self.store = store or PowerSystemStateStore()
         self.wls_runner = wls_runner
         self.process_oracle = process_oracle or ProcessValidityOracle()
@@ -3889,11 +3905,26 @@ class TransactionalPSSEEnv:
                 candidate_progress_score = metrics.get("chi_square_statistic")
             try:
                 if parent_progress_score is not None and candidate_progress_score is not None:
-                    denominator = max(abs(float(parent_progress_score)), 1e-12)
-                    progress = (float(parent_progress_score) - float(candidate_progress_score)) / denominator
+                    basis = "chi_square_statistic"
+                    parent_value, candidate_value = float(parent_progress_score), float(candidate_progress_score)
+                    if dual_anomaly_test and self.progress_basis == "chi_square_excess":
+                        # The anomaly energy above the noise baseline: the
+                        # same statistic less the degrees of freedom of the
+                        # parent solve (the candidate's differs only by the
+                        # rows a correction removes).  A parent without
+                        # excess keeps the whole-statistic basis.
+                        dof = self._latest_successful_wls_score(str(parent_id or ""), metric="chi_square_dof")
+                        if dof is None:
+                            dof = metrics.get("chi_square_dof")
+                        if dof is not None and parent_value - float(dof) > 0.0:
+                            parent_value -= float(dof)
+                            candidate_value -= float(dof)
+                            basis = "chi_square_excess"
+                    denominator = max(abs(parent_value), 1e-12)
+                    progress = (parent_value - candidate_value) / denominator
                     if dual_anomaly_test:
                         metrics["global_progress"] = progress
-                        metrics["global_progress_basis"] = "chi_square_statistic"
+                        metrics["global_progress_basis"] = basis
                     else:
                         metrics.setdefault("global_progress", progress)
                 if parent_score is not None:
