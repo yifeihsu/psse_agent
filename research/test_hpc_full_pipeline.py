@@ -206,6 +206,9 @@ def test_build_suite_accepts_and_forwards_the_corpus_flags() -> None:
     )
     assert args.hif_sample_paths == [Path("a.jsonl"), Path("b.jsonl")]
     assert args.imbalance_sample_path == Path("c.jsonl")
+    # Stage 0 hands the suite builder the same system arguments as the aggregate (2026-10-11).
+    assert parser.parse_args(required + ["--progress-basis", "chi_square_excess"]).progress_basis == "chi_square_excess"
+    assert args.progress_basis is None
     source = (CELL / "build_suite.py").read_text(encoding="utf-8")
     call = source[source.index("research.resolve_scenario_sources("):]
     call = call[: call.index(")")]

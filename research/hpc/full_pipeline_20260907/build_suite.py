@@ -227,6 +227,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable the normalized-residual test in admission (pre-2026-09-14 rule)",
     )
+    parser.add_argument(
+        "--progress-basis",
+        choices=("chi_square_statistic", "chi_square_excess"),
+        default=None,
+        help=(
+            "Basis of a candidate's global progress in the environment the aggregate ran under "
+            "(stage 0 passes the same system arguments to both draws); recorded in the manifest, "
+            "the draws themselves run no episodes"
+        ),
+    )
     parser.add_argument("--hif-sample-paths", nargs="+", type=Path)
     parser.add_argument("--imbalance-sample-path", type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
@@ -385,6 +395,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "topology_effects": list(args.topology_effects) if args.topology_effects else None,
         "system": str(args.system),
         "normalized_residual_threshold": normalized_residual_threshold,
+        "progress_basis": args.progress_basis,
         "training_candidates_built": len(train_candidates),
         "development_candidates_built": len(dev_candidates),
         "training_generator_report": train_generator.report(),
