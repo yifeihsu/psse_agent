@@ -48,8 +48,8 @@ from psse_env.wls_admission import DEFAULT_EXCESS_FLOOR
 BUS_TYPE, PD, QD, GS, BS = 1, 2, 3, 4, 5
 F_BUS, T_BUS, BR_R, BR_X, BR_B, TAP, SHIFT, BR_STATUS = 0, 1, 2, 3, 4, 8, 9, 10
 GEN_BUS, GEN_STATUS = 0, 7
-VIEWS = ("residual", "residual_v2", "values")
-RESIDUAL_VIEWS = ("residual", "residual_v2")
+VIEWS = ("residual", "residual_v2", "residual_v3", "values")
+RESIDUAL_VIEWS = ("residual", "residual_v2", "residual_v3")
 RESIDUAL_FLAG = 3.0
 CHI2_ALPHA = 0.01
 BLOCKS = ("Vm", "Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt")
@@ -65,6 +65,7 @@ NODE_FEATURES = {
                  "zero_injection", "log1p_degree", "g_shunt_pu", "b_shunt_pu"),
 }
 NODE_FEATURES["residual_v2"] = NODE_FEATURES["residual"]
+NODE_FEATURES["residual_v3"] = NODE_FEATURES["residual"]
 NODE_FEATURES["values"] = NODE_FEATURES["residual"] + (
     "vm.z", "vm.h", "pinj.z", "pinj.h", "qinj.z", "qinj.h", "vm_estimated")
 EDGE_FEATURES = {
@@ -73,6 +74,7 @@ EDGE_FEATURES = {
                  "cos_shift", "sin_shift", "status", "is_transformer", "orientation"),
 }
 EDGE_FEATURES["residual_v2"] = EDGE_FEATURES["residual"]
+EDGE_FEATURES["residual_v3"] = EDGE_FEATURES["residual"]
 EDGE_FEATURES["values"] = EDGE_FEATURES["residual"] + (
     "p_src.z", "p_src.h", "q_src.z", "q_src.h", "p_dst.z", "p_dst.h", "q_dst.z", "q_dst.h",
     "cos_angle_difference", "sin_angle_difference")
@@ -82,6 +84,11 @@ GLOBAL_FEATURES = {
     "residual": LEGACY_GLOBAL_FEATURES,
     "values": LEGACY_GLOBAL_FEATURES,
     "residual_v2": ("signed_log_excess_energy", "log1p_max_residual", "log1p_excess_count_gt3", "log1p_excess_count_gt4",
+                    "log1p_max_multiplier"),
+    # residual_v3 (2026-10-12): the excess relative to the alarm threshold's excess at the network's
+    # degrees of freedom (research.classifier_triage.effect_sampler.effect_ratio), the one global that is
+    # comparable across networks; the other four are those of residual_v2.
+    "residual_v3": ("signed_log_effect_ratio", "log1p_max_residual", "log1p_excess_count_gt3", "log1p_excess_count_gt4",
                     "log1p_max_multiplier"),
 }
 
@@ -198,10 +205,14 @@ def build_graph(case_name: str | Mapping[str, Any], payload: Mapping[str, Any], 
     magnitude = np.abs(residual)
     objective, dof = float(payload["objective"]), max(int(payload["dof"]), 1)
     max_multiplier = float(np.max(np.abs(lambdas))) if lambdas.size else 0.0
-    if view == "residual_v2":
+    if view in ("residual_v2", "residual_v3"):
         live = magnitude.size - 2 * int(np.count_nonzero(net["zero_injection"]))  # channels that can exceed a flag
+        if view == "residual_v3":
+            size = float(signed_log(np.asarray((objective - dof) / (float(chi2.ppf(1.0 - CHI2_ALPHA, dof)) - dof))))
+        else:
+            size = float(signed_log(np.asarray((objective - dof) / EXCESS_ENERGY_SCALE)))
         u = np.asarray([
-            float(signed_log(np.asarray((objective - dof) / EXCESS_ENERGY_SCALE))), np.log1p(magnitude.max()),
+            size, np.log1p(magnitude.max()),
             np.log1p(max(float(np.count_nonzero(magnitude > 3.0)) - CHANCE_RATE_GT3 * live, 0.0)),
             np.log1p(max(float(np.count_nonzero(magnitude > 4.0)) - CHANCE_RATE_GT4 * live, 0.0)),
             np.log1p(max_multiplier),

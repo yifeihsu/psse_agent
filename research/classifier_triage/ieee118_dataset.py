@@ -62,6 +62,7 @@ import argparse
 import copy
 import gzip
 import json
+import math
 import pickle
 import shutil
 import subprocess
@@ -81,8 +82,41 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from psse_env.wls_admission import DEFAULT_EXCESS_FLOOR, admitted as admission_admitted, operator_alarm  # noqa: E402
+from research.classifier_triage.effect_sampler import (  # noqa: E402
+    draw_target, effect_ratio, fit_scale, implied_magnitude, parse_band, rescale_corpus_row, wls_solver,
+)
 
 SYSTEM = "case118"
+#: The effect band of a run (research.classifier_triage.effect_sampler): None keeps the physical draws.
+EFFECT_BAND: tuple[float, float] | None = None
+#: Slack on the band when a root's own solve is checked (the sampler's tolerance plus the noise draw).
+BAND_SLACK = 0.15
+
+
+def set_system(name: str) -> None:
+    """Select the registered system of this process (workers take it from their task)."""
+    global SYSTEM
+    SYSTEM = str(name)
+
+
+def set_effect_band(band: Any) -> None:
+    global EFFECT_BAND
+    EFFECT_BAND = parse_band(band)
+
+
+def _configure(task: Mapping[str, Any]) -> None:
+    set_system(task.get("system") or SYSTEM)
+    set_effect_band(task.get("effect_band"))
+
+
+def band_admitted(stats: Mapping[str, Any]) -> bool:
+    """Root admission: the operator alarm and, under a band, the solve's own effect ratio in the band."""
+    if not stats.get("alarm"):
+        return False
+    if EFFECT_BAND is None:
+        return bool(stats.get("admitted"))
+    low, high = EFFECT_BAND
+    return low * (1.0 - BAND_SLACK) <= float(stats["effect_ratio"]) <= high * (1.0 + BAND_SLACK)
 SEED = 20261007
 LOAD_SCALE_RANGE = (0.80, 1.25)
 HIF_BANDS_OHM = ((100.0, 200.0), (200.0, 500.0), (500.0, 1000.0))
@@ -178,6 +212,7 @@ def wls_check(z: Sequence[float], sigma: Sequence[float], metadata: Mapping[str,
         "success": True, "objective": objective, "dof": dof, "chi_square_threshold": threshold,
         "log_chi_square_ratio": float(np.log(max(objective, 1e-9) / threshold)), "max_normalized_residual": max_r,
         "excess_objective": objective - dof,
+        "effect_ratio": effect_ratio(objective, dof, CHI2_ALPHA),
         "alarm": operator_alarm(objective, dof, max_r, alpha=CHI2_ALPHA, residual_threshold=RESIDUAL_THRESHOLD),
         "admitted": admission_admitted(objective, dof, max_r, rule=ADMISSION_RULE, alpha=CHI2_ALPHA,
                                        residual_threshold=RESIDUAL_THRESHOLD, margin=ANOMALY_MARGIN,
@@ -205,9 +240,23 @@ def record(root_id: str, family: str, parent_id: str, z: Sequence[float], sigma:
     return out
 
 
-def overlay_meter(z: np.ndarray, sigma: np.ndarray, rng: np.random.Generator, nb: int) -> tuple[np.ndarray, dict[str, Any]]:
-    """One power-meter gross error with the generator's magnitude law (``_compose_measurement``)."""
+def overlay_meter(z: np.ndarray, sigma: np.ndarray, rng: np.random.Generator, nb: int,
+                  base_stats: Mapping[str, Any] | None = None) -> tuple[np.ndarray, dict[str, Any]]:
+    """One power-meter gross error: the generator's magnitude law, or under a band an amplitude
+    whose increment of the effect ratio over the base solve is a draw from the band."""
     index = int(rng.integers(nb, z.size))  # Pinj .. Qt
+    if EFFECT_BAND is not None and base_stats is not None:
+        direction = np.zeros(z.size)
+        direction[index] = (1.0 if rng.random() < 0.5 else -1.0) * float(sigma[index])
+        target = float(base_stats["effect_ratio"]) + draw_target(rng, EFFECT_BAND)
+        fit = fit_scale(wls_solver(SYSTEM, sigma), np.asarray(z, dtype=float), direction, np.zeros(z.size), target,
+                        scale_bounds=(2.0, 80.0))
+        if not fit.get("reachable"):
+            return np.array(z, dtype=float, copy=True), {"index": index, "effect_failure": fit.get("reason")}
+        out = np.asarray(z, dtype=float) + float(fit["scale"]) * direction
+        return out, {"index": index, "observed": float(out[index]), "clean": float(z[index]), "channel": None,
+                     "effect": {"target_increment": target - float(base_stats["effect_ratio"]), "scale_sigma": float(fit["scale"]),
+                                "ratio": fit["ratio"], "sampler": "effect_targeted_v1"}}
     magnitude = float(rng.uniform(*OVERLAY_RANGE))
     magnitude = max(magnitude, OVERLAY_SIGMA_FLOOR * float(sigma[index]) * float(rng.uniform(*OVERLAY_FLOOR_FACTOR)))
     sign = 1.0 if rng.random() < 0.5 else -1.0
@@ -415,6 +464,10 @@ def waveform_job(task: Mapping[str, Any]) -> dict[str, Any]:
     from three_phase_model.exporter import export_model, load_assumptions
     from Transmission.generate_measurements import scale_loads, solve_ac_opf
 
+    _configure(task)
+    if EFFECT_BAND is not None:
+        raise ValueError("an effect band needs waveform rows from a corpus (--hif-corpus/--unbalance-corpus); "
+                         "the three-phase replay path draws physical magnitudes")
     kind, index, seed, work = str(task["kind"]), int(task["index"]), int(task["seed"]), Path(task["work"])
     replicas = int(task.get("healthy_replicas", 2))
     ctx = context()
@@ -534,8 +587,15 @@ def waveform_job(task: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def harmonic_job(task: Mapping[str, Any]) -> dict[str, Any]:
-    """One harmonic snapshot on an AC-OPF point (``build_trace``), with WLS admission."""
+    """One harmonic snapshot on an AC-OPF point (``build_trace``), with WLS admission.
+
+    Under an effect band the distortion's effect on the SCADA vector (its deviation from the
+    fundamental-only readings) is scaled until the WLS excess lands in the band; the implied
+    THD is the drawn one times the square root of the scale.
+    """
     from pypower.idx_bus import BUS_I
+
+    _configure(task)
 
     from Transmission.generate_hse_traces import build_trace
     from Transmission.generate_measurements import scale_loads, solve_ac_opf
@@ -579,37 +639,155 @@ def harmonic_job(task: Mapping[str, Any]) -> dict[str, Any]:
     physical = {"actual_thd": float(trace["actual_thd"]), "maximum_voltage_thd": float(severity["maximum_voltage_thd"]),
                 "maximum_voltage_thd_bus": int(severity["maximum_voltage_thd_bus_1based"]),
                 "max_abs_shift_sigma": float(np.max(np.abs(z_true - fundamental) / sigma))}
+    effect: dict[str, Any] | None = None
+    if EFFECT_BAND is not None:
+        noise = z_obs - z_true
+        target = draw_target(rng, EFFECT_BAND)
+        fit = fit_scale(wls_solver(SYSTEM, sigma), fundamental, z_true - fundamental, noise, target)
+        if not fit.get("reachable"):
+            attempt.update(outcome="excluded", reason="effect_band_unreachable", effect=fit, seconds=time.perf_counter() - started)
+            return out
+        scale = float(fit["scale"])
+        z_true = fundamental + scale * (z_true - fundamental)
+        z_obs = z_true + noise
+        implied = implied_magnitude("harmonic", {"thd_target": thd}, scale)
+        physical = {**physical, "drawn_actual_thd": physical["actual_thd"], "actual_thd": physical["actual_thd"] * math.sqrt(scale),
+                    "maximum_voltage_thd": physical["maximum_voltage_thd"] * math.sqrt(scale),
+                    "max_abs_shift_sigma": float(np.max(np.abs(z_true - fundamental) / sigma))}
+        effect = {"target": target, **{k: v for k, v in fit.items() if k != "reachable"}, "implied": implied,
+                  "sampler": "effect_targeted_v1"}
+        attempt["effect"] = effect
     attempt["physical"] = physical
     payload, stats = wls_check(z_obs, sigma)
     if payload is None:
         attempt.update(outcome="excluded", reason="wls_nonconvergence", seconds=time.perf_counter() - started)
         return out
-    attempt.update(outcome="admitted" if stats["admitted"] else "alarm_only" if stats["alarm"] else "quiet",
+    attempt.update(outcome="admitted" if band_admitted(stats) else "alarm_only" if stats["alarm"] else "quiet",
                    wls=stats, seconds=time.perf_counter() - started)
     truth = _empty_truth()
-    truth["harmonic"] = [{"bus_1based": source_bus, "thd_target": thd, "load_scale": load_scale, "operating_point": "ac_opf",
+    truth["harmonic"] = [{"bus_1based": source_bus, "thd_target": thd if effect is None else effect["implied"]["thd"],
+                          "drawn_thd_target": thd, "load_scale": load_scale, "operating_point": "ac_opf",
                           "kv_ll": ctx["bus_kv"][source_bus], **physical}]
     root = record(f"harmonic:{index:05d}", "harmonic", parent, z_obs, sigma, truth, stats, source_id=parent,
-                  op_point={"load_scale": load_scale, "dispatch": "ac_opf"}, physical=physical)
-    if stats["admitted"]:
+                  op_point={"load_scale": load_scale, "dispatch": "ac_opf"}, physical=physical, effect=effect)
+    if band_admitted(stats):
         out["roots"].append((root, payload))
     elif stats["alarm"]:
         out["alarm_only"].append((root, payload))
     return out
 
 
+# ------------------------------------------------------ waveform rows from a corpus
+
+def corpus_waveform_job(task: Mapping[str, Any]) -> dict[str, Any]:
+    """One HIF or unbalance window taken from a corpus row (``psse_env.providers.scenario_generator`` schema).
+
+    The row carries the same operating point without the disturbance (``z_true``), the disturbance
+    without sensor noise (``z_clean``) and the clean and disturbed phasors.  Under an effect band the
+    row is re-magnituded (``effect_sampler.rescale_corpus_row``); otherwise it only gets a fresh
+    sensor-noise draw.  Produces the same records as ``waveform_job`` (root, HIF-plus-meter overlay,
+    healthy replicas, the phasor entry and the corpus row for the pipeline).
+    """
+    _configure(task)
+    kind, index, seed = str(task["kind"]), int(task["index"]), int(task["seed"])
+    replicas = int(task.get("healthy_replicas", 2))
+    row = dict(task["row"])
+    ctx = context()
+    sigma, nb = ctx["sigma"], ctx["nb"]
+    rng = _rng(seed, kind, index)
+    row_sigma = np.asarray(row.get("sigma_z") or sigma, dtype=float)
+    parent = f"{kind}_window:{index:05d}"
+    label = dict(row.get("label") or {})
+    attempt: dict[str, Any] = {"kind": kind, "index": index, "parent_id": parent, "source": "corpus_row",
+                               "corpus_id": str(row.get("id")), "load_scale": (row.get("op_point") or {}).get("load_scale")}
+    out: dict[str, Any] = {"attempt": attempt, "roots": [], "alarm_only": [], "healthy": [], "phasors": {}, "corpus": []}
+    started = time.perf_counter()
+    z_reference = np.asarray(row["z_true"], dtype=float)
+    healthy_units = rng.standard_normal((replicas, row_sigma.size))
+    overlay_rng = np.random.default_rng(rng.integers(2**63 - 1))
+    if EFFECT_BAND is not None:
+        target = draw_target(rng, EFFECT_BAND)
+        scaled, fit = rescale_corpus_row(row, SYSTEM, rng, target)
+        if scaled is None:
+            attempt.update(outcome="excluded", reason="effect_band_unreachable", effect=fit, seconds=time.perf_counter() - started)
+            return out
+        row = scaled
+        attempt["effect"] = row["effect"]
+    else:
+        z_clean = np.asarray(row["z_clean"], dtype=float)
+        row["z_obs"] = (z_clean + rng.standard_normal(row_sigma.size) * row_sigma).tolist()
+    z_obs = np.asarray(row["z_obs"], dtype=float)
+    payload, stats = wls_check(z_obs, row_sigma)
+    if payload is None:
+        attempt.update(outcome="excluded", reason="wls_nonconvergence", seconds=time.perf_counter() - started)
+        return out
+    attempt.update(outcome="admitted" if band_admitted(stats) else "alarm_only" if stats["alarm"] else "quiet",
+                   wls=stats, seconds=time.perf_counter() - started)
+    implied = {k: v for k, v in (((row.get("effect") or {}).get("implied")) or {}).items() if k not in ("law", "effect_scale")}
+    truth = _empty_truth()
+    if kind == "hif":
+        drawn = {k: label.get(k) for k in ("r_hif_ohm", "r_hif_pu", "fault_power_mw", "nominal_fault_current_pu") if k in label}
+        truth["hif"] = [{**label, **implied, "drawn": drawn, "error_type": "high_impedance_fault"}]
+    else:
+        truth["unbalance"] = [{**label, "implied_fractions": implied.get("fractions"), "error_type": "three_phase_imbalance"}]
+    physical = {k: v for k, v in label.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    common = {"source_id": parent, "corpus_id": str(row.get("id")), "op_point": row.get("op_point"), "physical": physical,
+              "effect": row.get("effect")}
+    root = record(f"{kind}:{index:05d}", kind, parent, z_obs, row_sigma, truth, stats, **common)
+    if band_admitted(stats):
+        out["roots"].append((root, payload))
+        out["phasors"][root["root_id"]] = {"three_phase_voltages": row.get("three_phase_voltages"),
+                                           "three_phase_branch_currents": row.get("three_phase_branch_currents"), "format": "corpus"}
+        out["corpus"].append(row)
+        if kind == "hif":
+            z_mixed, meter = overlay_meter(z_obs, row_sigma, overlay_rng, nb, base_stats=stats)
+            if "effect_failure" not in meter:
+                mixed_payload, mixed_stats = wls_check(z_mixed, row_sigma)
+                if mixed_payload is not None and mixed_stats["alarm"]:
+                    mixed_truth = copy.deepcopy(truth)
+                    mixed_truth["measurement"] = [{k: v for k, v in meter.items() if k != "effect"}]
+                    out["roots"].append((record(f"measurement+hif:{index:05d}", "measurement+hif", parent, z_mixed, row_sigma,
+                                                mixed_truth, mixed_stats, **common, overlay_effect=meter.get("effect")), mixed_payload))
+                attempt["measurement_hif"] = {"admitted": bool(mixed_payload is not None and mixed_stats["alarm"])}
+    elif stats["alarm"]:
+        out["alarm_only"].append((root, payload))
+    for replica in range(replicas):
+        z = z_reference + healthy_units[replica] * row_sigma
+        h_payload, h_stats = wls_check(z, row_sigma)
+        if h_payload is None or not h_stats["alarm"]:
+            continue
+        out["healthy"].append((record(f"healthy:{kind}:{index:05d}:{replica}", "healthy_window", parent, z, row_sigma,
+                                      _empty_truth(), h_stats, source="corpus_reference", source_id=parent,
+                                      op_point=row.get("op_point")), h_payload))
+    attempt["healthy_alarms"] = len(out["healthy"])
+    return out
+
+
+def _corpus_waveform_safe(task):
+    return _safe(corpus_waveform_job, task)
+
+
 # --------------------------------------------------------------- balanced shards
 
 def build_generator(corpus: Mapping[str, Any], derived: Path, seed: int):
-    """The round-0 generator on one fresh IEEE 118 corpus, with the study's balanced-family settings."""
+    """The round-0 generator on one fresh corpus of the system, with the study's balanced-family settings.
+
+    Under an effect band the corpus rows already carry the band's magnitudes, so the generator admits
+    on the operator alarm alone (margin 1) and the ten-sigma meter floor is lifted; the band check is
+    applied to each root's own solve afterwards (``band_admitted``).
+    """
     from psse_env.providers.scenario_generator import Round0ScenarioGenerator
 
+    if EFFECT_BAND is not None:
+        admission = {"admission_rule": "chi_square_margin", "anomaly_margin": 1.0, "min_measurement_error_sigma": None}
+    else:
+        admission = {"admission_rule": ADMISSION_RULE, "admission_excess_floor": ADMISSION_EXCESS_FLOOR,
+                     "min_measurement_error_sigma": 10.0}
     return Round0ScenarioGenerator(
         system=SYSTEM, admission_mode="recoverable", corpus_path=corpus["corpus_path"],
         balanced_artifact_dir=corpus["artifact_dir"], derived_case_dir=derived, seed=seed,
-        normalized_residual_threshold=RESIDUAL_THRESHOLD, min_measurement_error_sigma=10.0,
-        parameter_ranking_dominance_threshold=1.0, parameter_target_rank_allowance=2,
-        admission_rule=ADMISSION_RULE, admission_excess_floor=ADMISSION_EXCESS_FLOOR,
+        normalized_residual_threshold=RESIDUAL_THRESHOLD,
+        parameter_ranking_dominance_threshold=1.0, parameter_target_rank_allowance=2, **admission,
     )
 
 
@@ -618,6 +796,7 @@ def balanced_shard(task: Mapping[str, Any]) -> dict[str, Any]:
     from psse_env.providers.balanced_corpus import build_balanced_corpus
     from research.hypothesis_ranking.build_dataset import RootBuilder, _root_record
 
+    _configure(task)
     shard, seed, out_dir = int(task["shard"]), int(task["seed"]), Path(task["out_dir"])
     plan = dict(task["per_shard"])
     ctx = context()
@@ -625,7 +804,11 @@ def balanced_shard(task: Mapping[str, Any]) -> dict[str, Any]:
     started = time.perf_counter()
     shard_dir = out_dir / f"shard_{shard:02d}"
     corpus = build_balanced_corpus(shard_dir / "corpus", system=SYSTEM, seed=seed, counts=dict(task["corpus_counts"]),
-                                   load_scale_range=LOAD_SCALE_RANGE, num_scans=3)
+                                   load_scale_range=LOAD_SCALE_RANGE, num_scans=3, effect_band=EFFECT_BAND)
+    if EFFECT_BAND is not None:
+        # the composed overlay of measurement+parameter follows the generator's own magnitude law,
+        # outside the band: the effect datasets leave that family out
+        plan["measurement+parameter"] = 0
     generator = build_generator(corpus, shard_dir / "derived_cases", seed + 1)
     builder = RootBuilder(generator, seed)
     timings = {}
@@ -642,7 +825,7 @@ def balanced_shard(task: Mapping[str, Any]) -> dict[str, Any]:
                               "corpus": {k: corpus.get(k) for k in ("counts", "complete", "corpus_path")}, "timings": timings}
     for root in builder.roots:
         payload, stats = wls_check(root["measurements"], sigma, root.get("metadata") or None)
-        if payload is None:
+        if payload is None or not band_admitted(stats):
             continue
         parent = f"corpus118:{shard:02d}:{root['source_id']}"
         clean = {key: value for key, value in root.items() if key not in ("parent_id",)}
@@ -682,12 +865,30 @@ def balanced_shard(task: Mapping[str, Any]) -> dict[str, Any]:
         z = np.asarray(row["z_obs"], dtype=float).copy()
         line = int(ctx["eligible"][int(mimic_rng.integers(len(ctx["eligible"])))])
         errors = []
-        for block, sign in ((0, signs[0]), (2, signs[1])):  # Pf and Pt
-            channel = 3 * nb + block * nl + line
-            magnitude = float(mimic_rng.uniform(*MIMIC_SIGMA_RANGE)) * float(row_sigma[channel])
-            clean = float(z[channel])
-            z[channel] = clean + sign * magnitude
-            errors.append({"index": channel, "observed": float(z[channel]), "clean": clean, "channel": None})
+        mimic_effect = None
+        if EFFECT_BAND is not None:
+            # the flow pair's magnitude is a band draw too, so a mimic is as loud as any root
+            direction = np.zeros(z.size)
+            for block, sign in ((0, signs[0]), (2, signs[1])):
+                channel = 3 * nb + block * nl + line
+                direction[channel] = sign * float(row_sigma[channel])
+            fit = fit_scale(wls_solver(SYSTEM, row_sigma), z, direction, np.zeros(z.size), draw_target(mimic_rng, EFFECT_BAND),
+                            scale_bounds=(2.0, 80.0))
+            if not fit.get("reachable"):
+                continue
+            mimic_effect = {k: v for k, v in fit.items() if k != "reachable"}
+            for block, sign in ((0, signs[0]), (2, signs[1])):
+                channel = 3 * nb + block * nl + line
+                clean = float(z[channel])
+                z[channel] = clean + float(fit["scale"]) * direction[channel]
+                errors.append({"index": channel, "observed": float(z[channel]), "clean": clean, "channel": None})
+        else:
+            for block, sign in ((0, signs[0]), (2, signs[1])):  # Pf and Pt
+                channel = 3 * nb + block * nl + line
+                magnitude = float(mimic_rng.uniform(*MIMIC_SIGMA_RANGE)) * float(row_sigma[channel])
+                clean = float(z[channel])
+                z[channel] = clean + sign * magnitude
+                errors.append({"index": channel, "observed": float(z[channel]), "clean": clean, "channel": None})
         payload, stats = wls_check(z, row_sigma)
         if payload is None:
             continue
@@ -698,7 +899,8 @@ def balanced_shard(task: Mapping[str, Any]) -> dict[str, Any]:
         truth = _empty_truth()
         truth["measurement"] = errors
         result["mimic"].append((record(f"{name}:{shard:02d}:{row['id']}:{line}", name, parent, z, row_sigma, truth, stats,
-                                       source_id=str(row["id"]), mimic={"branch_row0": line, "signs": list(signs)}), payload))
+                                       source_id=str(row["id"]), mimic={"branch_row0": line, "signs": list(signs)},
+                                       effect=mimic_effect), payload))
     result["seconds"] = time.perf_counter() - started
     return result
 
@@ -750,7 +952,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--workers", type=int, default=max(1, min(16, (os.cpu_count() or 2) - 2)))
     parser.add_argument("--plan", type=json.loads, default=None, help="JSON overrides of DEFAULT_PLAN")
     parser.add_argument("--stages", default="waveform,balanced", help="waveform (HIF, unbalance, harmonic) and/or balanced")
+    parser.add_argument("--system", default=SYSTEM, help="registered system (case14, case57, case118)")
+    parser.add_argument("--effect-band", default=None,
+                        help="low,high: draw every magnitude as the WLS effect ratio in this band "
+                             "(research.classifier_triage.effect_sampler); needs the corpus waveform rows")
+    parser.add_argument("--hif-corpus", action="append", default=[], help="HIF corpus samples.jsonl (rows replace the three-phase replays)")
+    parser.add_argument("--unbalance-corpus", action="append", default=[], help="unbalance corpus samples.jsonl")
     args = parser.parse_args(argv)
+    set_system(args.system)
+    set_effect_band(args.effect_band)
+    if EFFECT_BAND is not None and not (args.hif_corpus or args.unbalance_corpus):
+        parser.error("--effect-band needs --hif-corpus and/or --unbalance-corpus")
+    task_common = {"system": SYSTEM, "effect_band": list(EFFECT_BAND) if EFFECT_BAND else None}
     plan = copy.deepcopy(DEFAULT_PLAN)
     for key, value in (args.plan or {}).items():
         plan[key] = value
@@ -784,14 +997,34 @@ def main(argv: Sequence[str] | None = None) -> int:
             attempts.append(result["attempt"])
 
     if "waveform" in stages:
-        tasks = ([{"kind": "hif", "index": i, "seed": args.seed, "work": str(work), "healthy_replicas": plan["healthy_replicas"]}
-                  for i in range(int(plan["hif_attempts"]))]
-                 + [{"kind": "three_phase_unbalance", "index": i, "seed": args.seed, "work": str(work),
-                     "healthy_replicas": plan["healthy_replicas"]} for i in range(int(plan["unbalance_attempts"]))]
-                 + [{"kind": "harmonic", "index": i, "seed": args.seed} for i in range(int(plan["harmonic_attempts"]))])
+        tasks: list[dict[str, Any]] = []
+        if args.hif_corpus or args.unbalance_corpus:
+            # waveform rows from corpora (both systems alike); rows are shuffled per kind and capped by the plan
+            order_rng = np.random.default_rng(args.seed + 17)
+            for kind, files, cap_key in (("hif", args.hif_corpus, "hif_attempts"),
+                                         ("three_phase_unbalance", args.unbalance_corpus, "unbalance_attempts")):
+                rows: list[dict[str, Any]] = []
+                for path in files:
+                    with Path(path).open(encoding="utf-8") as stream:
+                        rows += [r for r in (json.loads(line) for line in stream if line.strip())
+                                 if (r.get("label") or {}).get("error_type") not in (None, "no_error")]
+                # more draws than rows cycle the shuffled rows: each pass gets its own target and noise
+                order = order_rng.permutation(len(rows)) if rows else np.zeros(0, dtype=int)
+                count = int(plan[cap_key]) if rows else 0
+                tasks += [{"kind": kind, "index": i, "seed": args.seed, "row": rows[int(order[i % len(rows)])],
+                           "healthy_replicas": plan["healthy_replicas"], **task_common} for i in range(count)]
+            corpus_tasks = len(tasks)
+        else:
+            corpus_tasks = 0
+            tasks += ([{"kind": "hif", "index": i, "seed": args.seed, "work": str(work), "healthy_replicas": plan["healthy_replicas"],
+                        **task_common} for i in range(int(plan["hif_attempts"]))]
+                      + [{"kind": "three_phase_unbalance", "index": i, "seed": args.seed, "work": str(work),
+                          "healthy_replicas": plan["healthy_replicas"], **task_common} for i in range(int(plan["unbalance_attempts"]))])
+        tasks += [{"kind": "harmonic", "index": i, "seed": args.seed, **task_common} for i in range(int(plan["harmonic_attempts"]))]
         t0 = time.perf_counter()
         with ProcessPoolExecutor(max_workers=args.workers) as pool:
-            futures = [pool.submit(_waveform_safe, task) for task in tasks]
+            futures = [pool.submit(_corpus_waveform_safe if (k < corpus_tasks) else _waveform_safe, task)
+                       for k, task in enumerate(tasks)]
             for done, future in enumerate(as_completed(futures), start=1):
                 take(future.result())
                 if done % 100 == 0 or done == len(futures):
@@ -801,7 +1034,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         shard_tasks = [{"shard": shard, "seed": args.seed + 1000 * (shard + 1), "out_dir": str(out / "balanced"),
                         "per_shard": plan["per_shard"], "corpus_counts": plan["corpus_per_shard"],
                         "corpus_healthy_replicas": plan["corpus_healthy_replicas"],
-                        "mimic_per_variant": int(np.ceil(int(plan["mimic_per_variant"]) / int(plan["balanced_shards"])))}
+                        "mimic_per_variant": int(np.ceil(int(plan["mimic_per_variant"]) / int(plan["balanced_shards"]))),
+                        **task_common}
                        for shard in range(int(plan["balanced_shards"]))]
         t0 = time.perf_counter()
         with ProcessPoolExecutor(max_workers=min(args.workers, len(shard_tasks))) as pool:
@@ -854,6 +1088,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest = {
         "schema": "classifier_triage_ieee118_transfer_v1", "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "git_commit": _git_commit(), "seed": args.seed, "plan": plan, "stages": sorted(stages), "system": SYSTEM,
+        "effect_band": list(EFFECT_BAND) if EFFECT_BAND else None,
+        "waveform_source": {"hif_corpora": list(args.hif_corpus), "unbalance_corpora": list(args.unbalance_corpus)}
+        if (args.hif_corpus or args.unbalance_corpus) else "three_phase_replay",
         "recipes": {"load_scale_range": LOAD_SCALE_RANGE, "dispatch": "ac_opf", "hif_bands_ohm": HIF_BANDS_OHM,
                     "hif_split_range": HIF_SPLIT_RANGE, "dirichlet_concentration": DIRICHLET_CONCENTRATION,
                     "harmonic_thd_range": HARMONIC_THD_RANGE, "harmonic_orders": HARMONIC_ORDERS,

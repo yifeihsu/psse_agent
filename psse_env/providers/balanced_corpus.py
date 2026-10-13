@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
-from pypower.idx_brch import PF, PT, QF, QT
+from copy import deepcopy
+
+from pypower.idx_brch import BR_R, BR_X, PF, PT, QF, QT
 from pypower.idx_bus import BUS_I, PD, QD, VM, VMAX, VMIN
 from pypower.idx_gen import GEN_BUS, GEN_STATUS, PG, PMAX, PMIN, QG, QMAX, QMIN
 
@@ -130,6 +132,118 @@ def _source_id(spec: Any, seed: int, family: str, attempt: int, solved: Mapping[
     return f"balanced_{digest[:24]}"
 
 
+# ------------------------------------------------- effect-targeted magnitudes
+
+def _effect_targeted_meters(z_true, z_obs, label, solver, rng, band, scale_bounds):
+    """Scale a row's gross meter amplitudes until the WLS excess lands in the band (exact)."""
+    from research.classifier_triage.effect_sampler import draw_target, fit_scale, implied_magnitude
+
+    z_true = np.asarray(z_true, dtype=float)
+    z_obs = np.asarray(z_obs, dtype=float)
+    gross = np.zeros_like(z_true)
+    if "indices" in label:
+        for index, amplitude in zip(label["indices"], label["amplitudes"]):
+            gross[int(index)] = float(amplitude)
+    else:
+        gross[int(label["index"])] = float(label["amplitude"])
+    noise = z_obs - z_true - gross
+    target = draw_target(rng, band)
+    fit = fit_scale(solver, z_true, gross, noise, target, scale_bounds=scale_bounds)
+    if not fit.get("reachable"):
+        return z_obs, {**dict(label), "effect_failure": fit.get("reason")}, None
+    k = float(fit["scale"])
+    new_label = dict(label)
+    if "indices" in label:
+        new_label["amplitudes"] = [float(a) * k for a in label["amplitudes"]]
+    else:
+        new_label["amplitude"] = float(label["amplitude"]) * k
+    new_label["drawn_amplitude_scale"] = k
+    effect = {"target": target, **{key: value for key, value in fit.items() if key != "reachable"},
+              "implied": implied_magnitude("measurement", label, k), "sampler": "effect_targeted_v1"}
+    return z_true + noise + k * gross, new_label, effect
+
+
+def _effect_targeted_parameter(nominal_case, label, noise, solver, rng, band, scale_bounds):
+    """Re-solve the true network with the factor's logarithm scaled until the WLS excess lands in the band.
+
+    Returns ``(true_case, solved, z_true, z_obs, label, admission, effect)`` or None.  The scale
+    bounds are tightened so the implied factors stay within [0.02, 50]; every candidate state is
+    the true network's own OPF, so the corpus keeps consistent physical cases.
+    """
+    import math
+
+    from research.classifier_triage.effect_sampler import draw_target, effect_ratio, implied_magnitude
+
+    noise = np.asarray(noise, dtype=float)
+    row = int(label["line_row"])
+    r_factor, x_factor = float(label["r_factor"]), float(label["x_factor"])
+    low, high = (float(v) for v in scale_bounds)
+    for factor in (r_factor, x_factor):
+        if factor != 1.0:
+            limit = math.log(50.0 if factor > 1.0 else 0.02) / math.log(factor)
+            high = min(high, limit)
+    if not (low < high):
+        return None
+    target = draw_target(rng, band)
+    cache: dict[float, tuple[Any, Any, np.ndarray, dict[str, Any]] | None] = {}
+
+    def solve_case(k: float):
+        if k in cache:
+            return cache[k]
+        case = deepcopy(nominal_case)
+        br = case["branch"]
+        br[row, BR_R] = max(1e-6, br[row, BR_R] * (r_factor ** k))
+        br[row, BR_X] = max(1e-6, br[row, BR_X] * (x_factor ** k))
+        try:
+            solved_k = solve_ac_opf(case)
+            if solved_k is None:
+                raise RuntimeError("opf")
+            z_k = compute_measurements_pu(solved_k)
+            admission_k = validate_balanced_solution(solved_k, z_k)
+        except Exception:
+            cache[k] = None
+            return None
+        cache[k] = (case, solved_k, np.asarray(z_k, dtype=float), admission_k)
+        return cache[k]
+
+    def ratio_at(k: float):
+        state = solve_case(k)
+        if state is None:
+            return None
+        solved_k = solver(state[2] + noise)
+        return None if solved_k is None else effect_ratio(solved_k[0], solved_k[1])
+
+    r_low, r_high = ratio_at(low), ratio_at(high)
+    if r_low is None or r_high is None or r_high < target * 0.9 or r_low > target * 1.1:
+        return None
+    lo, hi = math.log(low), math.log(high)
+    best = None
+    for iteration in range(10):
+        mid = math.exp(0.5 * (lo + hi))
+        ratio = ratio_at(mid)
+        if ratio is None:
+            hi = math.log(mid)
+            continue
+        if best is None or abs(ratio - target) < abs(best[1] - target):
+            best = (mid, ratio, iteration + 3)
+        if abs(ratio - target) <= 0.1 * target:
+            break
+        if ratio < target:
+            lo = math.log(mid)
+        else:
+            hi = math.log(mid)
+    if best is None:
+        return None
+    k, ratio, iterations = best
+    case, solved_k, z_k, admission_k = solve_case(k)
+    new_label = {**dict(label), "r_factor": r_factor ** k, "x_factor": x_factor ** k, "drawn_r_factor": r_factor,
+                 "drawn_x_factor": x_factor, "drawn_factor_log_scale": k}
+    effect = {"target": target, "scale": k, "ratio": ratio, "iterations": iterations, "ratio_at_bounds": [r_low, r_high],
+              "implied": implied_magnitude("parameter", label, k), "sampler": "effect_targeted_v1",
+              "resolved": "true-network OPF at the implied factors"}
+    return case, solved_k, z_k, z_k + noise, new_label, admission_k, effect
+
+
 def build_balanced_corpus(
     output_dir: str | Path,
     *,
@@ -139,6 +253,8 @@ def build_balanced_corpus(
     load_scale_range: tuple[float, float] = (0.80, 1.0),
     num_scans: int = 3,
     max_attempt_multiplier: int = 10,
+    effect_band: tuple[float, float] | None = None,
+    effect_scale_bounds: tuple[float, float] = (0.02, 50.0),
 ) -> dict[str, Any]:
     """Generate fresh clean, single/multiple meter, and one-line R/X sources.
 
@@ -147,6 +263,14 @@ def build_balanced_corpus(
     are independent noise draws around the same solved true network. Exhausted
     physical admission returns a durable manifest with ``complete=False``;
     OPF nonconvergence is never labeled mathematical infeasibility.
+
+    ``effect_band`` (2026-10-12) draws each error's magnitude as the effect the
+    operator's WLS sees (research.classifier_triage.effect_sampler): a meter
+    error's gross amplitudes are scaled exactly, a line error's R/X factors
+    are re-solved (the factor's logarithm is scaled and the true network's
+    OPF re-run) until the chi-square excess relative to the alarm threshold's
+    excess lands in the band; rows the band cannot reach within
+    ``effect_scale_bounds`` are rejected and counted.
     """
     requested_input = dict(counts if counts is not None else {family: 8 for family in BALANCED_CORPUS_FAMILIES})
     unknown = set(requested_input) - set(BALANCED_CORPUS_FAMILIES)
@@ -180,6 +304,13 @@ def build_balanced_corpus(
     rejected = {family: 0 for family in BALANCED_CORPUS_FAMILIES}
     rejected_records: list[dict[str, Any]] = []
     rng = np.random.default_rng(seed)
+    effect_rng = np.random.default_rng(seed + 7919)
+    effect_solver = None
+    if effect_band is not None:
+        from research.classifier_triage.effect_sampler import parse_band, wls_solver
+
+        effect_band = parse_band(effect_band)
+        effect_solver = wls_solver(spec.case_id, sigma)
     with corpus_path.open("w", encoding="utf-8") as stream:
         for family in BALANCED_CORPUS_FAMILIES:
             budget = max_attempt_multiplier * requested[family]
@@ -212,11 +343,32 @@ def build_balanced_corpus(
                     rejected_records.append(rejection)
                     continue
                 source_id = _source_id(spec, seed, family, attempted[family], solved)
+                effect: dict[str, Any] | None = None
                 if family == "measurement_error":
                     subtype = ("single_gross_outlier", "multi_gross_outliers")[accepted[family] % 2]
                     z_obs, label = apply_measurement_error(z_true, idx_map, rng, subtype=subtype)
+                    if effect_band is not None:
+                        z_obs, label, effect = _effect_targeted_meters(
+                            z_true, z_obs, label, effect_solver, effect_rng, effect_band, effect_scale_bounds,
+                        )
+                        if effect is None:
+                            rejection.update(reason="effect_band_unreachable", detail=label.get("effect_failure"))
+                            rejected[family] += 1
+                            rejected_records.append(rejection)
+                            continue
                 else:
                     z_obs = z_true + base_gaussian_noise(z_true, idx_map, DEFAULT_SIGMAS, rng)
+                    if family == "parameter_error" and effect_band is not None:
+                        targeted = _effect_targeted_parameter(
+                            scale_loads(ppc_base, alpha), label, z_obs - z_true, effect_solver, effect_rng,
+                            effect_band, effect_scale_bounds,
+                        )
+                        if targeted is None:
+                            rejection.update(reason="effect_band_unreachable")
+                            rejected[family] += 1
+                            rejected_records.append(rejection)
+                            continue
+                        true_case, solved, z_true, z_obs, label, admission, effect = targeted
                 solved_path = write_ppc_as_matpower_m(
                     solved, out / "physical_cases" / f"{source_id}.m", source_id,
                 )
@@ -233,6 +385,8 @@ def build_balanced_corpus(
                     "sigma_z": sigma.tolist(),
                     "physical_validation": {"passed": True, **admission},
                 }
+                if effect is not None:
+                    record["effect"] = effect
                 if family == "parameter_error":
                     record["sigma_z_scans"] = sigma.tolist()
                     record["z_scans"] = [
@@ -255,6 +409,8 @@ def build_balanced_corpus(
         "runtime": {package: version(package) for package in ("numpy", "scipy", "PYPOWER")},
         "network_case": spec.case_id, "base_case_hash": spec.base_case_hash,
         "seed": int(seed), "load_scale_range": [lo, hi], "num_scans": num_scans,
+        "effect_band": list(effect_band) if effect_band is not None else None,
+        "effect_scale_bounds": list(effect_scale_bounds) if effect_band is not None else None,
         "max_attempt_multiplier": max_attempt_multiplier,
         "measurement_order": list(MEASUREMENT_ORDER), "sigmas": dict(DEFAULT_SIGMAS),
         "nz": spec.nz, "state_count": spec.state_count,

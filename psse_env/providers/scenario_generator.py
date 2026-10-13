@@ -507,8 +507,15 @@ class Round0ScenarioGenerator:
         waveform_signature_mode: Mapping[str, str] | None = None,
         min_measurement_error_sigma: float | None = None,
         evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
+        effect_band: tuple[float, float] | str | None = None,
     ) -> None:
         self.evidence_profile = validate_evidence_profile(evidence_profile)
+        # Effect-targeted magnitudes (research.classifier_triage.effect_sampler, 2026-10-12):
+        # the harmonic roots this generator synthesizes get the distortion whose WLS excess
+        # lands in the band; the corpus-drawn families carry the band from their corpora.
+        from research.classifier_triage.effect_sampler import parse_band
+
+        self.effect_band = parse_band(effect_band)
         self.system = resolve_system(system)
         self.case_path = self.system.case_path
         self.nb, self.nl = self.system.nb, self.system.nl
@@ -2131,6 +2138,27 @@ class Round0ScenarioGenerator:
             bus=solution["bus"],
             branch=solution["branch"],
         )
+        effect: dict[str, Any] | None = None
+        if self.effect_band is not None:
+            # scale the distortion's effect on the SCADA vector until the operator's WLS excess
+            # lands in the band; the implied THD is the drawn one times sqrt(scale)
+            from research.classifier_triage.effect_sampler import draw_target, fit_scale, implied_magnitude, wls_solver
+            from Transmission.generate_measurements import compute_measurements_pu
+
+            fundamental = np.asarray(compute_measurements_pu(solution), dtype=float)
+            z_true_drawn = np.asarray(trace["z_scada_true"], dtype=float)
+            z_obs_drawn = np.asarray(trace["z_scada_meas"], dtype=float)
+            noise = z_obs_drawn - z_true_drawn
+            target = draw_target(self._rng, self.effect_band)
+            fit = fit_scale(wls_solver(self.system.case_id, trace["sigma_z"]), fundamental, z_true_drawn - fundamental, noise, target)
+            if not fit.get("reachable"):
+                raise ScenarioRejected("effect_band_unreachable", f"harmonic: {fit.get('reason')}")
+            scale = float(fit["scale"])
+            trace = dict(trace)
+            trace["z_scada_true"] = (fundamental + scale * (z_true_drawn - fundamental)).tolist()
+            trace["z_scada_meas"] = (fundamental + scale * (z_true_drawn - fundamental) + noise).tolist()
+            effect = {"target": target, **{k: v for k, v in fit.items() if k != "reachable"},
+                      "implied": implied_magnitude("harmonic", {"thd_target": thd_target}, scale), "sampler": "effect_targeted_v1"}
         harmonic_measurements: list[dict[str, Any]] = []
         orders: set[int] = set()
         for order_text, phasors in trace["harmonic_phasors"].items():
@@ -2166,10 +2194,12 @@ class Round0ScenarioGenerator:
             "label": {
                 "error_type": "harmonic_anomaly",
                 "source_bus": source_bus,
-                "thd_target": thd_target,
-                "actual_thd": float(trace["actual_thd"]),
+                "thd_target": thd_target if effect is None else effect["implied"]["thd"],
+                "drawn_thd_target": thd_target,
+                "actual_thd": float(trace["actual_thd"]) * (1.0 if effect is None else float(effect["scale"]) ** 0.5),
                 "load_scale": load_scale,
                 "operating_point": "ac_opf",
+                **({"effect": effect} if effect is not None else {}),
             },
             "op_point": {"load_scale": load_scale},
         }
