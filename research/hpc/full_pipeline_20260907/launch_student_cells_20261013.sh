@@ -14,8 +14,10 @@
 set -euo pipefail
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 CELL=$REPO/research/hpc/full_pipeline_20260907
+# git.exe takes the POSIX form of the repository path literally once MSYS path conversion is off: work from inside it.
+cd "$REPO"
 BRANCH=${BRANCH:-codex/classifier-triage-20261004}
-COMMIT=${1:-$(git -C "$REPO" rev-parse "$BRANCH")}
+COMMIT=${1:-$(git rev-parse "$BRANCH")}
 BASE=${BASE:-bf22a8d}                        # the last commit the 2026-10-11 cell's clone knows
 OLD118=/scratch/yx3882/research_full_pipeline_20261011_ieee118
 CLS14=/scratch/yx3882/research_full_pipeline_20261007_classifier
@@ -23,7 +25,7 @@ A=/scratch/yx3882/research_full_pipeline_20261013_ieee118_student
 B=/scratch/yx3882/research_full_pipeline_20261013_ieee14_reverse
 export MSYS_NO_PATHCONV=1
 
-[[ -z "$(git -C "$REPO" status --porcelain --untracked-files=no -- research psse_env scripts)" ]] \
+[[ -z "$(git status --porcelain --untracked-files=no -- research psse_env scripts)" ]] \
   || { echo "commit the pipeline sources first (tracked modifications under research/, psse_env/ or scripts/)" >&2; exit 2; }
 
 echo "== cell A: $A from $COMMIT"
