@@ -35,6 +35,41 @@ trap stage_cleanup EXIT
 cd "$SRC"
 MIXTURE=$COLLECTION_DIR/round1.train.jsonl
 VALIDATION_SUBSET=$BC0_DIR/validation.subset.jsonl
+# A frozen adapter linked as bc0 by stage 0 (FROZEN_STUDENT_ADAPTER) had no BC0
+# training stage to write the loss monitor: build it here the way stage_bc0 does,
+# a family-stratified subset of the D0 validation split (2026-10-13).
+if [[ ! -s "$VALIDATION_SUBSET" ]]; then
+  mkdir -p "$BC0_DIR"
+  "$PY" - "$D0_DIR/aggregate.validation.jsonl" "$VALIDATION_SUBSET" "$VALIDATION_ROWS" "$SEED_D0" <<'PY'
+import json
+import random
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+rows = [json.loads(line) for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()]
+target = int(sys.argv[3])
+rng = random.Random(int(sys.argv[4]))
+by_family = defaultdict(list)
+for row in rows:
+    metadata = row.get("metadata") or {}
+    by_family[str(metadata.get("scenario_family") or row.get("scenario_family") or "")].append(row)
+for bucket in by_family.values():
+    rng.shuffle(bucket)
+selected = []
+while len(selected) < min(target, len(rows)):
+    progressed = False
+    for family in sorted(by_family):
+        if by_family[family] and len(selected) < target:
+            selected.append(by_family[family].pop())
+            progressed = True
+    if not progressed:
+        break
+selected.sort(key=lambda row: str(row.get("example_id") or ""))
+Path(sys.argv[2]).write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in selected), encoding="utf-8")
+print(f"validation subset: {len(selected)} of {len(rows)} rows")
+PY
+fi
 read -r TRAIN_MAX_STEPS MIXTURE_ROWS < <(
 "$PY" - "$MIXTURE" "$ROUND_DIR/collection.done" <<'PY'
 import json
