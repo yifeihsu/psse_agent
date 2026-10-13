@@ -55,4 +55,4 @@ wsl -- ssh torch "cd $B && DEPEND=$R1T ALLOW_PARALLEL_CHAIN=1 CHAIN='d0 r1c zs' 
 echo "both cells submitted"
 echo "status A: MSYS_NO_PATHCONV=1 wsl -- ssh torch bash $A/status_pipeline.sh"
 echo "status B: MSYS_NO_PATHCONV=1 wsl -- ssh torch bash $B/status_pipeline.sh"
-echo "after cell A's stage 0: wsl -- ssh torch \"cd $A && \$(sed -n 's/^PY=//p' pipeline.env) check_suite_exclusion.py --d0-raw out/d0/aggregate.raw.jsonl --suite-dir out/suite --reference-d0-raw $OLD118/out/d0/aggregate.raw.jsonl\""
+echo "after cell A's stage 0: wsl -- ssh torch \"cd $A && \$(sed -n 's/^PY=//p' pipeline.env) source/research/hpc/full_pipeline_20260907/check_suite_exclusion.py --d0-raw out/d0/aggregate.raw.jsonl --suite-dir out/suite --reference-d0-raw $OLD118/out/d0/aggregate.raw.jsonl\""
