@@ -580,8 +580,11 @@ never learned is no longer a second step.  See
 *Result (2026-10-13, cell A of the student cells).*  On the same 124
 roots the frozen IEEE 14 student scores 115/124 under the spectra-first
 environment with nothing retrained (harmonic 16/16 in four steps), one
-DAgger round on IEEE 118 gives 114/124, and the expert stays at 119/124;
-the tables are in `docs/triage_family_scores_20261013.md`.
+DAgger round on IEEE 118 gives 114/124, and the expert stays at 119/124.
+The adapted adapter scores 156/160 zero-shot on the IEEE 14 development
+roots (expert 159/160), losing only the three unbalance roots the joint
+gate sends to spectra first; the tables are in
+`docs/triage_family_scores_20261013.md`.
 
 The student also pays for its IEEE 14 habits on the HIF roots it still
 solves: 11 false commits and 28 invalid actions across the sixteen (the

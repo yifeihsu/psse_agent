@@ -217,7 +217,45 @@ misses.
 
 ### Cell B: the adapted adapter on the 160 IEEE 14 roots
 
-CELL_B_PLACEHOLDER
+Cell B (`research_full_pipeline_20261013_ieee14_reverse`) links the 2026-10-07
+classifier cell's expert aggregate and cell A's adapted adapter, copies that
+cell's suite, collects one IEEE 14 round with the adapted adapter (122 roots,
+tool disagreement 9.4%, invalid actions 0.9%, 488 safe rows) and then scores
+the adapter and the expert zero-shot on the 160 development roots under the
+joint gate (43 minutes).
+
+| policy, 160 IEEE 14 roots | success | harmonic | unbalance | parameter | false commits | false finalizations | episodes with invalid actions | mean steps |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| IEEE 14 round-2 student on its own suite (2026-10-07 cell, IEEE 14 export) | 159/160 | | | | | | | |
+| adapted adapter after one IEEE 118 round, joint gate | 156/160 | 16/16 | 13/16 | 15/16 | 8 | 6 | 19 | 7.3 |
+| expert, joint gate | 159/160 | 16/16 | 16/16 | 15/16 | 0 | 0 | 0 | 7.0 |
+
+Every other family is perfect for both policies, and every harmonic root
+runs the four-step trace. The adapted adapter misses the parameter root the
+expert misses too (`r0_4d7aa8a5a01f`, the same root the expert end-to-end
+missed) and the three unbalance roots the joint gate sends to spectra first
+on IEEE 14, the misroute the offline table predicted. The expert pays one
+clean spectra request there and falls back to the phasors; the adapted
+student runs the HSE on clean spectra, asks for the spectra again and loops.
+Cell A's two unbalance losses are the same pattern on IEEE 118.
+
+### Reading
+
+* The spectra-first route is what fixed the IEEE 118 student: 101 to 115 of
+  124 with nothing retrained, every harmonic root solved. The DAgger round
+  on IEEE 118 did not add to the count on either network; it changed habits
+  (fewer false commits and context requests, premature finalizations on HIF
+  roots) and kept the IEEE 14 competence intact (156 of 160, with the three
+  losses explained below).
+* The one thing neither student has learned is the fallback after the
+  route's misroute: clean spectra on a harmonic call must be followed by the
+  phasors. The expert demonstrates it rarely (one of ten unbalance roots in
+  the IEEE 118 aggregate), so the student has little to imitate. Two cheap
+  remedies: a margin on the routing rule (open the spectra first only when
+  the harmonic head leads the unbalance head clearly; the offline tables put
+  the cost at one or two of 87 IEEE 118 harmonic roots), or an aggregate plan
+  that oversamples misrouted unbalance roots so the fallback is demonstrated.
+
 
 ## Caveats
 
