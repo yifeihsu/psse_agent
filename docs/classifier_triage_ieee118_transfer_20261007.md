@@ -483,6 +483,113 @@ balanced-model conditioning tolerance was set on IEEE 14 powers.  This is
 left as a finding: the cell's student will see the same two misses in its
 expert reference.
 
+### The cell on torch
+
+Committed as `5570bfc` and deployed to
+`/scratch/yx3882/research_full_pipeline_20261011_ieee118` on 2026-10-11 with
+the corpora uploaded beside it (sha256-verified).  The first chain (jobs
+19579813, 19579814, 19579815) built the 2100-row IEEE 118 balanced corpus and
+then aborted stage 0 in the expert aggregate: on one root the expert asked
+for an operator escalation at step 5 and the training-label audit
+(`assert_training_decision_evidence`) refused it with
+`required_recovery_contexts_missing`.  The audit requires every context tool
+implied by the unexplained signature families to have been consulted on the
+same state; on IEEE 118 the balanced WLS leaves spurious
+`wls_branch_multiplier line_status_or_parameter` signatures on healthy lines,
+so after an HIF explanation and a meter edit the parameter and topology
+contexts become "required" while the expert hands over with
+`recovery_options_exhausted` after the measurement context alone.  A local
+19-root aggregate run reproduced it once (an HIF root's counterfactual
+branch); the three escalating HIF roots of the development suite verify.
+
+The collector already knew how to end such an episode and keep the audit's
+missing list; `03af043` exposes it (`--stop-episode-on-unverified-expert-label`
+on the aggregate and the research runner, `UNVERIFIED_EXPERT_LABEL_POLICY`
+in `pipeline.env`, `abort` by default) and writes the disagreements
+(`d0/unverified_expert_labels.jsonl`, the collection's
+`unverified_expert_labels/<root>.json`).  The cell runs with `stop`.  The
+second chain (jobs 19583277, 19583278, 19583279) completed the aggregate
+(92 roots, 686 rows, none quarantined, two unverified labels: an HIF root
+and an HIF-plus-meter root, both `recovery_options_exhausted` with the
+parameter and topology contexts required by leftover branch-multiplier
+signatures) and then failed at the suite draw, because stage 0 hands the
+suite builder the same system arguments as the aggregate and the builder
+did not know `--progress-basis`; `bf22a8d` records it in the suite
+manifest.  The third chain (jobs 19585506, 19585507, 19585508) was
+submitted at 17:32 UTC and resumes stage 0 at the suite draw.
+The teacher-side fix, consulting the contexts the audit requires before a
+recovery handoff or dropping chance multiplier signatures from the
+requirement, is open.
+
+### Zero-shot result: the IEEE 14 student on the IEEE 118 development roots
+
+The third chain completed at 21:07 UTC (stage 0 1 h 48 min for the suite
+draw, the collection 16 min, the zero-shot evaluation 30 min on one H200).
+The frozen round-2 adapter of the 2026-10-07 classifier cell, trained on
+IEEE 14 only, rolled out with the joint gate on the 124 IEEE 118 development
+roots beside the expert (`output/classifier_triage_20261011/cell_results/`
+holds the summaries):
+
+| family | n | student | expert | student false commits | student invalid actions | loops | spectra requested |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| no_error | 8 | 8 | 8 | 0 | 0 | 0 | 0 |
+| measurement | 16 | 16 | 16 | 0 | 0 | 0 | 0 |
+| multi_measurement | 12 | 11 | 12 | 1 | 3 | 1 | 0 |
+| parameter | 16 | 15 | 15 | 0 | 0 | 0 | 0 |
+| measurement+parameter | 16 | 15 | 16 | 2 | 4 | 1 | 0 |
+| hif | 16 | 14 | 14 | 11 | 28 | 3 | 0 |
+| measurement+hif | 8 | 6 | 6 | 0 | 15 | 3 | 0 |
+| three_phase_unbalance | 16 | 16 | 16 | 0 | 10 | 3 | 0 |
+| harmonic | 16 | 0 | 16 | 12 | 38 | 13 | 0 (expert 16) |
+| **total** | 124 | **101** | **119** | 26 | 98 | 24 | 0 |
+
+Every family but one transfers at the expert's level: the balanced families
+within one root of the expert, HIF and HIF-plus-meter equal to it, unbalance
+perfect.  The whole gap is the harmonic family, where the student solves no
+root.  Its trace is the same on all sixteen: WLS alarm, phasors (admitted by
+the gate), the three-phase estimator finds no unbalance and no HIF, and then
+the student reads the measurement context and edits meters instead of asking
+for spectra; the expert asks for spectra on all sixteen and localizes every
+source.  The student spends 25 meter edits and 12 false commits on these
+roots, touches a healthy meter in every one, and 13 of 16 end in the loop
+detector.  On IEEE 14 the same adapter requests spectra on every harmonic
+root, so the cue it learned for "balanced phasors plus a standing alarm means
+spectra" does not survive the move: on IEEE 118 the alarm after the estimator
+looks to it like the meter-error pattern it was trained to repair.  The
+expert's rule is explicit (both acquisition tiers before any handoff) and
+does not depend on the network.  The observation the student decides on
+shows the cue that moved: on the IEEE 14 harmonic roots of the classifier
+cell (round-1 student, 16 of 16 spectra requests) the WLS signatures after
+the estimator are non-dominant outliers and multipliers spread over the
+network (anomaly breadth median 0.15 of the channels, no `_dominant`
+marker on most roots); on IEEE 118 the same distortion leaves five
+dominant outliers in a breadth of 0.02, which is the footprint of a meter
+error on IEEE 14.  The policy learned a network-relative cue for the
+spectra request; a network-free cue (or the expert's explicit rule) is
+what a transferable student needs.  The round-1 collection already holds
+28 expert-labelled harmonic rows from IEEE 118, so a DAgger round on them
+is the direct way to measure how much of the gap one round closes.
+
+*Follow-up (2026-10-13).*  The triage GNN's family head already names the
+waveform family of an admitted request (51/51 harmonic roots on IEEE 118
+under the joint export); the runtime report now exposes it and a harmonic
+call opens the spectra before the phasors, so the escalation the student
+never learned is no longer a second step.  See
+`docs/triage_family_scores_20261013.md`.
+
+The student also pays for its IEEE 14 habits on the HIF roots it still
+solves: 11 false commits and 28 invalid actions across the sixteen (the
+expert has none and six), meter edits committed on states whose alarm the
+fault explains.  The collection stage, which ran the student on 24 training
+roots with the expert labelling, measured a 24% tool disagreement on the 140
+comparable states and a 1.4% invalid-action rate.
+
+The expert's own 119 of 124 match the local run: the two HIF-plus-meter
+misses of the local suite, two HIF roots (one invalid-action quarantine, one
+escalation) and one parameter root.  Two aggregate episodes and one
+collection episode ended at an unverifiable escalation label and were
+recorded (`d0/unverified_expert_labels.jsonl`, `r1/.../unverified_expert_labels/`).
+
 ## Reproduce
 
 ```bash
