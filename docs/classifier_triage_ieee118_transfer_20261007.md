@@ -577,6 +577,12 @@ call opens the spectra before the phasors, so the escalation the student
 never learned is no longer a second step.  See
 `docs/triage_family_scores_20261013.md`.
 
+*Result (2026-10-13, cell A of the student cells).*  On the same 124
+roots the frozen IEEE 14 student scores 115/124 under the spectra-first
+environment with nothing retrained (harmonic 16/16 in four steps), one
+DAgger round on IEEE 118 gives 114/124, and the expert stays at 119/124;
+the tables are in `docs/triage_family_scores_20261013.md`.
+
 The student also pays for its IEEE 14 habits on the HIF roots it still
 solves: 11 false commits and 28 invalid actions across the sixteen (the
 expert has none and six), meter edits committed on states whose alarm the

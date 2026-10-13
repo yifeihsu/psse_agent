@@ -170,6 +170,55 @@ alarm, which is the cue that did not survive the move to IEEE 118. Measuring
 that needs the deferred student cells (an IEEE 118 collection round and the
 reverse evaluation).
 
+## IEEE 118 student cells (2026-10-13)
+
+Two cells on torch measure what the route does for the frozen IEEE 14
+student and what one DAgger round adds (`research/hpc/full_pipeline_20260907/
+overrides/ieee118_student_20261013.env`, `ieee14_reverse_20261013.env`,
+`launch_student_cells_20261013.sh`; commit 7634b46 after two launcher and
+stage fixes). Cell A keeps every setting of the 2026-10-11 transfer cell and
+its 124 development roots: the suite and corpora are copied from that cell,
+the expert aggregate is regenerated with the spectra-first teacher, and
+`check_suite_exclusion.py` confirmed the regenerated aggregate drew the same
+92 roots and none of the suite's. The aggregate's harmonic demonstrations
+are the four-step trace (40 rows instead of 60); the rest is row for row the
+2026-10-11 aggregate. Round 1: 24 training roots, 111 safe rows, tool
+disagreement 21%, a 222-row mixture, 56 optimizer steps continuing the frozen
+adapter (one preemption, resumed from checkpoint 48; final evaluation loss
+0.0106).
+
+### Cell A: the same 124 IEEE 118 roots
+
+| policy | success | harmonic | unbalance | meter+parameter | HIF | meter+HIF | false commits | false finalizations | episodes with invalid actions | mean steps |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| frozen IEEE 14 student, 2026-10-11 environment | 101/124 | 0/16 | 16/16 | 15/16 | 14/16 | 6/8 | 12 on the harmonic roots alone | 0 | 13 harmonic loops | |
+| frozen IEEE 14 student, spectra-first environment | 115/124 | 16/16 | 14/16 | 15/16 | 14/16 | 6/8 | 20 | 0 | 30 | 8.3 |
+| adapted after one IEEE 118 round | 114/124 | 16/16 | 14/16 | 14/16 | 14/16 | 6/8 | 7 | 10 | 21 | 7.6 |
+| expert | 119/124 | 16/16 | 16/16 | 16/16 | 14/16 | 6/8 | 0 | 0 | 4 | 7.0 |
+
+Every harmonic root, for all three policies, runs `run_wls ->
+get_harmonic_context -> run_hse_from_path -> finalize_diagnosis`. The frozen
+student, which never requested spectra on IEEE 118 before, now does so on
+all sixteen with nothing retrained: the environment change alone (the
+report's harmonic call and the one-step admission it carries) closed the
+whole harmonic gap, and the student's 101 became 115. The remaining nine
+misses are the expert's own five (two HIF, two meter+HIF, one parameter),
+two unbalance loops, one multi-meter and one meter+parameter root.
+
+The DAgger round does not add to that. The adapted adapter scores 114: the
+same roots as the frozen student except one meter+parameter root, where
+after a rejected parameter correction it asks for more evidence instead of
+trying the meter repair and loops. It does change habits: false commits fall
+from 20 to 7 and the measurement-context requests from 166 to 102 (the
+expert makes 91), HIF roots close in five steps instead of seven, but it
+picks up ten premature finalizations on six HIF and meter+HIF roots after
+the estimate, which cost it nothing except on a root the expert also
+misses.
+
+### Cell B: the adapted adapter on the 160 IEEE 14 roots
+
+CELL_B_PLACEHOLDER
+
 ## Caveats
 
 * The 2026-10-07 reason for hiding the heads stands as a caution: on IEEE 14
