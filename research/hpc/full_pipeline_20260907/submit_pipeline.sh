@@ -7,12 +7,16 @@
 # stage (d0, bc0, r1c, r1t, r1e, r2c, r2t, r2e) when the earlier receipts
 # already exist.  CHAIN="d0 r1c zs" submits that sequence instead (zs is the
 # zero-shot evaluation of the round-1 student, stage_zeroshot.sbatch).
+# DEPEND=<job id> makes the first submitted stage wait for that job (afterok), so
+# a cell that consumes another cell's adapter queues behind it, and
+# ALLOW_PARALLEL_CHAIN=1 lifts the duplicate-chain refusal for such a second cell
+# (2026-10-13; the fp- job names are shared by every cell).
 set -euo pipefail
 export PATH=/opt/slurm/bin:$PATH
 PIPE=/scratch/yx3882/research_full_pipeline_20260912
 cd "$PIPE"
 [[ -s out/prerequisites.dryrun.json ]] || { echo "run prerequisites.sh --output out/prerequisites.dryrun.json first" >&2; exit 2; }
-if squeue -u "$USER" -h -o "%j" | grep -Eq '^fp-'; then
+if [[ -z "${ALLOW_PARALLEL_CHAIN:-}" ]] && squeue -u "$USER" -h -o "%j" | grep -Eq '^fp-'; then
   echo "pipeline jobs are already queued or running; refusing a duplicate chain" >&2
   squeue -u "$USER" -o "%.12i %.10j %.8T %.10M %.24R" >&2
   exit 2
@@ -24,7 +28,8 @@ start=-1
 for index in "${!ORDER[@]}"; do [[ "${ORDER[$index]}" == "$FROM" ]] && start=$index; done
 [[ $start -ge 0 ]] || { echo "unknown FROM stage: $FROM" >&2; exit 2; }
 job_id() { local id=${1%%;*}; [[ "$id" =~ ^[0-9]+$ ]] || { echo "sbatch returned no job id: $1" >&2; exit 2; }; printf '%s' "$id"; }
-previous=""
+previous=${DEPEND:-}
+[[ -z "$previous" || "$previous" =~ ^[0-9]+$ ]] || { echo "DEPEND must be a Slurm job id" >&2; exit 2; }
 submitted=()
 for index in "${!ORDER[@]}"; do
   [[ $index -ge $start ]] || continue

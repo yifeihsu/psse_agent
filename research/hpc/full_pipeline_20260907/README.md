@@ -129,6 +129,41 @@ and the balanced control separately, and the train partition of the tabular
 corpus (four fifths of 304 single-meter, 226 multi-meter, 620 parameter, and
 500 harmonic rows) serves the rest. Total roots: 548 + 244 + 160 = 952.
 
+## IEEE 118 student cells (2026-10-13)
+
+Two cells measure what one DAgger round on IEEE 118 does for the frozen IEEE 14
+student, whose zero-shot result on IEEE 118 was 101/124 against the expert's
+119/124 with the harmonic family as the whole gap
+(`docs/classifier_triage_ieee118_transfer_20261007.md`).  Both run the teacher
+that opens the spectra first on the triage classifier's harmonic call
+(`docs/triage_family_scores_20261013.md`), so the spectra request the student
+never learned on IEEE 118 is one step keyed on a report field.
+
+* **Cell A** (`overrides/ieee118_student_20261013.env`,
+  `research_full_pipeline_20261013_ieee118_student`): the 2026-10-11 transfer
+  settings, chain `d0 -> r1c -> r1t -> r1e`.  Stage 0 regenerates the expert
+  aggregate with the new teacher (the 2026-10-11 aggregate demonstrates the
+  phasor detour on every harmonic root); the suite, the balanced corpus and the
+  waveform corpora are copied or linked from the 2026-10-11 cell before
+  submission, so the development roots are that cell's 124.
+  `check_suite_exclusion.py` confirms after stage 0 that the regenerated
+  aggregate drew the same roots and none of the suite's.  Round 1 collects with
+  the frozen adapter under the new labels, trains it for one pass on the 1:1
+  mixture, and the paired evaluation scores the frozen student, the adapted
+  candidate and the expert on the 124 roots.
+* **Cell B** (`overrides/ieee14_reverse_20261013.env`,
+  `research_full_pipeline_20261013_ieee14_reverse`): the adapted adapter and
+  the expert zero-shot on the 2026-10-07 classifier cell's 160 IEEE 14
+  development roots under the joint gate, chain `d0 -> r1c -> zs` queued
+  behind cell A's training job (`DEPEND`, `ALLOW_PARALLEL_CHAIN`); stage 0
+  links the classifier cell's aggregate and the adapter, the suite is copied
+  from that cell.
+
+`launch_student_cells_20261013.sh` deploys both cells from the committed
+branch and submits them in that order (`deploy_cell_from_windows.sh` with
+`SUBMIT=0` and `REMOTE_PREPARE` for the links and copies, then
+`submit_pipeline.sh`).
+
 ## Ambiguity design (ranked testing with escalation fallback)
 
 A parameter fault on one line often raises the Lagrange multiplier of an

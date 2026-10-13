@@ -12,6 +12,10 @@
 # uploaded through ssh stdin (wsl scp cannot take a Windows path) and
 # checksum-verified, deploy_remote.sh with the overrides file (fetch, path
 # rewrite, dry-run prerequisites), then submit_pipeline.sh.
+# REMOTE_PREPARE=<bash> runs on torch after the source clone and before the
+# dry-run prerequisites (links or copies a cell takes from another cell);
+# SUBMIT=0 deploys without submitting; DEPEND and ALLOW_PARALLEL_CHAIN are
+# passed to submit_pipeline.sh (2026-10-13).
 set -euo pipefail
 COMMIT=${1:?40-hex commit to deploy}
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "commit must be 40 hex" >&2; exit 2; }
@@ -21,6 +25,8 @@ BASE=${BASE:-b8d5117}                         # last commit the torch clones kno
 PIPE=${PIPE:-/scratch/yx3882/research_full_pipeline_20261001_ranked}
 SOURCE_CELL=${SOURCE_CELL:-/scratch/yx3882/research_full_pipeline_20260924_wls_gated}
 OVERRIDES=${OVERRIDES:-hypothesis_ranking_20261001.env}
+SUBMIT=${SUBMIT:-1}
+REMOTE_PREPARE=${REMOTE_PREPARE:-}
 SHORT=${COMMIT:0:7}
 # Relative to the repo: with MSYS_NO_PATHCONV set, git.exe would take a POSIX /c/... path literally.
 BUNDLE_LOCAL=${BUNDLE_LOCAL:-output/deploy_${SHORT}.bundle}
@@ -36,14 +42,22 @@ echo "bundle $(stat -c %s "$BUNDLE_LOCAL") bytes sha256 $SHA_LOCAL"
 # Plain ssh through the ControlMaster socket; BatchMode=yes bypasses it on this setup.
 wsl -- ssh -o NumberOfPasswordPrompts=0 torch "echo ssh_ok" || { echo "no SSH master: run scripts/start_torch_ssh_master.ps1 first" >&2; exit 2; }
 wsl -- ssh torch "set -e; mkdir -p $PIPE/logs $PIPE/out; if [ ! -d $PIPE/source/.git ]; then git clone -q $SOURCE_CELL/source $PIPE/source; fi; echo source_ready"
+if [[ -n "$REMOTE_PREPARE" ]]; then
+  printf '%s
+' "$REMOTE_PREPARE" | wsl -- ssh torch bash -s
+fi
 wsl -- ssh torch "cat > $PIPE/deploy_${SHORT}.bundle" < "$BUNDLE_LOCAL"
 SHA_REMOTE=$(wsl -- ssh torch "sha256sum $PIPE/deploy_${SHORT}.bundle | cut -d' ' -f1")
 [[ "$SHA_LOCAL" == "$SHA_REMOTE" ]] || { echo "bundle upload corrupted" >&2; exit 2; }
 wsl -- ssh torch bash -s -- "$PIPE/deploy_${SHORT}.bundle" "$BRANCH" "$COMMIT" "$PIPE" "$OVERRIDES" \
   < "$REPO/research/hpc/full_pipeline_20260907/deploy_remote.sh"
 wsl -- ssh torch "cat $PIPE/deploy.json"
-echo "deployed; submitting the chain"
 # SUBMIT_FROM=<stage> resumes a chain whose earlier receipts exist (d0 bc0 r1c r1t r1e r2c r2t r2e);
 # CHAIN="d0 r1c zs" submits that sequence instead (a frozen-student zero-shot cell).
-wsl -- ssh torch "cd $PIPE && FROM=${SUBMIT_FROM:-} CHAIN='${CHAIN:-}' bash submit_pipeline.sh"
+if [[ "$SUBMIT" == 1 ]]; then
+  echo "deployed; submitting the chain"
+  wsl -- ssh torch "cd $PIPE && FROM=${SUBMIT_FROM:-} CHAIN='${CHAIN:-}' DEPEND='${DEPEND:-}' ALLOW_PARALLEL_CHAIN='${ALLOW_PARALLEL_CHAIN:-}' bash submit_pipeline.sh"
+else
+  echo "deployed; not submitted (SUBMIT=0): wsl -- ssh torch \"cd $PIPE && CHAIN='...' bash submit_pipeline.sh\""
+fi
 echo "status: MSYS_NO_PATHCONV=1 wsl -- ssh torch bash $PIPE/status_pipeline.sh"
