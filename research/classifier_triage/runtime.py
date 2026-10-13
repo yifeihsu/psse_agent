@@ -8,11 +8,17 @@ directory once and, after every solve, writes a ``triage`` report on the WLS
 ledger entry: the mean request probability of the seeds against the
 calibrated threshold (decision G1) and the balanced family to investigate
 first.  The report reads nothing but the solve and the operator's current
-case; it never sees truth.  The six family heads are not reported
-(2026-10-07): on IEEE 14 the waveform families are told apart from a bad
-voltage meter on balanced data only through simulator artifacts, so their
-scores stay out of the policy's view; ``TriageClassifier.scores`` still
-returns them for offline study.
+case; it never sees truth.  The six family heads are reported as
+``family_scores`` (2026-10-13), with ``waveform_family`` (the largest of
+the hif/unbalance/harmonic heads) and ``spectra_admitted``: an admitted
+request whose waveform family is harmonic opens the spectra before the
+phasors (docs/triage_family_scores_20261013.md; on the tracked exports the
+rule routes 50/50 IEEE 14 and 86/87 IEEE 118 harmonic roots, and sends
+3-6 unbalance roots per network to a spectra request the phasors then
+follow).  The heads were held back on 2026-10-07 because on IEEE 14 the
+waveform families are told apart from a bad voltage meter only through
+simulator artifacts; the request flag carries that exposure too, and the
+heads now answer only which stream an admitted request opens first.
 
 ``export`` turns the benchmark's per-seed checkpoints into the runtime
 directory: ``runtime.json`` (contract, view, threshold and where it came
@@ -40,6 +46,10 @@ from research.classifier_triage.model import FAMILY_HEADS, FIRST_CLASSES  # noqa
 
 RUNTIME_CONTRACT = "triage_gnn_runtime_v1"
 METHOD = "triage_gnn"
+#: The waveform families an admitted request is routed by, and the one whose call opens the spectra first.
+WAVEFORM_FAMILIES = ("hif", "unbalance", "harmonic")
+SPECTRA_FIRST_FAMILY = "harmonic"
+SPECTRA_RULE = "an admitted request whose largest waveform head is harmonic opens the spectra before the phasors"
 DEFAULT_TRIAGE_CLASSIFIER = REPO_ROOT / "psse_env" / "oracle" / "models" / "triage_gnn_ieee14_20261004"
 
 
@@ -55,6 +65,11 @@ def payload_from_wls(payload: Mapping[str, Any]) -> dict[str, Any]:
         "objective": float(payload.get("global_residual_sum") or 0.0),
         "dof": int(payload.get("dof") or 1),
     }
+
+
+def waveform_route(family_scores: Mapping[str, float]) -> str:
+    """The waveform family an admitted request is routed by: the largest of the hif/unbalance/harmonic heads."""
+    return max(WAVEFORM_FAMILIES, key=lambda name: float(family_scores[name]))
 
 
 class TriageClassifier:
@@ -117,15 +132,23 @@ class TriageClassifier:
         scores = self.scores(case, payload_from_wls(wls_payload))
         if not (np.isfinite(scores["needs_aux"]) and np.all(np.isfinite(scores["family"])) and np.all(np.isfinite(scores["first"]))):
             return {"method": METHOD, "model_id": self.model_id, "status": "unavailable",
-                    "reason": "nonfinite scores", "request_admitted": False}
+                    "reason": "nonfinite scores", "request_admitted": False, "spectra_admitted": False}
         threshold = self.threshold_for(case)
+        admitted = bool(scores["needs_aux"] >= threshold)
+        family_scores = {name: float(value) for name, value in zip(FAMILY_HEADS, scores["family"])}
+        waveform_family = waveform_route(family_scores)
         return {
             "method": METHOD,
             "model_id": self.model_id,
             "status": "valid",
             "request_score": round(scores["needs_aux"], 4),
             "request_threshold": round(threshold, 4),
-            "request_admitted": bool(scores["needs_aux"] >= threshold),
+            "request_admitted": admitted,
+            # The six family heads (2026-10-13) and the stream an admitted request opens first.
+            "family_scores": {name: round(value, 3) for name, value in family_scores.items()},
+            "waveform_family": waveform_family,
+            "spectra_admitted": bool(admitted and waveform_family == SPECTRA_FIRST_FAMILY),
+            "spectra_rule": SPECTRA_RULE,
             "first_family": FIRST_CLASSES[int(np.argmax(scores["first"]))],
             "first_family_scores": {name: round(float(v), 3) for name, v in zip(FIRST_CLASSES, scores["first"])},
             "score_interpretation": "mean of the seeds' probabilities",

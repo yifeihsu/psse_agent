@@ -112,7 +112,8 @@ def current_family_suspicion(state: Any, family: str, target_state_id: Any = Non
     (``psse_env.actions.current_suspicion``): ``phasor`` for phase-resolved
     measurements, ``hif`` for the HIF estimator, ``harmonic`` for spectra.
     The harmonic and phasor-derived HIF suspicions read the acquisition ledger
-    and exist on the active state only.
+    (or, under classifier_gated_diagnostics, the triage report's harmonic
+    call, 2026-10-13) and exist on the active state only.
     """
     getter = getattr(state, "get", None)
     if not callable(getter):

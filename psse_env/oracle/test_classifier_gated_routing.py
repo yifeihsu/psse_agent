@@ -5,7 +5,9 @@ balanced screen is replaced by a triage classifier whose report rides on the
 WLS ledger as ``triage``.  Phasors follow its admitted request, or the
 fallbacks after a balanced miss: a correction tried on the state was
 rejected by verification, or every balanced context fetched on the state
-offered no correction.  Spectra follow phasors that came back balanced.
+offered no correction.  Spectra follow phasors that came back balanced, or
+open first on the report's harmonic call (``spectra_admitted``, 2026-10-13),
+with the phasors following only spectra that came back clean.
 """
 from __future__ import annotations
 
@@ -13,9 +15,9 @@ import pytest
 
 from psse_env.actions import (
     CORRECT_MEASUREMENTS, CORRECT_PARAMETERS, GET_HARMONIC_CONTEXT, GET_MEASUREMENT_CONTEXT, GET_PARAMETER_CONTEXT,
-    GET_THREE_PHASE_CONTEXT, GET_TOPOLOGY_CONTEXT, RUN_THREE_PHASE_NLM_FROM_PATH, RUN_WLS, action_signature,
-    balanced_route_failed, current_suspicion, current_triage_report, diagnostic_tool_permitted, triage_admits_request,
-    triage_first_family,
+    GET_THREE_PHASE_CONTEXT, GET_TOPOLOGY_CONTEXT, RUN_HSE_FROM_PATH, RUN_THREE_PHASE_NLM_FROM_PATH, RUN_WLS,
+    action_signature, balanced_route_failed, current_suspicion, current_triage_report, diagnostic_tool_permitted,
+    spectra_show_distortion, triage_admits_request, triage_admits_spectra, triage_first_family,
 )
 from psse_env.dagger.dataset_builder import (
     CANONICAL_DAGGER_SYSTEM_PROMPT, CLASSIFIER_GATED_PROMPT_PARAGRAPH, system_prompt_for_observation,
@@ -39,17 +41,22 @@ WLS_SIGNATURES = [
 ]
 
 
-def _report(*, admitted, score=None, first="measurement", status="valid"):
+def _report(*, admitted, score=None, first="measurement", status="valid", waveform="hif", spectra=None):
     threshold = 0.2782
     if score is None:
         score = 0.91 if admitted else 0.03
+    family_scores = {"measurement": 0.1, "parameter": 0.05, "topology": 0.02, "hif": 0.03, "unbalance": 0.03, "harmonic": 0.03}
+    family_scores[waveform] = 0.9
+    if spectra is None:
+        spectra = bool(admitted) and waveform == "harmonic"
     return {"method": "triage_gnn", "model_id": "triage_gnn:test", "status": status, "request_score": score,
-            "request_threshold": threshold, "request_admitted": bool(admitted), "first_family": first,
+            "request_threshold": threshold, "request_admitted": bool(admitted), "family_scores": family_scores,
+            "waveform_family": waveform, "spectra_admitted": bool(spectra), "first_family": first,
             "first_family_scores": {"measurement": 0.5, "parameter": 0.3, "topology": 0.2},
             "state_id": ACTIVE, "state_hash": HASH}
 
 
-def _state(*, admitted=False, first="measurement", alarm=True, report=True, profile=CLASSIFIER_GATED_PROFILE):
+def _state(*, admitted=False, first="measurement", alarm=True, report=True, profile=CLASSIFIER_GATED_PROFILE, waveform="hif"):
     """A compact policy observation after the opening WLS, with the triage report on its ledger."""
     wls = {
         "state_id": ACTIVE, "state_hash": HASH, "evidence_source": "deployment_wls:test", "successful": True,
@@ -57,7 +64,7 @@ def _state(*, admitted=False, first="measurement", alarm=True, report=True, prof
         "normalized_residual_threshold": 4.0, "max_normalized_residual": 8.0 if alarm else 2.0, "bus_count": 14,
     }
     if report:
-        wls["triage"] = _report(admitted=admitted, first=first)
+        wls["triage"] = _report(admitted=admitted, first=first, waveform=waveform)
     return {
         "evidence_profile": profile, "active_state_id": ACTIVE, "candidate_state_id": None, "has_open_candidate": False,
         "remaining_budget": 40, "remaining_anomaly_score": 2.0 if alarm else 0.5, "no_material_anomaly_remaining": not alarm,
@@ -80,6 +87,22 @@ def _phasors(state, *, nlm_attempted=None, classification=None):
     state["fresh_context_evidence"]["three_phase"] = record
     state["available_evidence"] = ["three_phase_voltages", "three_phase_branch_currents"]
     state["tried_action_signatures"].append(action_signature({"tool": GET_THREE_PHASE_CONTEXT, "arguments": {"state_id": ACTIVE}}))
+
+
+def _spectra(state, *, detected):
+    record = {"state_id": ACTIVE, "state_hash": HASH, "evidence_source": "deployment_context:harmonic_measurements",
+              "request_attempted": True, "harmonic_context_status": "available",
+              "available_evidence_channels": ["harmonic_measurements"], "harmonic_distortion_detected": detected}
+    state["fresh_context_evidence"]["harmonic"] = record
+    state["available_evidence"] = ["harmonic_measurements"]
+    state["tried_action_signatures"].append(action_signature({"tool": GET_HARMONIC_CONTEXT, "arguments": {"state_id": ACTIVE}}))
+    if detected:
+        state["unresolved_signatures"].append("harmonic distortion_detected_by_context")
+
+
+def _hse_event(*, accepted):
+    return {"action": {"tool": RUN_HSE_FROM_PATH, "arguments": {"state_id": ACTIVE}},
+            "tool_output": {"execution_status": "success", "tool_metrics": {"diagnostic_acceptance": {"accepted": accepted}}}}
 
 
 def _context(state, family, targets=()):
@@ -204,6 +227,50 @@ def test_admitted_request_acquires_phasors_then_tests_them_then_opens_spectra_wh
     state["fresh_context_evidence"]["three_phase"]["nlm_attempted"] = True
     state["fresh_context_evidence"]["three_phase"]["nlm_classification"] = "balanced_three_phase"
     assert _first(state)["tool"] == GET_HARMONIC_CONTEXT
+
+
+def test_a_harmonic_call_opens_the_spectra_before_the_phasors():
+    state = _state(admitted=True, waveform="harmonic")
+    report = current_triage_report(state)
+    assert triage_admits_spectra(report) and current_suspicion(state, "harmonic") and current_family_suspicion(state, "harmonic")
+    assert diagnostic_tool_permitted(state, GET_HARMONIC_CONTEXT)
+    first = _first(state)
+    assert first["tool"] == GET_HARMONIC_CONTEXT, first
+    # Not without the alarm, not on a quiet report, and not on another waveform family.
+    assert not diagnostic_tool_permitted(_state(admitted=True, waveform="harmonic", alarm=False), GET_HARMONIC_CONTEXT)
+    quiet = _state(admitted=False, waveform="harmonic")
+    assert not triage_admits_spectra(current_triage_report(quiet)) and not current_suspicion(quiet, "harmonic")
+    other = _state(admitted=True, waveform="unbalance")
+    assert not current_suspicion(other, "harmonic") and _first(other)["tool"] == GET_THREE_PHASE_CONTEXT
+
+
+def test_clean_spectra_on_a_harmonic_call_are_followed_by_the_admitted_phasors():
+    state = _state(admitted=True, waveform="harmonic")
+    _spectra(state, detected=False)
+    first = _first(state)
+    assert first["tool"] == GET_THREE_PHASE_CONTEXT, first
+    _phasors(state, nlm_attempted=True, classification="balanced_three_phase")
+    # The spectra were examined on this state already: the second tier is not asked for again.
+    assert all(p.action["tool"] != GET_HARMONIC_CONTEXT for p in _oracle().next_action_proposals(state, []))
+
+
+def test_a_detected_distortion_on_a_harmonic_call_runs_the_hse_and_the_phasors_wait():
+    state = _state(admitted=True, waveform="harmonic")
+    _spectra(state, detected=True)
+    assert spectra_show_distortion(state)
+    first = _first(state)
+    assert first["tool"] == RUN_HSE_FROM_PATH, first
+    # An HSE that rejected the distortion while the signature stands: the phasors follow.
+    rejected = _first(state, [_hse_event(accepted=False)])
+    assert rejected["tool"] == GET_THREE_PHASE_CONTEXT, rejected
+    # An accepted HSE explains the distortion and the WLS signatures it attributes (the
+    # environment's record): the screening proposes nothing and no acquisition follows.
+    state["explained_anomalies"] = [{"family": "harmonic", "tool": RUN_HSE_FROM_PATH, "state_id": ACTIVE,
+                                     "explained_signatures": ["harmonic distortion_detected_by_context", *WLS_SIGNATURES]}]
+    history = [_hse_event(accepted=True)]
+    assert _oracle().diagnostics_expert.classifier_screening_proposals(state, history) == []
+    proposals = _oracle().next_action_proposals(state, history)
+    assert all(p.action["tool"] not in {GET_THREE_PHASE_CONTEXT, GET_HARMONIC_CONTEXT} for p in proposals), proposals
 
 
 def test_without_an_admitted_request_the_balanced_ladder_runs_first_family_first():

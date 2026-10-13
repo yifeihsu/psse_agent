@@ -2047,7 +2047,8 @@ class MatpowerDeploymentProviders:
             report = self.triage.report(solved["ppc"], solved["payload"])
         except Exception as exc:  # the solve stands whatever the classifier does
             report = {"method": self.triage.method, "model_id": self.triage.model_id, "status": "unavailable",
-                      "reason": f"{type(exc).__name__}: {str(exc)[:160]}", "request_admitted": False}
+                      "reason": f"{type(exc).__name__}: {str(exc)[:160]}", "request_admitted": False,
+                      "spectra_admitted": False}
         return {**report, **self._binding(state)}
 
     # ----------------------------------------------------------------- contexts

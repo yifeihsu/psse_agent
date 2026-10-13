@@ -459,6 +459,24 @@ def triage_admits_request(report: Any) -> bool:
     return isinstance(report, Mapping) and report.get("status") == "valid" and report.get("request_admitted") is True
 
 
+def triage_admits_spectra(report: Any) -> bool:
+    """A valid triage report whose admitted request names the harmonic family (2026-10-13).
+
+    The runtime sets ``spectra_admitted`` when the request is admitted and the
+    largest of its waveform heads is harmonic; the spectra then open before
+    the phasors, which follow only when the spectra come back clean.
+    """
+    return triage_admits_request(report) and report.get("spectra_admitted") is True
+
+
+def triage_waveform_family(report: Any) -> str | None:
+    """The waveform family a valid triage report favours (hif, unbalance or harmonic), if reported."""
+    if not isinstance(report, Mapping) or report.get("status") != "valid":
+        return None
+    family = report.get("waveform_family")
+    return str(family) if family in ("hif", "unbalance", "harmonic") else None
+
+
 def triage_first_family(report: Any) -> str | None:
     """The balanced family a valid triage report says to investigate first."""
     if not isinstance(report, Mapping) or report.get("status") != "valid":
@@ -720,6 +738,23 @@ def spectra_examined_in_episode(state: Any) -> bool:
     return requested_on_earlier_state(state, GET_HARMONIC_CONTEXT)
 
 
+def spectra_ledger(state: Any) -> Mapping[str, Any]:
+    """The spectra request dispatched on the active state (its ``harmonic`` ledger entry), else empty."""
+    if not isinstance(state, Mapping):
+        return {}
+    contexts = state.get("fresh_context_evidence")
+    harmonic = contexts.get("harmonic") if isinstance(contexts, Mapping) else None
+    if (isinstance(harmonic, Mapping) and str(harmonic.get("state_id") or "") == str(state.get("active_state_id") or "")
+            and harmonic.get("request_attempted") is True):
+        return harmonic
+    return {}
+
+
+def spectra_show_distortion(state: Any) -> bool:
+    """The spectra acquired on the active state detected a distortion (the HSE rung is what follows them)."""
+    return spectra_ledger(state).get("harmonic_distortion_detected") is True
+
+
 def current_suspicion(state: Any, family: str) -> bool:
     """Whether the evidence on the active state points at ``family``.
 
@@ -729,12 +764,19 @@ def current_suspicion(state: Any, family: str) -> bool:
     channel was set aside, or the alarm stayed unexplained), ``hif`` for the
     HIF estimator (the screen's HIF, or an HIF-like line differential the
     acquired phasors showed), ``harmonic`` for spectra (phasors acquired on
-    this state came back balanced).  A suspicion that the acquired phasors
-    later refuted still admits the stream it already opened.
+    this state came back balanced, or under classifier_gated_diagnostics the
+    triage report's harmonic call, 2026-10-13).  A suspicion that the
+    acquired phasors later refuted still admits the stream it already opened.
     """
     report = current_screen_report(state, "hif")
     if family == "harmonic":
         if phasor_nlm_classification(state) == "balanced_three_phase":
+            return True
+        if (isinstance(state, Mapping) and is_classifier_gated(state.get("evidence_profile", DEFAULT_EVIDENCE_PROFILE))
+                and triage_admits_spectra(current_triage_report(state))):
+            # classifier_gated_diagnostics (2026-10-13): the classifier's
+            # harmonic call on the current WLS opens the spectra before any
+            # phasors; the phasors follow when the spectra come back clean.
             return True
         # Phasors examined on an ancestor state found no event (its waveform
         # signature would still stand): the spectra tier is open here too.

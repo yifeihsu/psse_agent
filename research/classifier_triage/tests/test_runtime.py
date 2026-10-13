@@ -60,8 +60,10 @@ def test_export_load_and_report(tmp_path):
     assert 0.0 <= report["request_score"] <= 1.0 and report["request_threshold"] == pytest.approx(0.3)
     assert report["request_admitted"] == (report["request_score"] >= 0.3)
     assert report["first_family"] in FIRST_CLASSES and set(report["first_family_scores"]) == set(FIRST_CLASSES)
-    # The waveform family heads stay out of the policy-visible report; the offline scores keep them.
-    assert "family_scores" not in report and not any(name in json.dumps(report) for name in ("unbalance", "harmonic"))
+    # The six family heads are reported (2026-10-13), with the waveform family an admitted request is routed by.
+    assert set(report["family_scores"]) == set(FAMILY_HEADS) and all(0.0 <= v <= 1.0 for v in report["family_scores"].values())
+    assert report["waveform_family"] == max(runtime.WAVEFORM_FAMILIES, key=lambda name: report["family_scores"][name])
+    assert report["spectra_admitted"] == (report["request_admitted"] and report["waveform_family"] == "harmonic")
     assert classifier.scores(ppc, runtime.payload_from_wls(payload))["family"].shape == (len(FAMILY_HEADS),)
     assert sum(report["first_family_scores"].values()) == pytest.approx(1.0, abs=0.01)
     # The report is the mean of the seeds, and the same by name or by loaded case.

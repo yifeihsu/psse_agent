@@ -56,6 +56,8 @@ from psse_env.actions import (
     current_suspicion,
     current_triage_report,
     triage_admits_request,
+    triage_admits_spectra,
+    spectra_show_distortion,
     current_wls_alarm,
     phasor_ledger,
     phasors_examined_in_episode,
@@ -470,16 +472,21 @@ class DiagnosticsExpert:
     def classifier_screening_proposals(
         self, state: Any, history: Sequence[Mapping[str, Any]] | None = None,
     ) -> list[ExpertActionProposal]:
-        """classifier_gated_diagnostics: phasors follow the triage classifier's admitted request.
+        """classifier_gated_diagnostics: the auxiliary streams follow the triage classifier's admitted request.
 
         The report rides on the current WLS (``wls.triage``).  An admitted
-        request acquires the phase-resolved measurements and tests them once
-        with the NLM: an HIF-like line differential mints the HIF signature
-        the estimator rung keys on, an unbalance source is explained, and
-        phasors that came back balanced open the spectra (the second tier).
-        Without an admitted request the balanced ladder runs; its fallbacks
-        (a rejected correction on this state, or contexts that offered
-        nothing) are the unexplained acquisition tier (``ExpertPolicyOracle``).
+        request whose waveform family is harmonic (``spectra_admitted``,
+        2026-10-13) acquires the spectra first: a detected distortion runs
+        the HSE rung of the harmonic ladder, and the phasors follow only
+        spectra that came back clean or an HSE that rejected the
+        distortion.  Any other admitted request acquires the phase-resolved
+        measurements and tests them once with the NLM: an HIF-like line
+        differential mints the HIF signature the estimator rung keys on, an
+        unbalance source is explained, and phasors that came back balanced
+        open the spectra (the second tier).  Without an admitted request
+        the balanced ladder runs; its fallbacks (a rejected correction on
+        this state, or contexts that offered nothing) are the unexplained
+        acquisition tier (``ExpertPolicyOracle``).
         """
         state = policy_state_view(state)
         if not is_classifier_gated(state):
@@ -501,15 +508,36 @@ class DiagnosticsExpert:
         if not phase:
             if not triage_admits_request(report):
                 return []
+            if triage_admits_spectra(report) and not spectra_examined_in_episode(state):
+                # The classifier's harmonic call (2026-10-13): the spectra are
+                # the first tier on this request; the phasors wait for them.
+                harmonic_score = (report.get("family_scores") or {}).get("harmonic")
+                return self._permitted(state, [self._proposal(
+                    GET_HARMONIC_CONTEXT, {"state_id": active_id}, confidence=0.97,
+                    evidence=[f"triage_harmonic_call score={harmonic_score} threshold={report.get('request_threshold')}",
+                              "spectral_evidence_requested_first_tier"],
+                )], history)
+            if spectra_show_distortion(state):
+                # Spectra acquired first on this state show a distortion: the
+                # harmonic ladder's HSE rung follows, and an accepted HSE
+                # closes the diagnosis.  The phasors are acquired only once
+                # the HSE answered and the harmonic signature still stands.
+                unresolved = unexplained_signatures(
+                    state_value(state, "unresolved_signatures", []), state_value(state, "explained_anomalies", []),
+                )
+                completed = self._completed_diagnostics(history or [], active_state_id=str(active_id))
+                if not matching_evidence_codes(unresolved, *HARMONIC_MARKERS) or RUN_HSE_FROM_PATH not in completed:
+                    return []
             if phasors_tested_in_episode(state):
                 # Phasors were acquired and tested on an ancestor state, and
                 # only the operator's corrections have changed since: they
                 # show the same event, so they are not acquired again.
                 return []
+            after_spectra = ["spectra_examined_before_phasors"] if spectra_examined_in_episode(state) else []
             return self._permitted(state, [self._proposal(
                 GET_THREE_PHASE_CONTEXT, {"state_id": active_id}, confidence=0.97,
                 evidence=[f"triage_request_admitted score={report.get('request_score')} threshold={report.get('request_threshold')}",
-                          "phase_resolved_measurements_requested"],
+                          *after_spectra, "phase_resolved_measurements_requested"],
             )], history)
         if current_suspicion(state, "harmonic") and not spectra_examined_in_episode(state):
             # The phasors show a balanced system: the spectra are the next
