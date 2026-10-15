@@ -141,6 +141,36 @@ class RolloutTests(unittest.TestCase):
         self.assertEqual(policy.records[0]["completion_token_ids"], [3, 0])
         self.assertEqual(policy.research_policy_identity, {"adapter_path": "fake"})
 
+    def test_recording_keeps_the_sampled_tokens_of_an_invalid_call(self) -> None:
+        class _Invalid(_SamplingPolicy):
+            def act(self, observation):
+                super().act(observation)
+                if self.calls == 2:
+                    raise ValueError("unparseable tool call")
+                return {"tool": RUN_WLS, "arguments": {"state_id": "active"}}
+
+        policy = RecordingPolicy(_Invalid(5))
+        policy.act({"phase": "wls"})
+        with self.assertRaises(ValueError):
+            policy.act({"phase": "finalize"})
+        self.assertEqual(len(policy.records), 2)
+        self.assertIsNone(policy.records[1]["action"])
+        self.assertEqual(policy.records[1]["policy_exception"], "ValueError")
+        self.assertEqual(policy.records[1]["completion_token_ids"], [5, 1])
+
+    def test_a_failure_before_sampling_never_reuses_the_previous_generation(self) -> None:
+        class _FailsEarly(_SamplingPolicy):
+            def act(self, observation):
+                if observation.get("phase") == "broken":
+                    raise RuntimeError("observation rejected before generation")
+                return super().act(observation)
+
+        policy = RecordingPolicy(_FailsEarly(2))
+        policy.act({"phase": "wls"})
+        with self.assertRaises(RuntimeError):
+            policy.act({"phase": "broken"})
+        self.assertNotIn("completion_token_ids", policy.records[1])
+
     def test_pairing_requires_one_record_per_policy_step(self) -> None:
         trace = [{"step": 0, "intervention": True, "action": {"tool": RUN_WLS}},
                  {"step": 1, "action": {"tool": RUN_WLS, "arguments": {}}, "execution_status": "success", "error_code": None}]

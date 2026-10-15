@@ -125,12 +125,34 @@ class RecordingPolicy:
     def research_policy_identity(self) -> Any:
         return getattr(self._policy, "research_policy_identity", None)
 
-    def act(self, observation: Mapping[str, Any]) -> Any:
-        action = self._policy.act(observation)
+    def _fresh_generation(self, before: Any) -> dict[str, Any] | None:
+        """The policy's generation record if this call produced one (never the previous step's)."""
         generation = getattr(self._policy, "last_generation", None)
-        record: dict[str, Any] = {"action": copy.deepcopy(action)}
-        if isinstance(generation, Mapping):
-            record.update(copy.deepcopy(dict(generation)))
+        if not isinstance(generation, Mapping):
+            return None
+        if isinstance(before, Mapping) and before.get("call_index") == generation.get("call_index"):
+            return None
+        return copy.deepcopy(dict(generation))
+
+    def act(self, observation: Mapping[str, Any]) -> Any:
+        before = getattr(self._policy, "last_generation", None)
+        try:
+            action = self._policy.act(observation)
+        except Exception as exc:
+            # An unparseable tool call raises after the tokens were sampled; the
+            # evaluator turns the exception into an invalid action.  Keep the
+            # sampled tokens so the trajectory still pairs with its trace and
+            # the invalid output can be trained against.
+            record: dict[str, Any] = {"action": None, "policy_exception": type(exc).__name__}
+            generation = self._fresh_generation(before)
+            if generation is not None:
+                record.update(generation)
+            self.records.append(record)
+            raise
+        record = {"action": copy.deepcopy(action)}
+        generation = self._fresh_generation(before)
+        if generation is not None:
+            record.update(generation)
         self.records.append(record)
         return action
 

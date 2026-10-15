@@ -442,8 +442,8 @@ def phase_update(config: RLConfig, manifest: Manifest, *, progress: Callable[[Ma
     groups, score_summary = score_groups(config, store)
     _write_json(out / "advantages.json", {
         **score_summary,
-        "groups": {adv.root: {"rewards": list(adv.rewards), "advantages": list(adv.advantages), "informative": adv.informative}
-                   for _, adv in groups},
+        "by_root": {adv.root: {"rewards": list(adv.rewards), "advantages": list(adv.advantages), "informative": adv.informative}
+                    for _, adv in groups},
     })
     next_adapter = out / "adapter"
     report: dict[str, Any] = {"iteration": manifest.iteration, "adapter_in": manifest.current_adapter, "scores": score_summary}
