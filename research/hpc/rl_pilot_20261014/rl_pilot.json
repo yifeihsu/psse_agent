@@ -1,5 +1,5 @@
 {
-  "output_dir": "/scratch/yx3882/rl_pilot_20261014/out/pilot",
+  "output_dir": "/scratch/yx3882/rl_pilot_20261014/out/pilot_v2",
   "training_suite": "/scratch/yx3882/research_full_pipeline_20261007_classifier/out/suite/r2_training.json",
   "development_suite": "/scratch/yx3882/research_full_pipeline_20261007_classifier/out/suite/development.json",
   "initial_adapter": "/scratch/yx3882/research_full_pipeline_20261007_classifier/out/r2/training/lora",
@@ -15,9 +15,9 @@
   "hif_search_profile": "research",
   "max_steps": 40,
   "samples_per_root": 4,
-  "seed": 20261014,
-  "temperature": 0.8,
-  "top_p": 0.95,
+  "seed": 20261015,
+  "temperature": 1.0,
+  "top_p": 1.0,
   "top_k": null,
   "roots_per_iteration": 61,
   "max_length": 32768,
@@ -46,10 +46,11 @@
   },
   "update": {
     "learning_rate": 1e-05,
-    "beta_kl": 0.02,
+    "beta_kl": 0.0,
     "optimizer_steps": 2,
     "max_grad_norm": 1.0,
     "loss_normalization": "dapo",
     "use_logits_to_keep": true
-  }
+  },
+  "update_checkpoint_rows": 32
 }

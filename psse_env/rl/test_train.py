@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from psse_env.rl.rollout import StepRecord, Trajectory, TrajectoryStore
-from psse_env.rl.train import Manifest, RLConfig, iteration_roots, load_suite, score_groups
+from psse_env.rl.train import Manifest, RLConfig, aggregate_evaluation, iteration_roots, load_suite, phase_evaluate, score_groups
 
 
 def _config(directory: str, **overrides) -> RLConfig:
@@ -37,6 +37,14 @@ class TrainDriverTests(unittest.TestCase):
                 _config(directory, samples_per_root=1).validate()
             with self.assertRaises(ValueError):
                 _config(directory, update={"learning_rate": -1.0}).validate()
+            for truncated in (dict(top_p=0.95), dict(top_k=64)):
+                with self.assertRaisesRegex(ValueError, "biases the policy gradient"):
+                    _config(directory, **truncated).validate()
+            _config(directory, top_k=0, temperature=1.3).validate()
+            with self.assertRaisesRegex(ValueError, "sampling temperature"):
+                _config(directory, update={"temperature": 2.0}).validate()
+            settings = _config(directory, temperature=1.3, update={"beta_kl": 0.1}).update_settings(4)
+            self.assertEqual((settings.temperature, settings.beta_kl, settings.seed), (1.3, 0.1, 20261014 + 4))
             path = Path(directory) / "rl.json"
             path.write_text(json.dumps(config.as_dict()), encoding="utf-8")
             self.assertEqual(RLConfig.load(path).samples_per_root, 2)
@@ -94,6 +102,35 @@ class TrainDriverTests(unittest.TestCase):
             informative = [advantages for _, advantages in groups if advantages.informative]
             self.assertEqual(len(informative), 1)
             self.assertEqual(informative[0].root, "a")
+
+
+    def test_evaluation_is_skipped_when_the_update_left_the_adapter_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = _config(directory, development_suite=str(Path(directory) / "dev.json"))
+            out = Path(directory) / "iteration_000"
+            out.mkdir()
+            (out / "update_report.json").write_text(json.dumps({"update": None}), encoding="utf-8")
+            summary = phase_evaluate(config, Manifest(current_adapter="adapter0"))
+            self.assertIn("skipped", summary)
+            self.assertIn("skipped", json.loads((out / "evaluation.json").read_text(encoding="utf-8"))["summary"])
+            self.assertIsNone(phase_evaluate(_config(directory), Manifest(current_adapter="adapter0")))
+
+    def test_aggregate_evaluation_counts_success_cost_and_safety(self) -> None:
+        records = [
+            {"family": "parameter", "truth_audited_task_success": True, "steps": 6, "reward": {"total": 0.88},
+             "false_commit_count": 0, "loop_detected": False, "invalid_action_count": 0},
+            {"family": "parameter", "truth_audited_task_success": False, "steps": 30, "reward": {"total": -0.6},
+             "false_commit_count": 2, "loop_detected": True, "invalid_action_count": 3, "false_finalization_count": 1},
+            {"family": "hif", "truth_audited_task_success": True, "steps": 5, "reward": {"total": 0.9}},
+        ]
+        summary = aggregate_evaluation(records)
+        self.assertEqual(summary["roots"], 3)
+        self.assertEqual(summary["truth_audited_task_success"], 2)
+        self.assertAlmostEqual(summary["mean_steps"], 41 / 3)
+        self.assertAlmostEqual(summary["mean_reward"], (0.88 - 0.6 + 0.9) / 3)
+        self.assertEqual((summary["false_commit_count"], summary["invalid_action_count"], summary["loop_episodes"]), (2, 3, 1))
+        self.assertEqual(summary["false_finalization_count"], 1)
+        self.assertEqual(summary["by_family"], {"hif": {"roots": 1, "successes": 1}, "parameter": {"roots": 2, "successes": 1}})
 
 
 if __name__ == "__main__":

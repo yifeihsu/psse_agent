@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import contextlib
 import math
+import tempfile
 import unittest
+from pathlib import Path
 
 from psse_env.rl.rows import build_step_row
-from psse_env.rl.update import UpdateSettings, completion_logprobs, policy_gradient_update
+from psse_env.rl.update import UpdateCheckpoint, UpdateSettings, completion_logprobs, policy_gradient_update
 
 try:
     import torch
@@ -19,48 +20,58 @@ if torch is not None:
         def __init__(self, logits):
             self.logits = logits
 
+    class _Preempted(RuntimeError):
+        pass
+
     class _TinyLM(torch.nn.Module):
         """A bigram model: logits depend on the previous token only."""
 
         vocab = 12
 
-        def __init__(self, seed: int = 0) -> None:
+        def __init__(self, seed: int = 0, fail_after: int | None = None) -> None:
             super().__init__()
             generator = torch.Generator().manual_seed(seed)
             self.table = torch.nn.Parameter(torch.randn(self.vocab, self.vocab, generator=generator) * 0.1)
             self.frozen = torch.nn.Parameter(torch.zeros(1), requires_grad=False)
-            self.adapter_enabled = True
             self.calls: list[int | None] = []
+            self.fail_after = fail_after
 
         @property
         def device(self):
             return self.table.device
 
         def forward(self, input_ids, attention_mask=None, logits_to_keep=None, use_cache=False, **side):
+            if self.fail_after is not None and len(self.calls) >= self.fail_after:
+                raise _Preempted("preempted")
             self.calls.append(logits_to_keep)
-            table = self.table if self.adapter_enabled else self.table.detach() * 0.0
-            logits = table[input_ids]
+            logits = self.table[input_ids]
             if logits_to_keep:
                 logits = logits[:, -int(logits_to_keep) :, :]
             return _Outputs(logits)
-
-        @contextlib.contextmanager
-        def disable_adapter(self):
-            self.adapter_enabled = False
-            try:
-                yield
-            finally:
-                self.adapter_enabled = True
 
     class _NoKeepLM(_TinyLM):
         def forward(self, input_ids, attention_mask=None, use_cache=False, **side):  # no logits_to_keep
             self.calls.append(None)
             return _Outputs(self.table[input_ids])
 
+    def _save_tiny(model, directory: Path) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        torch.save(model.state_dict(), directory / "weights.pt")
+
+    def _load_tiny(directory: Path, **kwargs) -> "_TinyLM":
+        model = _TinyLM(**kwargs)
+        model.load_state_dict(torch.load(directory / "weights.pt"))
+        return model
+
 
 def _row(prompt, completion, advantage):
     return build_step_row(root="r", sample_index=0, step=0, advantage=advantage, prompt_ids=prompt,
                           completion_ids=completion, max_length=64)
+
+
+def _rows():
+    return [_row([1, 2, 3], [4, 5], 1.0), _row([2, 3], [6], -1.0), _row([3, 4, 5], [7, 8], 0.5),
+            _row([5, 6], [9], -0.5), _row([6, 7, 8], [10, 11], 1.5), _row([8, 9], [2], -1.5)]
 
 
 @unittest.skipIf(torch is None, "torch is not installed")
@@ -78,10 +89,19 @@ class UpdateTests(unittest.TestCase):
         expected = torch.log_softmax(logits[-3:-1], dim=-1).gather(-1, ids[0, -2:].unsqueeze(-1)).squeeze(-1)
         self.assertTrue(torch.allclose(kept, expected, atol=1e-6))
 
+    def test_log_probabilities_are_taken_at_the_sampling_temperature(self) -> None:
+        model = _TinyLM()
+        row = _row([1, 2, 3], [4, 5], 1.0)
+        tempered = completion_logprobs(model, row, temperature=2.0)
+        ids = torch.tensor([row.input_ids])
+        logits = model.table[ids][0] / 2.0
+        expected = torch.log_softmax(logits[-3:-1], dim=-1).gather(-1, ids[0, -2:].unsqueeze(-1)).squeeze(-1)
+        self.assertTrue(torch.allclose(tempered, expected, atol=1e-6))
+        self.assertFalse(torch.allclose(tempered, completion_logprobs(model, row), atol=1e-4))
+
     def test_falls_back_when_the_model_has_no_logits_to_keep(self) -> None:
         model = _NoKeepLM()
-        row = _row([1, 2, 3], [4], 1.0)
-        logprobs = completion_logprobs(model, row, use_logits_to_keep=True)
+        logprobs = completion_logprobs(model, _row([1, 2, 3], [4], 1.0), use_logits_to_keep=True)
         self.assertEqual(tuple(logprobs.shape), (1,))
 
     def test_positive_advantage_raises_the_sampled_likelihood_and_negative_lowers_it(self) -> None:
@@ -89,61 +109,87 @@ class UpdateTests(unittest.TestCase):
             model = _TinyLM()
             row = _row([1, 2, 3], [4, 5], advantage)
             before = completion_logprobs(model, row).sum().item()
-            settings = UpdateSettings(learning_rate=0.1, beta_kl=0.0, optimizer_steps=1)
-            report = policy_gradient_update(model, [row], settings)
+            report = policy_gradient_update(model, [row], UpdateSettings(learning_rate=0.1, optimizer_steps=1))
             after = completion_logprobs(model, row).sum().item()
             if advantage > 0:
                 self.assertGreater(after, before)
             else:
                 self.assertLess(after, before)
-            self.assertEqual(report.rows, 1)
-            self.assertEqual(report.completion_tokens, 2)
-            self.assertEqual(report.optimizer_steps, 1)
+            self.assertEqual((report.rows, report.completion_tokens, report.optimizer_steps), (1, 2, 1))
             self.assertTrue(math.isfinite(report.grad_norm[0]))
             self.assertEqual(report.kl, [0.0])
+            self.assertIsNone(report.resumed_from)
 
     def test_zero_advantage_rows_leave_the_parameters_unchanged(self) -> None:
         model = _TinyLM()
         before = model.table.detach().clone()
-        report = policy_gradient_update(model, [_row([1, 2], [3], 0.0)], UpdateSettings(learning_rate=0.1, beta_kl=0.0))
+        report = policy_gradient_update(model, [_row([1, 2], [3], 0.0)], UpdateSettings(learning_rate=0.1))
         self.assertTrue(torch.equal(before, model.table.detach()))
         self.assertEqual(report.grad_norm, [0.0])
 
-    def test_kl_penalty_uses_the_reference_pass_and_the_k3_estimator(self) -> None:
-        model = _TinyLM()
+    def test_kl_penalty_needs_a_reference_and_uses_the_k3_estimator(self) -> None:
         row = _row([1, 2, 3], [4], 0.0)
         settings = UpdateSettings(learning_rate=0.05, beta_kl=1.0, optimizer_steps=1)
-        report = policy_gradient_update(model, [row], settings)
-        self.assertEqual(len(report.kl), 1)
-        self.assertGreaterEqual(report.kl[0], 0.0)
-        self.assertGreater(report.grad_norm[0], 0.0)
-        stub = _NoKeepLM()
-
-        def reference(_row):
-            return torch.zeros(1)
-
-        report = policy_gradient_update(stub, [row], settings, reference_logprobs=reference)
+        with self.assertRaisesRegex(ValueError, "starting adapter"):
+            policy_gradient_update(_TinyLM(), [row], settings)
+        report = policy_gradient_update(_TinyLM(), [row], settings, reference_logprobs=lambda _row: torch.zeros(1))
         self.assertGreater(report.kl[0], 0.0)
+        self.assertGreater(report.grad_norm[0], 0.0)
+        model = _TinyLM()
+        same = lambda r: completion_logprobs(model, r).detach()
+        report = policy_gradient_update(model, [row], settings, reference_logprobs=same)
+        self.assertAlmostEqual(report.kl[0], 0.0, places=6)
 
     def test_optimizer_steps_partition_the_rows(self) -> None:
         model = _TinyLM()
         rows = [_row([1, 2], [3], 1.0), _row([2, 3], [4], -1.0), _row([3, 4], [5], 0.5)]
         seen: list[int] = []
-        report = policy_gradient_update(model, rows, UpdateSettings(learning_rate=0.01, beta_kl=0.0, optimizer_steps=2),
+        report = policy_gradient_update(model, rows, UpdateSettings(learning_rate=0.01, optimizer_steps=2),
                                         progress=lambda record: seen.append(int(record["rows"])))
         self.assertEqual(report.optimizer_steps, 2)
         self.assertEqual(sorted(seen), [1, 2])
         self.assertAlmostEqual(report.mean_advantage, 0.5 / 3.0)
 
+    def test_an_interrupted_update_resumes_to_the_same_parameters(self) -> None:
+        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=2, seed=7)
+        reference = _TinyLM(seed=3)
+        expected = policy_gradient_update(reference, _rows(), settings)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = UpdateCheckpoint(directory=Path(directory), save_model=_save_tiny, every_rows=2)
+            # Chunks hold three rows each: the run completes step one, saves the
+            # gradients of two rows of step two, and is preempted on the third.
+            interrupted = _TinyLM(seed=3, fail_after=5)
+            with self.assertRaises(_Preempted):
+                policy_gradient_update(interrupted, _rows(), settings, checkpoint=checkpoint)
+            state = checkpoint.load_state()
+            self.assertEqual((state["completed_chunks"], state["chunk_rows_done"]), (1, 2))
+            self.assertIsNotNone(checkpoint.model_dir())
+            resumed_model = _load_tiny(checkpoint.model_dir(), seed=3)
+            resumed = policy_gradient_update(resumed_model, _rows(), settings, checkpoint=checkpoint)
+            self.assertEqual(resumed.resumed_from, {"completed_chunks": 1, "chunk_rows_done": 2})
+            self.assertTrue(torch.allclose(resumed_model.table, reference.table, atol=1e-6))
+            self.assertEqual(len(resumed.policy_loss), 2)
+            for got, want in zip(resumed.policy_loss, expected.policy_loss):
+                self.assertAlmostEqual(got, want, places=5)
+            files = sorted(path.name for path in Path(directory).iterdir())
+            self.assertIn("state.json", files)
+            self.assertEqual([name for name in files if name.startswith("grads_")], [])
+
+    def test_a_checkpoint_for_other_rows_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = UpdateCheckpoint(directory=Path(directory), save_model=_save_tiny, every_rows=1)
+            policy_gradient_update(_TinyLM(), _rows(), UpdateSettings(optimizer_steps=2), checkpoint=checkpoint)
+            with self.assertRaisesRegex(RuntimeError, "different batch"):
+                policy_gradient_update(_TinyLM(), _rows()[:3], UpdateSettings(optimizer_steps=2), checkpoint=checkpoint)
+
     def test_settings_validation(self) -> None:
-        with self.assertRaises(ValueError):
-            UpdateSettings(learning_rate=0.0).validate()
-        with self.assertRaises(ValueError):
-            UpdateSettings(beta_kl=-1.0).validate()
-        with self.assertRaises(ValueError):
-            UpdateSettings(loss_normalization="token").validate()
+        for bad in (dict(learning_rate=0.0), dict(beta_kl=-1.0), dict(loss_normalization="token"), dict(temperature=0.0)):
+            with self.assertRaises(ValueError):
+                UpdateSettings(**bad).validate()
         with self.assertRaises(ValueError):
             policy_gradient_update(_TinyLM(), [], UpdateSettings())
+        with self.assertRaises(ValueError):
+            UpdateCheckpoint(directory=Path("."), save_model=lambda m, d: None, every_rows=0)
 
 
 if __name__ == "__main__":

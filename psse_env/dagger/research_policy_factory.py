@@ -71,6 +71,11 @@ class GenerationOptions:
     reproducible episode.  The policy records the exact tokens it sampled
     (:attr:`_CanonicalResearchNativePolicy.last_generation`) so training can
     reuse them instead of a re-rendered target.
+
+    Sampling always passes ``top_p`` and ``top_k`` explicitly: the Gemma 4
+    generation config ships ``top_k=64`` and ``top_p=0.95``, which ``generate``
+    would otherwise apply silently.  ``top_k=None`` therefore means "no top-k
+    cut" (``top_k=0``), so the default draw is the policy's own distribution.
     """
 
     do_sample: bool = False
@@ -85,11 +90,57 @@ class GenerationOptions:
                 raise ValueError("sampling needs a positive temperature")
             if not 0.0 < self.top_p <= 1.0:
                 raise ValueError("top_p must lie in (0, 1]")
-            if self.top_k is not None and int(self.top_k) <= 0:
-                raise ValueError("top_k must be positive when set")
+            if self.top_k is not None and int(self.top_k) < 0:
+                raise ValueError("top_k must be nonnegative when set (0 disables the cut)")
+
+    @property
+    def truncates(self) -> bool:
+        """Whether the sampling distribution is cut (nucleus or top-k), which biases a policy gradient."""
+
+        return bool(self.do_sample and (self.top_p < 1.0 or (self.top_k is not None and int(self.top_k) > 0)))
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def sampled_token_probabilities(scores: Sequence[Any], sampled_ids: Any) -> list[float]:
+    """Probability of each sampled token under the distribution it was drawn from.
+
+    ``scores`` is ``generate``'s per-step processed logits (temperature and
+    nucleus already applied, filtered tokens at minus infinity); the softmax
+    of step ``t`` is therefore the sampling distribution of token ``t``.
+    """
+
+    import torch
+
+    probabilities: list[float] = []
+    ids = sampled_ids.reshape(-1)
+    for step, logits in enumerate(scores):
+        if step >= int(ids.shape[0]):
+            break
+        row = logits[0].float()
+        probability = torch.softmax(row, dim=-1)[int(ids[step])]
+        probabilities.append(float(probability))
+    return probabilities
+
+
+def sampling_summary(probabilities: Sequence[float]) -> dict[str, Any]:
+    """How peaked a sampled completion was: its minimum and mean token probability.
+
+    A completion whose every token had probability one under the sampling
+    distribution is what greedy decoding would have produced; the fraction
+    of such completions across a rollout says whether the policy can explore
+    at all at the chosen temperature.
+    """
+
+    values = [float(value) for value in probabilities]
+    if not values:
+        return {"min_token_probability": None, "mean_token_probability": None, "tokens_below_0_99": 0}
+    return {
+        "min_token_probability": min(values),
+        "mean_token_probability": sum(values) / len(values),
+        "tokens_below_0_99": sum(1 for value in values if value < 0.99),
+    }
 
 
 def _token_repetition_metrics(token_ids: Sequence[int]) -> dict[str, Any]:
@@ -643,14 +694,14 @@ class _CanonicalResearchNativePolicy:
             return {"do_sample": False, "temperature": 0.0}
         if options.seed is not None:
             torch_module.manual_seed(int(options.seed) + self._generation_calls)
-        kwargs: dict[str, Any] = {
+        # Both cuts are passed explicitly so the model's generation config
+        # (top_k 64, top_p 0.95 on Gemma 4) never applies behind our back.
+        return {
             "do_sample": True,
             "temperature": float(options.temperature),
             "top_p": float(options.top_p),
+            "top_k": int(options.top_k) if options.top_k is not None else 0,
         }
-        if options.top_k is not None:
-            kwargs["top_k"] = int(options.top_k)
-        return kwargs
 
     def _record_generation(
         self,
@@ -661,10 +712,11 @@ class _CanonicalResearchNativePolicy:
         prompt_length: int,
         original_prompt_length: int,
         text: str,
+        token_probabilities: Sequence[float] | None = None,
     ) -> None:
         completion = sampled_ids[: int(generated_tokens)]
         completion_ids = [int(value) for value in completion.reshape(-1).tolist()]
-        self._last_generation = {
+        record: dict[str, Any] = {
             "model_observation": copy.deepcopy(dict(observation)),
             "prompt_tokens": int(prompt_length),
             "original_prompt_tokens": int(original_prompt_length),
@@ -673,6 +725,11 @@ class _CanonicalResearchNativePolicy:
             "generation": self._generation.as_dict(),
             "call_index": int(self._generation_calls),
         }
+        if token_probabilities is not None:
+            probabilities = [float(value) for value in list(token_probabilities)[: len(completion_ids)]]
+            record["completion_token_probabilities"] = probabilities
+            record.update(sampling_summary(probabilities))
+        self._last_generation = record
         self._generation_calls += 1
 
     def generate_text(self, observation: Mapping[str, Any]) -> str:
@@ -720,6 +777,10 @@ class _CanonicalResearchNativePolicy:
         started = time.perf_counter()
         self._bundle.model.eval()
         generation_kwargs = self._generation_kwargs(torch)
+        # Sampling also records the probability each chosen token had under
+        # the sampling distribution, so a run can tell a peaked policy (every
+        # sample identical) from a broken one.
+        want_scores = bool(self._generation.do_sample)
         with torch.inference_mode():
             generated = self._bundle.model.generate(
                 **model_inputs,
@@ -727,10 +788,16 @@ class _CanonicalResearchNativePolicy:
                 use_cache=True,
                 eos_token_id=stop_ids,
                 pad_token_id=pad_token_id,
+                return_dict_in_generate=want_scores,
+                output_scores=want_scores,
                 **generation_kwargs,
             )
         generation_seconds = time.perf_counter() - started
-        sampled_ids = generated[0][prompt_length:].detach().cpu()
+        sequences = generated.sequences if want_scores else generated
+        sampled_ids = sequences[0][prompt_length:].detach().cpu()
+        token_probabilities = (
+            sampled_token_probabilities(generated.scores, sampled_ids) if want_scores else None
+        )
         text, generated_tokens, trimmed_pad_tokens = decode_generated_response(
             self._bundle.processor,
             sampled_ids,
@@ -757,6 +824,7 @@ class _CanonicalResearchNativePolicy:
             prompt_length=prompt_length,
             original_prompt_length=original_prompt_length,
             text=text,
+            token_probabilities=token_probabilities,
         )
         try:
             action = _validated_generated_action(text, visible_parameters)

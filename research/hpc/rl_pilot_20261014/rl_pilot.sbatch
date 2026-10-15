@@ -56,6 +56,17 @@ cleanup() { kill "$GPU_SAMPLER_PID" 2>/dev/null || true; rm -rf "$OPENDSS_LOCAL"
 trap cleanup EXIT
 
 cd "$SRC"
+# One rollout or evaluation process leaves the GPU idle while the environment
+# steps on the CPU; on an 80 GB card two processes share it (each holds a 4-bit
+# copy), each taking every second root, and the unsharded call of the phase
+# then finishes any leftover root and closes the phase.  The update is one
+# process; it checkpoints itself, so a preemption resumes it mid-step.
+if [[ -z "${RL_WORKERS:-}" ]]; then
+  gpu_mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 | tr -dc '0-9')
+  RL_WORKERS=1
+  (( ${gpu_mib:-0} >= 70000 )) && RL_WORKERS=2
+fi
+echo "[rl] $RL_WORKERS worker(s) for the rollout and evaluation phases"
 "$PY" -m psse_env.rl.train --config "$WORK/configs/$CONFIG" --status
 for (( i = 0; i < ITERATIONS; i++ )); do
   # Each phase is one process; the driver refuses a phase the manifest is not at,
@@ -64,6 +75,15 @@ for (( i = 0; i < ITERATIONS; i++ )); do
     current=$("$PY" -m psse_env.rl.train --config "$WORK/configs/$CONFIG" --status | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["phase"])')
     [[ "$current" == "$phase" ]] || continue
     echo "[rl] iteration loop $i phase $phase $(date -u +%FT%TZ)"
+    if [[ "$phase" != update && "$RL_WORKERS" -gt 1 ]]; then
+      pids=()
+      for (( s = 0; s < RL_WORKERS; s++ )); do
+        "$PY" -m psse_env.rl.train --config "$WORK/configs/$CONFIG" --phase "$phase" --shard "$s/$RL_WORKERS" \
+          >> "$LOGS/$phase-${CONFIG%.json}-${SLURM_JOB_ID:-manual}-shard$s.out" 2>&1 &
+        pids+=($!)
+      done
+      for pid in "${pids[@]}"; do wait "$pid" || { echo "$phase shard failed (pid $pid)" >&2; exit 1; }; done
+    fi
     "$PY" -m psse_env.rl.train --config "$WORK/configs/$CONFIG" --phase "$phase"
   done
 done

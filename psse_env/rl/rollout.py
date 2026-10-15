@@ -37,9 +37,16 @@ class StepRecord:
     tool: str
     execution_status: str | None
     error_code: str | None
+    #: Probability of each sampled token under the distribution it was drawn
+    #: from (empty for greedy or expert steps).
+    token_probabilities: list[float] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @property
+    def min_token_probability(self) -> float | None:
+        return min(self.token_probabilities) if self.token_probabilities else None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "StepRecord":
@@ -54,6 +61,7 @@ class StepRecord:
             tool=str(value.get("tool") or ""),
             execution_status=value.get("execution_status"),
             error_code=value.get("error_code"),
+            token_probabilities=[float(item) for item in value.get("token_probabilities") or []],
         )
 
 
@@ -176,12 +184,53 @@ def pair_records_with_trace(
                 tool=str(action.get("tool") if isinstance(action, Mapping) else ""),
                 execution_status=trace_step.get("execution_status"),
                 error_code=trace_step.get("error_code"),
+                token_probabilities=[float(item) for item in record.get("completion_token_probabilities") or []],
             )
         )
     missing = sum(1 for step in steps if not step.model_observation or not step.completion_token_ids)
     if missing:
         return steps, False, f"{missing} steps without a recorded generation"
     return steps, True, None
+
+
+def distinct_trajectories(group: Sequence[Trajectory]) -> int:
+    """How many different completion-token sequences a group of sampled episodes produced."""
+    return len({tuple(tuple(step.completion_token_ids) for step in trajectory.steps) for trajectory in group})
+
+
+def reward_spread(group: Sequence[Trajectory]) -> float:
+    rewards = [trajectory.total_reward for trajectory in group]
+    return (max(rewards) - min(rewards)) if rewards else 0.0
+
+
+def store_summary(store: "TrajectoryStore") -> dict[str, Any]:
+    """What a whole iteration's rollouts contain: signal, success, cost and how peaked the sampling was."""
+    groups = informative = distinct_groups = episodes = successes = calls = unpaired = 0
+    steps = peaked_steps = 0
+    for _root, group in store.iter_groups():
+        groups += 1
+        informative += int(reward_spread(group) > 1e-9)
+        distinct_groups += int(distinct_trajectories(group) > 1)
+        for trajectory in group:
+            episodes += 1
+            successes += int(bool(trajectory.evaluation.get("truth_audited_task_success")))
+            calls += int(trajectory.reward.get("calls") or 0)
+            unpaired += int(not trajectory.pairing_ok)
+            for step in trajectory.steps:
+                if step.token_probabilities:
+                    steps += 1
+                    peaked_steps += int(min(step.token_probabilities) >= 0.99)
+    return {
+        "groups": groups,
+        "groups_with_reward_spread": informative,
+        "groups_with_distinct_samples": distinct_groups,
+        "episodes": episodes,
+        "success_rate": (successes / episodes) if episodes else None,
+        "mean_calls": (calls / episodes) if episodes else None,
+        "unpaired_trajectories": unpaired,
+        "sampled_steps_with_probabilities": steps,
+        "fraction_of_steps_with_every_token_above_0_99": (peaked_steps / steps) if steps else None,
+    }
 
 
 def rollout_group(
@@ -358,6 +407,7 @@ def rollout_roots(
                 "family": scenario_family(scenario),
                 "rewards": [trajectory.total_reward for trajectory in group],
                 "successes": sum(1 for trajectory in group if trajectory.evaluation.get("truth_audited_task_success")),
+                "distinct_trajectories": distinct_trajectories(group),
                 "pairing_ok": all(trajectory.pairing_ok for trajectory in group),
                 "completed": completed,
                 "elapsed_seconds": time.perf_counter() - started,
@@ -378,7 +428,10 @@ __all__ = [
     "StepRecord",
     "Trajectory",
     "TrajectoryStore",
+    "distinct_trajectories",
     "pair_records_with_trace",
+    "reward_spread",
+    "store_summary",
     "rollout_group",
     "rollout_roots",
     "sample_seed",

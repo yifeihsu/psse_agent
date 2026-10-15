@@ -7,8 +7,11 @@
 # Steps: a local clone of the classifier cell's source as the work directory's
 # source, the incremental git bundle uploaded through ssh stdin and
 # checksum-verified, the configs under research/hpc/rl_pilot_20261014/*.json and
-# the expert reference (output/classifier_triage_20261013/e2e_ieee14_spectra_first/
-# episodes.jsonl) uploaded, then one job per config.  SUBMIT=0 deploys without
+# the expert reference uploaded, then one job per config.  The reference holds
+# the expert's calls per root on the development roots and the round-2 training
+# roots (output/rl_pilot_20261014/expert_reference.jsonl, merged from
+# output/classifier_triage_20261013/e2e_ieee14_spectra_first and
+# output/rl_pilot_20261014/expert_r2_training).  SUBMIT=0 deploys without
 # submitting; ITERATIONS sets the job's iteration count.
 set -euo pipefail
 COMMIT=${1:?40-hex commit to deploy}
@@ -21,7 +24,7 @@ BRANCH=${BRANCH:-codex/classifier-triage-20261004}
 BASE=${BASE:-1003f7f}                       # the commit the classifier cell's source is at
 WORK=${WORK:-/scratch/yx3882/rl_pilot_20261014}
 SOURCE_CELL=${SOURCE_CELL:-/scratch/yx3882/research_full_pipeline_20261007_classifier}
-REFERENCE_LOCAL=${REFERENCE_LOCAL:-output/classifier_triage_20261013/e2e_ieee14_spectra_first/episodes.jsonl}
+REFERENCE_LOCAL=${REFERENCE_LOCAL:-output/rl_pilot_20261014/expert_reference.jsonl}
 SHORT=${COMMIT:0:7}
 BUNDLE_LOCAL=output/deploy_rl_${SHORT}.bundle
 export MSYS_NO_PATHCONV=1

@@ -13,12 +13,14 @@ from psse_env.rl.rollout import (
     RecordingPolicy,
     Trajectory,
     TrajectoryStore,
+    distinct_trajectories,
     pair_records_with_trace,
     rollout_group,
     rollout_roots,
     sample_seed,
     scenario_family,
     scenario_root,
+    store_summary,
 )
 
 
@@ -110,6 +112,7 @@ class _SamplingPolicy:
             action = {"tool": FINALIZE_DIAGNOSIS, "arguments": {}}
         self._last_generation = {"model_observation": dict(observation), "prompt_tokens": 10 + self.calls,
                                  "original_prompt_tokens": 10 + self.calls, "completion_token_ids": [self.seed % 7, self.calls],
+                                 "completion_token_probabilities": [1.0, 0.5 if self.extra_wls else 1.0],
                                  "text": action["tool"], "generation": {"seed": self.seed}, "call_index": self.calls}
         self.calls += 1
         return action
@@ -177,6 +180,10 @@ class RolloutTests(unittest.TestCase):
         self.assertEqual(group[0].steps[0].tool, RUN_WLS)
         self.assertEqual(group[0].steps[0].completion_token_ids, [created[0].seed % 7, 0])
         self.assertEqual(group[0].policy_identity, {"adapter_path": "fake"})
+        self.assertEqual(group[0].steps[0].token_probabilities, [1.0, 1.0])
+        self.assertEqual(group[1].steps[0].min_token_probability, 0.5)
+        self.assertEqual(distinct_trajectories(group), 2)
+        self.assertEqual(distinct_trajectories([group[0], group[0]]), 1)
         self.assertEqual(scenario_root(scenario), "r0_fake")
         self.assertEqual(scenario_family(scenario), "no_error")
 
@@ -203,6 +210,12 @@ class RolloutTests(unittest.TestCase):
             restored = Trajectory.from_dict(groups["r0_a"][1].as_dict())
             self.assertEqual(restored.steps[0].completion_token_ids, groups["r0_a"][1].steps[0].completion_token_ids)
             self.assertTrue((Path(directory) / "groups" / "r0_a.jsonl").is_file())
+            summary = store_summary(store)
+            self.assertEqual(summary["groups"], 2)
+            self.assertEqual(summary["episodes"], 4)
+            self.assertEqual(summary["success_rate"], 1.0)
+            self.assertEqual(summary["sampled_steps_with_probabilities"], 8)
+            self.assertEqual(summary["fraction_of_steps_with_every_token_above_0_99"], 1.0)
 
 
 if __name__ == "__main__":

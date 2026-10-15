@@ -1,28 +1,29 @@
 """The RL iteration driver: sample, score, update, evaluate, checkpoint.
 
-    python -m psse_env.rl.train --config rl.json --iterations 1          # run the next iterations
-    python -m psse_env.rl.train --config rl.json --phase rollout         # one phase of the current iteration
-    python -m psse_env.rl.train --config rl.json --phase update
+    python -m psse_env.rl.train --config rl.json --iterations 1              # run the next iterations
+    python -m psse_env.rl.train --config rl.json --phase rollout             # one phase of the current iteration
+    python -m psse_env.rl.train --config rl.json --phase rollout --shard 0/2 # one worker's slice of a phase
     python -m psse_env.rl.train --config rl.json --status
 
-Every phase is resumable: rollouts are stored per root group, the update
-writes the next adapter atomically, and ``manifest.json`` records where the
-run stands.  A phase is a separate process on the cluster
-(research/hpc/rl_pilot_20261014/rl_pilot.sbatch) so a preemption loses at
-most the root group in flight.
+Every phase survives preemption.  Rollouts and the greedy evaluation are
+stored per root, so a restarted process skips what is done; the update
+commits its adapter and optimizer after every optimizer step and its
+accumulated gradients every few rows (:class:`psse_env.rl.update.UpdateCheckpoint`).
+``manifest.json`` records the phase the run is at and advances only when a
+phase completes.  The rollout and evaluation phases shard over worker
+processes (``--shard i/n``); the unsharded call of the same phase finishes
+any root left over and closes the phase.
 
 The config (JSON) names the training and development suites, the starting
 adapter and base model, the evidence profile and environment options the
 pipeline cell used, the sampling, reward, advantage and update settings.
-See docs/rl_experiments_20261014.md for a worked example.
+See docs/rl_experiments_20261014.md.
 """
 from __future__ import annotations
 
 import argparse
-import copy
 import gc
 import json
-import os
 import shutil
 import sys
 import time
@@ -35,13 +36,20 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from psse_env.rl.advantages import GroupAdvantages, group_advantages, summarize_groups
-from psse_env.rl.reward import RewardWeights, load_expert_reference
-from psse_env.rl.rollout import Trajectory, TrajectoryStore, rollout_roots, scenario_root
+from psse_env.rl.reward import RewardWeights, episode_basis, episode_reward, load_expert_reference
+from psse_env.rl.rollout import Trajectory, TrajectoryStore, rollout_roots, scenario_family, scenario_root, store_summary
 from psse_env.rl.rows import build_rows
-from psse_env.rl.update import UpdateSettings, policy_gradient_update
+from psse_env.rl.update import (
+    REFERENCE_ADAPTER,
+    TRAINED_ADAPTER,
+    UpdateCheckpoint,
+    UpdateSettings,
+    policy_gradient_update,
+)
 
-TRAIN_CONTRACT = "rl_iteration_driver_v1"
+TRAIN_CONTRACT = "rl_iteration_driver_v2"
 PHASES = ("rollout", "update", "evaluate")
+SHARDED_PHASES = ("rollout", "evaluate")
 
 
 @dataclass
@@ -63,8 +71,11 @@ class RLConfig:
     max_steps: int = 40
     samples_per_root: int = 4
     seed: int = 20261014
-    temperature: float = 0.8
-    top_p: float = 0.95
+    #: Sampling.  The update takes log-probabilities at this temperature, so
+    #: any temperature is on-policy; a nucleus or top-k cut is not and is
+    #: refused (``validate``).
+    temperature: float = 1.0
+    top_p: float = 1.0
     top_k: int | None = None
     roots_per_iteration: int | None = None
     max_length: int = 32768
@@ -75,6 +86,7 @@ class RLConfig:
     local_files_only: bool = True
     evaluate_every_iteration: bool = True
     evaluation_workers_per_policy: int = 1
+    update_checkpoint_rows: int = 32
     #: ``adapter`` samples the LoRA policy; ``expert`` rolls the observable
     #: teacher out instead (a wiring check of the environment, the audit and
     #: the store on a CPU: its episodes carry no generation record, so the
@@ -101,10 +113,23 @@ class RLConfig:
             raise ValueError("max_steps and max_length must be positive")
         if not 0.0 < self.temperature:
             raise ValueError("temperature must be positive")
+        if self.top_p < 1.0 or (self.top_k is not None and int(self.top_k) > 0):
+            raise ValueError(
+                "a nucleus or top-k cut samples from a distribution the update does not optimize, "
+                "which biases the policy gradient; set top_p to 1.0 and top_k to null (use the "
+                "temperature to control exploration)"
+            )
         if self.policy_source not in {"adapter", "expert"}:
             raise ValueError("policy_source must be adapter or expert")
+        if self.update_checkpoint_rows <= 0:
+            raise ValueError("update_checkpoint_rows must be positive")
+        if "temperature" in self.update:
+            raise ValueError("the update's temperature is the sampling temperature; set it at the top level only")
         RewardWeights.from_mapping(self.reward)
         UpdateSettings(**self.update).validate()
+
+    def update_settings(self, iteration: int) -> UpdateSettings:
+        return UpdateSettings(**{**self.update, "seed": self.seed + int(iteration), "temperature": self.temperature})
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -144,6 +169,10 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _safe_name(root: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in root)
+
+
 def load_suite(path: str | Path) -> list[dict[str, Any]]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if isinstance(payload, Mapping):
@@ -167,6 +196,28 @@ def iteration_roots(scenarios: Sequence[Mapping[str, Any]], *, iteration: int, r
     start = (iteration * roots_per_iteration) % len(order)
     chosen = [order[(start + offset) % len(order)] for offset in range(roots_per_iteration)]
     return [dict(scenarios[index]) for index in chosen]
+
+
+def parse_shard(value: str | None) -> tuple[int, int] | None:
+    """``"i/n"`` selects every n-th root starting at i (0-based); ``None`` is the whole draw."""
+
+    if value is None:
+        return None
+    try:
+        index_text, count_text = str(value).split("/", 1)
+        index, count = int(index_text), int(count_text)
+    except ValueError as exc:
+        raise ValueError(f"a shard is 'i/n', got {value!r}") from exc
+    if count <= 0 or not 0 <= index < count:
+        raise ValueError(f"shard index must lie in [0, n), got {value!r}")
+    return index, count
+
+
+def shard_scenarios(scenarios: Sequence[Mapping[str, Any]], shard: tuple[int, int] | None) -> list[dict[str, Any]]:
+    if shard is None:
+        return [dict(row) for row in scenarios]
+    index, count = shard
+    return [dict(row) for row in scenarios[index::count]]
 
 
 def configure_research_environment(config: RLConfig) -> Callable[..., Any]:
@@ -220,7 +271,16 @@ def iteration_dir(config: RLConfig, iteration: int) -> Path:
     return Path(config.output_dir) / f"iteration_{iteration:03d}"
 
 
-def phase_rollout(config: RLConfig, manifest: Manifest, *, progress: Callable[[Mapping[str, Any]], None] | None = None) -> dict[str, Any]:
+def phase_rollout(
+    config: RLConfig,
+    manifest: Manifest,
+    *,
+    progress: Callable[[Mapping[str, Any]], None] | None = None,
+    shard: tuple[int, int] | None = None,
+) -> dict[str, Any]:
+    """Sample the iteration's roots.  A shard samples its slice and writes no summary;
+    the unsharded call afterwards finds every finished group in the store and closes the phase."""
+
     from psse_env.dagger.release_factories import deterministic_case_loader
 
     out = iteration_dir(config, manifest.iteration)
@@ -231,7 +291,9 @@ def phase_rollout(config: RLConfig, manifest: Manifest, *, progress: Callable[[M
         roots_per_iteration=config.roots_per_iteration,
         seed=config.seed,
     )
-    (out / "roots.json").write_text(json.dumps([scenario_root(s) for s in scenarios], indent=1) + "\n", encoding="utf-8")
+    if shard is None:
+        (out / "roots.json").write_text(json.dumps([scenario_root(s) for s in scenarios], indent=1) + "\n", encoding="utf-8")
+    scenarios = shard_scenarios(scenarios, shard)
     env_factory = configure_research_environment(config)
     store = TrajectoryStore(out / "trajectories")
     weights = RewardWeights.from_mapping(config.reward)
@@ -249,8 +311,12 @@ def phase_rollout(config: RLConfig, manifest: Manifest, *, progress: Callable[[M
         expert_reference=reference or None,
         progress=progress,
     )
-    summary.update(adapter=manifest.current_adapter, iteration=manifest.iteration, roots=len(scenarios))
-    _write_json(out / "rollout_summary.json", summary)
+    summary.update(adapter=manifest.current_adapter, iteration=manifest.iteration, roots=len(scenarios),
+                   shard=None if shard is None else f"{shard[0]}/{shard[1]}")
+    if shard is None:
+        summary["store"] = store_summary(store)
+        summary["sampling"] = {"temperature": config.temperature, "top_p": config.top_p, "top_k": config.top_k}
+        _write_json(out / "rollout_summary.json", summary)
     return summary
 
 
@@ -280,8 +346,23 @@ def score_groups(config: RLConfig, store: TrajectoryStore) -> tuple[list[tuple[l
     return groups, summary
 
 
-def _load_trainable_model(config: RLConfig, adapter: str) -> tuple[Any, Any, tuple[str, ...]]:
-    """The base in 4-bit with the adapter attached trainable, plus its processor and side inputs."""
+def _save_trained_adapter(model: Any, directory: Path) -> None:
+    """Write only the trained adapter (never the frozen reference) as a loadable PEFT directory."""
+
+    try:
+        model.save_pretrained(str(directory), selected_adapters=[TRAINED_ADAPTER])
+    except TypeError:
+        model.save_pretrained(str(directory))
+
+
+def _load_trainable_model(
+    config: RLConfig, adapter: str, *, reference_adapter: str | None = None
+) -> tuple[Any, Any, tuple[str, ...]]:
+    """The base in 4-bit with ``adapter`` attached trainable, plus its processor and side inputs.
+
+    With ``reference_adapter`` the run's starting adapter is loaded beside it,
+    frozen, as the KL reference (PEFT adapter ``reference``).
+    """
 
     from psse_env.sft.research_cli import ResearchTrainerSettings, _load_research_base, attach_research_adapter
     from psse_env.sft.training import LoraSettings, infer_required_side_input_names
@@ -299,6 +380,12 @@ def _load_trainable_model(config: RLConfig, adapter: str) -> tuple[Any, Any, tup
     settings.validate()
     model = _load_research_base(settings)
     model, _attachment = attach_research_adapter(model, settings=settings, lora=LoraSettings())
+    if reference_adapter:
+        model.load_adapter(str(reference_adapter), adapter_name=REFERENCE_ADAPTER, is_trainable=False)
+        model.set_adapter(TRAINED_ADAPTER)
+        for name, parameter in model.named_parameters():
+            if f".{REFERENCE_ADAPTER}." in name and parameter.requires_grad:
+                parameter.requires_grad_(False)
     if hasattr(model, "gradient_checkpointing_enable"):
         try:
             model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
@@ -332,6 +419,23 @@ def _prompt_functions(config: RLConfig, adapter: str, processor: Any) -> tuple[C
     return render, policy.prompt_token_ids
 
 
+def _carry_adapter_over(source: str, destination: Path) -> None:
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(source, destination)
+
+
+def _release_gpu() -> None:
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # pragma: no cover - torch optional in tests
+        pass
+
+
 def phase_update(config: RLConfig, manifest: Manifest, *, progress: Callable[[Mapping[str, Any]], None] | None = None) -> dict[str, Any]:
     out = iteration_dir(config, manifest.iteration)
     store = TrajectoryStore(out / "trajectories")
@@ -349,12 +453,16 @@ def phase_update(config: RLConfig, manifest: Manifest, *, progress: Callable[[Ma
     if not trainable:
         report["update"] = None
         report["note"] = "no informative, paired group: the adapter is carried over unchanged"
-        if next_adapter.exists():
-            shutil.rmtree(next_adapter)
-        shutil.copytree(manifest.current_adapter, next_adapter)
+        _carry_adapter_over(manifest.current_adapter, next_adapter)
         _write_json(out / "update_report.json", report)
         return report
-    model, processor, side_inputs = _load_trainable_model(config, manifest.current_adapter)
+    settings = config.update_settings(manifest.iteration)
+    checkpoint = UpdateCheckpoint(directory=out / "update_checkpoint", save_model=_save_trained_adapter,
+                                  every_rows=config.update_checkpoint_rows)
+    resume_dir = checkpoint.model_dir()
+    start_adapter = str(resume_dir) if resume_dir is not None else manifest.current_adapter
+    reference = config.initial_adapter if settings.beta_kl > 0.0 else None
+    model, processor, side_inputs = _load_trainable_model(config, start_adapter, reference_adapter=reference)
     try:
         render, prompt_ids = _prompt_functions(config, manifest.current_adapter, processor)
         rows, rows_report = build_rows(
@@ -362,91 +470,170 @@ def phase_update(config: RLConfig, manifest: Manifest, *, progress: Callable[[Ma
             max_length=config.max_length, required_side_inputs=side_inputs,
         )
         report["rows"] = rows_report
+        report["resumed_from_checkpoint"] = str(resume_dir) if resume_dir is not None else None
         if not rows:
             report["update"] = None
             report["note"] = "no training rows after pairing and rendering checks"
-            if next_adapter.exists():
-                shutil.rmtree(next_adapter)
-            shutil.copytree(manifest.current_adapter, next_adapter)
+            _carry_adapter_over(manifest.current_adapter, next_adapter)
         else:
-            settings = UpdateSettings(**{**config.update, "seed": config.seed + manifest.iteration})
-            update = policy_gradient_update(model, rows, settings, progress=progress)
+            update = policy_gradient_update(model, rows, settings, progress=progress, checkpoint=checkpoint)
             report["update"] = update.as_dict()
             temporary = out / "adapter.tmp"
             if temporary.exists():
                 shutil.rmtree(temporary)
-            model.save_pretrained(str(temporary))
+            _save_trained_adapter(model, temporary)
             if next_adapter.exists():
                 shutil.rmtree(next_adapter)
             temporary.rename(next_adapter)
+            shutil.rmtree(checkpoint.directory, ignore_errors=True)
     finally:
         del model
-        gc.collect()
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:  # pragma: no cover - torch optional in tests
-            pass
+        _release_gpu()
     report["adapter_out"] = str(next_adapter)
     _write_json(out / "update_report.json", report)
     return report
 
 
-def phase_evaluate(config: RLConfig, manifest: Manifest) -> dict[str, Any] | None:
-    """Greedy evaluation of the iteration's new adapter on the development suite."""
+def _compact_evaluation(episode: Mapping[str, Any], *, root: str, family: str, reward: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "scenario_id": root,
+        "family": family,
+        "truth_audited_task_success": bool(episode.get("truth_audited_task_success")),
+        "basis": episode_basis(episode),
+        "steps": episode.get("steps"),
+        "policy_steps": episode.get("policy_steps"),
+        "false_commit_count": episode.get("false_commit_count"),
+        "false_finalization_count": episode.get("false_finalization_count"),
+        "loop_detected": bool(episode.get("loop_detected")),
+        "invalid_action_count": episode.get("invalid_action_count"),
+        "healthy_components_preserved": episode.get("healthy_components_preserved"),
+        "tools": [str((step.get("action") or {}).get("tool")) for step in episode.get("trace") or [] if isinstance(step, Mapping)],
+        "reward": dict(reward),
+    }
+
+
+def aggregate_evaluation(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Success, cost and safety of a greedy evaluation, overall and per family."""
+
+    count = len(records)
+    by_family: dict[str, dict[str, int]] = {}
+    for record in records:
+        entry = by_family.setdefault(str(record.get("family")), {"roots": 0, "successes": 0})
+        entry["roots"] += 1
+        entry["successes"] += int(bool(record.get("truth_audited_task_success")))
+
+    def total(key: str) -> int:
+        return sum(int(record.get(key) or 0) for record in records)
+
+    return {
+        "roots": count,
+        "truth_audited_task_success": sum(1 for record in records if record.get("truth_audited_task_success")),
+        "mean_steps": (sum(int(record.get("steps") or 0) for record in records) / count) if count else None,
+        "mean_reward": (sum(float((record.get("reward") or {}).get("total") or 0.0) for record in records) / count) if count else None,
+        "false_commit_count": total("false_commit_count"),
+        "false_finalization_count": total("false_finalization_count"),
+        "invalid_action_count": total("invalid_action_count"),
+        "loop_episodes": sum(1 for record in records if record.get("loop_detected")),
+        "by_family": dict(sorted(by_family.items())),
+    }
+
+
+def phase_evaluate(config: RLConfig, manifest: Manifest, *, shard: tuple[int, int] | None = None) -> dict[str, Any] | None:
+    """Greedy evaluation of the iteration's adapter on the development suite, stored per root.
+
+    Skipped when the update phase carried the adapter over unchanged: its
+    score is the previous iteration's (or the starting adapter's).
+    """
 
     if not config.development_suite or not config.evaluate_every_iteration:
         return None
-    from psse_env.dagger.release_factories import deterministic_case_loader
+    out = iteration_dir(config, manifest.iteration)
+    update_path = out / "update_report.json"
+    update_report = json.loads(update_path.read_text(encoding="utf-8")) if update_path.is_file() else None
+    if update_report is not None and update_report.get("update") is None:
+        summary = {"iteration": manifest.iteration, "skipped": "the update phase left the adapter unchanged",
+                   "adapter": str(out / "adapter")}
+        if shard is None:
+            _write_json(out / "evaluation.json", {"summary": summary})
+        return summary
+
     from psse_env.dagger.evaluator import evaluate_rollout_suites
+    from psse_env.dagger.release_factories import deterministic_case_loader
     from psse_env.dagger.research_policy_factory import clear_research_policy_cache, research_gemma_policy_factory
     from scripts.run_dagger_research import PAIRED_EVALUATION_CONTRACT
 
-    out = iteration_dir(config, manifest.iteration)
     adapter = str(out / "adapter")
-    env_factory = configure_research_environment(config)
-    scenarios = load_suite(config.development_suite)
-    policy = research_gemma_policy_factory(
-        adapter, base_model=config.base_model, base_revision=config.base_revision,
-        load_in_4bit=config.load_in_4bit, local_files_only=config.local_files_only,
-        prompt_profile=config.prompt_profile, architecture=config.architecture,
-    )
-    result = evaluate_rollout_suites(
-        {"standard_success": scenarios}, env_factory=env_factory,
-        policy_factory=lambda **_kwargs: policy, max_steps=config.max_steps, seed=config.seed,
-        case_loader=deterministic_case_loader, **PAIRED_EVALUATION_CONTRACT,
-    ).as_dict()
-    overall = result["suite_metrics"]["overall"]
-    episodes = result["suite_metrics"]["episodes"]
-    summary = {
-        "iteration": manifest.iteration,
-        "adapter": adapter,
-        "roots": len(scenarios),
-        "truth_audited_task_success": sum(1 for e in episodes if e.get("truth_audited_task_success")),
-        "mean_steps": overall.get("mean_steps"),
-        "false_commit_count": overall.get("false_commit_count"),
-        "loop_episodes": overall.get("loop_episodes"),
-        "invalid_action_count": overall.get("invalid_action_count"),
-    }
-    _write_json(out / "evaluation.json", {"summary": summary, "overall": overall})
+    all_scenarios = load_suite(config.development_suite)
+    scenarios = shard_scenarios(all_scenarios, shard)
+    episodes_dir = out / "evaluation" / "episodes"
+    episodes_dir.mkdir(parents=True, exist_ok=True)
+    pending = [s for s in scenarios if not (episodes_dir / f"{_safe_name(scenario_root(s))}.json").is_file()]
+    if pending:
+        env_factory = configure_research_environment(config)
+        weights = RewardWeights.from_mapping(config.reward)
+        reference = load_expert_reference(config.expert_reference)
+        policy = research_gemma_policy_factory(
+            adapter, base_model=config.base_model, base_revision=config.base_revision,
+            load_in_4bit=config.load_in_4bit, local_files_only=config.local_files_only,
+            prompt_profile=config.prompt_profile, architecture=config.architecture,
+        )
+        try:
+            for scenario in pending:
+                root = scenario_root(scenario)
+                family = scenario_family(scenario)
+                result = evaluate_rollout_suites(
+                    {"standard_success": [scenario]}, env_factory=env_factory,
+                    policy_factory=lambda **_kwargs: policy, max_steps=config.max_steps, seed=config.seed,
+                    case_loader=deterministic_case_loader, **PAIRED_EVALUATION_CONTRACT,
+                ).as_dict()
+                episode = dict(result["suite_metrics"]["episodes"][0])
+                reward = episode_reward(episode, family=family, expert_reference_calls=reference.get(root), weights=weights)
+                _write_json(episodes_dir / f"{_safe_name(root)}.json",
+                            _compact_evaluation(episode, root=root, family=family, reward=reward.as_dict()))
+                print(json.dumps({"evaluated": root, "family": family,
+                                  "success": bool(episode.get("truth_audited_task_success")),
+                                  "steps": episode.get("steps"), "reward": round(reward.total, 3)}), flush=True)
+        finally:
+            del policy
+            clear_research_policy_cache()
+            _release_gpu()
+    if shard is not None:
+        return {"shard": f"{shard[0]}/{shard[1]}", "evaluated": len(pending), "roots": len(scenarios)}
+    records = []
+    for scenario in all_scenarios:
+        path = episodes_dir / f"{_safe_name(scenario_root(scenario))}.json"
+        records.append(json.loads(path.read_text(encoding="utf-8")))
+    summary = {"iteration": manifest.iteration, "adapter": adapter, **aggregate_evaluation(records)}
+    _write_json(out / "evaluation.json", {"summary": summary})
     with (out / "evaluation_episodes.jsonl").open("w", encoding="utf-8") as stream:
-        for episode in episodes:
-            compact = {key: episode.get(key) for key in ("scenario_id", "family", "truth_audited_task_success", "steps", "false_commit_count", "loop_detected")}
-            stream.write(json.dumps(compact, sort_keys=True) + "\n")
-    del policy
-    clear_research_policy_cache()
+        for record in records:
+            stream.write(json.dumps(record, sort_keys=True) + "\n")
     return summary
 
 
-def run_phase(config: RLConfig, phase: str, *, progress: Callable[[Mapping[str, Any]], None] | None = None) -> dict[str, Any] | None:
+def run_phase(
+    config: RLConfig,
+    phase: str,
+    *,
+    progress: Callable[[Mapping[str, Any]], None] | None = None,
+    shard: tuple[int, int] | None = None,
+) -> dict[str, Any] | None:
     manifest_path = Path(config.output_dir) / "manifest.json"
     Path(config.output_dir).mkdir(parents=True, exist_ok=True)
     manifest = Manifest.load(manifest_path, initial_adapter=config.initial_adapter)
     if phase != manifest.phase:
         raise RuntimeError(f"the run is at phase {manifest.phase!r} of iteration {manifest.iteration}, not {phase!r}")
+    if shard is not None and phase not in SHARDED_PHASES:
+        raise ValueError(f"only the {' and '.join(SHARDED_PHASES)} phases are sharded")
     started = time.perf_counter()
+    if shard is not None:
+        if phase == "rollout":
+            result = phase_rollout(config, manifest, progress=progress, shard=shard)
+        else:
+            result = phase_evaluate(config, manifest, shard=shard)
+        print(json.dumps({"phase": phase, "shard": f"{shard[0]}/{shard[1]}", "iteration": manifest.iteration,
+                          "seconds": round(time.perf_counter() - started, 1), "result": result}, default=str), flush=True)
+        return result
     if phase == "rollout":
         result = phase_rollout(config, manifest, progress=progress)
         manifest.phase = "update"
@@ -492,6 +679,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", required=True)
     parser.add_argument("--phase", choices=PHASES, default=None, help="run one phase of the current iteration")
+    parser.add_argument("--shard", default=None,
+                        help="'i/n': this worker's slice of the rollout or evaluation phase; the unsharded call closes the phase")
     parser.add_argument("--iterations", type=int, default=1, help="iterations to run when no phase is given")
     parser.add_argument("--status", action="store_true")
     args = parser.parse_args(argv)
@@ -500,8 +689,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(status(config), indent=2))
         return 0
     if args.phase:
-        run_phase(config, args.phase, progress=_print_progress)
+        run_phase(config, args.phase, progress=_print_progress, shard=parse_shard(args.shard))
         return 0
+    if args.shard:
+        raise SystemExit("--shard needs --phase")
     run_iterations(config, args.iterations, progress=_print_progress)
     return 0
 
