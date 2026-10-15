@@ -65,6 +65,14 @@ pruning. On the standard draw most groups will be uninformative (the
 measurement the plan asks for first); the hard draw is what gives the loop
 a signal.
 
+**Submitted (2026-10-14):** pilot job 19859785 on torch from commit 3e78301,
+work directory `/scratch/yx3882/rl_pilot_20261014`, config `rl_pilot.json`,
+two iterations per job. Status:
+
+```bash
+wsl -- ssh torch "cat /scratch/yx3882/rl_pilot_20261014/out/pilot/manifest.json; tail -5 /scratch/yx3882/rl_pilot_20261014/logs/rl-rl_pilot-19859785.out"
+```
+
 ## 3. Building the hard draw
 
 The suite builder reverses the admission filters when asked. Example for a
