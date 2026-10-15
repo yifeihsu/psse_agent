@@ -50,6 +50,17 @@ class HardDrawAllocationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.module = _build_suite_module()
 
+    def test_strata_follow_the_stratum_threshold_not_the_admission_threshold(self) -> None:
+        # A hard draw admits training roots at 1.0 but must still call a
+        # true-first root with ratio 1.06 ambiguous, as the deployed context does at 1.2.
+        row = {"audit": {"parameter_ranking": {"parameter_ranking_dominance_ratio": 1.06, "true_line_rank": 1}}}
+        stratum = self.module.parameter_ranking_stratum
+        self.assertEqual(stratum(row, family="parameter", dominance_threshold=1.2)["stratum"], "ambiguous")
+        self.assertEqual(stratum(row, family="parameter", dominance_threshold=1.0)["stratum"], "dominant")
+        misranked = {"audit": {"parameter_ranking": {"parameter_ranking_dominance_ratio": 1.4, "true_line_rank": 2}}}
+        self.assertEqual(stratum(misranked, family="measurement+parameter", dominance_threshold=1.2)["stratum"], "misranked")
+        self.assertEqual(stratum(row, family="measurement", dominance_threshold=1.2)["stratum"], "not_applicable")
+
     def test_stratum_plan_parsing(self) -> None:
         self.assertEqual(self.module.parse_stratum_plan(None), {})
         plan = self.module.parse_stratum_plan('{"parameter": {"misranked": 2, "ambiguous": 1, "dominant": 0}}')

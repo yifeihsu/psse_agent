@@ -286,9 +286,28 @@ def build_parser() -> argparse.ArgumentParser:
         help='JSON {family: {stratum: count}} drawing those development families by parameter-ranking stratum',
     )
     parser.add_argument(
+        "--stratum-dominance-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Dominance ratio below which a true-first parameter root is 'ambiguous' when strata are "
+            "recorded and drawn; omitted uses --training-threshold (the deployed context's threshold "
+            "in the standard pipeline).  A hard draw that admits training roots at 1.0 passes 1.2 here"
+        ),
+    )
+    parser.add_argument(
+        "--stratum-candidates",
+        type=int,
+        default=0,
+        help="Generator candidates requested for each stratum-plan family (large enough to walk the whole pool)",
+    )
+    parser.add_argument(
         "--effect-band",
         default=None,
-        help="Draw fault magnitudes by WLS effect ratio, 'low,high' (both draws); replaces the sigma floor for meters",
+        help=(
+            "Draw the synthesized harmonic roots' distortion by WLS effect ratio, 'low,high' (both "
+            "draws); corpus-drawn families keep their corpus magnitudes"
+        ),
     )
     parser.add_argument(
         "--min-measurement-error-sigma",
@@ -396,6 +415,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     }
 
     # Training: the teacher-solvable population at the production threshold.
+    stratum_threshold = float(
+        args.training_threshold if args.stratum_dominance_threshold is None else args.stratum_dominance_threshold
+    )
     training_stratum_plan = parse_stratum_plan(args.training_stratum_plan)
     development_stratum_plan = parse_stratum_plan(args.development_stratum_plan)
     train_generator = research.research_scenario_generator(
@@ -411,9 +433,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     train_requested = {family: count * args.candidate_multiplier for family, count in train_plan.items()}
     for family, strata in training_stratum_plan.items():
         # A stratum draw needs the whole candidate pool of that family.
-        train_requested[family] = max(train_requested.get(family, 0), sum(strata.values()) * args.candidate_multiplier)
+        train_requested[family] = max(train_requested.get(family, 0), sum(strata.values()) * args.candidate_multiplier,
+                                      int(args.stratum_candidates))
     train_candidates = [
-        stratified_envelope(research, row, dominance_threshold=args.training_threshold)
+        stratified_envelope(research, row, dominance_threshold=stratum_threshold)
         for row in train_generator.build(train_requested)
     ]
     training, training_allocation = allocate_with_strata(
@@ -444,9 +467,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         family: count * args.candidate_multiplier for family, count in development_plan.items()
     }
     for family, strata in development_stratum_plan.items():
-        dev_requested[family] = max(dev_requested.get(family, 0), sum(strata.values()) * args.candidate_multiplier)
+        dev_requested[family] = max(dev_requested.get(family, 0), sum(strata.values()) * args.candidate_multiplier,
+                                    int(args.stratum_candidates))
     dev_candidates = [
-        stratified_envelope(research, row, dominance_threshold=args.training_threshold)
+        stratified_envelope(research, row, dominance_threshold=stratum_threshold)
         for row in dev_generator.build(dev_requested)
     ]
     development, development_allocation = allocate_with_strata(
@@ -523,6 +547,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         "training_allocation": training_allocation,
         "development_allocation": development_allocation,
         "effect_band": args.effect_band,
+        "stratum_dominance_threshold": stratum_threshold,
+        "stratum_candidates": int(args.stratum_candidates),
         "min_measurement_error_sigma": args.min_measurement_error_sigma,
         "topology_effects": list(args.topology_effects) if args.topology_effects else None,
         "system": str(args.system),
