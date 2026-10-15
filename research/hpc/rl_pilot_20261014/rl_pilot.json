@@ -50,7 +50,8 @@
     "optimizer_steps": 2,
     "max_grad_norm": 1.0,
     "loss_normalization": "dapo",
-    "use_logits_to_keep": true
+    "use_logits_to_keep": true,
+    "allow_stale_policy_steps": true
   },
   "update_checkpoint_rows": 32
 }

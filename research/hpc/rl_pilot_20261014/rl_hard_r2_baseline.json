@@ -53,7 +53,8 @@
     "use_logits_to_keep": true,
     "max_row_grad_norm": 25.0,
     "row_grad_norm_factor": 5.0,
-    "row_grad_norm_warmup": 16
+    "row_grad_norm_warmup": 16,
+    "allow_stale_policy_steps": true
   },
   "update_checkpoint_rows": 32
 }

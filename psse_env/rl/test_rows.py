@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import math
 
 from psse_env.rl.advantages import group_advantages
 from psse_env.rl.rollout import StepRecord, Trajectory
@@ -30,6 +31,21 @@ def _trajectory(root: str, sample: int, *, steps: int, pairing_ok: bool = True, 
 
 
 class RowTests(unittest.TestCase):
+    def test_behavior_probabilities_are_kept_and_invalid_probabilities_rejected(self) -> None:
+        row = build_step_row(root="r", sample_index=0, step=0, advantage=1, prompt_ids=[1],
+                             completion_ids=[2, 3], max_length=4, token_probabilities=[0.5, 1.0])
+        self.assertEqual(row.behavior_logprobs, [math.log(0.5), 0.0])
+        for probabilities in ([0.5], [0.0, 0.5], [float("nan"), 0.5]):
+            with self.assertRaises(ValueError):
+                build_step_row(root="r", sample_index=0, step=0, advantage=1, prompt_ids=[1],
+                               completion_ids=[2, 3], max_length=4, token_probabilities=probabilities)
+
+    def test_a_shorter_training_context_is_excluded_from_on_policy_rows(self) -> None:
+        group = ([_trajectory("a", 0, steps=1), _trajectory("a", 1, steps=1)], group_advantages([1, 0]))
+        rows, report = build_rows([group], render_prompt=_render, prompt_token_ids=_tokenize, max_length=5)
+        self.assertEqual(rows, [])
+        self.assertEqual(report["prompt_truncated_rows"], 2)
+
     def test_step_row_masks_the_prompt_and_supervises_the_sampled_tokens(self) -> None:
         row = build_step_row(root="r", sample_index=0, step=0, advantage=0.5, prompt_ids=[1, 2, 3],
                              completion_ids=[9, 8], max_length=100, required_side_inputs=("mm_token_type_ids",))

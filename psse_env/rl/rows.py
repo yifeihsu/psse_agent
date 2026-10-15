@@ -9,6 +9,7 @@ advantage contributes no rows.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
@@ -33,6 +34,7 @@ class TrainingRow:
     completion_mask: list[int]
     side_inputs: dict[str, list[int]] = field(default_factory=dict)
     prompt_truncated: bool = False
+    behavior_logprobs: list[float] = field(default_factory=list)
 
     @property
     def completion_tokens(self) -> int:
@@ -59,6 +61,7 @@ def build_step_row(
     completion_ids: Sequence[int],
     max_length: int,
     required_side_inputs: Sequence[str] = (),
+    token_probabilities: Sequence[float] = (),
 ) -> TrainingRow:
     if max_length <= 0:
         raise ValueError("max_length must be positive")
@@ -68,6 +71,10 @@ def build_step_row(
         raise ValueError("a training row needs at least one completion token")
     if len(completion) >= max_length:
         raise ValueError(f"completion of {len(completion)} tokens does not fit max_length={max_length}")
+    probabilities = [float(value) for value in token_probabilities]
+    if probabilities and (len(probabilities) != len(completion) or
+                          any(not math.isfinite(p) or not 0 < p <= 1 for p in probabilities)):
+        raise ValueError("sampling probabilities must match the completion and lie in (0, 1]")
     full = prompt + completion
     slice_start = max(0, len(full) - int(max_length))
     used = full[slice_start:]
@@ -86,6 +93,7 @@ def build_step_row(
         completion_mask=completion_mask,
         side_inputs=side_inputs,
         prompt_truncated=slice_start > 0,
+        behavior_logprobs=[math.log(p) for p in probabilities],
     )
 
 
@@ -113,6 +121,7 @@ def build_rows(
         "empty_completions": 0,
         "invalid_steps_excluded": 0,
         "prompt_truncated_rows": 0,
+        "invalid_probability_rows": 0,
         "completion_tokens": 0,
     }
     for trajectories, advantages in groups:
@@ -139,21 +148,28 @@ def build_rows(
                 if step.prompt_tokens and len(prompt_ids) != int(step.prompt_tokens):
                     report["prompt_length_mismatches"] += 1
                     continue
-                row = build_step_row(
-                    root=trajectory.root,
-                    sample_index=trajectory.sample_index,
-                    step=step.step,
-                    advantage=advantage,
-                    prompt_ids=prompt_ids,
-                    completion_ids=step.completion_token_ids,
-                    max_length=max_length,
-                    required_side_inputs=required_side_inputs,
-                )
+                if len(prompt_ids) + len(step.completion_token_ids) > max_length:
+                    # A shorter training context is a different conditional policy.
+                    report["prompt_truncated_rows"] += 1
+                    continue
+                try:
+                    row = build_step_row(
+                        root=trajectory.root,
+                        sample_index=trajectory.sample_index,
+                        step=step.step,
+                        advantage=advantage,
+                        prompt_ids=prompt_ids,
+                        completion_ids=step.completion_token_ids,
+                        max_length=max_length,
+                        required_side_inputs=required_side_inputs,
+                        token_probabilities=step.token_probabilities,
+                    )
+                except ValueError:
+                    report["invalid_probability_rows"] += 1
+                    continue
                 rows.append(row)
                 report["rows"] += 1
                 report["completion_tokens"] += row.completion_tokens
-                if row.prompt_truncated:
-                    report["prompt_truncated_rows"] += 1
     return rows, report
 
 

@@ -1,11 +1,14 @@
 """The on-policy LoRA update.
 
-One gradient pass per rollout batch, so the importance ratio is one and the
+One optimizer step per rollout batch, so the importance ratio is one and the
 loss is the advantage-weighted log-likelihood of the sampled completion
 tokens, normalized by the number of completion tokens in the optimizer step
 (the DAPO normalization TRL uses by default).  Log-probabilities are taken at
 the sampling temperature, so the policy being optimized is the one that
 produced the samples.
+
+Multiple unweighted steps require an explicit historical-reproduction flag;
+their later chunks are stale-policy updates, not an exact ratio-one gradient.
 
 An optional KL penalty (``beta_kl > 0``) keeps the policy near a reference
 adapter, estimated with the k3 estimator on the sampled tokens.  The
@@ -23,6 +26,7 @@ immutable files committed by one ``state.json``.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import random
 import shutil
@@ -33,7 +37,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from psse_env.rl.rows import TrainingRow
 
-UPDATE_CONTRACT = "rl_on_policy_lora_update_v2"
+UPDATE_CONTRACT = "rl_on_policy_lora_update_v3"
 LOSS_NORMALIZATIONS = ("dapo", "sequence")
 REFERENCE_ADAPTER = "reference"
 TRAINED_ADAPTER = "default"
@@ -44,6 +48,13 @@ class UpdateSettings:
     learning_rate: float = 1e-5
     beta_kl: float = 0.0
     optimizer_steps: int = 1
+    # Historical runs partitioned one rollout batch into several unweighted
+    # updates. After the first update those samples are stale. Keep that path
+    # only behind an explicit reproduction flag; new runs take one step.
+    allow_stale_policy_steps: bool = False
+    # Optional pre-step check against the actual sampling distribution. A
+    # configured tolerance requires probabilities on every row and one step.
+    max_behavior_logprob_error: float | None = None
     max_grad_norm: float = 1.0
     weight_decay: float = 0.0
     loss_normalization: str = "dapo"
@@ -75,6 +86,14 @@ class UpdateSettings:
             raise ValueError("beta_kl must be finite and nonnegative")
         if self.optimizer_steps <= 0:
             raise ValueError("optimizer_steps must be positive")
+        if self.optimizer_steps != 1 and not self.allow_stale_policy_steps:
+            raise ValueError("ratio-one updates require optimizer_steps=1; multiple steps use stale samples. "
+                             "allow_stale_policy_steps is for historical reproduction only")
+        if self.max_behavior_logprob_error is not None:
+            if not math.isfinite(self.max_behavior_logprob_error) or self.max_behavior_logprob_error <= 0:
+                raise ValueError("max_behavior_logprob_error must be finite and positive")
+            if self.optimizer_steps != 1:
+                raise ValueError("behavior log-probability equality can only be checked with one optimizer step")
         if self.loss_normalization not in LOSS_NORMALIZATIONS:
             raise ValueError(f"loss_normalization must be one of {LOSS_NORMALIZATIONS}")
         if not math.isfinite(self.max_grad_norm) or self.max_grad_norm <= 0:
@@ -95,11 +114,22 @@ class UpdateSettings:
 class RowGradientBound:
     """The per-row bound of one optimizer step and the row norms it has seen."""
 
-    def __init__(self, settings: UpdateSettings, norms: Sequence[float] = (), clipped: int = 0, dropped: int = 0) -> None:
+    def __init__(self, settings: UpdateSettings, norms: Sequence[float] = (), clipped: int = 0, dropped: int = 0,
+                 outliers: Sequence[Mapping[str, Any]] = ()) -> None:
         self.settings = settings
         self.norms = [float(value) for value in norms]
         self.clipped = int(clipped)
         self.dropped = int(dropped)
+        self.outliers = [dict(value) for value in outliers]
+
+    def locate(self, row: TrainingRow, logprobs: Any, result: Mapping[str, Any]) -> None:
+        """Keep the eight largest pre-clip row gradients, including their origin."""
+        self.outliers.append({**dict(result), "root": row.root, "sample_index": row.sample_index,
+                              "step": row.step, "advantage": row.advantage,
+                              "completion_tokens": row.completion_tokens,
+                              "min_logprob": float(logprobs.detach().min())})
+        self.outliers.sort(key=lambda item: float("inf") if item["dropped"] else item["norm"], reverse=True)
+        del self.outliers[8:]
 
     def bound(self) -> float | None:
         """The bound for the next row, from the rows before it."""
@@ -139,6 +169,7 @@ class RowGradientBound:
             "clipped": self.clipped,
             "dropped_nonfinite": self.dropped,
             "bound_after_step": self.bound(),
+            "largest_rows": list(self.outliers),
         }
 
 
@@ -158,6 +189,8 @@ class UpdateReport:
     #: Per optimizer step, when the per-row bound is on: row norm quantiles,
     #: rows clipped and rows dropped as non-finite.
     row_grad_norms: list[dict[str, Any]] = field(default_factory=list)
+    behavior_logprob_max_error: float | None = None
+    stale_policy_steps: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -358,6 +391,16 @@ def policy_gradient_update(
     started = time.perf_counter()
     if not rows:
         raise ValueError("no training rows")
+    if any(not math.isfinite(row.advantage) for row in rows):
+        raise ValueError("row advantages must be finite")
+    if settings.max_behavior_logprob_error is not None and any(
+        len(row.behavior_logprobs) != row.completion_tokens for row in rows
+    ):
+        raise ValueError("behavior log-probability checking requires every sampled token probability")
+    batch_digest = hashlib.sha256(json.dumps(
+        {"rows": [asdict(row) for row in rows], "settings": settings.as_dict()},
+        sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode()).hexdigest()
     parameters = _trainable_parameters(model)
     if not parameters:
         raise ValueError("model has no trainable parameters")
@@ -386,7 +429,10 @@ def policy_gradient_update(
     row_summaries: list[dict[str, Any]] = []
     resumed_from: dict[str, Any] | None = None
     state = checkpoint.load_state() if checkpoint is not None else None
+    behavior_max_error = 0.0 if settings.max_behavior_logprob_error is not None else None
     if state is not None:
+        if state.get("batch_digest") != batch_digest or state.get("contract") != UPDATE_CONTRACT:
+            raise RuntimeError("the update checkpoint was written for a different batch, settings, or code contract")
         if int(state.get("row_count", -1)) != len(rows) or int(state.get("chunk_count", -1)) != len(chunks):
             raise RuntimeError("the update checkpoint was written for a different batch of rows")
         start_chunk = int(state["completed_chunks"])
@@ -398,18 +444,24 @@ def policy_gradient_update(
         partial_kl = float(state.get("partial_kl") or 0.0)
         partial_rows = state.get("partial_row_norms") or {}
         row_summaries = list(state.get("row_grad_norms") or [])
+        behavior_max_error = state.get("behavior_logprob_max_error", behavior_max_error)
         if state.get("optimizer_file"):
             optimizer.load_state_dict(torch.load(checkpoint.directory / state["optimizer_file"], map_location="cpu"))
         resumed_from = {"completed_chunks": start_chunk, "chunk_rows_done": start_row}
 
     model.train()
+    # Retain training mode for gradient checkpointing, but disable module
+    # dropout to match eval-mode sampling (autograd remains enabled).
+    for module in model.modules():
+        if isinstance(module, torch.nn.modules.dropout._DropoutNd):
+            module.eval()
     for chunk_index in range(start_chunk, len(chunks)):
         chunk = chunks[chunk_index]
         tokens = chunk_tokens[chunk_index]
         first_row = start_row if chunk_index == start_chunk else 0
         bound = (
             RowGradientBound(settings, norms=partial_rows.get("norms") or (), clipped=int(partial_rows.get("clipped") or 0),
-                             dropped=int(partial_rows.get("dropped") or 0))
+                             dropped=int(partial_rows.get("dropped") or 0), outliers=partial_rows.get("outliers") or ())
             if first_row > 0 else RowGradientBound(settings)
         )
         if first_row == 0:
@@ -433,6 +485,13 @@ def policy_gradient_update(
             logprobs = completion_logprobs(
                 model, row, use_logits_to_keep=settings.use_logits_to_keep, temperature=settings.temperature
             )
+            if settings.max_behavior_logprob_error is not None:
+                behavior = torch.tensor(row.behavior_logprobs, device=logprobs.device, dtype=logprobs.dtype)
+                error = float((logprobs.detach() - behavior).abs().max())
+                if not math.isfinite(error) or error > settings.max_behavior_logprob_error:
+                    raise RuntimeError(f"sampling/update log-probability mismatch at {row.root}/{row.sample_index}/{row.step}: "
+                                       f"max error {error}, limit {settings.max_behavior_logprob_error}")
+                behavior_max_error = max(behavior_max_error, error)
             policy_term = -(float(row.advantage) * logprobs)
             kl_term = None
             if reference is not None:
@@ -451,7 +510,10 @@ def policy_gradient_update(
                     loss = loss + settings.beta_kl * kl_term.mean() * scale
                 chunk_policy += float(policy_term.mean().detach()) * scale
             if settings.bounds_rows:
-                _bounded_row_backward(loss, parameters, bound, torch)
+                if not bool(torch.isfinite(loss)):
+                    raise FloatingPointError(f"non-finite loss at {row.root}/{row.sample_index}/{row.step}")
+                result = _bounded_row_backward(loss, parameters, bound, torch)
+                bound.locate(row, logprobs, result)
             else:
                 loss.backward()
             if kl_term is not None:
@@ -460,12 +522,15 @@ def policy_gradient_update(
             if checkpoint is not None and done < len(chunk) and done % checkpoint.every_rows == 0:
                 _save_partial(checkpoint, model, optimizer,
                               state_base={**_state_base(rows, chunks, chunk_index, policy_losses, kls, grad_norms),
+                                          "batch_digest": batch_digest, "behavior_logprob_max_error": behavior_max_error,
                                           "row_grad_norms": list(row_summaries),
                                           "partial_row_norms": {"norms": list(bound.norms), "clipped": bound.clipped,
-                                                                "dropped": bound.dropped}},
+                                                                "dropped": bound.dropped, "outliers": bound.outliers}},
                               rows_done=done, partial_policy=chunk_policy, partial_kl=chunk_kl, previous=state)
                 state = checkpoint.load_state()
-        grad_norm = float(torch.nn.utils.clip_grad_norm_(parameters, settings.max_grad_norm))
+        if settings.bounds_rows and bound.dropped == len(chunk):
+            raise FloatingPointError("every row had a non-finite gradient; optimizer step refused")
+        grad_norm = float(torch.nn.utils.clip_grad_norm_(parameters, settings.max_grad_norm, error_if_nonfinite=True))
         optimizer.step()
         policy_losses.append(chunk_policy)
         kls.append(chunk_kl)
@@ -474,7 +539,8 @@ def policy_gradient_update(
             row_summaries.append(bound.summary())
         if checkpoint is not None:
             _save_step(checkpoint, model, optimizer, rows=rows, chunks=chunks, completed=chunk_index + 1,
-                       policy_losses=policy_losses, kls=kls, grad_norms=grad_norms, row_summaries=row_summaries)
+                       policy_losses=policy_losses, kls=kls, grad_norms=grad_norms, row_summaries=row_summaries,
+                       batch_digest=batch_digest, behavior_max_error=behavior_max_error)
             state = checkpoint.load_state()
         if progress is not None:
             progress({
@@ -502,10 +568,12 @@ def policy_gradient_update(
         settings=settings.as_dict(),
         resumed_from=resumed_from,
         row_grad_norms=row_summaries,
+        behavior_logprob_max_error=behavior_max_error,
+        stale_policy_steps=max(0, len(chunks) - 1),
     )
 
 
-def _bounded_row_backward(loss: Any, parameters: Sequence[Any], bound: RowGradientBound, torch_module: Any) -> None:
+def _bounded_row_backward(loss: Any, parameters: Sequence[Any], bound: RowGradientBound, torch_module: Any) -> dict[str, Any]:
     """Backpropagate one row alone, clip its gradient to the row bound and add it to the step's sum.
 
     The step's accumulated gradient is held aside while the row's own
@@ -529,6 +597,8 @@ def _bounded_row_backward(loss: Any, parameters: Sequence[Any], bound: RowGradie
             parameter.grad = previous
         else:
             parameter.grad = previous.add_(row_gradient)
+    return {"norm": norm if finite else None, "limit": limit, "dropped": not finite,
+            "clipped": bool(finite and limit is not None and norm > limit)}
 
 
 def _named_trainable(model: Any) -> list[tuple[str, Any]]:
@@ -567,7 +637,8 @@ def _save_partial(checkpoint, model, optimizer, *, state_base, rows_done, partia
     })
 
 
-def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_losses, kls, grad_norms, row_summaries=()) -> None:
+def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_losses, kls, grad_norms, row_summaries=(),
+               batch_digest=None, behavior_max_error=None) -> None:
     import torch
 
     checkpoint.directory.mkdir(parents=True, exist_ok=True)
@@ -586,6 +657,8 @@ def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_
     temporary.replace(checkpoint.directory / optimizer_file)
     _commit_state(checkpoint, {
         **_state_base(rows, chunks, completed, policy_losses, kls, grad_norms),
+        "batch_digest": batch_digest,
+        "behavior_logprob_max_error": behavior_max_error,
         "row_grad_norms": list(row_summaries),
         "partial_row_norms": {},
         "chunk_rows_done": 0,

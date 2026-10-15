@@ -102,6 +102,9 @@ class RewardTests(unittest.TestCase):
         self.assertIsNone(episode_reward(episode, weights=weights).tool_regret)
 
     def test_weights_reject_negative_values_and_load_from_mapping(self) -> None:
+        for value in (float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                RewardWeights(call_cost=value).validate()
         with self.assertRaises(ValueError):
             RewardWeights(call_cost=-1.0).validate()
         with self.assertRaises(ValueError):

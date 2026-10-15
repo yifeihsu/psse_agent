@@ -10,17 +10,18 @@ disposition for each.  For a meter root it does the
 same with the residual-ranked channels against the true meter.  The tag is:
 
 * ``separable_by_verification``: only true targets pass verification;
-* ``not_separable``: a wrong target passes too (the misranked ceiling);
-* ``true_target_unverifiable``: no true target passes, so the root cannot be
-  closed by a correction at all under this verifier;
+* ``not_separable``: a wrong tested target passes too;
+* ``true_target_unverifiable``: no tested true singleton passes on the fresh state;
 * ``no_balanced_target``: the family has no balanced correction target
   (waveform and healthy roots), tagged without running anything;
 * ``context_unavailable``: the context offered nothing to verify.
 
-The separable fraction per family and stratum is the attainable ceiling of
-any policy on the draw; a root tagged ``not_separable`` can only be scored
-through a bounded handoff.  Everything here runs the observable verifier the
-policy would see; the truth is read only to name which candidates are true.
+These are local candidate-verifier tags, not an information-theoretic or
+policy-success ceiling. Other visible evidence can rank the true target first;
+joint actions or a different sequence can also change a verdict. The finite
+top-k test is not exhaustive, and a passed singleton is not proof of full
+physical recovery. Everything here runs the observable verifier; truth is
+read only to label the tested candidates, never to construct policy inputs.
 """
 from __future__ import annotations
 
