@@ -6,7 +6,14 @@ import unittest
 from pathlib import Path
 
 from psse_env.rl.rows import build_step_row
-from psse_env.rl.update import UpdateCheckpoint, UpdateSettings, completion_logprobs, policy_gradient_update
+from psse_env.rl.update import (
+    RowGradientBound,
+    UpdateCheckpoint,
+    UpdateSettings,
+    _bounded_row_backward,
+    completion_logprobs,
+    policy_gradient_update,
+)
 
 try:
     import torch
@@ -182,8 +189,92 @@ class UpdateTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "different batch"):
                 policy_gradient_update(_TinyLM(), _rows()[:3], UpdateSettings(optimizer_steps=2), checkpoint=checkpoint)
 
+    def test_the_row_bound_caps_an_outlier_row(self) -> None:
+        rows = [_row([1, 2, 3], [4, 5], 1.0), _row([2, 3], [6], -1.0), _row([3, 4], [7], 0.5),
+                _row([5, 6, 7], [8, 9], 400.0)]
+
+        class _Recorder:
+            def __init__(self):
+                self.grad = None
+
+            def zero_grad(self, set_to_none=True):
+                for parameter in model.parameters():
+                    parameter.grad = None
+
+            def step(self):
+                self.grad = model.table.grad.detach().clone()
+
+            def state_dict(self):
+                return {}
+
+            def load_state_dict(self, value):
+                pass
+
+        bound = 0.05
+        expected = torch.zeros_like(_TinyLM(seed=4).table)
+        norms = []
+        for row in rows:
+            single = _TinyLM(seed=4)
+            tokens = sum(r.completion_tokens for r in rows)
+            loss = -(float(row.advantage) * completion_logprobs(single, row)).sum() / tokens
+            loss.backward()
+            norm = float(single.table.grad.norm())
+            norms.append(norm)
+            expected += single.table.grad * min(1.0, bound / norm)
+        self.assertGreater(max(norms), 20 * bound)
+        model = _TinyLM(seed=4)
+        recorder = _Recorder()
+        settings = UpdateSettings(learning_rate=0.01, optimizer_steps=1, max_grad_norm=1e9, max_row_grad_norm=bound)
+        report = policy_gradient_update(model, rows, settings, optimizer=recorder)
+        self.assertTrue(torch.allclose(recorder.grad, expected, atol=1e-6))
+        summary = report.row_grad_norms[0]
+        self.assertEqual(summary["rows"], 4)
+        self.assertEqual(summary["clipped"], sum(1 for norm in norms if norm > bound))
+        self.assertAlmostEqual(summary["max"], max(norms), places=5)
+
+    def test_the_median_bound_starts_after_the_warmup(self) -> None:
+        bound = RowGradientBound(UpdateSettings(row_grad_norm_factor=3.0, row_grad_norm_warmup=3))
+        self.assertIsNone(bound.bound())
+        for norm in (0.0, 1.0, 2.0):
+            bound.record(norm, clipped=False, dropped=False)
+        self.assertIsNone(bound.bound())
+        bound.record(4.0, clipped=False, dropped=False)
+        self.assertAlmostEqual(bound.bound(), 3.0 * 2.0)
+        capped = RowGradientBound(UpdateSettings(max_row_grad_norm=5.0, row_grad_norm_factor=3.0, row_grad_norm_warmup=1), norms=[4.0])
+        self.assertAlmostEqual(capped.bound(), 5.0)
+        capped.record(float("nan"), clipped=False, dropped=True)
+        summary = capped.summary()
+        self.assertEqual((summary["rows"], summary["dropped_nonfinite"], summary["nonzero_rows"]), (2, 1, 1))
+
+    def test_a_row_with_a_nonfinite_gradient_is_dropped(self) -> None:
+        parameter = torch.nn.Parameter(torch.ones(3))
+        parameter.grad = torch.full((3,), 0.5)
+        bound = RowGradientBound(UpdateSettings(max_row_grad_norm=10.0))
+        _bounded_row_backward((parameter * float("inf")).sum(), [parameter], bound, torch)
+        self.assertTrue(torch.equal(parameter.grad, torch.full((3,), 0.5)))
+        self.assertEqual(bound.dropped, 1)
+        _bounded_row_backward((parameter * 2.0).sum(), [parameter], bound, torch)
+        self.assertTrue(torch.allclose(parameter.grad, torch.full((3,), 2.5)))
+
+    def test_a_bounded_update_resumes_to_the_same_parameters(self) -> None:
+        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=2, seed=7, max_row_grad_norm=0.5,
+                                  row_grad_norm_factor=1.5, row_grad_norm_warmup=1)
+        reference = _TinyLM(seed=3)
+        expected = policy_gradient_update(reference, _rows(), settings)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = UpdateCheckpoint(directory=Path(directory), save_model=_save_tiny, every_rows=2)
+            with self.assertRaises(_Preempted):
+                policy_gradient_update(_TinyLM(seed=3, fail_after=5), _rows(), settings, checkpoint=checkpoint)
+            self.assertEqual(len(checkpoint.load_state()["partial_row_norms"]["norms"]), 2)
+            resumed_model = _load_tiny(checkpoint.model_dir(), seed=3)
+            resumed = policy_gradient_update(resumed_model, _rows(), settings, checkpoint=checkpoint)
+            self.assertTrue(torch.allclose(resumed_model.table, reference.table, atol=1e-6))
+            self.assertEqual([s["clipped"] for s in resumed.row_grad_norms], [s["clipped"] for s in expected.row_grad_norms])
+            self.assertEqual(len(resumed.row_grad_norms), 2)
+
     def test_settings_validation(self) -> None:
-        for bad in (dict(learning_rate=0.0), dict(beta_kl=-1.0), dict(loss_normalization="token"), dict(temperature=0.0)):
+        for bad in (dict(learning_rate=0.0), dict(beta_kl=-1.0), dict(loss_normalization="token"), dict(temperature=0.0),
+                    dict(max_row_grad_norm=0.0), dict(row_grad_norm_factor=-1.0), dict(row_grad_norm_warmup=0)):
             with self.assertRaises(ValueError):
                 UpdateSettings(**bad).validate()
         with self.assertRaises(ValueError):

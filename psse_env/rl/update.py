@@ -27,7 +27,7 @@ import math
 import random
 import shutil
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -53,6 +53,20 @@ class UpdateSettings:
     adam_beta1: float = 0.9
     adam_beta2: float = 0.999
     adam_epsilon: float = 1e-8
+    #: Per-row gradient bound (2026-10-15, after a pilot step whose norm was
+    #: 5,255 against 37 to 58 elsewhere).  Each row's gradient is clipped to
+    #: ``max_row_grad_norm`` and, once ``row_grad_norm_warmup`` rows with a
+    #: nonzero gradient have been seen in the optimizer step, to
+    #: ``row_grad_norm_factor`` times their median norm, so no single row
+    #: can set a step's direction.  A row whose gradient is not finite is
+    #: dropped.  Both unset keeps the plain accumulation.
+    max_row_grad_norm: float | None = None
+    row_grad_norm_factor: float | None = None
+    row_grad_norm_warmup: int = 16
+
+    @property
+    def bounds_rows(self) -> bool:
+        return self.max_row_grad_norm is not None or self.row_grad_norm_factor is not None
 
     def validate(self) -> None:
         if not math.isfinite(self.learning_rate) or self.learning_rate <= 0:
@@ -67,9 +81,65 @@ class UpdateSettings:
             raise ValueError("max_grad_norm must be finite and positive")
         if not math.isfinite(self.temperature) or self.temperature <= 0:
             raise ValueError("temperature must be finite and positive")
+        for name in ("max_row_grad_norm", "row_grad_norm_factor"):
+            value = getattr(self, name)
+            if value is not None and (not math.isfinite(float(value)) or float(value) <= 0):
+                raise ValueError(f"{name} must be finite and positive when set")
+        if self.row_grad_norm_warmup < 1:
+            raise ValueError("row_grad_norm_warmup must be at least 1")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class RowGradientBound:
+    """The per-row bound of one optimizer step and the row norms it has seen."""
+
+    def __init__(self, settings: UpdateSettings, norms: Sequence[float] = (), clipped: int = 0, dropped: int = 0) -> None:
+        self.settings = settings
+        self.norms = [float(value) for value in norms]
+        self.clipped = int(clipped)
+        self.dropped = int(dropped)
+
+    def bound(self) -> float | None:
+        """The bound for the next row, from the rows before it."""
+        bounds: list[float] = []
+        if self.settings.max_row_grad_norm is not None:
+            bounds.append(float(self.settings.max_row_grad_norm))
+        if self.settings.row_grad_norm_factor is not None:
+            nonzero = sorted(value for value in self.norms if value > 0.0)
+            if len(nonzero) >= self.settings.row_grad_norm_warmup:
+                middle = len(nonzero) // 2
+                median = nonzero[middle] if len(nonzero) % 2 else 0.5 * (nonzero[middle - 1] + nonzero[middle])
+                bounds.append(float(self.settings.row_grad_norm_factor) * median)
+        return min(bounds) if bounds else None
+
+    def record(self, norm: float, *, clipped: bool, dropped: bool) -> None:
+        if dropped:
+            self.dropped += 1
+            return
+        self.norms.append(float(norm))
+        self.clipped += int(clipped)
+
+    def summary(self) -> dict[str, Any]:
+        values = sorted(self.norms)
+        nonzero = [value for value in values if value > 0.0]
+
+        def quantile(q: float) -> float | None:
+            if not values:
+                return None
+            return values[min(len(values) - 1, int(round(q * (len(values) - 1))))]
+
+        return {
+            "rows": len(values) + self.dropped,
+            "nonzero_rows": len(nonzero),
+            "median": quantile(0.5),
+            "p95": quantile(0.95),
+            "max": values[-1] if values else None,
+            "clipped": self.clipped,
+            "dropped_nonfinite": self.dropped,
+            "bound_after_step": self.bound(),
+        }
 
 
 @dataclass
@@ -85,6 +155,9 @@ class UpdateReport:
     seconds: float
     settings: dict[str, Any]
     resumed_from: dict[str, Any] | None = None
+    #: Per optimizer step, when the per-row bound is on: row norm quantiles,
+    #: rows clipped and rows dropped as non-finite.
+    row_grad_norms: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -309,6 +382,8 @@ def policy_gradient_update(
     start_row = 0
     partial_policy = 0.0
     partial_kl = 0.0
+    partial_rows: Mapping[str, Any] = {}
+    row_summaries: list[dict[str, Any]] = []
     resumed_from: dict[str, Any] | None = None
     state = checkpoint.load_state() if checkpoint is not None else None
     if state is not None:
@@ -321,6 +396,8 @@ def policy_gradient_update(
         grad_norms = [float(v) for v in state.get("grad_norms") or []]
         partial_policy = float(state.get("partial_policy") or 0.0)
         partial_kl = float(state.get("partial_kl") or 0.0)
+        partial_rows = state.get("partial_row_norms") or {}
+        row_summaries = list(state.get("row_grad_norms") or [])
         if state.get("optimizer_file"):
             optimizer.load_state_dict(torch.load(checkpoint.directory / state["optimizer_file"], map_location="cpu"))
         resumed_from = {"completed_chunks": start_chunk, "chunk_rows_done": start_row}
@@ -330,6 +407,11 @@ def policy_gradient_update(
         chunk = chunks[chunk_index]
         tokens = chunk_tokens[chunk_index]
         first_row = start_row if chunk_index == start_chunk else 0
+        bound = (
+            RowGradientBound(settings, norms=partial_rows.get("norms") or (), clipped=int(partial_rows.get("clipped") or 0),
+                             dropped=int(partial_rows.get("dropped") or 0))
+            if first_row > 0 else RowGradientBound(settings)
+        )
         if first_row == 0:
             optimizer.zero_grad(set_to_none=True)
             chunk_policy = 0.0
@@ -368,12 +450,19 @@ def policy_gradient_update(
                 if kl_term is not None:
                     loss = loss + settings.beta_kl * kl_term.mean() * scale
                 chunk_policy += float(policy_term.mean().detach()) * scale
-            loss.backward()
+            if settings.bounds_rows:
+                _bounded_row_backward(loss, parameters, bound, torch)
+            else:
+                loss.backward()
             if kl_term is not None:
                 chunk_kl += float(kl_term.mean().detach()) / max(1, len(chunk))
             done = position + 1
             if checkpoint is not None and done < len(chunk) and done % checkpoint.every_rows == 0:
-                _save_partial(checkpoint, model, optimizer, state_base=_state_base(rows, chunks, chunk_index, policy_losses, kls, grad_norms),
+                _save_partial(checkpoint, model, optimizer,
+                              state_base={**_state_base(rows, chunks, chunk_index, policy_losses, kls, grad_norms),
+                                          "row_grad_norms": list(row_summaries),
+                                          "partial_row_norms": {"norms": list(bound.norms), "clipped": bound.clipped,
+                                                                "dropped": bound.dropped}},
                               rows_done=done, partial_policy=chunk_policy, partial_kl=chunk_kl, previous=state)
                 state = checkpoint.load_state()
         grad_norm = float(torch.nn.utils.clip_grad_norm_(parameters, settings.max_grad_norm))
@@ -381,9 +470,11 @@ def policy_gradient_update(
         policy_losses.append(chunk_policy)
         kls.append(chunk_kl)
         grad_norms.append(grad_norm)
+        if settings.bounds_rows:
+            row_summaries.append(bound.summary())
         if checkpoint is not None:
             _save_step(checkpoint, model, optimizer, rows=rows, chunks=chunks, completed=chunk_index + 1,
-                       policy_losses=policy_losses, kls=kls, grad_norms=grad_norms)
+                       policy_losses=policy_losses, kls=kls, grad_norms=grad_norms, row_summaries=row_summaries)
             state = checkpoint.load_state()
         if progress is not None:
             progress({
@@ -393,6 +484,7 @@ def policy_gradient_update(
                 "policy_loss": chunk_policy,
                 "kl": chunk_kl,
                 "grad_norm": grad_norm,
+                "row_grad_norms": row_summaries[-1] if settings.bounds_rows else None,
                 "elapsed_seconds": time.perf_counter() - started,
             })
     model.eval()
@@ -409,7 +501,34 @@ def policy_gradient_update(
         seconds=time.perf_counter() - started,
         settings=settings.as_dict(),
         resumed_from=resumed_from,
+        row_grad_norms=row_summaries,
     )
+
+
+def _bounded_row_backward(loss: Any, parameters: Sequence[Any], bound: RowGradientBound, torch_module: Any) -> None:
+    """Backpropagate one row alone, clip its gradient to the row bound and add it to the step's sum.
+
+    The step's accumulated gradient is held aside while the row's own
+    gradient is computed, so the row's norm is measured on its own; a row
+    whose norm is not finite contributes nothing.
+    """
+
+    held = [parameter.grad for parameter in parameters]
+    for parameter in parameters:
+        parameter.grad = None
+    loss.backward()
+    limit = bound.bound()
+    norm = float(torch_module.nn.utils.clip_grad_norm_(parameters, max_norm=limit if limit is not None else float("inf")))
+    finite = math.isfinite(norm)
+    bound.record(norm, clipped=bool(finite and limit is not None and norm > limit), dropped=not finite)
+    for parameter, previous in zip(parameters, held):
+        row_gradient = parameter.grad if finite else None
+        if previous is None:
+            parameter.grad = row_gradient
+        elif row_gradient is None:
+            parameter.grad = previous
+        else:
+            parameter.grad = previous.add_(row_gradient)
 
 
 def _named_trainable(model: Any) -> list[tuple[str, Any]]:
@@ -448,7 +567,7 @@ def _save_partial(checkpoint, model, optimizer, *, state_base, rows_done, partia
     })
 
 
-def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_losses, kls, grad_norms) -> None:
+def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_losses, kls, grad_norms, row_summaries=()) -> None:
     import torch
 
     checkpoint.directory.mkdir(parents=True, exist_ok=True)
@@ -467,6 +586,8 @@ def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_
     temporary.replace(checkpoint.directory / optimizer_file)
     _commit_state(checkpoint, {
         **_state_base(rows, chunks, completed, policy_losses, kls, grad_norms),
+        "row_grad_norms": list(row_summaries),
+        "partial_row_norms": {},
         "chunk_rows_done": 0,
         "partial_policy": 0.0,
         "partial_kl": 0.0,
@@ -479,6 +600,7 @@ def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_
 __all__ = [
     "LOSS_NORMALIZATIONS",
     "REFERENCE_ADAPTER",
+    "RowGradientBound",
     "TRAINED_ADAPTER",
     "UPDATE_CONTRACT",
     "UpdateCheckpoint",
