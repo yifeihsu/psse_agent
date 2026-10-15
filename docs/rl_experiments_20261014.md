@@ -105,35 +105,109 @@ Deploy and submit (SSH master up):
 bash research/hpc/rl_pilot_20261014/deploy_from_windows.sh "$(git rev-parse HEAD)"
 ```
 
-## 4. Building the hard draw
+## 4. The hard draw (built 2026-10-15)
 
-The suite builder reverses the admission filters when asked. Example for a
-stratified development draw with the plan's parameter strata and an effect
-band in place of the 10-sigma floor:
-
-```bash
-python research/hpc/full_pipeline_20260907/build_suite.py --source-root . --d0-raw <d0/aggregate.raw.jsonl> --protected-suite <classifier development.json> --round-train-plan "$ROUND_TRAIN_PLAN" --development-plan "$DEVELOPMENT_PLAN" --rounds 2 --seed 20261014 --admission-mode physical --development-rank-allowance 99 --training-rank-allowance 99 --effect-band 1.5,3 --development-stratum-plan '{"parameter": {"misranked": 24, "ambiguous": 24, "dominant": 8}}' --training-stratum-plan '{"parameter": {"misranked": 48, "ambiguous": 48, "dominant": 16}}' --output-dir output/rl_hard_draw_20261014/suite
-```
-
-Misranked roots are 8 of 250 in the population, so the candidate multiplier
-or the requested count must be large enough; the manifest records
-`stratum_shortfalls` when a stratum could not be filled. Then tag and score:
+Plan step 1. The draw keeps recoverable admission, so every root still
+alarms and has a correction that verifies, and relaxes only the filters that
+make roots teacher-solvable: parameter roots are admitted at dominance
+threshold 1.0 with any rank of the true line, the 10-sigma meter floor is
+off, and the synthesized harmonics use effect band 1.5 to 3. Physical
+admission is not used: it also drops the alarm requirement, which would mix
+sub-threshold faults (section 10 of the plan) into the draw. Strata are
+labelled at the deployed context's threshold of 1.2
+(`--stratum-dominance-threshold`), whatever the admission threshold.
 
 ```bash
-python -m research.rl.identifiability --suite output/rl_hard_draw_20261014/suite/development.json --output-dir output/rl_hard_draw_20261014/identifiability
-python -m research.classifier_triage.expert_e2e --suite output/rl_hard_draw_20261014/suite/development.json --profile classifier_gated_diagnostics --output-dir output/rl_hard_draw_20261014/e2e_baseline
+python research/hpc/full_pipeline_20260907/build_suite.py --source-root . --evidence-profile classifier_gated_diagnostics --d0-raw <d0 roots> --protected-suite <classifier development.json> --protected-suite <r1_training.json> --protected-suite <r2_training.json> --round-train-plan '{"measurement": 32, "multi_measurement": 32, "harmonic": 24, "topology": 8, "measurement+topology": 8, "no_error": 8, "parameter": 52, "measurement+parameter": 44}' --development-plan '{"measurement": 24, "multi_measurement": 24, "harmonic": 16, "topology": 8, "measurement+topology": 8, "no_error": 8, "parameter": 44, "measurement+parameter": 32}' --rounds 1 --seed 20261015 --training-threshold 1.0 --development-threshold 1.0 --training-rank-allowance 99 --development-rank-allowance 99 --stratum-dominance-threshold 1.2 --stratum-candidates 600 --effect-band 1.5,3 --topology-effects dangling_line_terminal,bus_split --training-stratum-plan '{"parameter": {"misranked": 4, "ambiguous": 40, "dominant": 8}, "measurement+parameter": {"misranked": 4, "ambiguous": 32, "dominant": 8}}' --development-stratum-plan '{"parameter": {"misranked": 12, "ambiguous": 24, "dominant": 8}, "measurement+parameter": {"misranked": 8, "ambiguous": 16, "dominant": 8}}' --output-dir output/rl_hard_draw_20261015/suite
+python -m research.rl.build_mimic_suite --per-variant 24 --seed 20261015 --output output/rl_hard_draw_20261015/mimic/development.json
+python -m research.rl.build_mimic_suite --per-variant 24 --seed 20261016 --output output/rl_hard_draw_20261015/mimic/training.json
 ```
 
-The tagger's `separable_fraction_of_balanced_roots` is the attainable
-ceiling; the expert run is the floor the RL arm must clear.
+The build takes a few minutes locally. Inputs: the D0 root fingerprints of
+the 2026-10-07 classifier cell and its three suites, all excluded; no root
+of the hard draw overlaps them or each other. The merged suites are
+`output/rl_hard_draw_20261015/hard_development.json` (209 roots) and
+`hard_training.json` (256), uploaded with the expert reference to
+`/scratch/yx3882/rl_pilot_20261014/data/hard_draw_20261015`.
+
+**Pool limit.** Only 500 of the corpus's 620 parameter rows have their
+true-network case files (the same in the local and the cluster checkout),
+about 400 of them in the training partition, and misranked roots are about
+3% of them. The development draw got 9 of the 12 misranked parameter roots
+it asked for; more need a fresh IEEE 14 parameter corpus
+(`psse_env/providers/balanced_corpus.py`, single-process, hours).
+
+**Development draw, expert ceilings and identifiability** (baseline = the
+current spectra-first expert under the classifier gate; ranked ledger = the
+screen profile's ledger expert with the learned ranker):
+
+| Stratum | Roots | Median effect ratio | Separable by verification | Baseline | Ranked ledger |
+| --- | --- | --- | --- | --- | --- |
+| Parameter, misranked | 9 | 15 | 1 | 1 | 5 |
+| Meter plus parameter, misranked | 8 | 27 | 3 | 1 | 4 |
+| Parameter, ambiguous | 24 | 107 | 15 | 23 | 24 |
+| Meter plus parameter, ambiguous | 16 | 131 | 9 | 16 | 16 |
+| Mimic, opposite-sign flow pair | 24 | 6.6 | 10 | 20 | 20 |
+| Mimic, same-sign flow pair | 24 | 8.4 | 24 | 20 | 20 |
+| Parameter and meter plus parameter, dominant | 16 | 6 to 46 | 14 | 16 | 16 |
+| Single meter, no floor | 24 | 2.4 | 24 | 24 | 24 |
+| Multi-meter, no floor | 24 | 9.2 | 24 | 24 | 24 |
+| Harmonic, effect band 1.5 to 3 | 16 | 2.3 | n/a | 16 | 16 |
+| Topology, meter plus topology, healthy | 24 | | | 24 | 24 |
+| **All** | **209** | | 126 of 177 balanced | **185 (88.5%)** | **193 (92.3%)** |
+
+The training draw (256 roots) reads the same way: baseline 242 (94.5%),
+72% of its balanced roots separable. By the plan's predeclared rule (best
+expert between 60 and 95%) the development draw is hard enough; without the
+mimics it was not (ranked ledger 153 of 161, 95.0%).
+
+What the draw shows:
+
+- **Relaxing the teacher-specific filters alone barely hurts the expert.**
+  Meters down to effect ratio 0.5, multi-meter roots without the floor and
+  low-effect harmonics are all solved. The residual difficulty is in three
+  places: misranked parameter roots, and both kinds of flow-meter mimic.
+- **"Not separable by verification" is not "unsolvable".** On misranked
+  roots the wrong neighbouring line passes verification, often as partial
+  progress, yet the ranked-ledger expert solves 9 of 17 because the screen's
+  refit ranking tests the true line first. A better ordering from
+  observable evidence avoids the trap: this is the stratum where a learned
+  ordering can add something.
+- **Same-sign mimics fail on the protocol, not the diagnosis.** Both experts
+  find exactly the right two meters and correct them one at a time; each
+  correction is estimated while the other meter is still biased, so the
+  final values miss the audit's tolerance. A joint correction of the pair
+  would land.
+- **Opposite-sign mimics fail on identifiability.** The pair reads as an
+  injection error at the line's two buses; the experts correct healthy
+  injection meters and verification accepts them (14 of 24 not separable).
+- **The contract forbids comparing candidates.** The environment refuses to
+  roll back an accepted candidate, so neither the expert nor a policy can
+  try two lines and keep the better one. In 14 of the development draw's
+  inseparable roots (19 in training) the true correction clears the alarm
+  while the wrong one is accepted only as partial progress, so a comparison
+  would separate them; allowing it is a contract decision.
+
+Reproduce the tags, ceilings and report:
+
+```bash
+python -m research.rl.identifiability --suite output/rl_hard_draw_20261015/hard_development.json --output-dir output/rl_hard_draw_20261015/identifiability_hard_development
+python -m research.classifier_triage.expert_e2e --suite output/rl_hard_draw_20261015/hard_development.json --profile classifier_gated_diagnostics --expert baseline --output-dir output/rl_hard_draw_20261015/e2e_hard_development_baseline
+python -m research.rl.hard_draw_report --suite output/rl_hard_draw_20261015/hard_development.json --tags output/rl_hard_draw_20261015/merged/tags_development.jsonl --expert baseline=output/rl_hard_draw_20261015/merged/dev_baseline.jsonl --expert ledger_ranked=output/rl_hard_draw_20261015/merged/dev_ledger_ranked.jsonl --output output/rl_hard_draw_20261015/report_hard_development.json
+```
+
+The RL run on the hard draw is configured (`research/hpc/rl_pilot_20261014/rl_hard.json`,
+output `out/hard_v1`, 64 roots per iteration) and not submitted.
 
 ## 5. What is not built
 
 - The k-candidate handoff with length-discounted credit (plan step 2.3):
   the environment's bounded handoff still names at most two lines and the
   reward credits it at 0.6 whatever the list length.
-- The mimic, compound and IEEE 118 strata of the hard draw are drawn with
-  the existing builders; no new generator overlay was added.
+- Compound strata (two parameter errors on adjacent lines, a meter and a
+  parameter on the same line) and IEEE 118 roots are not in the hard draw;
+  they need new generator overlays. The mimics come from the existing
+  builder.
 
 ## 6. Verification
 

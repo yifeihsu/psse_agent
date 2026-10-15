@@ -28,6 +28,9 @@ PARAMETER_FAMILIES = {"parameter", "measurement+parameter"}
 
 
 def root_stratum(root: Mapping[str, Any]) -> str:
+    mimic = (root.get("audit") or {}).get("mimic")
+    if isinstance(mimic, Mapping) and mimic.get("variant"):
+        return f"mimic:{str(mimic['variant']).removeprefix('mimic_')}"
     family = str(root["grouping"]["scenario_family"])
     if family in PARAMETER_FAMILIES:
         ranking = (root.get("audit") or {}).get("parameter_ranking") or {}
