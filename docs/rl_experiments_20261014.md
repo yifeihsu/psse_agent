@@ -235,8 +235,16 @@ python -m research.classifier_triage.expert_e2e --suite output/rl_hard_draw_2026
 python -m research.rl.hard_draw_report --suite output/rl_hard_draw_20261015/hard_development.json --tags output/rl_hard_draw_20261015/merged/tags_development.jsonl --expert baseline=output/rl_hard_draw_20261015/merged/dev_baseline.jsonl --expert ledger_ranked=output/rl_hard_draw_20261015/merged/dev_ledger_ranked.jsonl --output output/rl_hard_draw_20261015/report_hard_development.json
 ```
 
-The RL run on the hard draw is configured (`research/hpc/rl_pilot_20261014/rl_hard.json`,
-output `out/hard_v1`, 64 roots per iteration) and not submitted.
+**RL run on the hard draw (submitted 2026-10-15).** Job 19932222 from commit
+a50b5ab, config `rl_hard.json` (output `out/hard_v1`, 64 of the 256 training
+roots per iteration, four samples each, two iterations per job, target four
+iterations, so one pass over the training draw). The update now bounds each
+row's gradient (`max_row_grad_norm` 25, then five times the step's median
+row norm after 16 rows; non-finite rows dropped; row norm quantiles and
+clips reported per step), after the pilot's 5,255 spike. The control, job
+19932223 (`rl_hard_r2_baseline.json`, output `out/hard_r2_baseline`), scores
+the frozen round-2 adapter on the same 209 development roots with the same
+code.
 
 ## 5. What is not built
 
