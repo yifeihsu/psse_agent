@@ -246,6 +246,18 @@ clips reported per step), after the pilot's 5,255 spike. The control, job
 the frozen round-2 adapter on the same 209 development roots with the same
 code.
 
+**Screen-profile arm (submitted 2026-10-15).** Job 19952750, config
+`rl_hard_screen.json` (output `out/hard_screen_v1`): the same draw, seed and
+roots per iteration under `suspicion_gated_diagnostics`, where the policy sees
+the balanced screen's report, including the refit ranking that lets the
+ranked ledger expert solve 9 of the 17 misranked roots. It starts from the
+2026-10-01 ranked cell's round-2 adapter, which was trained under that
+profile; its regret reference is the ranked ledger expert's calls (243 of
+the 256 training roots solved). Control: job 19952751
+(`rl_hard_screen_baseline.json`), the frozen ranked-cell adapter on the same
+209 development roots. The classifier arm's control finished at 182 of 209
+(87.1%), stratum by stratum within three roots of the baseline expert.
+
 ## 5. What is not built
 
 - The k-candidate handoff with length-discounted credit (plan step 2.3):
