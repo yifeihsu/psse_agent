@@ -21,6 +21,14 @@ own ceiling.
         --seed N --candidate-multiplier 3 --output-dir OUT/suite \\
         [--training-threshold 1.2] [--development-threshold 1.0] \\
         [--development-rank-allowance 2]
+
+The hard draw of docs/rl_hard_cases_plan_20261013.md (step 1) reverses the
+admission filters: ``--admission-mode physical``, a large
+``--training-rank-allowance`` / ``--development-rank-allowance`` so misranked
+parameter roots are kept, ``--effect-band low,high`` in place of the
+10-sigma meter floor, and a ``--development-stratum-plan`` /
+``--training-stratum-plan`` (JSON ``{family: {stratum: count}}``) that draws
+the parameter families by ranking stratum instead of by family count.
 """
 
 from __future__ import annotations
@@ -57,6 +65,89 @@ def load_research_script(source_root: Path):
         sys.modules.pop(spec.name, None)
         raise
     return module
+
+
+def parse_stratum_plan(value: str | None) -> dict[str, dict[str, int]]:
+    """``{"parameter": {"misranked": 24, "ambiguous": 24}}`` or an empty plan."""
+
+    if not value:
+        return {}
+    payload = json.loads(value)
+    if not isinstance(payload, Mapping):
+        raise ValueError("a stratum plan is a JSON object of family -> {stratum: count}")
+    plan: dict[str, dict[str, int]] = {}
+    for family, strata in payload.items():
+        if not isinstance(strata, Mapping):
+            raise ValueError(f"stratum plan for {family!r} must map stratum -> count")
+        plan[str(family)] = {str(stratum): int(count) for stratum, count in strata.items() if int(count) > 0}
+    return {family: strata for family, strata in plan.items() if strata}
+
+
+def _row_stratum(row: Mapping[str, Any]) -> str | None:
+    audit = row.get("audit") if isinstance(row.get("audit"), Mapping) else {}
+    ranking = audit.get("parameter_ranking") if isinstance(audit.get("parameter_ranking"), Mapping) else {}
+    value = ranking.get("stratum")
+    return str(value) if value is not None else None
+
+
+def allocate_with_strata(
+    research,
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    role: str,
+    family_plan: Mapping[str, int],
+    stratum_plan: Mapping[str, Mapping[str, int]],
+    seed: int,
+    d0_roots: set[str],
+    protected_roots: set[str],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Allocate roots by family, and by ranking stratum for the families a stratum plan names.
+
+    ``role`` is ``training`` or ``development``.  A family in the stratum plan
+    is drawn stratum by stratum from the candidates (sorted by root, then
+    shuffled with ``seed``); the other families go through
+    ``research.allocate_scenarios`` as before.  Shortfalls are reported, not
+    silently filled from other strata.
+    """
+
+    import random
+
+    if role not in {"training", "development"}:
+        raise ValueError("role must be training or development")
+    excluded = set(d0_roots) | set(protected_roots)
+    chosen: list[dict[str, Any]] = []
+    report: dict[str, Any] = {"stratum_counts": {}, "stratum_shortfalls": {}}
+    for family, strata in sorted(stratum_plan.items()):
+        for stratum, count in sorted(strata.items()):
+            pool = [
+                dict(row)
+                for row in candidates
+                if research._scenario_family(row) == family
+                and _row_stratum(row) == stratum
+                and research._row_root(row) not in excluded
+            ]
+            pool.sort(key=research._row_root)
+            random.Random(f"{seed}:{family}:{stratum}").shuffle(pool)
+            taken = pool[: int(count)]
+            report["stratum_counts"][f"{family}:{stratum}"] = len(taken)
+            if len(taken) < int(count):
+                report["stratum_shortfalls"][f"{family}:{stratum}"] = int(count) - len(taken)
+            for row in taken:
+                excluded.add(research._row_root(row))
+                chosen.append(row)
+    remaining_plan = {family: count for family, count in family_plan.items() if family not in stratum_plan}
+    remaining_candidates = [row for row in candidates if research._scenario_family(row) not in stratum_plan]
+    if remaining_plan:
+        training, development = research.allocate_scenarios(
+            remaining_candidates,
+            d0_roots=set(excluded),
+            train_plan=remaining_plan if role == "training" else {},
+            development_plan=remaining_plan if role == "development" else {},
+            seed=seed,
+            protected_roots=protected_roots,
+        )
+        chosen.extend(dict(row) for row in (training if role == "training" else development))
+    return chosen, report
 
 
 def split_rounds(
@@ -179,6 +270,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--development-rank-allowance", type=int, default=DEFAULT_DEVELOPMENT_RANK_ALLOWANCE
     )
     parser.add_argument(
+        "--training-rank-allowance",
+        type=int,
+        default=None,
+        help="Admit training roots whose true line ranks within this many candidates (hard draw); omitted keeps rank one",
+    )
+    parser.add_argument(
+        "--training-stratum-plan",
+        default=None,
+        help='JSON {family: {stratum: count}} drawing those training families by parameter-ranking stratum',
+    )
+    parser.add_argument(
+        "--development-stratum-plan",
+        default=None,
+        help='JSON {family: {stratum: count}} drawing those development families by parameter-ranking stratum',
+    )
+    parser.add_argument(
+        "--effect-band",
+        default=None,
+        help="Draw fault magnitudes by WLS effect ratio, 'low,high' (both draws); replaces the sigma floor for meters",
+    )
+    parser.add_argument(
         "--min-measurement-error-sigma",
         type=float,
         default=None,
@@ -284,25 +396,34 @@ def main(argv: Sequence[str] | None = None) -> None:
     }
 
     # Training: the teacher-solvable population at the production threshold.
+    training_stratum_plan = parse_stratum_plan(args.training_stratum_plan)
+    development_stratum_plan = parse_stratum_plan(args.development_stratum_plan)
     train_generator = research.research_scenario_generator(
         seed=args.seed,
         research_profile=profile,
         parameter_ranking_dominance_threshold=args.training_threshold,
+        parameter_target_rank_allowance=args.training_rank_allowance,
         min_measurement_error_sigma=args.min_measurement_error_sigma,
         topology_effects=args.topology_effects,
         normalized_residual_threshold=normalized_residual_threshold,
+        effect_band=args.effect_band,
     )
     train_requested = {family: count * args.candidate_multiplier for family, count in train_plan.items()}
+    for family, strata in training_stratum_plan.items():
+        # A stratum draw needs the whole candidate pool of that family.
+        train_requested[family] = max(train_requested.get(family, 0), sum(strata.values()) * args.candidate_multiplier)
     train_candidates = [
         stratified_envelope(research, row, dominance_threshold=args.training_threshold)
         for row in train_generator.build(train_requested)
     ]
-    training, _ = research.allocate_scenarios(
+    training, training_allocation = allocate_with_strata(
+        research,
         train_candidates,
-        d0_roots=d0_roots,
-        train_plan=train_plan,
-        development_plan={},
+        role="training",
+        family_plan=train_plan,
+        stratum_plan=training_stratum_plan,
         seed=args.seed,
+        d0_roots=d0_roots,
         protected_roots=protected_roots,
     )
     training_roots = {research._row_root(row) for row in training}
@@ -317,20 +438,25 @@ def main(argv: Sequence[str] | None = None) -> None:
         min_measurement_error_sigma=args.min_measurement_error_sigma,
         topology_effects=args.topology_effects,
         normalized_residual_threshold=normalized_residual_threshold,
+        effect_band=args.effect_band,
     )
     dev_requested = {
         family: count * args.candidate_multiplier for family, count in development_plan.items()
     }
+    for family, strata in development_stratum_plan.items():
+        dev_requested[family] = max(dev_requested.get(family, 0), sum(strata.values()) * args.candidate_multiplier)
     dev_candidates = [
         stratified_envelope(research, row, dominance_threshold=args.training_threshold)
         for row in dev_generator.build(dev_requested)
     ]
-    _, development = research.allocate_scenarios(
+    development, development_allocation = allocate_with_strata(
+        research,
         dev_candidates,
-        d0_roots=d0_roots | training_roots,
-        train_plan={},
-        development_plan=development_plan,
+        role="development",
+        family_plan=development_plan,
+        stratum_plan=development_stratum_plan,
         seed=args.seed + 1,
+        d0_roots=d0_roots | training_roots,
         protected_roots=protected_roots,
     )
     strata: dict[str, dict[str, Any]] = {}
@@ -391,6 +517,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         "training_threshold": float(args.training_threshold),
         "development_threshold": float(args.development_threshold),
         "development_rank_allowance": int(args.development_rank_allowance),
+        "training_rank_allowance": args.training_rank_allowance,
+        "training_stratum_plan": training_stratum_plan,
+        "development_stratum_plan": development_stratum_plan,
+        "training_allocation": training_allocation,
+        "development_allocation": development_allocation,
+        "effect_band": args.effect_band,
         "min_measurement_error_sigma": args.min_measurement_error_sigma,
         "topology_effects": list(args.topology_effects) if args.topology_effects else None,
         "system": str(args.system),

@@ -744,6 +744,7 @@ def research_scenario_generator(
     min_measurement_error_sigma: float | None = None,
     topology_effects: Sequence[str] | None = None,
     normalized_residual_threshold: float | None | object = _UNSET,
+    effect_band: tuple[float, float] | str | None = None,
 ) -> Round0ScenarioGenerator:
     """The scenario generator behind a research profile.
 
@@ -757,6 +758,10 @@ def research_scenario_generator(
     keeps the adjacent-line ambiguity the network really has.
     ``parameter_target_rank_allowance`` additionally admits roots whose true
     line ranks within that many candidates rather than first.
+    ``effect_band`` draws every fault's magnitude by the WLS effect ratio it
+    produces (research.classifier_triage.effect_sampler; the hard draw of
+    docs/rl_hard_cases_plan_20261013.md uses a low band instead of the
+    10-sigma meter floor).
     """
 
     profile = dict(research_profile or LEGACY_RESEARCH_PROFILE)
@@ -778,6 +783,8 @@ def research_scenario_generator(
         generator_kwargs["parameter_target_rank_allowance"] = int(parameter_target_rank_allowance)
     if min_measurement_error_sigma is not None:
         generator_kwargs["min_measurement_error_sigma"] = float(min_measurement_error_sigma)
+    if effect_band is not None:
+        generator_kwargs["effect_band"] = effect_band
     if topology_effects:
         # Breaker-error classes the topology family samples from the full
         # node/breaker model (see Round0ScenarioGenerator.topology_effects).

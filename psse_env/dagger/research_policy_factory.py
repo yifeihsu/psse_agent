@@ -8,6 +8,7 @@ release identity and it never computes or checks an adapter tree digest.
 from __future__ import annotations
 
 import copy
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import threading
@@ -57,6 +58,38 @@ E2B_BASE_MODEL_REVISION = GEMMA4_E2B_LEGACY.revision
 _PROMPT_PROFILES = SUPPORTED_RESEARCH_PROMPT_PROFILES
 _RESEARCH_BUNDLE_CACHE: dict[tuple[Any, ...], tuple[_ModelBundle, dict[str, Any]]] = {}
 _RESEARCH_BUNDLE_LOCK = threading.Lock()
+
+
+@dataclass(frozen=True)
+class GenerationOptions:
+    """How the research policy decodes.
+
+    Greedy decoding (the default, ``do_sample=False``) is what every
+    evaluation uses.  Sampling is for the on-policy RL rollouts
+    (:mod:`psse_env.rl`): ``seed`` fixes the first draw and every later call
+    of the same policy instance advances it, so one policy instance is one
+    reproducible episode.  The policy records the exact tokens it sampled
+    (:attr:`_CanonicalResearchNativePolicy.last_generation`) so training can
+    reuse them instead of a re-rendered target.
+    """
+
+    do_sample: bool = False
+    temperature: float = 1.0
+    top_p: float = 1.0
+    top_k: int | None = None
+    seed: int | None = None
+
+    def validate(self) -> None:
+        if self.do_sample:
+            if not self.temperature > 0.0:
+                raise ValueError("sampling needs a positive temperature")
+            if not 0.0 < self.top_p <= 1.0:
+                raise ValueError("top_p must lie in (0, 1]")
+            if self.top_k is not None and int(self.top_k) <= 0:
+                raise ValueError("top_k must be positive when set")
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def _token_repetition_metrics(token_ids: Sequence[int]) -> dict[str, Any]:
@@ -496,7 +529,13 @@ class _CanonicalResearchNativePolicy:
         "<|turn>model\n<|channel>thought\n<channel|>"
     )
 
-    def __init__(self, bundle: _ModelBundle, *, architecture: str) -> None:
+    def __init__(
+        self,
+        bundle: _ModelBundle,
+        *,
+        architecture: str,
+        generation: GenerationOptions | None = None,
+    ) -> None:
         from psse_env.dagger.preliminary_e2b_eval import (
             canonical_prompt_tool_schemas,
         )
@@ -509,19 +548,41 @@ class _CanonicalResearchNativePolicy:
             for row in self._tools
         }
         self._last_action_metrics: dict[str, Any] = {}
+        self._generation = generation or GenerationOptions()
+        self._generation.validate()
+        self._generation_calls = 0
+        self._last_generation: dict[str, Any] | None = None
 
     @property
     def last_action_metrics(self) -> dict[str, Any]:
         return copy.deepcopy(self._last_action_metrics)
 
-    def generate_text(self, observation: Mapping[str, Any]) -> str:
-        from psse_env.dagger.preliminary_e2b_eval import (
-            MAX_INPUT_TOKENS,
-            MAX_NEW_TOKENS,
-            normalize_episode_state_reference,
-        )
+    @property
+    def generation_options(self) -> GenerationOptions:
+        return self._generation
 
-        self._last_action_metrics = {}
+    @property
+    def last_generation(self) -> dict[str, Any] | None:
+        """The last call's model observation and the exact tokens it produced.
+
+        ``None`` until the first call.  The RL rollout reads it after every
+        action so the training row is the sampled completion itself, not a
+        re-rendered target (:mod:`psse_env.rl.rollout`).
+        """
+
+        return copy.deepcopy(self._last_generation)
+
+    def render_prompt(
+        self, observation: Mapping[str, Any]
+    ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+        """Render the exact generation prompt of a model observation.
+
+        Shared by generation and by RL training, so a training row's prompt
+        is the string the policy decoded from.  Returns the rendered text,
+        the tool schemas visible on the observation and their parameter
+        schemas by name.
+        """
+
         if not isinstance(observation, Mapping):
             raise TypeError("Research Gemma policy requires a model-observation mapping")
         payload = {"state": copy.deepcopy(dict(observation))}
@@ -552,6 +613,77 @@ class _CanonicalResearchNativePolicy:
                 "Unified research processor produced an unexpected no-thinking "
                 "generation prefix"
             )
+        return rendered, visible_tools, visible_parameters
+
+    def prompt_token_ids(self, rendered: str) -> tuple[list[int], int]:
+        """Tokenize a rendered prompt exactly as generation feeds it to the model.
+
+        Returns the token ids after the left truncation to the research input
+        limit, and the untruncated length.
+        """
+
+        from psse_env.dagger.preliminary_e2b_eval import MAX_INPUT_TOKENS
+
+        encoded = tokenize_rendered_text(self._bundle.processor, rendered)
+        input_ids = encoded.get("input_ids")
+        if input_ids is None or not hasattr(input_ids, "shape"):
+            raise GateError("Research processor did not return tensor input_ids")
+        original_prompt_length = int(input_ids.shape[-1])
+        if original_prompt_length <= 0:
+            raise GateError("Research processor returned an empty prompt")
+        prompt_length = min(original_prompt_length, MAX_INPUT_TOKENS)
+        kept = input_ids[..., -prompt_length:]
+        return [int(value) for value in kept.reshape(-1).tolist()], original_prompt_length
+
+    def _generation_kwargs(self, torch_module: Any) -> dict[str, Any]:
+        """Decoding arguments for ``generate``; sampling seeds the draw per call."""
+
+        options = self._generation
+        if not options.do_sample:
+            return {"do_sample": False, "temperature": 0.0}
+        if options.seed is not None:
+            torch_module.manual_seed(int(options.seed) + self._generation_calls)
+        kwargs: dict[str, Any] = {
+            "do_sample": True,
+            "temperature": float(options.temperature),
+            "top_p": float(options.top_p),
+        }
+        if options.top_k is not None:
+            kwargs["top_k"] = int(options.top_k)
+        return kwargs
+
+    def _record_generation(
+        self,
+        observation: Mapping[str, Any],
+        *,
+        sampled_ids: Any,
+        generated_tokens: int,
+        prompt_length: int,
+        original_prompt_length: int,
+        text: str,
+    ) -> None:
+        completion = sampled_ids[: int(generated_tokens)]
+        completion_ids = [int(value) for value in completion.reshape(-1).tolist()]
+        self._last_generation = {
+            "model_observation": copy.deepcopy(dict(observation)),
+            "prompt_tokens": int(prompt_length),
+            "original_prompt_tokens": int(original_prompt_length),
+            "completion_token_ids": completion_ids,
+            "text": str(text),
+            "generation": self._generation.as_dict(),
+            "call_index": int(self._generation_calls),
+        }
+        self._generation_calls += 1
+
+    def generate_text(self, observation: Mapping[str, Any]) -> str:
+        from psse_env.dagger.preliminary_e2b_eval import (
+            MAX_INPUT_TOKENS,
+            MAX_NEW_TOKENS,
+            normalize_episode_state_reference,
+        )
+
+        self._last_action_metrics = {}
+        rendered, visible_tools, visible_parameters = self.render_prompt(observation)
         encoded = tokenize_rendered_text(self._bundle.processor, rendered)
         input_ids = encoded.get("input_ids")
         if input_ids is None or not hasattr(input_ids, "shape"):
@@ -587,15 +719,15 @@ class _CanonicalResearchNativePolicy:
         pad_token_id = resolve_pad_token_id(self._bundle.processor)
         started = time.perf_counter()
         self._bundle.model.eval()
+        generation_kwargs = self._generation_kwargs(torch)
         with torch.inference_mode():
             generated = self._bundle.model.generate(
                 **model_inputs,
                 max_new_tokens=MAX_NEW_TOKENS,
-                do_sample=False,
-                temperature=0.0,
                 use_cache=True,
                 eos_token_id=stop_ids,
                 pad_token_id=pad_token_id,
+                **generation_kwargs,
             )
         generation_seconds = time.perf_counter() - started
         sampled_ids = generated[0][prompt_length:].detach().cpu()
@@ -618,6 +750,14 @@ class _CanonicalResearchNativePolicy:
             "trimmed_trailing_pad_tokens": int(trimmed_pad_tokens),
             **repetition,
         }
+        self._record_generation(
+            observation,
+            sampled_ids=sampled_ids,
+            generated_tokens=int(generated_tokens),
+            prompt_length=prompt_length,
+            original_prompt_length=original_prompt_length,
+            text=text,
+        )
         try:
             action = _validated_generated_action(text, visible_parameters)
         except GateError:
@@ -640,9 +780,16 @@ class _CanonicalResearchNativePolicy:
 
 
 def _canonical_research_policy(
-    bundle: _ModelBundle, identity: Mapping[str, Any]
+    bundle: _ModelBundle,
+    identity: Mapping[str, Any],
+    generation: GenerationOptions | None = None,
 ) -> Any:
     profile = str(identity.get("prompt_profile") or "")
+    if generation is not None and generation.do_sample and profile != PROMPT_PROFILE_NATIVE:
+        raise GateError(
+            "sampled generation is implemented for the native research prompt "
+            f"profile only, not {profile!r}"
+        )
     if profile == PROMPT_PROFILE_SMALL_FORCED:
         # E2B and E4B share the exact no-thinking template and use the measured
         # forced native-tool prefix that keeps small adapters in tool mode.
@@ -662,7 +809,9 @@ def _canonical_research_policy(
         )
     if profile == PROMPT_PROFILE_NATIVE:
         return _CanonicalResearchNativePolicy(
-            bundle, architecture=str(identity.get("architecture") or "")
+            bundle,
+            architecture=str(identity.get("architecture") or ""),
+            generation=generation,
         )
     if profile == PROMPT_PROFILE_RELEASE:
         return _CanonicalGemmaPolicy(bundle)
@@ -672,12 +821,28 @@ def _canonical_research_policy(
 class ResearchGemmaPolicy:
     """Canonical Gemma tool policy with an explicit non-release identity."""
 
-    def __init__(self, bundle: _ModelBundle, identity: Mapping[str, Any]) -> None:
-        self._canonical_policy = _canonical_research_policy(bundle, identity)
+    def __init__(
+        self,
+        bundle: _ModelBundle,
+        identity: Mapping[str, Any],
+        generation: GenerationOptions | None = None,
+    ) -> None:
+        self._canonical_policy = _canonical_research_policy(bundle, identity, generation)
         self._adapter = LocalAliasPolicyAdapter(
             self._canonical_policy, protocol="canonical"
         )
         self._identity = copy.deepcopy(dict(identity))
+
+    @property
+    def canonical_policy(self) -> Any:
+        """The model-facing policy (prompt rendering and decoding)."""
+
+        return self._canonical_policy
+
+    @property
+    def last_generation(self) -> dict[str, Any] | None:
+        getter = getattr(self._canonical_policy, "last_generation", None)
+        return copy.deepcopy(getter) if isinstance(getter, Mapping) else getter
 
     @property
     def research_policy_identity(self) -> dict[str, Any]:
@@ -718,8 +883,14 @@ def research_gemma_policy_factory(
     cache: bool = True,
     seed: int | None = None,
     rng: Any | None = None,
+    generation: GenerationOptions | None = None,
 ) -> ResearchGemmaPolicy:
-    """Load a research LoRA directly, without source/tree/hash qualification."""
+    """Load a research LoRA directly, without source/tree/hash qualification.
+
+    ``generation`` selects the decoding; the default is greedy.  The bundle
+    cache is keyed on the adapter and base, so a sampling policy and a greedy
+    one share the loaded weights.
+    """
 
     del seed, rng
     bundle, identity = _load_research_bundle(
@@ -733,10 +904,13 @@ def research_gemma_policy_factory(
         use_cache=cache,
         architecture=architecture,
     )
-    return ResearchGemmaPolicy(bundle, identity)
+    if generation is None:
+        return ResearchGemmaPolicy(bundle, identity)
+    return ResearchGemmaPolicy(bundle, identity, generation=generation)
 
 
 __all__ = [
+    "GenerationOptions",
     "PROMPT_PROFILE_E2B",
     "PROMPT_PROFILE_NATIVE",
     "PROMPT_PROFILE_RELEASE",
