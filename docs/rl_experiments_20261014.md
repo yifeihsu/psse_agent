@@ -246,6 +246,18 @@ clips reported per step), after the pilot's 5,255 spike. The control, job
 the frozen round-2 adapter on the same 209 development roots with the same
 code.
 
+**Row bound corrected (2026-10-15).** The classifier arm's first update
+showed per-row gradient norms with median 1e-4, 95th percentile 1.5 and
+maximum 11.6: most rows sample tokens of probability close to 1, so five
+times the median clipped 88 of 229 and 93 of 228 rows, the ones carrying the
+signal, and the step norms fell to 0.92 and 0.23. The median-relative bound
+was dropped (d3f250a); both arms keep the absolute cap of 25, which clipped
+nothing in that update and still catches a spike like the pilot's. The
+classifier arm's iteration-0 update was redone from the same stored
+rollouts (job 19956235); the superseded adapter and partial evaluation are
+kept in `iteration_000/superseded_20261015_median_bound`. The screen arm had
+not reached its update and runs with the corrected config from the start.
+
 **Screen-profile arm (submitted 2026-10-15).** Job 19952750, config
 `rl_hard_screen.json` (output `out/hard_screen_v1`): the same draw, seed and
 roots per iteration under `suspicion_gated_diagnostics`, where the policy sees
