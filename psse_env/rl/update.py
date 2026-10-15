@@ -60,6 +60,13 @@ class UpdateSettings:
     #: ``row_grad_norm_factor`` times their median norm, so no single row
     #: can set a step's direction.  A row whose gradient is not finite is
     #: dropped.  Both unset keeps the plain accumulation.
+    #:
+    #: Caution (hard-draw run, 2026-10-15): most rows sample tokens of
+    #: probability close to 1, so their gradients are nearly zero and the
+    #: median row norm was 1e-4 against a 95th percentile of 1.5; five times
+    #: the median then clipped 40% of the rows, the ones carrying the signal.
+    #: The median is not a usable scale for these rows; prefer the absolute
+    #: cap, set well above the largest row norm a step reports.
     max_row_grad_norm: float | None = None
     row_grad_norm_factor: float | None = None
     row_grad_norm_warmup: int = 16

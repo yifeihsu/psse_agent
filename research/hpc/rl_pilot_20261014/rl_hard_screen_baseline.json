@@ -52,7 +52,7 @@
     "loss_normalization": "dapo",
     "use_logits_to_keep": true,
     "max_row_grad_norm": 25.0,
-    "row_grad_norm_factor": 5.0,
+    "row_grad_norm_factor": null,
     "row_grad_norm_warmup": 16
   },
   "update_checkpoint_rows": 32
