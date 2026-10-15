@@ -105,6 +105,45 @@ Deploy and submit (SSH master up):
 bash research/hpc/rl_pilot_20261014/deploy_from_windows.sh "$(git rev-parse HEAD)"
 ```
 
+### Relaunch results (job 19871504, 2026-10-15)
+
+The relaunched pilot ran both iterations in 5 h 37 min on one A100 (gr103),
+without a preemption or an error; the update checkpointed every 32 rows as
+designed. The control is the frozen round-2 adapter scored by the same code
+on the same 160 development roots (`rl_pilot_r2_baseline.json`, job
+19889349), because the round-2 student's own 159 of 160 dates from the
+2026-10-07 environment.
+
+| Iteration | Groups with reward spread | Training rows (tokens) | Policy loss per step | Gradient norm before clipping |
+| --- | --- | --- | --- | --- |
+| 0 | 10 of 61 (16.4%) | 402 (8,673) | −0.021, −0.004 | 54, 37 |
+| 1 | 6 of 61 (9.8%) | 201 (4,244) | −0.031, −0.010 | 58, 5,255 |
+
+All 488 sampled episodes were solved; 95% of sampled steps had every token
+at probability 0.99 or above. 16 of iteration 0's trajectories were left
+unpaired by the invalid-call recording defect fixed in e622689 before
+iteration 1.
+
+| Greedy evaluation, 160 roots | Solved | Mean steps | Mean reward | False commits (episodes) | Invalid actions (episodes) | Loops |
+| --- | --- | --- | --- | --- | --- | --- |
+| Frozen round-2 adapter | 159 | 8.08 | 0.710 | 23 (20) | 39 (28) | 2 |
+| After iteration 0 | 159 | 8.01 | 0.722 | 20 (18) | 35 (27) | 2 |
+| After iteration 1 | 159 | 8.03 | 0.715 | 23 (20) | 33 (26) | 1 |
+
+All three miss the same root, the misranked parameter root r0_4d7aa8a5a01f.
+
+Reading: the machinery works end to end on the cluster, and on the
+standard draw it changes nothing measurable, as the plan predicted. The
+student already matches the expert's success, and in the few groups with a
+reward spread the deviating sample is usually the worse one, so the update
+mostly sharpens the greedy behaviour. Iteration 1's second optimizer step
+had a gradient norm of 5,255 against 37 to 58 elsewhere; clipping bounded
+its size, but one outlier row likely set its direction, and iteration 1
+gave back iteration 0's small gain in false commits. Before a longer run:
+more rows per optimizer step, or a per-row bound on the gradient, so one
+row cannot steer a step. The hard draw (section 4) is where the next run
+belongs.
+
 ## 4. The hard draw (built 2026-10-15)
 
 Plan step 1. The draw keeps recoverable admission, so every root still
