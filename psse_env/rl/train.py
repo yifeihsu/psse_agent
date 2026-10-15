@@ -24,7 +24,9 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import math
 import shutil
+import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -111,9 +113,9 @@ class RLConfig:
             raise ValueError("samples_per_root must be at least 2 for a group-relative advantage")
         if self.max_steps <= 0 or self.max_length <= 0:
             raise ValueError("max_steps and max_length must be positive")
-        if not 0.0 < self.temperature:
+        if not math.isfinite(self.temperature) or not 0.0 < self.temperature:
             raise ValueError("temperature must be positive")
-        if self.top_p < 1.0 or (self.top_k is not None and int(self.top_k) > 0):
+        if self.top_p != 1.0 or (self.top_k is not None and int(self.top_k) != 0):
             raise ValueError(
                 "a nucleus or top-k cut samples from a distribution the update does not optimize, "
                 "which biases the policy gradient; set top_p to 1.0 and top_k to null (use the "
@@ -123,6 +125,9 @@ class RLConfig:
             raise ValueError("policy_source must be adapter or expert")
         if self.update_checkpoint_rows <= 0:
             raise ValueError("update_checkpoint_rows must be positive")
+        if self.roots_per_iteration is not None and self.roots_per_iteration <= 0:
+            raise ValueError("roots_per_iteration must be positive")
+        group_advantages([0.0, 1.0], method=self.advantage_method, scale=self.advantage_scale)
         if "temperature" in self.update:
             raise ValueError("the update's temperature is the sampling temperature; set it at the top level only")
         RewardWeights.from_mapping(self.reward)
@@ -167,6 +172,10 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def source_revision() -> str:
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip()
 
 
 def _safe_name(root: str) -> str:
@@ -317,6 +326,9 @@ def phase_rollout(
         summary["store"] = store_summary(store)
         summary["sampling"] = {"temperature": config.temperature, "top_p": config.top_p, "top_k": config.top_k}
         _write_json(out / "rollout_summary.json", summary)
+        _write_json(out / "rollout_config.json", {
+            "config": config.as_dict(), "source_revision": source_revision(),
+        })
     return summary
 
 
@@ -457,6 +469,8 @@ def phase_update(config: RLConfig, manifest: Manifest, *, progress: Callable[[Ma
         _write_json(out / "update_report.json", report)
         return report
     settings = config.update_settings(manifest.iteration)
+    if settings.max_behavior_logprob_error is not None and score_summary["unpaired_trajectories"]:
+        raise RuntimeError("strict sampling/update check refuses unpaired trajectories; inspect rollout records")
     checkpoint = UpdateCheckpoint(directory=out / "update_checkpoint", save_model=_save_trained_adapter,
                                   every_rows=config.update_checkpoint_rows)
     resume_dir = checkpoint.model_dir()
@@ -470,6 +484,10 @@ def phase_update(config: RLConfig, manifest: Manifest, *, progress: Callable[[Ma
             max_length=config.max_length, required_side_inputs=side_inputs,
         )
         report["rows"] = rows_report
+        if settings.max_behavior_logprob_error is not None and any(rows_report[key] for key in (
+            "prompt_length_mismatches", "prompt_truncated_rows", "invalid_probability_rows", "empty_completions"
+        )):
+            raise RuntimeError("strict sampling/update check found excluded rows; inspect row construction")
         report["resumed_from_checkpoint"] = str(resume_dir) if resume_dir is not None else None
         if not rows:
             report["update"] = None
@@ -527,6 +545,13 @@ def aggregate_evaluation(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]
 
     return {
         "roots": count,
+        "strict_resolution": sum(bool(record.get("truth_audited_task_success"))
+                                 and record.get("basis") == "counterfactual_resolution"
+                                 and (record.get("reward") or {}).get("credit") == 1.0 for record in records),
+        "success_by_basis": {basis: sum(bool(record.get("truth_audited_task_success")) and record.get("basis") == basis
+                                        for record in records)
+                             for basis in sorted({str(record.get("basis") or "none") for record in records})},
+        "healthy_corruption_episodes": sum(record.get("healthy_components_preserved") is False for record in records),
         "truth_audited_task_success": sum(1 for record in records if record.get("truth_audited_task_success")),
         "mean_steps": (sum(int(record.get("steps") or 0) for record in records) / count) if count else None,
         "mean_reward": (sum(float((record.get("reward") or {}).get("total") or 0.0) for record in records) / count) if count else None,

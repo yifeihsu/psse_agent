@@ -151,14 +151,14 @@ class UpdateTests(unittest.TestCase):
         model = _TinyLM()
         rows = [_row([1, 2], [3], 1.0), _row([2, 3], [4], -1.0), _row([3, 4], [5], 0.5)]
         seen: list[int] = []
-        report = policy_gradient_update(model, rows, UpdateSettings(learning_rate=0.01, optimizer_steps=2),
+        report = policy_gradient_update(model, rows, UpdateSettings(learning_rate=0.01, optimizer_steps=2, allow_stale_policy_steps=True),
                                         progress=lambda record: seen.append(int(record["rows"])))
         self.assertEqual(report.optimizer_steps, 2)
         self.assertEqual(sorted(seen), [1, 2])
         self.assertAlmostEqual(report.mean_advantage, 0.5 / 3.0)
 
     def test_an_interrupted_update_resumes_to_the_same_parameters(self) -> None:
-        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=2, seed=7)
+        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=2, seed=7, allow_stale_policy_steps=True)
         reference = _TinyLM(seed=3)
         expected = policy_gradient_update(reference, _rows(), settings)
         with tempfile.TemporaryDirectory() as directory:
@@ -185,9 +185,9 @@ class UpdateTests(unittest.TestCase):
     def test_a_checkpoint_for_other_rows_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             checkpoint = UpdateCheckpoint(directory=Path(directory), save_model=_save_tiny, every_rows=1)
-            policy_gradient_update(_TinyLM(), _rows(), UpdateSettings(optimizer_steps=2), checkpoint=checkpoint)
+            policy_gradient_update(_TinyLM(), _rows(), UpdateSettings(optimizer_steps=2, allow_stale_policy_steps=True), checkpoint=checkpoint)
             with self.assertRaisesRegex(RuntimeError, "different batch"):
-                policy_gradient_update(_TinyLM(), _rows()[:3], UpdateSettings(optimizer_steps=2), checkpoint=checkpoint)
+                policy_gradient_update(_TinyLM(), _rows()[:3], UpdateSettings(optimizer_steps=2, allow_stale_policy_steps=True), checkpoint=checkpoint)
 
     def test_the_row_bound_caps_an_outlier_row(self) -> None:
         rows = [_row([1, 2, 3], [4, 5], 1.0), _row([2, 3], [6], -1.0), _row([3, 4], [7], 0.5),
@@ -257,7 +257,7 @@ class UpdateTests(unittest.TestCase):
         self.assertTrue(torch.allclose(parameter.grad, torch.full((3,), 2.5)))
 
     def test_a_bounded_update_resumes_to_the_same_parameters(self) -> None:
-        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=2, seed=7, max_row_grad_norm=0.5,
+        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=2, seed=7, allow_stale_policy_steps=True, max_row_grad_norm=0.5,
                                   row_grad_norm_factor=1.5, row_grad_norm_warmup=1)
         reference = _TinyLM(seed=3)
         expected = policy_gradient_update(reference, _rows(), settings)
@@ -271,6 +271,69 @@ class UpdateTests(unittest.TestCase):
             self.assertTrue(torch.allclose(resumed_model.table, reference.table, atol=1e-6))
             self.assertEqual([s["clipped"] for s in resumed.row_grad_norms], [s["clipped"] for s in expected.row_grad_norms])
             self.assertEqual(len(resumed.row_grad_norms), 2)
+
+    def test_multiple_unweighted_steps_need_explicit_legacy_opt_in(self) -> None:
+        with self.assertRaisesRegex(ValueError, "stale samples"):
+            UpdateSettings(optimizer_steps=2).validate()
+
+    def test_sampling_probability_mismatch_aborts_before_an_optimizer_step(self) -> None:
+        model = _TinyLM()
+        row = _rows()[0]
+        row.behavior_logprobs = completion_logprobs(model, row).detach().tolist()
+        row.behavior_logprobs[0] += 0.5
+        before = model.table.detach().clone()
+        with self.assertRaisesRegex(RuntimeError, "sampling/update log-probability mismatch"):
+            policy_gradient_update(model, [row], UpdateSettings(max_behavior_logprob_error=0.01))
+        self.assertTrue(torch.equal(before, model.table.detach()))
+
+    def test_sampling_probability_check_disables_dropout_but_keeps_autograd(self) -> None:
+        class DropoutLM(_TinyLM):
+            def __init__(self):
+                super().__init__()
+                self.dropout = torch.nn.Dropout(0.9)
+
+            def forward(self, *args, **kwargs):
+                output = super().forward(*args, **kwargs)
+                output.logits = self.dropout(output.logits)
+                return output
+
+        model = DropoutLM().eval()
+        row = _rows()[0]
+        row.behavior_logprobs = completion_logprobs(model, row).detach().tolist()
+        before = model.table.detach().clone()
+        report = policy_gradient_update(model, [row], UpdateSettings(max_behavior_logprob_error=1e-5))
+        self.assertLess(report.behavior_logprob_max_error, 1e-5)
+        self.assertFalse(torch.equal(before, model.table.detach()))
+        self.assertEqual(report.stale_policy_steps, 0)
+
+    def test_same_count_changed_rows_or_settings_cannot_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = UpdateCheckpoint(directory=Path(directory), save_model=_save_tiny, every_rows=1)
+            policy_gradient_update(_TinyLM(), _rows(), UpdateSettings(), checkpoint=checkpoint)
+            changed = _rows()
+            changed[0].advantage = -3.0
+            for rows, settings in ((changed, UpdateSettings()), (_rows(), UpdateSettings(learning_rate=0.5))):
+                with self.assertRaisesRegex(RuntimeError, "different batch"):
+                    policy_gradient_update(_TinyLM(), rows, settings, checkpoint=checkpoint)
+
+    def test_single_step_resume_keeps_outlier_identity_and_probability_check(self) -> None:
+        settings = UpdateSettings(seed=7, max_row_grad_norm=0.01, max_behavior_logprob_error=1e-5)
+        rows = _rows()
+        reference = _TinyLM(seed=3)
+        for index, row in enumerate(rows):
+            row.root = f"root{index}"
+            row.behavior_logprobs = completion_logprobs(reference, row).detach().tolist()
+        expected = policy_gradient_update(reference, rows, settings)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = UpdateCheckpoint(directory=Path(directory), save_model=_save_tiny, every_rows=2)
+            with self.assertRaises(_Preempted):
+                policy_gradient_update(_TinyLM(seed=3, fail_after=3), rows, settings, checkpoint=checkpoint)
+            self.assertIsNone(checkpoint.model_dir())
+            resumed_model = _TinyLM(seed=3)
+            resumed = policy_gradient_update(resumed_model, rows, settings, checkpoint=checkpoint)
+            self.assertTrue(torch.allclose(resumed_model.table, reference.table, atol=1e-7))
+            self.assertEqual(resumed.row_grad_norms, expected.row_grad_norms)
+            self.assertEqual(len(resumed.row_grad_norms[0]["largest_rows"]), len(rows))
 
     def test_settings_validation(self) -> None:
         for bad in (dict(learning_rate=0.0), dict(beta_kl=-1.0), dict(loss_normalization="token"), dict(temperature=0.0),

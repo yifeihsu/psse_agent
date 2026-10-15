@@ -20,6 +20,7 @@ offline truth after the episode ended.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -75,7 +76,7 @@ class RewardWeights:
         for name, value in asdict(self).items():
             if name == "basis_credit":
                 continue
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
                 raise ValueError(f"reward weight {name} must be a nonnegative number, got {value!r}")
         if self.max_charged_calls <= 0:
             raise ValueError("max_charged_calls must be positive")
