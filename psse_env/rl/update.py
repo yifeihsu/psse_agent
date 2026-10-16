@@ -5,7 +5,14 @@ loss is the advantage-weighted log-likelihood of the sampled completion
 tokens, normalized by the number of completion tokens in the optimizer step
 (the DAPO normalization TRL uses by default).  Log-probabilities are taken at
 the sampling temperature, so the policy being optimized is the one that
-produced the samples.
+produced the samples.  That ratio-one reading is exact for the first
+optimizer step of a batch only; with ``optimizer_steps > 1`` the later steps
+see parameters the earlier ones moved.  ``clip_ratio`` turns the loss into
+the clipped PPO surrogate against the probabilities the policy recorded when
+it sampled, which makes those later steps sound.  With or without it, every
+optimizer step reports how far its log-probabilities are from the recorded
+ones (:class:`OnPolicyCheck`), so a run can tell the numerical gap between
+the decoding pass and the training pass from the drift its own steps add.
 
 An optional KL penalty (``beta_kl > 0``) keeps the policy near a reference
 adapter, estimated with the k3 estimator on the sampled tokens.  The
@@ -34,7 +41,13 @@ from typing import Any, Callable, Mapping, Sequence
 from psse_env.rl.rows import TrainingRow
 
 UPDATE_CONTRACT = "rl_on_policy_lora_update_v2"
-LOSS_NORMALIZATIONS = ("dapo", "sequence")
+#: ``dapo``: every completion token of the optimizer step weighs the same, so
+#: a trajectory weighs as many tokens as it has (a 40-step looping sample
+#: outweighs seven 6-step ones).  ``sequence``: every row (step) weighs the
+#: same.  ``trajectory``: every trajectory weighs the same, whatever its
+#: length; a row's tokens are divided by its trajectory's tokens and the
+#: step by its number of trajectories.
+LOSS_NORMALIZATIONS = ("dapo", "sequence", "trajectory")
 REFERENCE_ADAPTER = "reference"
 TRAINED_ADAPTER = "default"
 
@@ -70,6 +83,13 @@ class UpdateSettings:
     max_row_grad_norm: float | None = None
     row_grad_norm_factor: float | None = None
     row_grad_norm_warmup: int = 16
+    #: PPO-style clip of the importance ratio against the probabilities the
+    #: policy recorded when it sampled (``None``: the plain on-policy loss,
+    #: whose ratio-one assumption holds for the first optimizer step of a
+    #: batch only).  A row without a sampling record keeps the plain loss.
+    #: At ratio one the clipped surrogate has the same gradient as the plain
+    #: loss, so the first step is unchanged by it.
+    clip_ratio: float | None = None
 
     @property
     def bounds_rows(self) -> bool:
@@ -94,6 +114,10 @@ class UpdateSettings:
                 raise ValueError(f"{name} must be finite and positive when set")
         if self.row_grad_norm_warmup < 1:
             raise ValueError("row_grad_norm_warmup must be at least 1")
+        if self.clip_ratio is not None and (
+            not math.isfinite(float(self.clip_ratio)) or not 0.0 < float(self.clip_ratio) < 1.0
+        ):
+            raise ValueError("clip_ratio must lie in (0, 1) when set")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -149,6 +173,69 @@ class RowGradientBound:
         }
 
 
+class OnPolicyCheck:
+    """How far one optimizer step's log-probabilities are from the ones the policy sampled with.
+
+    Rows carry the sampling probabilities the policy recorded; the update
+    recomputes the same tokens' log-probabilities with the model it trains.
+    At the first optimizer step of a batch the parameters are the sampling
+    parameters, so any gap is numerical (the training forward pass against
+    the cached decoding pass); from the second step on it also holds the
+    drift the earlier steps introduced.  ``threshold`` is a log-ratio: the
+    tokens beyond it are the ones a PPO clip of that size would clip.
+    """
+
+    def __init__(self, *, threshold: float = math.log(1.2), state: Mapping[str, Any] | None = None) -> None:
+        state = dict(state or {})
+        self.threshold = float(state.get("threshold") or threshold)
+        self.rows = int(state.get("rows") or 0)
+        self.rows_without_record = int(state.get("rows_without_record") or 0)
+        self.tokens = int(state.get("tokens") or 0)
+        self.sum_abs = float(state.get("sum_abs") or 0.0)
+        self.sum = float(state.get("sum") or 0.0)
+        self.max_abs = float(state.get("max_abs") or 0.0)
+        self.beyond = int(state.get("beyond") or 0)
+
+    def record(self, logprobs: Any, sampling_logprobs: Any | None) -> None:
+        """Compare one row's recomputed log-probabilities (shape ``[n]``) with its recorded ones."""
+        if sampling_logprobs is None:
+            self.rows_without_record += 1
+            return
+        delta = (logprobs.detach().float() - sampling_logprobs.detach().float()).reshape(-1)
+        self.rows += 1
+        count = int(delta.numel())
+        self.tokens += count
+        if count:
+            self.sum_abs += float(delta.abs().sum())
+            self.sum += float(delta.sum())
+            self.max_abs = max(self.max_abs, float(delta.abs().max()))
+            self.beyond += int((delta.abs() > self.threshold).sum())
+
+    def state(self) -> dict[str, Any]:
+        return {
+            "threshold": self.threshold,
+            "rows": self.rows,
+            "rows_without_record": self.rows_without_record,
+            "tokens": self.tokens,
+            "sum_abs": self.sum_abs,
+            "sum": self.sum,
+            "max_abs": self.max_abs,
+            "beyond": self.beyond,
+        }
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "rows": self.rows,
+            "rows_without_record": self.rows_without_record,
+            "tokens": self.tokens,
+            "mean_log_ratio": (self.sum / self.tokens) if self.tokens else None,
+            "mean_abs_log_ratio": (self.sum_abs / self.tokens) if self.tokens else None,
+            "max_abs_log_ratio": self.max_abs if self.tokens else None,
+            "tokens_beyond_threshold": self.beyond,
+            "threshold_log_ratio": self.threshold,
+        }
+
+
 @dataclass
 class UpdateReport:
     contract: str
@@ -165,6 +252,9 @@ class UpdateReport:
     #: Per optimizer step, when the per-row bound is on: row norm quantiles,
     #: rows clipped and rows dropped as non-finite.
     row_grad_norms: list[dict[str, Any]] = field(default_factory=list)
+    #: Per optimizer step: the gap between the recomputed and the recorded
+    #: sampling log-probabilities (:class:`OnPolicyCheck`).
+    on_policy_check: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -391,6 +481,8 @@ def policy_gradient_update(
     partial_kl = 0.0
     partial_rows: Mapping[str, Any] = {}
     row_summaries: list[dict[str, Any]] = []
+    check_summaries: list[dict[str, Any]] = []
+    partial_check: Mapping[str, Any] = {}
     resumed_from: dict[str, Any] | None = None
     state = checkpoint.load_state() if checkpoint is not None else None
     if state is not None:
@@ -405,6 +497,8 @@ def policy_gradient_update(
         partial_kl = float(state.get("partial_kl") or 0.0)
         partial_rows = state.get("partial_row_norms") or {}
         row_summaries = list(state.get("row_grad_norms") or [])
+        partial_check = state.get("partial_on_policy") or {}
+        check_summaries = list(state.get("on_policy_checks") or [])
         if state.get("optimizer_file"):
             optimizer.load_state_dict(torch.load(checkpoint.directory / state["optimizer_file"], map_location="cpu"))
         resumed_from = {"completed_chunks": start_chunk, "chunk_rows_done": start_row}
@@ -419,6 +513,7 @@ def policy_gradient_update(
                              dropped=int(partial_rows.get("dropped") or 0))
             if first_row > 0 else RowGradientBound(settings)
         )
+        check = OnPolicyCheck(state=partial_check if first_row > 0 else None)
         if first_row == 0:
             optimizer.zero_grad(set_to_none=True)
             chunk_policy = 0.0
@@ -431,6 +526,7 @@ def policy_gradient_update(
                     parameter.grad = saved[name].to(parameter.device, dtype=parameter.dtype)
             chunk_policy = partial_policy
             chunk_kl = partial_kl
+        trajectories = len({(rows[index].root, rows[index].sample_index) for index in chunk})
         for position in range(first_row, len(chunk)):
             row = rows[chunk[position]]
             # The reference pass runs first, with no autograd graph alive while
@@ -440,13 +536,24 @@ def policy_gradient_update(
             logprobs = completion_logprobs(
                 model, row, use_logits_to_keep=settings.use_logits_to_keep, temperature=settings.temperature
             )
-            policy_term = -(float(row.advantage) * logprobs)
+            old_logprobs = None
+            if row.sampling_logprobs is not None and len(row.sampling_logprobs) == int(logprobs.shape[0]):
+                old_logprobs = torch.tensor(list(row.sampling_logprobs), dtype=logprobs.dtype, device=logprobs.device)
+            check.record(logprobs, old_logprobs)
+            policy_term = _policy_term(logprobs, old_logprobs, float(row.advantage), settings.clip_ratio, torch)
             kl_term = None
             if reference is not None:
                 delta = reference.to(logprobs.device) - logprobs
                 kl_term = torch.exp(delta) - delta - 1.0
             if settings.loss_normalization == "dapo":
                 scale = 1.0 / max(1, tokens)
+                loss = policy_term.sum() * scale
+                if kl_term is not None:
+                    loss = loss + settings.beta_kl * kl_term.sum() * scale
+                chunk_policy += float(policy_term.sum().detach()) * scale
+            elif settings.loss_normalization == "trajectory":
+                # A row without a trajectory total (rows built outside build_rows) is its own trajectory.
+                scale = 1.0 / (max(1, int(row.trajectory_tokens or row.completion_tokens)) * max(1, trajectories))
                 loss = policy_term.sum() * scale
                 if kl_term is not None:
                     loss = loss + settings.beta_kl * kl_term.sum() * scale
@@ -469,7 +576,9 @@ def policy_gradient_update(
                               state_base={**_state_base(rows, chunks, chunk_index, policy_losses, kls, grad_norms),
                                           "row_grad_norms": list(row_summaries),
                                           "partial_row_norms": {"norms": list(bound.norms), "clipped": bound.clipped,
-                                                                "dropped": bound.dropped}},
+                                                                "dropped": bound.dropped},
+                                          "on_policy_checks": list(check_summaries),
+                                          "partial_on_policy": check.state()},
                               rows_done=done, partial_policy=chunk_policy, partial_kl=chunk_kl, previous=state)
                 state = checkpoint.load_state()
         grad_norm = float(torch.nn.utils.clip_grad_norm_(parameters, settings.max_grad_norm))
@@ -479,9 +588,11 @@ def policy_gradient_update(
         grad_norms.append(grad_norm)
         if settings.bounds_rows:
             row_summaries.append(bound.summary())
+        check_summaries.append(check.summary())
         if checkpoint is not None:
             _save_step(checkpoint, model, optimizer, rows=rows, chunks=chunks, completed=chunk_index + 1,
-                       policy_losses=policy_losses, kls=kls, grad_norms=grad_norms, row_summaries=row_summaries)
+                       policy_losses=policy_losses, kls=kls, grad_norms=grad_norms, row_summaries=row_summaries,
+                       check_summaries=check_summaries)
             state = checkpoint.load_state()
         if progress is not None:
             progress({
@@ -492,6 +603,7 @@ def policy_gradient_update(
                 "kl": chunk_kl,
                 "grad_norm": grad_norm,
                 "row_grad_norms": row_summaries[-1] if settings.bounds_rows else None,
+                "on_policy_check": check_summaries[-1],
                 "elapsed_seconds": time.perf_counter() - started,
             })
     model.eval()
@@ -509,7 +621,24 @@ def policy_gradient_update(
         settings=settings.as_dict(),
         resumed_from=resumed_from,
         row_grad_norms=row_summaries,
+        on_policy_check=check_summaries,
     )
+
+
+def _policy_term(logprobs: Any, old_logprobs: Any | None, advantage: float, clip_ratio: float | None, torch_module: Any) -> Any:
+    """Per-token policy loss: the plain on-policy term, or the clipped PPO surrogate.
+
+    The surrogate needs both a clip and the row's recorded sampling
+    log-probabilities; ``min(r A, clip(r) A)`` with ``r`` the per-token
+    ratio.  At ``r = 1`` its gradient is ``A`` times the score, the plain
+    term's gradient, so a first optimizer step is the same either way.
+    """
+
+    if clip_ratio is None or old_logprobs is None:
+        return -(advantage * logprobs)
+    ratio = torch_module.exp(logprobs - old_logprobs)
+    clipped = torch_module.clamp(ratio, 1.0 - float(clip_ratio), 1.0 + float(clip_ratio))
+    return -torch_module.minimum(ratio * advantage, clipped * advantage)
 
 
 def _bounded_row_backward(loss: Any, parameters: Sequence[Any], bound: RowGradientBound, torch_module: Any) -> None:
@@ -574,7 +703,8 @@ def _save_partial(checkpoint, model, optimizer, *, state_base, rows_done, partia
     })
 
 
-def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_losses, kls, grad_norms, row_summaries=()) -> None:
+def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_losses, kls, grad_norms, row_summaries=(),
+               check_summaries=()) -> None:
     import torch
 
     checkpoint.directory.mkdir(parents=True, exist_ok=True)
@@ -595,6 +725,8 @@ def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_
         **_state_base(rows, chunks, completed, policy_losses, kls, grad_norms),
         "row_grad_norms": list(row_summaries),
         "partial_row_norms": {},
+        "on_policy_checks": list(check_summaries),
+        "partial_on_policy": {},
         "chunk_rows_done": 0,
         "partial_policy": 0.0,
         "partial_kl": 0.0,
@@ -606,6 +738,7 @@ def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_
 
 __all__ = [
     "LOSS_NORMALIZATIONS",
+    "OnPolicyCheck",
     "REFERENCE_ADAPTER",
     "RowGradientBound",
     "TRAINED_ADAPTER",

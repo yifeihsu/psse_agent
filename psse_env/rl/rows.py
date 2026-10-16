@@ -5,17 +5,24 @@ model observation with the same renderer the policy used, checked against
 the recorded prompt length, and the completion is the recorded token list.
 No target is re-rendered from the parsed action, so the trained tokens are
 the sampled ones.  Rows carry their trajectory's advantage; a group with no
-advantage contributes no rows.
+advantage contributes no rows.  When the policy recorded the probability of
+each token it sampled, the row also carries those as log-probabilities, the
+reference the update checks itself against (and clips against, when asked).
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
 from psse_env.rl.advantages import GroupAdvantages
 from psse_env.rl.rollout import Trajectory
 
-ROWS_CONTRACT = "rl_training_rows_v1"
+ROWS_CONTRACT = "rl_training_rows_v2"
+#: A recorded sampling probability below this is clamped before the log, so a
+#: token whose probability the sampler's float32 softmax rounded to zero still
+#: gives a finite reference log-probability.
+MIN_SAMPLING_PROBABILITY = 1e-12
 
 PromptRenderer = Callable[[Mapping[str, Any]], str]
 PromptTokenizer = Callable[[str], tuple[list[int], int]]
@@ -33,6 +40,15 @@ class TrainingRow:
     completion_mask: list[int]
     side_inputs: dict[str, list[int]] = field(default_factory=dict)
     prompt_truncated: bool = False
+    #: Natural log of each completion token's probability under the
+    #: distribution the policy sampled it from, as the policy recorded it;
+    #: ``None`` when the step carried no record or the record did not match
+    #: the completion token for token.
+    sampling_logprobs: list[float] | None = None
+    #: Completion tokens of the whole trajectory this row belongs to, set by
+    #: :func:`build_rows`; the ``trajectory`` loss normalization divides by
+    #: it so a trajectory weighs the same whatever its length.
+    trajectory_tokens: int | None = None
 
     @property
     def completion_tokens(self) -> int:
@@ -49,6 +65,21 @@ class TrainingRow:
         return record
 
 
+def sampling_logprobs_for(
+    completion_ids: Sequence[int], probabilities: Sequence[float] | None
+) -> list[float] | None:
+    """The recorded sampling probabilities as log-probabilities, or ``None`` when they do not pair with the completion."""
+
+    if probabilities is None:
+        return None
+    values = [float(value) for value in probabilities]
+    if len(values) != len(completion_ids) or not values:
+        return None
+    if any(not math.isfinite(value) or value < 0.0 or value > 1.0 + 1e-6 for value in values):
+        return None
+    return [math.log(min(1.0, max(value, MIN_SAMPLING_PROBABILITY))) for value in values]
+
+
 def build_step_row(
     *,
     root: str,
@@ -59,6 +90,7 @@ def build_step_row(
     completion_ids: Sequence[int],
     max_length: int,
     required_side_inputs: Sequence[str] = (),
+    sampling_probabilities: Sequence[float] | None = None,
 ) -> TrainingRow:
     if max_length <= 0:
         raise ValueError("max_length must be positive")
@@ -75,6 +107,7 @@ def build_step_row(
     completion_mask = [0] * prompt_kept + [1] * len(completion)
     labels = [token if keep else -100 for token, keep in zip(used, completion_mask)]
     side_inputs = {name: [0] * len(used) for name in dict.fromkeys(required_side_inputs)}
+    sampling_logprobs = sampling_logprobs_for(completion, sampling_probabilities)
     return TrainingRow(
         root=root,
         sample_index=sample_index,
@@ -86,6 +119,7 @@ def build_step_row(
         completion_mask=completion_mask,
         side_inputs=side_inputs,
         prompt_truncated=slice_start > 0,
+        sampling_logprobs=sampling_logprobs,
     )
 
 
@@ -114,6 +148,7 @@ def build_rows(
         "invalid_steps_excluded": 0,
         "prompt_truncated_rows": 0,
         "completion_tokens": 0,
+        "rows_with_sampling_probabilities": 0,
     }
     for trajectories, advantages in groups:
         if not advantages.informative:
@@ -126,6 +161,7 @@ def build_rows(
             if not trajectory.pairing_ok:
                 report["trajectories_unpaired"] += 1
                 continue
+            trajectory_rows: list[TrainingRow] = []
             for step in trajectory.steps:
                 report["steps"] += 1
                 if not include_invalid_steps and step.execution_status != "success":
@@ -148,13 +184,29 @@ def build_rows(
                     completion_ids=step.completion_token_ids,
                     max_length=max_length,
                     required_side_inputs=required_side_inputs,
+                    sampling_probabilities=step.token_probabilities or None,
                 )
                 rows.append(row)
+                trajectory_rows.append(row)
                 report["rows"] += 1
                 report["completion_tokens"] += row.completion_tokens
+                if row.sampling_logprobs is not None:
+                    report["rows_with_sampling_probabilities"] += 1
+            total_tokens = sum(row.completion_tokens for row in trajectory_rows)
+            for row in trajectory_rows:
+                row.trajectory_tokens = total_tokens
                 if row.prompt_truncated:
                     report["prompt_truncated_rows"] += 1
     return rows, report
 
 
-__all__ = ["ROWS_CONTRACT", "PromptRenderer", "PromptTokenizer", "TrainingRow", "build_rows", "build_step_row"]
+__all__ = [
+    "MIN_SAMPLING_PROBABILITY",
+    "ROWS_CONTRACT",
+    "PromptRenderer",
+    "PromptTokenizer",
+    "TrainingRow",
+    "build_rows",
+    "build_step_row",
+    "sampling_logprobs_for",
+]

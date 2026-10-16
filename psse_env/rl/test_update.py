@@ -70,6 +70,32 @@ if torch is not None:
         model.load_state_dict(torch.load(directory / "weights.pt"))
         return model
 
+    class _GradRecorder:
+        """Stands in for the optimizer: keeps the accumulated gradient of the one step instead of applying it."""
+
+        def __init__(self, model) -> None:
+            self.model = model
+            self.grad = None
+
+        def zero_grad(self, set_to_none=True):
+            for parameter in self.model.parameters():
+                parameter.grad = None
+
+        def step(self):
+            self.grad = self.model.table.grad.detach().clone()
+
+        def state_dict(self):
+            return {}
+
+        def load_state_dict(self, value):
+            pass
+
+    def _with_record(model, rows, *, shift: float = 0.0):
+        """Attach each row's own log-probabilities under ``model`` (plus ``shift``) as its sampling record."""
+        for row in rows:
+            row.sampling_logprobs = [value + shift for value in completion_logprobs(model, row).detach().tolist()]
+        return rows
+
 
 def _row(prompt, completion, advantage):
     return build_step_row(root="r", sample_index=0, step=0, advantage=advantage, prompt_ids=prompt,
@@ -79,6 +105,12 @@ def _row(prompt, completion, advantage):
 def _rows():
     return [_row([1, 2, 3], [4, 5], 1.0), _row([2, 3], [6], -1.0), _row([3, 4, 5], [7, 8], 0.5),
             _row([5, 6], [9], -0.5), _row([6, 7, 8], [10, 11], 1.5), _row([8, 9], [2], -1.5)]
+
+
+def _rows_after_token_3():
+    """Rows whose first completion token is predicted from token 3, so one step moves every row's logits."""
+    return [_row([1, 2, 3], [4, 5], 1.0), _row([2, 3], [6], -1.0), _row([0, 3], [7, 8], 0.5),
+            _row([5, 3], [9], -0.5), _row([6, 7, 3], [10, 11], 1.5), _row([8, 3], [2], -1.5)]
 
 
 @unittest.skipIf(torch is None, "torch is not installed")
@@ -272,9 +304,99 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual([s["clipped"] for s in resumed.row_grad_norms], [s["clipped"] for s in expected.row_grad_norms])
             self.assertEqual(len(resumed.row_grad_norms), 2)
 
+    def test_the_on_policy_check_is_exact_at_the_first_step_and_sees_the_drift_after_it(self) -> None:
+        model = _TinyLM(seed=2)
+        rows = _with_record(model, _rows_after_token_3())
+        rows[4].sampling_logprobs = None
+        rows[5].sampling_logprobs = None
+        report = policy_gradient_update(model, rows, UpdateSettings(learning_rate=0.5, optimizer_steps=2, seed=7))
+        self.assertEqual(len(report.on_policy_check), 2)
+        first, second = report.on_policy_check
+        self.assertEqual(first["rows"] + first["rows_without_record"], 3)
+        self.assertEqual(first["rows_without_record"] + second["rows_without_record"], 2)
+        self.assertGreater(first["tokens"], 0)
+        self.assertAlmostEqual(first["mean_abs_log_ratio"], 0.0, places=5)
+        self.assertAlmostEqual(first["max_abs_log_ratio"], 0.0, places=5)
+        self.assertEqual(first["tokens_beyond_threshold"], 0)
+        self.assertGreater(second["mean_abs_log_ratio"], 1e-3)
+        self.assertAlmostEqual(second["threshold_log_ratio"], math.log(1.2))
+
+    def test_the_clipped_ratio_has_the_plain_gradient_on_policy_and_none_beyond_the_clip(self) -> None:
+        def gradient(rows, settings):
+            model = _TinyLM(seed=4)
+            recorder = _GradRecorder(model)
+            policy_gradient_update(model, rows, settings, optimizer=recorder)
+            return recorder.grad
+
+        plain = UpdateSettings(learning_rate=0.1, optimizer_steps=1, max_grad_norm=1e9)
+        clipped = UpdateSettings(learning_rate=0.1, optimizer_steps=1, max_grad_norm=1e9, clip_ratio=0.2)
+        on_policy = _with_record(_TinyLM(seed=4), _rows_after_token_3())
+        self.assertTrue(torch.allclose(gradient(on_policy, clipped), gradient(on_policy, plain), atol=1e-6))
+        # The recorded probability is 1.5 times smaller than the current one: ratio 1.5, beyond the clip.
+        too_high = _with_record(_TinyLM(seed=4), [_row([1, 2, 3], [4, 5], 1.0)], shift=-math.log(1.5))
+        self.assertTrue(torch.equal(gradient(too_high, clipped), torch.zeros(12, 12)))
+        self.assertFalse(torch.equal(gradient(too_high, plain), torch.zeros(12, 12)))
+        # A negative advantage with a ratio of 1.5 is unclipped (the surrogate still pushes the action down) ...
+        too_high_negative = _with_record(_TinyLM(seed=4), [_row([1, 2, 3], [4, 5], -1.0)], shift=-math.log(1.5))
+        self.assertFalse(torch.equal(gradient(too_high_negative, clipped), torch.zeros(12, 12)))
+        # ... and a ratio of 1/1.5 with a negative advantage is clipped.
+        too_low_negative = _with_record(_TinyLM(seed=4), [_row([1, 2, 3], [4, 5], -1.0)], shift=math.log(1.5))
+        self.assertTrue(torch.equal(gradient(too_low_negative, clipped), torch.zeros(12, 12)))
+        # Rows without a record keep the plain loss under a clip.
+        bare = [_row([1, 2, 3], [4, 5], 1.0)]
+        self.assertTrue(torch.allclose(gradient(bare, clipped), gradient(bare, plain), atol=1e-6))
+
+    def test_a_clipped_update_with_the_check_resumes_to_the_same_parameters_and_report(self) -> None:
+        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=2, seed=7, clip_ratio=0.2)
+        reference = _TinyLM(seed=3)
+        rows = _with_record(_TinyLM(seed=3), _rows())
+        expected = policy_gradient_update(reference, rows, settings)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = UpdateCheckpoint(directory=Path(directory), save_model=_save_tiny, every_rows=2)
+            with self.assertRaises(_Preempted):
+                policy_gradient_update(_TinyLM(seed=3, fail_after=5), rows, settings, checkpoint=checkpoint)
+            self.assertEqual(checkpoint.load_state()["partial_on_policy"]["rows"], 2)
+            resumed_model = _load_tiny(checkpoint.model_dir(), seed=3)
+            resumed = policy_gradient_update(resumed_model, rows, settings, checkpoint=checkpoint)
+            self.assertTrue(torch.allclose(resumed_model.table, reference.table, atol=1e-6))
+            self.assertEqual([c["rows"] for c in resumed.on_policy_check], [c["rows"] for c in expected.on_policy_check])
+            self.assertEqual([c["tokens"] for c in resumed.on_policy_check], [c["tokens"] for c in expected.on_policy_check])
+            for got, want in zip(resumed.on_policy_check, expected.on_policy_check):
+                self.assertAlmostEqual(got["mean_abs_log_ratio"], want["mean_abs_log_ratio"], places=5)
+
+    def test_trajectory_normalization_gives_every_trajectory_the_same_weight(self) -> None:
+        short = [_row([1, 2, 3], [4], 1.0)]
+        long = [_row([2, 3], [5, 6], -1.0), _row([7, 3], [8, 9], -1.0), _row([0, 3], [10, 11], -1.0)]
+        for row in long:
+            row.sample_index = 1
+        rows = short + long
+        for group in (short, long):
+            total = sum(row.completion_tokens for row in group)
+            for row in group:
+                row.trajectory_tokens = total
+        expected = torch.zeros(12, 12)
+        for group in (short, long):
+            for row in group:
+                single = _TinyLM(seed=4)
+                loss = -(float(row.advantage) * completion_logprobs(single, row)).sum() / (row.trajectory_tokens * 2)
+                loss.backward()
+                expected += single.table.grad
+        model = _TinyLM(seed=4)
+        recorder = _GradRecorder(model)
+        settings = UpdateSettings(learning_rate=0.01, optimizer_steps=1, max_grad_norm=1e9, loss_normalization="trajectory")
+        report = policy_gradient_update(model, rows, settings, optimizer=recorder)
+        self.assertTrue(torch.allclose(recorder.grad, expected, atol=1e-6))
+        self.assertEqual((report.rows, report.completion_tokens), (4, 7))
+        # Under the token normalization the long trajectory carries six of the seven tokens.
+        dapo = _GradRecorder(_TinyLM(seed=4))
+        policy_gradient_update(dapo.model, rows, UpdateSettings(learning_rate=0.01, optimizer_steps=1, max_grad_norm=1e9),
+                               optimizer=dapo)
+        self.assertFalse(torch.allclose(dapo.grad, expected, atol=1e-4))
+
     def test_settings_validation(self) -> None:
         for bad in (dict(learning_rate=0.0), dict(beta_kl=-1.0), dict(loss_normalization="token"), dict(temperature=0.0),
-                    dict(max_row_grad_norm=0.0), dict(row_grad_norm_factor=-1.0), dict(row_grad_norm_warmup=0)):
+                    dict(max_row_grad_norm=0.0), dict(row_grad_norm_factor=-1.0), dict(row_grad_norm_warmup=0),
+                    dict(clip_ratio=0.0), dict(clip_ratio=1.0), dict(clip_ratio=float("nan"))):
             with self.assertRaises(ValueError):
                 UpdateSettings(**bad).validate()
         with self.assertRaises(ValueError):

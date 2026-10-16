@@ -40,5 +40,17 @@ The expert reference (calls per root for the tool-regret term) covers the
 development roots and the round-2 training roots:
 `output/rl_pilot_20261014/expert_reference.jsonl`.
 
+Where an iteration's learning signal is (groups with a reward spread, what the
+spread is made of, where the samples part, how peaked the sampling was;
+`docs/rl_implementation_review_20261016.md`):
+
+```bash
+wsl -- ssh torch "cd /scratch/yx3882/rl_pilot_20261014/source && PYTHONPATH=. python -m psse_env.rl.diagnose --iteration /scratch/yx3882/rl_pilot_20261014/out/hard_v1/iteration_000 --output /scratch/yx3882/rl_pilot_20261014/out/hard_v1/iteration_000/diagnosis.json"
+```
+
+`update_report.json` of every update since 2026-10-16 also carries
+`on_policy_check`: per optimizer step, how far the recomputed log-probabilities
+are from the ones the policy sampled with.
+
 `out/pilot` holds the first submission's 25 groups (temperature 0.8,
 top-p 0.95, before the fixes of 2026-10-15); keep it as the record.

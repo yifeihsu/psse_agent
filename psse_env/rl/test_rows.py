@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import math
 import unittest
 
 from psse_env.rl.advantages import group_advantages
 from psse_env.rl.rollout import StepRecord, Trajectory
-from psse_env.rl.rows import build_rows, build_step_row
+from psse_env.rl.rows import MIN_SAMPLING_PROBABILITY, build_rows, build_step_row, sampling_logprobs_for
 
 
 def _render(observation):
@@ -16,15 +17,18 @@ def _tokenize(rendered: str):
     return ids, len(ids)
 
 
-def _trajectory(root: str, sample: int, *, steps: int, pairing_ok: bool = True, prompt_tokens: int | None = None) -> Trajectory:
+def _trajectory(root: str, sample: int, *, steps: int, pairing_ok: bool = True, prompt_tokens: int | None = None,
+                with_probabilities: bool = False) -> Trajectory:
     records = []
     for index in range(steps):
         observation = {"active_state_id": f"{root}:s{index}"}
         expected = len(_render(observation)) if prompt_tokens is None else prompt_tokens
+        completion = [7, 8, 9][: index + 1]
         records.append(StepRecord(step=index, model_observation=observation, prompt_tokens=expected,
-                                  original_prompt_tokens=expected, completion_token_ids=[7, 8, 9][: index + 1],
+                                  original_prompt_tokens=expected, completion_token_ids=completion,
                                   text="x", action={"tool": "run_wls", "arguments": {}}, tool="run_wls",
-                                  execution_status="success" if index else "failure", error_code=None))
+                                  execution_status="success" if index else "failure", error_code=None,
+                                  token_probabilities=[0.5] * len(completion) if with_probabilities else []))
     return Trajectory(root=root, family="parameter", sample_index=sample, episode_seed=1, steps=records,
                       reward={"total": 1.0}, evaluation={}, pairing_ok=pairing_ok)
 
@@ -81,6 +85,40 @@ class RowTests(unittest.TestCase):
         self.assertEqual(report["invalid_steps_excluded"], 2)
         self.assertEqual(len(rows), 2)
         self.assertTrue(all(row.step == 1 for row in rows))
+
+    def test_recorded_sampling_probabilities_become_reference_log_probabilities(self) -> None:
+        row = build_step_row(root="r", sample_index=0, step=0, advantage=1.0, prompt_ids=[1, 2], completion_ids=[9, 8, 7],
+                             max_length=16, sampling_probabilities=[1.0, 0.5, 0.0])
+        self.assertEqual(len(row.sampling_logprobs), 3)
+        self.assertAlmostEqual(row.sampling_logprobs[0], 0.0)
+        self.assertAlmostEqual(row.sampling_logprobs[1], math.log(0.5))
+        self.assertAlmostEqual(row.sampling_logprobs[2], math.log(MIN_SAMPLING_PROBABILITY))
+        self.assertIsNone(build_step_row(root="r", sample_index=0, step=0, advantage=1.0, prompt_ids=[1, 2],
+                                         completion_ids=[9, 8, 7], max_length=16).sampling_logprobs)
+        self.assertIsNone(sampling_logprobs_for([9, 8, 7], [1.0, 0.5]))
+        self.assertIsNone(sampling_logprobs_for([9, 8], [0.5, float("nan")]))
+        self.assertIsNone(sampling_logprobs_for([9, 8], [0.5, 1.5]))
+        self.assertIsNone(sampling_logprobs_for([], []))
+
+    def test_rows_carry_the_recorded_sampling_probabilities(self) -> None:
+        recorded = ([_trajectory("e", 0, steps=2, with_probabilities=True), _trajectory("e", 1, steps=1, with_probabilities=True)],
+                    group_advantages([1.0, 0.0], root="e"))
+        rows, report = build_rows([recorded], render_prompt=_render, prompt_token_ids=_tokenize, max_length=64)
+        self.assertEqual(report["rows"], 3)
+        self.assertEqual(report["rows_with_sampling_probabilities"], 3)
+        self.assertEqual(rows[1].sampling_logprobs, [math.log(0.5), math.log(0.5)])
+        bare = ([_trajectory("f", 0, steps=1), _trajectory("f", 1, steps=1)], group_advantages([1.0, 0.0], root="f"))
+        rows, report = build_rows([bare], render_prompt=_render, prompt_token_ids=_tokenize, max_length=64)
+        self.assertEqual(report["rows_with_sampling_probabilities"], 0)
+        self.assertTrue(all(row.sampling_logprobs is None for row in rows))
+
+    def test_rows_know_their_trajectorys_token_total(self) -> None:
+        group = ([_trajectory("g", 0, steps=2), _trajectory("g", 1, steps=1)], group_advantages([1.0, 0.0], root="g"))
+        rows, _report = build_rows([group], render_prompt=_render, prompt_token_ids=_tokenize, max_length=64)
+        self.assertEqual([row.completion_tokens for row in rows], [1, 2, 1])
+        self.assertEqual([row.trajectory_tokens for row in rows], [3, 3, 1])
+        self.assertIsNone(build_step_row(root="r", sample_index=0, step=0, advantage=1.0, prompt_ids=[1],
+                                         completion_ids=[2], max_length=8).trajectory_tokens)
 
 
 if __name__ == "__main__":

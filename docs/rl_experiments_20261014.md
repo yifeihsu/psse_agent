@@ -398,3 +398,21 @@ with a scripted environment; `psse_env/rl/test_update.py` checks the loss,
 the temperature, the KL estimator and checkpoint resume on a tiny bigram
 model; `psse_env/rl/test_peft_reference.py` checks the reference adapter on a
 tiny GPT-2 with real PEFT adapters.
+
+## 8. Review of the implementation (2026-10-16)
+
+`docs/rl_implementation_review_20261016.md` reads the loop component by
+component against the question of why the arms show no significant gain. In
+short: the loop is a correct on-policy GRPO/RLOO implementation; the flat
+results come from the absence of reward spread inside most groups, a budget of
+four optimizer steps, the saturated metric and the group-standardized
+advantage, not from the estimator, and switching to GAGPO would inherit all
+four. The review added three instruments, all default-off or report-only:
+`python -m psse_env.rl.diagnose --iteration <run>/iteration_NNN` (where the
+signal of a stored iteration is and what it is made of), `on_policy_check` in
+`update_report.json` (the gap between the recomputed and the recorded sampling
+log-probabilities per optimizer step), and `update.clip_ratio` (the clipped
+PPO surrogate against the recorded probabilities, for more than one optimizer
+step per batch), and `update.loss_normalization: "trajectory"` (every
+trajectory of an optimizer step weighs the same whatever its length, the
+direct answer to the 1,014-token sample of section 5).
