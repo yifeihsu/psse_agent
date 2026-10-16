@@ -9,6 +9,10 @@ from its own sampled rollouts, scored by the offline audit
 | `rl_pilot.json` | The pilot config: suites and adapter of the classifier cell, the sampling, reward, advantage and update settings |
 | `rl_pilot.sbatch` | One job runs `ITERATIONS` iterations as separate rollout, update and evaluate processes; the rollout and evaluation phases use two worker processes on an 80 GB card; requeues resume at the manifest's phase |
 | `deploy_from_windows.sh` | Clone the classifier cell's source, upload the bundle, the configs and the expert reference, submit one job per config |
+| `rl_hard.json`, `rl_hard_screen.json` | The two hard-draw arms (classifier gate, balanced screen), 64 roots per iteration from one seeded permutation |
+| `rl_hard_r2_baseline.json`, `rl_hard_screen_baseline.json` | Their controls: the frozen starting adapters scored on the same 209 development roots |
+| `rl_hard_screen_strat_kl.json` | The screen arm rerun with stratified roots (`root_sampling`, fixed counts per hard-draw stratum) and a KL penalty to the starting adapter (`beta_kl` 0.04); run note section 5 |
+| `rl_hard_screen_strat_kl_smoke.json` | One short iteration of that rerun (8 roots, no evaluation) that exercises the KL update on the real model |
 
 Deploy and submit from the Windows checkout (needs the SSH master):
 

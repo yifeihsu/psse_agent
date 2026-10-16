@@ -270,7 +270,108 @@ the 256 training roots solved). Control: job 19952751
 209 development roots. The classifier arm's control finished at 182 of 209
 (87.1%), stratum by stratum within three roots of the baseline expert.
 
-## 5. What is not built
+## 5. Hard-draw results after two iterations, and the stratified, KL-anchored rerun (2026-10-16)
+
+Greedy evaluation on the 209 hard development roots (experts: baseline 185
+under the classifier gate, ranked ledger 193 under the screen profile):
+
+| Run | Solved | False commits | Invalid actions | Loops | Mean steps |
+| --- | --- | --- | --- | --- | --- |
+| Classifier arm, frozen round-2 control | 182 | 14 | 51 | 7 | 10.11 |
+| Classifier arm, iteration 0 | 183 | 13 | 37 | 7 | 10.01 |
+| Classifier arm, iteration 1 | 183 | 15 | 35 | 6 | 10.02 |
+| Screen arm, frozen ranked-cell control | 174 | 9 | 42 | 30 | 10.08 |
+| Screen arm, iteration 0 | 173 | 11 | 51 | 19 | 10.20 |
+| Screen arm, iteration 1 | 170 | 10 | 89 | 21 | 10.78 |
+
+| Update | Informative groups | Rows | Policy loss per step | Step gradient norm | Largest row norm | Rows clipped |
+| --- | --- | --- | --- | --- | --- | --- |
+| Classifier, iteration 0 | 11 of 64 | 457 | −0.016, 0.004 | 22.4, 65.7 | 11.5, 80.3 | 0, 3 |
+| Classifier, iteration 1 | 10 of 64 | 517 | 0.014, −0.012 | 14.7, 7.6 | 10.2, 3.0 | 0, 0 |
+| Screen, iteration 0 | 16 of 64 | 960 | −0.069, −0.097 | 7.9, 3.1 | 3.7, 1.8 | 0, 0 |
+| Screen, iteration 1 | 20 of 64 | 1,039 | −0.126, −0.091 | 3.5, 45.8 | 1.7, 22.8 | 0, 0 |
+
+- **The classifier arm is level with its control.** The one lasting change
+  is about 30% fewer invalid actions; 198 of 209 tool sequences are the
+  same in both iterations. Misranked roots stay at 1 of 8 and 1 of 9.
+- **The screen arm's second update broke its harmonic roots** (12 to 5 of
+  16). On every lost root the adapter reads the measurement context after
+  the three-phase estimate instead of the harmonic context, then cycles
+  through corrections, estimator runs and rollbacks for 33 to 40 steps. It
+  gained three mimic and multi-meter roots; misranked roots are unchanged.
+- **Cause, from the iteration-1 batch.** 18 of its 20 informative groups were
+  measurement-type roots, where the cost terms reward skipping the
+  three-phase and harmonic acquisitions and going straight to measurement
+  corrections, and one measurement root punished asking for the harmonic
+  context after the three-phase estimate. One harmonic group held a 40-step
+  looping sample (advantage −1.73, 1,014 tokens): it produced the 22.8 row
+  and most of the 45.8 step norm, because the DAPO normalization weights a
+  trajectory by its tokens. The harmonic decision was already near a tie
+  (it flipped both ways in iteration 0), so a general push toward
+  measurement corrections carried over.
+- **Harmonic roots were not under-sampled.** Each iteration drew 64 disjoint
+  training roots, 7 of them harmonic, above their proportional 6; a
+  proportional stratified draw would not have changed their weight.
+
+**The rerun** (`rl_hard_screen_strat_kl.json`, output
+`out/hard_screen_strat_kl_v1`) keeps the screen arm's starting adapter,
+suites, seed, reward and update settings and changes two things:
+
+1. **Stratified roots** (`psse_env/rl/sampling.py`, config block
+   `root_sampling`): every iteration draws fixed counts per hard-draw
+   stratum, each stratum walked through its own seeded permutation, so a
+   stratum's roots are used up before any repeats. The counts oversample the
+   regression's stratum and the strata that carried signal in the first
+   run, keep every misranked training root in every iteration, and keep a
+   floor on the strata the policy solves four times out of four:
+
+   | Stratum | Training roots | Proportional share | Count | Informative groups in the first run |
+   | --- | --- | --- | --- | --- |
+   | Harmonic | 24 | 6 | 12 | 4 of 14 |
+   | Mimic, same-sign flow pair | 24 | 6 | 8 | 6 of 13 |
+   | Mimic, opposite-sign flow pair | 24 | 6 | 6 | 3 of 13 |
+   | Multi-meter | 32 | 8 | 8 | 8 of 14 |
+   | Single meter | 32 | 8 | 6 | 5 of 18 |
+   | Meter plus parameter, ambiguous | 32 | 8 | 4 | 4 of 17 |
+   | Meter plus parameter, misranked | 4 | 1 | 4 | 1 of 3 |
+   | Parameter, misranked | 4 | 1 | 4 | 1 of 1 |
+   | Meter plus topology | 8 | 2 | 2 | 2 of 3 |
+   | Topology | 8 | 2 | 2 | 2 of 4 |
+   | Parameter, ambiguous | 40 | 10 | 3 | 0 of 17 |
+   | Parameter, dominant | 8 | 2 | 1 | 0 of 3 |
+   | Meter plus parameter, dominant | 8 | 2 | 2 | 0 of 5 |
+   | Healthy | 8 | 2 | 2 | 0 of 3 |
+
+   Over four iterations the draw covers 200 of the 256 training roots. The
+   strata come from the audit and shape the training mix only; the policy
+   never sees them. A run without `root_sampling` draws exactly as before
+   (checked against both running arms' recorded roots).
+2. **KL penalty to the starting adapter**, `beta_kl` 0.04 (the GRPO paper's
+   value), k3 on the sampled tokens, the reference loaded as a second PEFT
+   adapter. It resists large departures from the starting adapter; it
+   cannot hold a near-tie decision by itself (a token moving from 0.55 to
+   0.45 changes the k3 term very little), so the harmonic count is the main
+   protection. The reference costs one extra forward pass per row, about a
+   third more update time, so a two-iteration job may reach the 12-hour
+   limit; the manifest resumes after a time-limit end.
+
+The KL path had only run on tiny test models. `rl_hard_screen_strat_kl_smoke.json`
+(8 stratified roots, at most 24 steps, no evaluation, output
+`out/smoke_strat_kl`) runs one iteration on the real model: the first
+optimizer step must report a KL of zero, because the trained adapter starts
+equal to the reference and the pipeline trains its adapters without
+dropout, and the second step a small positive one.
+
+```bash
+cd /scratch/yx3882/rl_pilot_20261014 && PATH=/opt/slurm/bin:$PATH sbatch --export=ALL,CONFIG=rl_hard_screen_strat_kl_smoke.json,ITERATIONS=1 --job-name=rl-smoke-strat-kl source/research/hpc/rl_pilot_20261014/rl_pilot.sbatch
+cd /scratch/yx3882/rl_pilot_20261014 && PATH=/opt/slurm/bin:$PATH sbatch --export=ALL,CONFIG=rl_hard_screen_strat_kl.json,ITERATIONS=2 --job-name=rl-rl_hard_screen_strat_kl source/research/hpc/rl_pilot_20261014/rl_pilot.sbatch
+```
+
+The rerun's comparison is the screen arm's control (174 of 209) and the
+screen arm itself, iteration by iteration and by stratum, above all the
+harmonic and misranked roots.
+
+## 6. What is not built
 
 - The k-candidate handoff with length-discounted credit (plan step 2.3):
   the environment's bounded handoff still names at most two lines and the
@@ -280,9 +381,11 @@ the 256 training roots solved). Control: job 19952751
   they need new generator overlays. The mimics come from the existing
   builder.
 
-## 6. Verification
+## 7. Verification
 
-Run locally on 2026-10-15 (244 passed, 64 subtests):
+Run locally on 2026-10-15 (244 passed, 64 subtests); `psse_env/rl/test_sampling.py`
+(2026-10-16) adds the stratified draw and pins the default draw to the
+permutation the running arms use:
 
 ```bash
 python -m pytest -q psse_env/rl research/rl psse_env/dagger/test_research_policy_factory.py psse_env/dagger/test_research_dagger_minimal.py psse_env/dagger/test_evaluator.py psse_env/sft/tests research/test_hpc_full_pipeline.py

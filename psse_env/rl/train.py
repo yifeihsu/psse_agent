@@ -39,6 +39,7 @@ from psse_env.rl.advantages import GroupAdvantages, group_advantages, summarize_
 from psse_env.rl.reward import RewardWeights, episode_basis, episode_reward, load_expert_reference
 from psse_env.rl.rollout import Trajectory, TrajectoryStore, rollout_roots, scenario_family, scenario_root, store_summary
 from psse_env.rl.rows import build_rows
+from psse_env.rl.sampling import RootSampling, root_stratum, stratified_roots
 from psse_env.rl.update import (
     REFERENCE_ADAPTER,
     TRAINED_ADAPTER,
@@ -78,6 +79,11 @@ class RLConfig:
     top_p: float = 1.0
     top_k: int | None = None
     roots_per_iteration: int | None = None
+    #: How the iteration's roots are drawn (:mod:`psse_env.rl.sampling`):
+    #: empty is the seeded permutation in disjoint slices; ``{"mode":
+    #: "stratified", "key": ..., "counts": {stratum: n}}`` fixes each
+    #: stratum's share of every iteration.
+    root_sampling: dict[str, Any] = field(default_factory=dict)
     max_length: int = 32768
     advantage_method: str = "grpo"
     advantage_scale: str = "group"
@@ -127,6 +133,7 @@ class RLConfig:
             raise ValueError("the update's temperature is the sampling temperature; set it at the top level only")
         RewardWeights.from_mapping(self.reward)
         UpdateSettings(**self.update).validate()
+        RootSampling.from_mapping(self.root_sampling).validate(self.roots_per_iteration)
 
     def update_settings(self, iteration: int) -> UpdateSettings:
         return UpdateSettings(**{**self.update, "seed": self.seed + int(iteration), "temperature": self.temperature})
@@ -196,6 +203,15 @@ def iteration_roots(scenarios: Sequence[Mapping[str, Any]], *, iteration: int, r
     start = (iteration * roots_per_iteration) % len(order)
     chosen = [order[(start + offset) % len(order)] for offset in range(roots_per_iteration)]
     return [dict(scenarios[index]) for index in chosen]
+
+
+def select_iteration_roots(config: RLConfig, scenarios: Sequence[Mapping[str, Any]], iteration: int) -> list[dict[str, Any]]:
+    """The roots of one iteration under the config's ``root_sampling`` (the permutation when it is empty)."""
+
+    sampling = RootSampling.from_mapping(config.root_sampling)
+    if sampling.mode == "stratified":
+        return stratified_roots(scenarios, iteration=iteration, counts=sampling.counts, key=sampling.key, seed=config.seed)
+    return iteration_roots(scenarios, iteration=iteration, roots_per_iteration=config.roots_per_iteration, seed=config.seed)
 
 
 def parse_shard(value: str | None) -> tuple[int, int] | None:
@@ -285,12 +301,13 @@ def phase_rollout(
 
     out = iteration_dir(config, manifest.iteration)
     out.mkdir(parents=True, exist_ok=True)
-    scenarios = iteration_roots(
-        load_suite(config.training_suite),
-        iteration=manifest.iteration,
-        roots_per_iteration=config.roots_per_iteration,
-        seed=config.seed,
-    )
+    sampling = RootSampling.from_mapping(config.root_sampling)
+    scenarios = select_iteration_roots(config, load_suite(config.training_suite), manifest.iteration)
+    strata: dict[str, int] = {}
+    if sampling.mode == "stratified":
+        for scenario in scenarios:
+            name = root_stratum(scenario, sampling.key)
+            strata[name] = strata.get(name, 0) + 1
     if shard is None:
         (out / "roots.json").write_text(json.dumps([scenario_root(s) for s in scenarios], indent=1) + "\n", encoding="utf-8")
     scenarios = shard_scenarios(scenarios, shard)
@@ -316,6 +333,8 @@ def phase_rollout(
     if shard is None:
         summary["store"] = store_summary(store)
         summary["sampling"] = {"temperature": config.temperature, "top_p": config.top_p, "top_k": config.top_k}
+        if sampling.mode == "stratified":
+            summary["root_sampling"] = {"mode": sampling.mode, "key": sampling.key, "strata": dict(sorted(strata.items()))}
         _write_json(out / "rollout_summary.json", summary)
     return summary
 
