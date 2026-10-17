@@ -38,7 +38,7 @@ if str(REPO_ROOT) not in sys.path:
 from psse_env.rl.advantages import GroupAdvantages, group_advantages, summarize_groups
 from psse_env.rl.reward import RewardWeights, episode_basis, episode_reward, load_expert_reference
 from psse_env.rl.rollout import Trajectory, TrajectoryStore, rollout_roots, scenario_family, scenario_root, store_summary
-from psse_env.rl.rows import build_rows
+from psse_env.rl.rows import RowSettings, build_rows
 from psse_env.rl.sampling import RootSampling, root_stratum, stratified_roots
 from psse_env.rl.update import (
     REFERENCE_ADAPTER,
@@ -100,6 +100,11 @@ class RLConfig:
     policy_source: str = "adapter"
     reward: dict[str, Any] = field(default_factory=dict)
     update: dict[str, Any] = field(default_factory=dict)
+    #: What the update trains on (:class:`psse_env.rl.rows.RowSettings`):
+    #: complete groups only, prompt digest and truncation checks, sampling
+    #: records, preservation rows for the KL term.  Empty keeps the
+    #: pre-2026-10-17 behaviour.
+    rows: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: str | Path) -> "RLConfig":
@@ -134,6 +139,15 @@ class RLConfig:
         RewardWeights.from_mapping(self.reward)
         UpdateSettings(**self.update).validate()
         RootSampling.from_mapping(self.root_sampling).validate(self.roots_per_iteration)
+        RowSettings.from_mapping(self.rows)
+
+    def row_settings(self, iteration: int) -> RowSettings:
+        """The row settings of one iteration: a clipped update always requires sampling records."""
+
+        payload = {**self.rows, "seed": self.seed + int(iteration)}
+        if self.update.get("clip_ratio") is not None:
+            payload["require_sampling_records"] = True
+        return RowSettings.from_mapping(payload)
 
     def update_settings(self, iteration: int) -> UpdateSettings:
         return UpdateSettings(**{**self.update, "seed": self.seed + int(iteration), "temperature": self.temperature})
@@ -487,6 +501,7 @@ def phase_update(config: RLConfig, manifest: Manifest, *, progress: Callable[[Ma
         rows, rows_report = build_rows(
             groups, render_prompt=render, prompt_token_ids=prompt_ids,
             max_length=config.max_length, required_side_inputs=side_inputs,
+            settings=config.row_settings(manifest.iteration),
         )
         report["rows"] = rows_report
         report["resumed_from_checkpoint"] = str(resume_dir) if resume_dir is not None else None

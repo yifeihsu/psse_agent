@@ -713,7 +713,10 @@ class _CanonicalResearchNativePolicy:
         original_prompt_length: int,
         text: str,
         token_probabilities: Sequence[float] | None = None,
+        prompt_ids: Any = None,
     ) -> None:
+        from psse_env.rl.prompt_digest import prompt_token_digest
+
         completion = sampled_ids[: int(generated_tokens)]
         completion_ids = [int(value) for value in completion.reshape(-1).tolist()]
         record: dict[str, Any] = {
@@ -725,6 +728,11 @@ class _CanonicalResearchNativePolicy:
             "generation": self._generation.as_dict(),
             "call_index": int(self._generation_calls),
         }
+        if prompt_ids is not None:
+            # The ids actually fed to generate (after the left truncation), so
+            # the update can refuse a row whose re-rendered prompt differs.
+            flat = prompt_ids.reshape(-1).tolist() if hasattr(prompt_ids, "reshape") else list(prompt_ids)
+            record["prompt_token_digest"] = prompt_token_digest(int(value) for value in flat)
         if token_probabilities is not None:
             probabilities = [float(value) for value in list(token_probabilities)[: len(completion_ids)]]
             record["completion_token_probabilities"] = probabilities
@@ -825,6 +833,7 @@ class _CanonicalResearchNativePolicy:
             original_prompt_length=original_prompt_length,
             text=text,
             token_probabilities=token_probabilities,
+            prompt_ids=model_inputs["input_ids"].detach().cpu(),
         )
         try:
             action = _validated_generated_action(text, visible_parameters)

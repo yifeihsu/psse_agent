@@ -499,3 +499,66 @@ PPO surrogate against the recorded probabilities, for more than one optimizer
 step per batch), and `update.loss_normalization: "trajectory"` (every
 trajectory of an optimizer step weighs the same whatever its length, the
 direct answer to the 1,014-token sample of section 5).
+
+## 9. The estimator and data-contract rerun (prepared 2026-10-17)
+
+A second, external review of the loop at `eeec327` (not in the repository;
+its GAGPO sections are set aside here) agreed with section 8 on the
+building blocks and the Dr. GRPO point, and added defects in the parts the
+next rerun would rely on. Checked against the code:
+
+| Claim | Finding |
+| --- | --- |
+| `clip_ratio` silently falls back to the plain loss on a row without a sampling record | Correct; it now refuses the batch (`policy_gradient_update`, `_policy_term`), and a clipped config builds rows with `require_sampling_records`. |
+| Rows are shuffled individually, so under the `trajectory` normalization a trajectory split across optimizer steps does not get one weight | Correct; optimizer steps now hold whole trajectories, dealt round robin (`_chunks`). |
+| Uninformative groups are dropped before the KL term, so the anchor never sees the states the policy already handles the same way every time | Correct; `rows.preservation` adds zero-advantage rows from uninformative groups, normalized in the KL term only (`_chunk_weights`). |
+| The on-policy check reports but does not enforce; it averages over mostly near-certain tokens | Correct; `update.max_on_policy_log_ratio` refuses a first step beyond the tolerance before it is applied, and the check reports the decision tokens (recorded probability below 0.99) separately. |
+| The row builder checks the re-rendered prompt's length, not its identity, and can truncate it again | Correct; the sampler now records a digest of the prompt token ids it decoded from (`psse_env/rl/prompt_digest.py`), `rows.require_prompt_digest` refuses a row without or with a different one, and `rows.reject_truncated_prompts` refuses update-side truncation. |
+| The rollout may load the processor from the adapter directory while the update loads it from the base model | Not here: the adapters hold only the LoRA weights and config, so both load the base model's processor; the policy identity records `processor_source`. |
+| Unpaired trajectories stay in the group baseline | `rows.require_complete_groups` skips such groups (none occurred after e622689). |
+| The √3 bound on four-sample standardized advantages; RLOO at K = 4 is 4/3 of the centered GRPO advantage; zero KL at initialization is not a generation-parity test; the optimizer is re-created every iteration; expert scores are baselines, not ceilings | All correct, no code change. |
+
+All defaults are unchanged: a config without a `rows` block and without the
+new update fields trains exactly as before (`psse_env/rl/test_rows.py`,
+`test_update.py`, `test_train.py`, `test_prompt_digest.py`).
+
+**The rerun** (`rl_hard_screen_fix.json`, output `out/hard_screen_fix_v1`)
+keeps the stratified mix, the KL penalty, four samples per root at
+temperature 1.0, two optimizer steps at learning rate 1e-5 and the row
+bound of 25, so that its control is the completed rerun of section 5
+(same roots, same starting adapter, same budget). It changes:
+
+| Setting | Section 5 rerun | This rerun | Why |
+| --- | --- | --- | --- |
+| `advantage_scale` | group | none | A one-call cost difference no longer weighs like a success flip (section 8, Dr. GRPO). |
+| `update.loss_normalization` | dapo | trajectory | A 40-step looping sample weighs like a 6-step one; whole-trajectory optimizer steps make the weight exact. |
+| `update.clip_ratio` | unset | 0.2 | The second optimizer step is a clipped PPO step against the recorded sampling probabilities instead of an uncorrected off-policy one. |
+| `update.max_on_policy_log_ratio` | unset | 0.05 | The first step is refused unless the training pass reproduces the sampling pass to that tolerance. |
+| `rows` | defaults | complete groups, prompt digest, no update-side truncation, sampling records required, preservation one trajectory per uninformative group, at most 24 groups | The KL anchor covers about 24 more states per iteration (about 220 rows, a fifth more update time); every trained row is exactly the sampled context. |
+
+Not changed on purpose: the learning rate and the number of optimizer
+steps. Section 8 recommends 3e-5 and four steps only after the scale and
+normalization changes are seen to work, and the seesaw of section 5 shows
+that two steps at 1e-5 already move the harmonic decision by whole
+strata; raising the budget is the next factor, on its own.
+
+Smoke test (`rl_hard_screen_fix_smoke.json`, output `out/smoke_fix`, 8
+stratified roots, one iteration, no evaluation) and the launch:
+
+```bash
+cd /scratch/yx3882/rl_pilot_20261014 && PATH=/opt/slurm/bin:$PATH sbatch --export=ALL,CONFIG=rl_hard_screen_fix_smoke.json,ITERATIONS=1 --job-name=rl-smoke-fix source/research/hpc/rl_pilot_20261014/rl_pilot.sbatch
+cd /scratch/yx3882/rl_pilot_20261014 && PATH=/opt/slurm/bin:$PATH sbatch --export=ALL,CONFIG=rl_hard_screen_fix.json,ITERATIONS=2 --job-name=rl-rl_hard_screen_fix source/research/hpc/rl_pilot_20261014/rl_pilot.sbatch
+```
+
+The smoke test passes when its update report shows every row with a
+sampling record and a matching prompt digest (`rows_without_sampling_record_rejected`,
+`prompt_digest_missing` and `prompt_digest_mismatches` all zero,
+`prompt_truncated_rows_rejected` zero), preservation rows above zero, a
+first-step `on_policy_check` mean absolute log-ratio under 0.05 with its
+decision-token mean reported, a KL of zero at the first step and a
+positive one at the second, and no row clipped by the ratio at the first
+step (`tokens_beyond_threshold` zero).
+
+The decision rule stays the one of section 5: paired gains and losses
+against the control on the 209 roots, by stratum, above all harmonic
+(does the seesaw stop?) and misranked (unchanged by every run so far).

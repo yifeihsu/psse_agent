@@ -40,6 +40,10 @@ class StepRecord:
     #: Probability of each sampled token under the distribution it was drawn
     #: from (empty for greedy or expert steps).
     token_probabilities: list[float] = field(default_factory=list)
+    #: Digest of the prompt token ids the policy decoded from
+    #: (:mod:`psse_env.rl.prompt_digest`); ``None`` for records made before
+    #: 2026-10-17 or by policies that do not report it.
+    prompt_digest: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -62,6 +66,7 @@ class StepRecord:
             execution_status=value.get("execution_status"),
             error_code=value.get("error_code"),
             token_probabilities=[float(item) for item in value.get("token_probabilities") or []],
+            prompt_digest=(str(value["prompt_digest"]) if value.get("prompt_digest") else None),
         )
 
 
@@ -207,6 +212,7 @@ def pair_records_with_trace(
                 execution_status=trace_step.get("execution_status"),
                 error_code=trace_step.get("error_code"),
                 token_probabilities=[float(item) for item in record.get("completion_token_probabilities") or []],
+                prompt_digest=(str(record["prompt_token_digest"]) if record.get("prompt_token_digest") else None),
             )
         )
     missing = sum(1 for step in steps if not step.model_observation or not step.completion_token_ids)

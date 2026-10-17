@@ -52,6 +52,19 @@ class TrainDriverTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 RLConfig.load(path)
 
+    def test_row_settings_are_validated_and_a_clipped_update_requires_sampling_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = _config(directory, rows={"preservation": "one", "preservation_max_groups": 8})
+            config.validate()
+            settings = config.row_settings(3)
+            self.assertEqual((settings.preservation, settings.seed, settings.require_sampling_records), ("one", 20261014 + 3, False))
+            with self.assertRaisesRegex(ValueError, "preservation"):
+                _config(directory, rows={"preservation": "some"}).validate()
+            with self.assertRaisesRegex(ValueError, "unknown rows fields"):
+                _config(directory, rows={"bogus": True}).validate()
+            clipped = _config(directory, update={"clip_ratio": 0.2})
+            self.assertTrue(clipped.row_settings(0).require_sampling_records)
+
     def test_manifest_round_trip_defaults_to_the_initial_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "manifest.json"

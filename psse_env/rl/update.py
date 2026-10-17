@@ -90,6 +90,13 @@ class UpdateSettings:
     #: At ratio one the clipped surrogate has the same gradient as the plain
     #: loss, so the first step is unchanged by it.
     clip_ratio: float | None = None
+    #: Refuse the batch when the first optimizer step's mean absolute
+    #: log-ratio between the recomputed and the recorded sampling
+    #: log-probabilities exceeds this (``None``: report only).  At the first
+    #: step the parameters are the sampling parameters, so the gap is the
+    #: numerical difference between the decoding and training passes; a
+    #: large one means the update is not training the policy that sampled.
+    max_on_policy_log_ratio: float | None = None
 
     @property
     def bounds_rows(self) -> bool:
@@ -118,6 +125,10 @@ class UpdateSettings:
             not math.isfinite(float(self.clip_ratio)) or not 0.0 < float(self.clip_ratio) < 1.0
         ):
             raise ValueError("clip_ratio must lie in (0, 1) when set")
+        if self.max_on_policy_log_ratio is not None and (
+            not math.isfinite(float(self.max_on_policy_log_ratio)) or float(self.max_on_policy_log_ratio) <= 0.0
+        ):
+            raise ValueError("max_on_policy_log_ratio must be finite and positive when set")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -185,6 +196,12 @@ class OnPolicyCheck:
     tokens beyond it are the ones a PPO clip of that size would clip.
     """
 
+    #: A token sampled with probability below this is a decision token: the
+    #: tool name, a target, an argument the policy was unsure about.  Their
+    #: gap is reported separately, because an average over the mostly
+    #: near-certain formatting tokens hides a gap where it matters.
+    UNCERTAIN_LOGPROB = math.log(0.99)
+
     def __init__(self, *, threshold: float = math.log(1.2), state: Mapping[str, Any] | None = None) -> None:
         state = dict(state or {})
         self.threshold = float(state.get("threshold") or threshold)
@@ -195,13 +212,17 @@ class OnPolicyCheck:
         self.sum = float(state.get("sum") or 0.0)
         self.max_abs = float(state.get("max_abs") or 0.0)
         self.beyond = int(state.get("beyond") or 0)
+        self.uncertain_tokens = int(state.get("uncertain_tokens") or 0)
+        self.uncertain_sum_abs = float(state.get("uncertain_sum_abs") or 0.0)
+        self.uncertain_max_abs = float(state.get("uncertain_max_abs") or 0.0)
 
     def record(self, logprobs: Any, sampling_logprobs: Any | None) -> None:
         """Compare one row's recomputed log-probabilities (shape ``[n]``) with its recorded ones."""
         if sampling_logprobs is None:
             self.rows_without_record += 1
             return
-        delta = (logprobs.detach().float() - sampling_logprobs.detach().float()).reshape(-1)
+        recorded = sampling_logprobs.detach().float().reshape(-1)
+        delta = logprobs.detach().float().reshape(-1) - recorded
         self.rows += 1
         count = int(delta.numel())
         self.tokens += count
@@ -210,6 +231,11 @@ class OnPolicyCheck:
             self.sum += float(delta.sum())
             self.max_abs = max(self.max_abs, float(delta.abs().max()))
             self.beyond += int((delta.abs() > self.threshold).sum())
+            uncertain = delta[recorded < self.UNCERTAIN_LOGPROB]
+            if int(uncertain.numel()):
+                self.uncertain_tokens += int(uncertain.numel())
+                self.uncertain_sum_abs += float(uncertain.abs().sum())
+                self.uncertain_max_abs = max(self.uncertain_max_abs, float(uncertain.abs().max()))
 
     def state(self) -> dict[str, Any]:
         return {
@@ -221,6 +247,9 @@ class OnPolicyCheck:
             "sum": self.sum,
             "max_abs": self.max_abs,
             "beyond": self.beyond,
+            "uncertain_tokens": self.uncertain_tokens,
+            "uncertain_sum_abs": self.uncertain_sum_abs,
+            "uncertain_max_abs": self.uncertain_max_abs,
         }
 
     def summary(self) -> dict[str, Any]:
@@ -233,6 +262,9 @@ class OnPolicyCheck:
             "max_abs_log_ratio": self.max_abs if self.tokens else None,
             "tokens_beyond_threshold": self.beyond,
             "threshold_log_ratio": self.threshold,
+            "uncertain_tokens": self.uncertain_tokens,
+            "uncertain_mean_abs_log_ratio": (self.uncertain_sum_abs / self.uncertain_tokens) if self.uncertain_tokens else None,
+            "uncertain_max_abs_log_ratio": self.uncertain_max_abs if self.uncertain_tokens else None,
         }
 
 
@@ -255,6 +287,10 @@ class UpdateReport:
     #: Per optimizer step: the gap between the recomputed and the recorded
     #: sampling log-probabilities (:class:`OnPolicyCheck`).
     on_policy_check: list[dict[str, Any]] = field(default_factory=list)
+    #: Rows carrying an advantage, and preservation rows (zero advantage,
+    #: present for the KL term only).
+    policy_rows: int = 0
+    preservation_rows: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -422,11 +458,47 @@ def _trainable_parameters(model: Any) -> list[Any]:
     return [parameter for parameter in model.parameters() if parameter.requires_grad]
 
 
-def _chunks(row_count: int, settings: UpdateSettings) -> list[list[int]]:
-    order = list(range(row_count))
-    random.Random(settings.seed).shuffle(order)
-    chunk_count = min(settings.optimizer_steps, len(order))
-    return [order[index::chunk_count] for index in range(chunk_count)]
+def _chunks(rows: Sequence[TrainingRow], settings: UpdateSettings) -> list[list[int]]:
+    """Row indices per optimizer step, whole trajectories kept together.
+
+    Trajectories (root, sample) are shuffled by the seed and dealt round
+    robin to the steps, so every step holds about the same number of them
+    and a trajectory's rows are never split across steps.  Under the
+    ``trajectory`` normalization that is what gives each trajectory one
+    weight; splitting rows across steps gave a trajectory with rows in two
+    steps a different total weight from one with rows in one (the external
+    review of 2026-10-17, item 2.4).
+    """
+
+    by_trajectory: dict[tuple[str, int], list[int]] = {}
+    for index, row in enumerate(rows):
+        by_trajectory.setdefault(row.trajectory_key, []).append(index)
+    keys = list(by_trajectory)
+    random.Random(settings.seed).shuffle(keys)
+    chunk_count = min(settings.optimizer_steps, len(keys))
+    chunks: list[list[int]] = [[] for _ in range(chunk_count)]
+    for position, key in enumerate(keys):
+        chunks[position % chunk_count].extend(by_trajectory[key])
+    return chunks
+
+
+def _chunk_weights(rows: Sequence[TrainingRow], chunk: Sequence[int]) -> dict[str, int]:
+    """Token, row and trajectory counts of a step, for the policy rows and for all rows.
+
+    The policy term is normalized over the rows that carry an advantage and
+    the KL term over every row, so preservation rows regularize without
+    diluting the policy gradient.
+    """
+
+    policy = [index for index in chunk if not rows[index].preservation]
+    return {
+        "tokens": sum(rows[index].completion_tokens for index in chunk),
+        "policy_tokens": sum(rows[index].completion_tokens for index in policy),
+        "rows": len(chunk),
+        "policy_rows": len(policy),
+        "trajectories": len({rows[index].trajectory_key for index in chunk}),
+        "policy_trajectories": len({rows[index].trajectory_key for index in policy}),
+    }
 
 
 def policy_gradient_update(
@@ -442,11 +514,13 @@ def policy_gradient_update(
     """Apply ``settings.optimizer_steps`` AdamW steps over ``rows`` and report the losses.
 
     With ``beta_kl > 0`` and no ``reference_logprobs``, the reference is the
-    model's PEFT adapter named ``reference``.  Rows with a zero advantage
-    still count toward the token normalization, as in GRPO.  With a
-    ``checkpoint``, a resumed call (same rows, same settings) continues from
-    the last committed state; the caller must have reloaded the model from
-    ``checkpoint.model_dir()`` when it is not ``None``.
+    model's PEFT adapter named ``reference``.  Policy rows with a zero
+    advantage still count toward the policy normalization, as in GRPO;
+    preservation rows (``row.preservation``) count toward the KL
+    normalization only.  With a ``checkpoint``, a resumed call (same rows,
+    same settings) continues from the last committed state; the caller must
+    have reloaded the model from ``checkpoint.model_dir()`` when it is not
+    ``None``.
     """
 
     import torch
@@ -470,8 +544,18 @@ def policy_gradient_update(
             betas=(settings.adam_beta1, settings.adam_beta2),
             eps=settings.adam_epsilon,
         )
-    chunks = _chunks(len(rows), settings)
-    chunk_tokens = [sum(rows[index].completion_tokens for index in chunk) for chunk in chunks]
+    if settings.clip_ratio is not None:
+        missing = [row for row in rows if row.sampling_logprobs is None or len(row.sampling_logprobs) != row.completion_tokens]
+        if missing:
+            first = missing[0]
+            raise ValueError(
+                f"clip_ratio needs the behaviour log-probabilities of every row; {len(missing)} of {len(rows)} rows have "
+                f"none or a mismatched record (first: root {first.root} sample {first.sample_index} step {first.step}). "
+                "Build the rows with require_sampling_records or sample with a recording policy."
+            )
+    chunks = _chunks(rows, settings)
+    weights = [_chunk_weights(rows, chunk) for chunk in chunks]
+    chunk_tokens = [weight["tokens"] for weight in weights]
     policy_losses: list[float] = []
     kls: list[float] = []
     grad_norms: list[float] = []
@@ -526,7 +610,7 @@ def policy_gradient_update(
                     parameter.grad = saved[name].to(parameter.device, dtype=parameter.dtype)
             chunk_policy = partial_policy
             chunk_kl = partial_kl
-        trajectories = len({(rows[index].root, rows[index].sample_index) for index in chunk})
+        weight = weights[chunk_index]
         for position in range(first_row, len(chunk)):
             row = rows[chunk[position]]
             # The reference pass runs first, with no autograd graph alive while
@@ -545,25 +629,31 @@ def policy_gradient_update(
             if reference is not None:
                 delta = reference.to(logprobs.device) - logprobs
                 kl_term = torch.exp(delta) - delta - 1.0
+            # The policy term is normalized over the policy rows of the step, the
+            # KL term over all of its rows (preservation rows included).
             if settings.loss_normalization == "dapo":
-                scale = 1.0 / max(1, tokens)
-                loss = policy_term.sum() * scale
+                policy_scale = 1.0 / max(1, weight["policy_tokens"])
+                kl_scale = 1.0 / max(1, weight["tokens"])
+                loss = policy_term.sum() * policy_scale
                 if kl_term is not None:
-                    loss = loss + settings.beta_kl * kl_term.sum() * scale
-                chunk_policy += float(policy_term.sum().detach()) * scale
+                    loss = loss + settings.beta_kl * kl_term.sum() * kl_scale
+                chunk_policy += float(policy_term.sum().detach()) * policy_scale
             elif settings.loss_normalization == "trajectory":
                 # A row without a trajectory total (rows built outside build_rows) is its own trajectory.
-                scale = 1.0 / (max(1, int(row.trajectory_tokens or row.completion_tokens)) * max(1, trajectories))
-                loss = policy_term.sum() * scale
+                own = max(1, int(row.trajectory_tokens or row.completion_tokens))
+                policy_scale = 1.0 / (own * max(1, weight["policy_trajectories"]))
+                kl_scale = 1.0 / (own * max(1, weight["trajectories"]))
+                loss = policy_term.sum() * policy_scale
                 if kl_term is not None:
-                    loss = loss + settings.beta_kl * kl_term.sum() * scale
-                chunk_policy += float(policy_term.sum().detach()) * scale
+                    loss = loss + settings.beta_kl * kl_term.sum() * kl_scale
+                chunk_policy += float(policy_term.sum().detach()) * policy_scale
             else:
-                scale = 1.0 / max(1, len(chunk))
-                loss = policy_term.mean() * scale
+                policy_scale = 1.0 / max(1, weight["policy_rows"])
+                kl_scale = 1.0 / max(1, weight["rows"])
+                loss = policy_term.mean() * policy_scale
                 if kl_term is not None:
-                    loss = loss + settings.beta_kl * kl_term.mean() * scale
-                chunk_policy += float(policy_term.mean().detach()) * scale
+                    loss = loss + settings.beta_kl * kl_term.mean() * kl_scale
+                chunk_policy += float(policy_term.mean().detach()) * policy_scale
             if settings.bounds_rows:
                 _bounded_row_backward(loss, parameters, bound, torch)
             else:
@@ -581,6 +671,16 @@ def policy_gradient_update(
                                           "partial_on_policy": check.state()},
                               rows_done=done, partial_policy=chunk_policy, partial_kl=chunk_kl, previous=state)
                 state = checkpoint.load_state()
+        if chunk_index == 0 and settings.max_on_policy_log_ratio is not None:
+            gap = check.summary()
+            mean_gap = gap.get("mean_abs_log_ratio")
+            if gap["rows_without_record"] or mean_gap is None or mean_gap > float(settings.max_on_policy_log_ratio):
+                raise RuntimeError(
+                    "the first optimizer step is not on policy: mean absolute log-ratio between the recomputed and the "
+                    f"recorded sampling log-probabilities {mean_gap} (limit {settings.max_on_policy_log_ratio}), "
+                    f"{gap['rows_without_record']} rows without a record; decision tokens: {gap['uncertain_tokens']} "
+                    f"with mean gap {gap['uncertain_mean_abs_log_ratio']}. The update was not applied."
+                )
         grad_norm = float(torch.nn.utils.clip_grad_norm_(parameters, settings.max_grad_norm))
         optimizer.step()
         policy_losses.append(chunk_policy)
@@ -622,6 +722,8 @@ def policy_gradient_update(
         resumed_from=resumed_from,
         row_grad_norms=row_summaries,
         on_policy_check=check_summaries,
+        policy_rows=sum(1 for row in rows if not row.preservation),
+        preservation_rows=sum(1 for row in rows if row.preservation),
     )
 
 
@@ -631,11 +733,15 @@ def _policy_term(logprobs: Any, old_logprobs: Any | None, advantage: float, clip
     The surrogate needs both a clip and the row's recorded sampling
     log-probabilities; ``min(r A, clip(r) A)`` with ``r`` the per-token
     ratio.  At ``r = 1`` its gradient is ``A`` times the score, the plain
-    term's gradient, so a first optimizer step is the same either way.
+    term's gradient, so a first optimizer step is the same either way.  A
+    clip without a record is refused: a silent fall-back to the plain term
+    would train an unclipped step the caller believes is clipped.
     """
 
-    if clip_ratio is None or old_logprobs is None:
+    if clip_ratio is None:
         return -(advantage * logprobs)
+    if old_logprobs is None:
+        raise ValueError("clip_ratio is set but the row carries no sampling record")
     ratio = torch_module.exp(logprobs - old_logprobs)
     clipped = torch_module.clamp(ratio, 1.0 - float(clip_ratio), 1.0 + float(clip_ratio))
     return -torch_module.minimum(ratio * advantage, clipped * advantage)

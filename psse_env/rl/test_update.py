@@ -97,20 +97,21 @@ if torch is not None:
         return rows
 
 
-def _row(prompt, completion, advantage):
-    return build_step_row(root="r", sample_index=0, step=0, advantage=advantage, prompt_ids=prompt,
-                          completion_ids=completion, max_length=64)
+def _row(prompt, completion, advantage, sample=0, preservation=False):
+    """One row; rows with different ``sample`` are different trajectories (the update chunks by trajectory)."""
+    return build_step_row(root="r", sample_index=sample, step=0, advantage=advantage, prompt_ids=prompt,
+                          completion_ids=completion, max_length=64, preservation=preservation)
 
 
 def _rows():
-    return [_row([1, 2, 3], [4, 5], 1.0), _row([2, 3], [6], -1.0), _row([3, 4, 5], [7, 8], 0.5),
-            _row([5, 6], [9], -0.5), _row([6, 7, 8], [10, 11], 1.5), _row([8, 9], [2], -1.5)]
+    return [_row([1, 2, 3], [4, 5], 1.0, 0), _row([2, 3], [6], -1.0, 1), _row([3, 4, 5], [7, 8], 0.5, 2),
+            _row([5, 6], [9], -0.5, 3), _row([6, 7, 8], [10, 11], 1.5, 4), _row([8, 9], [2], -1.5, 5)]
 
 
 def _rows_after_token_3():
     """Rows whose first completion token is predicted from token 3, so one step moves every row's logits."""
-    return [_row([1, 2, 3], [4, 5], 1.0), _row([2, 3], [6], -1.0), _row([0, 3], [7, 8], 0.5),
-            _row([5, 3], [9], -0.5), _row([6, 7, 3], [10, 11], 1.5), _row([8, 3], [2], -1.5)]
+    return [_row([1, 2, 3], [4, 5], 1.0, 0), _row([2, 3], [6], -1.0, 1), _row([0, 3], [7, 8], 0.5, 2),
+            _row([5, 3], [9], -0.5, 3), _row([6, 7, 3], [10, 11], 1.5, 4), _row([8, 3], [2], -1.5, 5)]
 
 
 @unittest.skipIf(torch is None, "torch is not installed")
@@ -181,7 +182,7 @@ class UpdateTests(unittest.TestCase):
 
     def test_optimizer_steps_partition_the_rows(self) -> None:
         model = _TinyLM()
-        rows = [_row([1, 2], [3], 1.0), _row([2, 3], [4], -1.0), _row([3, 4], [5], 0.5)]
+        rows = [_row([1, 2], [3], 1.0, 0), _row([2, 3], [4], -1.0, 1), _row([3, 4], [5], 0.5, 2)]
         seen: list[int] = []
         report = policy_gradient_update(model, rows, UpdateSettings(learning_rate=0.01, optimizer_steps=2),
                                         progress=lambda record: seen.append(int(record["rows"])))
@@ -342,9 +343,11 @@ class UpdateTests(unittest.TestCase):
         # ... and a ratio of 1/1.5 with a negative advantage is clipped.
         too_low_negative = _with_record(_TinyLM(seed=4), [_row([1, 2, 3], [4, 5], -1.0)], shift=math.log(1.5))
         self.assertTrue(torch.equal(gradient(too_low_negative, clipped), torch.zeros(12, 12)))
-        # Rows without a record keep the plain loss under a clip.
+        # A clip without a record is refused, never a silent plain step.
         bare = [_row([1, 2, 3], [4, 5], 1.0)]
-        self.assertTrue(torch.allclose(gradient(bare, clipped), gradient(bare, plain), atol=1e-6))
+        with self.assertRaisesRegex(ValueError, "behaviour log-probabilities"):
+            gradient(bare, clipped)
+        self.assertFalse(torch.equal(gradient(bare, plain), torch.zeros(12, 12)))
 
     def test_a_clipped_update_with_the_check_resumes_to_the_same_parameters_and_report(self) -> None:
         settings = UpdateSettings(learning_rate=0.05, optimizer_steps=2, seed=7, clip_ratio=0.2)
@@ -393,10 +396,86 @@ class UpdateTests(unittest.TestCase):
                                optimizer=dapo)
         self.assertFalse(torch.allclose(dapo.grad, expected, atol=1e-4))
 
+    def test_optimizer_steps_keep_whole_trajectories_together_and_balanced(self) -> None:
+        from psse_env.rl.update import _chunks
+
+        rows = [_row([1, 2, 3], [4], 1.0, 0)]
+        for prompt, completion in (([2, 3], [5, 6]), ([7, 3], [8, 9]), ([0, 3], [10, 11])):
+            rows.append(_row(prompt, completion, -1.0, 1))
+        rows += [_row([4, 5], [6], 0.5, 2), _row([5, 6], [7], -0.5, 3), _row([6, 7], [8], -0.5, 3)]
+        chunks = _chunks(rows, UpdateSettings(optimizer_steps=2, seed=3))
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(sorted(index for chunk in chunks for index in chunk), list(range(len(rows))))
+        for chunk in chunks:
+            keys = {rows[index].trajectory_key for index in chunk}
+            self.assertEqual(len(keys), 2)  # four trajectories dealt two per step
+            for index in chunk:  # every row of a trajectory sits in the chunk that holds it
+                self.assertTrue(all(rows[other].trajectory_key != rows[index].trajectory_key
+                                    for other_chunk in chunks if other_chunk is not chunk for other in other_chunk))
+        # Under the trajectory normalization the last step weighs each of its trajectories 1/2,
+        # whatever their lengths (rows in one step cannot be split across steps any more).
+        for row in rows:
+            row.trajectory_tokens = sum(other.completion_tokens for other in rows if other.trajectory_key == row.trajectory_key)
+        last = chunks[-1]
+        expected = torch.zeros(12, 12)
+        for index in last:
+            single = _TinyLM(seed=4)
+            loss = -(float(rows[index].advantage) * completion_logprobs(single, rows[index])).sum() / (rows[index].trajectory_tokens * 2)
+            loss.backward()
+            expected += single.table.grad
+        recorder = _GradRecorder(_TinyLM(seed=4))
+        policy_gradient_update(recorder.model, rows, UpdateSettings(optimizer_steps=2, seed=3, max_grad_norm=1e9,
+                                                                    loss_normalization="trajectory"), optimizer=recorder)
+        self.assertTrue(torch.allclose(recorder.grad, expected, atol=1e-6))
+
+    def test_preservation_rows_enter_the_kl_term_but_not_the_policy_normalization(self) -> None:
+        def gradient(rows, normalization):
+            recorder = _GradRecorder(_TinyLM(seed=4))
+            settings = UpdateSettings(optimizer_steps=1, max_grad_norm=1e9, loss_normalization=normalization)
+            report = policy_gradient_update(recorder.model, rows, settings, optimizer=recorder)
+            return recorder.grad, report
+
+        for normalization in ("dapo", "trajectory", "sequence"):
+            policy = _rows_after_token_3()
+            kept = _rows_after_token_3() + [_row([9, 3], [10, 11, 4], 0.0, 9, preservation=True)]
+            for rows in (policy, kept):
+                for row in rows:
+                    row.trajectory_tokens = row.completion_tokens
+            alone, _ = gradient(policy, normalization)
+            with_preservation, report = gradient(kept, normalization)
+            self.assertTrue(torch.allclose(alone, with_preservation, atol=1e-6), normalization)
+            self.assertEqual((report.policy_rows, report.preservation_rows), (6, 1))
+        # With a KL penalty the preservation row is regularized: a reference that disagrees with the
+        # model on that row alone moves the parameters, which a zero-advantage row never could.
+        reference = _TinyLM(seed=5)
+        row = _row([9, 3], [10, 11, 4], 0.0, 9, preservation=True)
+        row.trajectory_tokens = row.completion_tokens
+        recorder = _GradRecorder(_TinyLM(seed=4))
+        policy_gradient_update(recorder.model, [row], UpdateSettings(optimizer_steps=1, max_grad_norm=1e9, beta_kl=1.0),
+                               optimizer=recorder, reference_logprobs=lambda r: completion_logprobs(reference, r).detach())
+        self.assertFalse(torch.equal(recorder.grad, torch.zeros(12, 12)))
+
+    def test_a_first_step_off_policy_beyond_the_tolerance_is_refused_before_it_is_applied(self) -> None:
+        model = _TinyLM(seed=2)
+        rows = _with_record(model, _rows_after_token_3(), shift=0.5)
+        recorder = _GradRecorder(model)
+        with self.assertRaisesRegex(RuntimeError, "not on policy"):
+            policy_gradient_update(model, rows, UpdateSettings(optimizer_steps=1, max_on_policy_log_ratio=0.1), optimizer=recorder)
+        self.assertIsNone(recorder.grad)
+        exact = _with_record(_TinyLM(seed=2), _rows_after_token_3())
+        report = policy_gradient_update(_TinyLM(seed=2), exact, UpdateSettings(optimizer_steps=1, max_on_policy_log_ratio=0.1))
+        self.assertLess(report.on_policy_check[0]["mean_abs_log_ratio"], 1e-5)
+        self.assertGreater(report.on_policy_check[0]["uncertain_tokens"], 0)
+        self.assertLess(report.on_policy_check[0]["uncertain_mean_abs_log_ratio"], 1e-5)
+        with self.assertRaisesRegex(RuntimeError, "without a record"):
+            missing = _rows_after_token_3()
+            policy_gradient_update(_TinyLM(seed=2), missing, UpdateSettings(optimizer_steps=1, max_on_policy_log_ratio=0.1))
+
     def test_settings_validation(self) -> None:
         for bad in (dict(learning_rate=0.0), dict(beta_kl=-1.0), dict(loss_normalization="token"), dict(temperature=0.0),
                     dict(max_row_grad_norm=0.0), dict(row_grad_norm_factor=-1.0), dict(row_grad_norm_warmup=0),
-                    dict(clip_ratio=0.0), dict(clip_ratio=1.0), dict(clip_ratio=float("nan"))):
+                    dict(clip_ratio=0.0), dict(clip_ratio=1.0), dict(clip_ratio=float("nan")),
+                    dict(max_on_policy_log_ratio=0.0), dict(max_on_policy_log_ratio=float("inf"))):
             with self.assertRaises(ValueError):
                 UpdateSettings(**bad).validate()
         with self.assertRaises(ValueError):
