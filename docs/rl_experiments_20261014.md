@@ -371,6 +371,89 @@ The rerun's comparison is the screen arm's control (174 of 209) and the
 screen arm itself, iteration by iteration and by stratum, above all the
 harmonic and misranked roots.
 
+### Results after four iterations (2026-10-17)
+
+All three runs reached four iterations: the classifier arm (jobs 19956235
+and 19996864), the screen arm (20013499) and the rerun (20028509; smoke
+test 20015194 passed with KL 0 then 0.0023). The rerun's job was preempted
+nine times and requeued each time without losing work; it was cancelled by
+hand once its manifest reached iteration 4, because every requeue restarts
+the job script's iteration loop and it had begun a fifth iteration
+(`iteration_004` holds 30 partial groups). Greedy evaluation on the 209
+hard development roots:
+
+| Run | Control | Iteration 1 | 2 | 3 | 4 | Expert |
+| --- | --- | --- | --- | --- | --- | --- |
+| Classifier arm | 182 | 183 | 183 | 184 | 183 | 185 (baseline) |
+| Screen arm | 174 | 173 | 170 | 170 | 177 | 193 (ranked ledger) |
+| Rerun, stratified and KL-anchored | 174 | 173 | 176 | 167 | 171 | 193 (ranked ledger) |
+
+No iteration of any run differs from its control at p < 0.05 (two-sided
+sign test on the paired roots; the closest is the rerun's third iteration,
+3 gains and 10 losses, p 0.09). The rerun's updates:
+
+| Rerun iteration | Informative groups | Rows | Policy loss per step | Step gradient norm | Largest row norm | Rows clipped | KL per step |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 15 of 64 | 995 | −0.004, 0.022 | 3.7, 4.1 | 2.7, 97.5 | 2 | 0, 0.006 |
+| 2 | 19 of 64 | 991 | −0.266, −0.016 | 4.0, 15.6 | 1.6, 14.8 | 0 | 0.012, 0.006 |
+| 3 | 19 of 64 | 1,176 | −0.119, −0.096 | 4.7, 25.3 | 3.1, 412.4 | 1 | 0.041, 0.005 |
+| 4 | 17 of 64 | 1,028 | −0.021, −0.090 | 17.5, 8.7 | 18.9, 6.6 | 0 | 0.041, 0.072 |
+
+The strata that moved (every other stratum is identical in every column):
+
+| Stratum | Roots | Control | Rerun 1 | 2 | 3 | 4 | Screen arm 4 | Ranked expert |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Harmonic | 16 | 12 | 16 | 16 | 8 | 11 | 12 | 16 |
+| Mimic, opposite-sign | 24 | 19 | 16 | 17 | 19 | 18 | 20 | 20 |
+| Mimic, same-sign | 24 | 14 | 13 | 13 | 13 | 13 | 15 | 20 |
+| Multi-meter | 24 | 23 | 22 | 24 | 24 | 23 | 24 | 24 |
+| Single meter | 24 | 24 | 24 | 24 | 22 | 24 | 24 | 24 |
+| Meter plus parameter, misranked | 8 | 1 | 1 | 1 | 1 | 1 | 1 | 4 |
+| Parameter, misranked | 9 | 1 | 1 | 1 | 1 | 1 | 1 | 5 |
+| False commits | | 9 | 9 | 8 | 6 | 3 | 11 | |
+| Invalid actions | | 42 | 47 | 37 | 57 | 42 | 56 | |
+| Loop episodes | | 30 | 29 | 21 | 26 | 27 | 17 | |
+
+What the three runs show:
+
+- **The stratified mix did what it was built for, once.** With 12 harmonic
+  roots per iteration, 6 of the first batch's 15 informative groups were
+  harmonic, and one update took the harmonic roots from 12 to 16 of 16 with
+  no invalid actions on them, against 11 of 16 for the screen arm's first
+  iteration. The mix removed the sampling asymmetry of section 5.
+- **The harmonic-versus-meter decision seesaws every update.** The first
+  update that fixed harmonic broke five meter-type roots (the adapter asked
+  for the harmonic or three-phase context on flow-meter mimics and repeated
+  the request); the second won two back; the third dropped harmonic to 8 of
+  16 with new failure modes (asking for every other context after the
+  harmonic one instead of running the harmonic estimator, skipping the
+  three-phase estimate); the fourth recovered to 11. The screen arm showed
+  the same oscillation in the other order (12, 11, 5, 7, 12). In the screen
+  evidence this choice is a near tie that each batch pushes one way.
+- **The KL penalty did not hold it.** At `beta_kl` 0.04 the penalty is
+  about 0.002 against policy losses near 0.1; the KL to the starting adapter
+  grew from 0.006 to 0.07 across the four updates. As section 5 predicted,
+  a brake of this size cannot pin a near-tie decision.
+- **The misranked roots never moved**, in any run or iteration: 1 of 8 and
+  1 of 9, the same as the baseline expert, against 4 of 8 and 5 of 9 for the
+  ranked-ledger expert that reads the screen's refit ranking. The groups
+  that fail these roots fail four times out of four, so they carry no
+  gradient (section 4 of the plan, section 5 of the review). The flow-meter
+  mimics stayed at or below the control throughout.
+- **Efficiency moved more than success.** The classifier arm ended with
+  invalid actions 29 against 51 and false commits 11 against 14; the rerun
+  ended with false commits 3 against 9 and loop episodes 27 against 30, the
+  screen arm with loops 17 against 30. Across the rerun's four evaluations
+  161 roots were always solved, 30 never, and 18 flipped.
+
+Next steps are the review's (section 8): advantages in reward units,
+trajectory-level normalization, the clipped ratio for more than one
+optimizer step, and a larger optimizer budget, with the stratified mix
+kept; and for the misranked roots, rollouts that branch at the decision
+state, since on-policy sampling of a peaked policy never produces the
+reward spread those roots need. The pre-change arms (`rl_hard.json`,
+`rl_hard_screen.json`) and the rerun are complete; nothing is queued.
+
 ## 6. What is not built
 
 - The k-candidate handoff with length-discounted credit (plan step 2.3):
