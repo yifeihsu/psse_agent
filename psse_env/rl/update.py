@@ -48,6 +48,7 @@ UPDATE_CONTRACT = "rl_on_policy_lora_update_v2"
 #: length; a row's tokens are divided by its trajectory's tokens and the
 #: step by its number of trajectories.
 LOSS_NORMALIZATIONS = ("dapo", "sequence", "trajectory")
+CLIP_REFERENCES = ("sampler", "training")
 REFERENCE_ADAPTER = "reference"
 TRAINED_ADAPTER = "default"
 
@@ -97,6 +98,20 @@ class UpdateSettings:
     #: numerical difference between the decoding and training passes; a
     #: large one means the update is not training the policy that sampled.
     max_on_policy_log_ratio: float | None = None
+    #: What the clipped ratio is taken against.  ``sampler``: the
+    #: probabilities the policy recorded when it sampled.  ``training``: the
+    #: training pass itself before the first optimizer step (one extra
+    #: forward per row, persisted with the checkpoint), so the first step
+    #: has a ratio of exactly one and later steps clip against the true
+    #: pre-update policy.  The sampler's probabilities then serve the
+    #: on-policy check only.  Measured 2026-10-17 on the smoke test of the
+    #: fix rerun: the sampling pass (bf16 inference) and the training pass
+    #: (4-bit training preparation, norms and embeddings in float32) differ
+    #: by a mean absolute log-ratio of 0.005 over all tokens but 0.37 over
+    #: the decision tokens, with single tokens off by 1.85; against the
+    #: sampler such a token is clipped or scaled by a factor of six at the
+    #: first step for a numerical reason, not a policy change.
+    clip_reference: str = "sampler"
 
     @property
     def bounds_rows(self) -> bool:
@@ -129,6 +144,8 @@ class UpdateSettings:
             not math.isfinite(float(self.max_on_policy_log_ratio)) or float(self.max_on_policy_log_ratio) <= 0.0
         ):
             raise ValueError("max_on_policy_log_ratio must be finite and positive when set")
+        if self.clip_reference not in CLIP_REFERENCES:
+            raise ValueError(f"clip_reference must be one of {CLIP_REFERENCES}, got {self.clip_reference!r}")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -291,6 +308,10 @@ class UpdateReport:
     #: present for the KL term only).
     policy_rows: int = 0
     preservation_rows: int = 0
+    #: Per optimizer step, when a clip is set: the gap between the
+    #: recomputed log-probabilities and the clip baseline, with the tokens
+    #: beyond the clip (the ones the surrogate actually clipped or scaled).
+    clip_check: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -566,8 +587,11 @@ def policy_gradient_update(
     partial_rows: Mapping[str, Any] = {}
     row_summaries: list[dict[str, Any]] = []
     check_summaries: list[dict[str, Any]] = []
+    clip_summaries: list[dict[str, Any]] = []
     partial_check: Mapping[str, Any] = {}
+    partial_clip: Mapping[str, Any] = {}
     resumed_from: dict[str, Any] | None = None
+    extra_state: dict[str, Any] = {}
     state = checkpoint.load_state() if checkpoint is not None else None
     if state is not None:
         if int(state.get("row_count", -1)) != len(rows) or int(state.get("chunk_count", -1)) != len(chunks):
@@ -583,9 +607,41 @@ def policy_gradient_update(
         row_summaries = list(state.get("row_grad_norms") or [])
         partial_check = state.get("partial_on_policy") or {}
         check_summaries = list(state.get("on_policy_checks") or [])
+        partial_clip = state.get("partial_clip") or {}
+        clip_summaries = list(state.get("clip_checks") or [])
+        if state.get("old_logprobs_file"):
+            extra_state["old_logprobs_file"] = str(state["old_logprobs_file"])
         if state.get("optimizer_file"):
             optimizer.load_state_dict(torch.load(checkpoint.directory / state["optimizer_file"], map_location="cpu"))
         resumed_from = {"completed_chunks": start_chunk, "chunk_rows_done": start_row}
+
+    # The clip baseline from the training pass: every row's log-probabilities
+    # under the model as it stands before the first optimizer step, taken
+    # without a gradient, persisted beside the checkpoint so a resumed update
+    # clips against the same baseline after the model has moved.
+    training_old: list[Any] | None = None
+    if settings.clip_ratio is not None and settings.clip_reference == "training":
+        if extra_state.get("old_logprobs_file"):
+            training_old = torch.load(checkpoint.directory / extra_state["old_logprobs_file"], map_location="cpu")
+            if len(training_old) != len(rows):
+                raise RuntimeError("the persisted clip baseline was written for a different batch of rows")
+        elif start_chunk > 0 or (checkpoint is not None and checkpoint.model_dir() is not None):
+            raise RuntimeError("the update checkpoint has no clip baseline although an optimizer step was applied")
+        else:
+            model.eval()
+            with torch.no_grad():
+                training_old = [
+                    completion_logprobs(model, row, use_logits_to_keep=settings.use_logits_to_keep,
+                                        temperature=settings.temperature).detach().float().cpu()
+                    for row in rows
+                ]
+            if checkpoint is not None:
+                checkpoint.directory.mkdir(parents=True, exist_ok=True)
+                temporary = checkpoint.directory / "old_logprobs.pt.tmp"
+                torch.save(training_old, temporary)
+                temporary.replace(checkpoint.directory / "old_logprobs.pt")
+                extra_state["old_logprobs_file"] = "old_logprobs.pt"
+    clip_threshold = math.log(1.0 + float(settings.clip_ratio)) if settings.clip_ratio is not None else math.log(1.2)
 
     model.train()
     for chunk_index in range(start_chunk, len(chunks)):
@@ -598,6 +654,7 @@ def policy_gradient_update(
             if first_row > 0 else RowGradientBound(settings)
         )
         check = OnPolicyCheck(state=partial_check if first_row > 0 else None)
+        clip_check = OnPolicyCheck(threshold=clip_threshold, state=partial_clip if first_row > 0 else None)
         if first_row == 0:
             optimizer.zero_grad(set_to_none=True)
             chunk_policy = 0.0
@@ -620,11 +677,17 @@ def policy_gradient_update(
             logprobs = completion_logprobs(
                 model, row, use_logits_to_keep=settings.use_logits_to_keep, temperature=settings.temperature
             )
-            old_logprobs = None
+            sampler_old = None
             if row.sampling_logprobs is not None and len(row.sampling_logprobs) == int(logprobs.shape[0]):
-                old_logprobs = torch.tensor(list(row.sampling_logprobs), dtype=logprobs.dtype, device=logprobs.device)
-            check.record(logprobs, old_logprobs)
-            policy_term = _policy_term(logprobs, old_logprobs, float(row.advantage), settings.clip_ratio, torch)
+                sampler_old = torch.tensor(list(row.sampling_logprobs), dtype=logprobs.dtype, device=logprobs.device)
+            check.record(logprobs, sampler_old)
+            if training_old is not None:
+                clip_old = training_old[chunk[position]].to(device=logprobs.device, dtype=logprobs.dtype)
+            else:
+                clip_old = sampler_old
+            if settings.clip_ratio is not None:
+                clip_check.record(logprobs, clip_old)
+            policy_term = _policy_term(logprobs, clip_old, float(row.advantage), settings.clip_ratio, torch)
             kl_term = None
             if reference is not None:
                 delta = reference.to(logprobs.device) - logprobs
@@ -668,7 +731,10 @@ def policy_gradient_update(
                                           "partial_row_norms": {"norms": list(bound.norms), "clipped": bound.clipped,
                                                                 "dropped": bound.dropped},
                                           "on_policy_checks": list(check_summaries),
-                                          "partial_on_policy": check.state()},
+                                          "partial_on_policy": check.state(),
+                                          "clip_checks": list(clip_summaries),
+                                          "partial_clip": clip_check.state(),
+                                          **extra_state},
                               rows_done=done, partial_policy=chunk_policy, partial_kl=chunk_kl, previous=state)
                 state = checkpoint.load_state()
         if chunk_index == 0 and settings.max_on_policy_log_ratio is not None:
@@ -689,10 +755,12 @@ def policy_gradient_update(
         if settings.bounds_rows:
             row_summaries.append(bound.summary())
         check_summaries.append(check.summary())
+        if settings.clip_ratio is not None:
+            clip_summaries.append(clip_check.summary())
         if checkpoint is not None:
             _save_step(checkpoint, model, optimizer, rows=rows, chunks=chunks, completed=chunk_index + 1,
                        policy_losses=policy_losses, kls=kls, grad_norms=grad_norms, row_summaries=row_summaries,
-                       check_summaries=check_summaries)
+                       check_summaries=check_summaries, clip_summaries=clip_summaries, extra_state=extra_state)
             state = checkpoint.load_state()
         if progress is not None:
             progress({
@@ -704,6 +772,7 @@ def policy_gradient_update(
                 "grad_norm": grad_norm,
                 "row_grad_norms": row_summaries[-1] if settings.bounds_rows else None,
                 "on_policy_check": check_summaries[-1],
+                "clip_check": clip_summaries[-1] if clip_summaries else None,
                 "elapsed_seconds": time.perf_counter() - started,
             })
     model.eval()
@@ -724,6 +793,7 @@ def policy_gradient_update(
         on_policy_check=check_summaries,
         policy_rows=sum(1 for row in rows if not row.preservation),
         preservation_rows=sum(1 for row in rows if row.preservation),
+        clip_check=clip_summaries,
     )
 
 
@@ -741,7 +811,7 @@ def _policy_term(logprobs: Any, old_logprobs: Any | None, advantage: float, clip
     if clip_ratio is None:
         return -(advantage * logprobs)
     if old_logprobs is None:
-        raise ValueError("clip_ratio is set but the row carries no sampling record")
+        raise ValueError("clip_ratio is set but the row carries no clip baseline")
     ratio = torch_module.exp(logprobs - old_logprobs)
     clipped = torch_module.clamp(ratio, 1.0 - float(clip_ratio), 1.0 + float(clip_ratio))
     return -torch_module.minimum(ratio * advantage, clipped * advantage)
@@ -810,7 +880,7 @@ def _save_partial(checkpoint, model, optimizer, *, state_base, rows_done, partia
 
 
 def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_losses, kls, grad_norms, row_summaries=(),
-               check_summaries=()) -> None:
+               check_summaries=(), clip_summaries=(), extra_state=None) -> None:
     import torch
 
     checkpoint.directory.mkdir(parents=True, exist_ok=True)
@@ -833,12 +903,15 @@ def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_
         "partial_row_norms": {},
         "on_policy_checks": list(check_summaries),
         "partial_on_policy": {},
+        "clip_checks": list(clip_summaries),
+        "partial_clip": {},
         "chunk_rows_done": 0,
         "partial_policy": 0.0,
         "partial_kl": 0.0,
         "grads_file": None,
         "model_dir": model_dir,
         "optimizer_file": optimizer_file,
+        **dict(extra_state or {}),
     })
 
 

@@ -455,6 +455,50 @@ class UpdateTests(unittest.TestCase):
                                optimizer=recorder, reference_logprobs=lambda r: completion_logprobs(reference, r).detach())
         self.assertFalse(torch.equal(recorder.grad, torch.zeros(12, 12)))
 
+    def test_the_training_pass_clip_baseline_makes_the_first_step_exact_and_survives_a_resume(self) -> None:
+        def gradient(rows, settings):
+            recorder = _GradRecorder(_TinyLM(seed=4))
+            report = policy_gradient_update(recorder.model, rows, settings, optimizer=recorder)
+            return recorder.grad, report
+
+        plain = UpdateSettings(learning_rate=0.1, optimizer_steps=1, max_grad_norm=1e9)
+        against_sampler = UpdateSettings(learning_rate=0.1, optimizer_steps=1, max_grad_norm=1e9, clip_ratio=0.2)
+        against_training = UpdateSettings(learning_rate=0.1, optimizer_steps=1, max_grad_norm=1e9, clip_ratio=0.2,
+                                          clip_reference="training")
+        # Records off by a factor of 1.5 (a numerical gap between the sampling and training passes):
+        # against the sampler the first step is clipped, against the training pass it is the plain step.
+        shifted = _with_record(_TinyLM(seed=4), _rows_after_token_3(), shift=-math.log(1.5))
+        expected, _ = gradient(_with_record(_TinyLM(seed=4), _rows_after_token_3()), plain)
+        clipped, _ = gradient(shifted, against_sampler)
+        exact, report = gradient(shifted, against_training)
+        self.assertFalse(torch.allclose(clipped, expected, atol=1e-6))
+        self.assertTrue(torch.allclose(exact, expected, atol=1e-6))
+        self.assertEqual(report.clip_check[0]["tokens_beyond_threshold"], 0)
+        self.assertLess(report.clip_check[0]["mean_abs_log_ratio"], 1e-6)
+        self.assertGreater(report.on_policy_check[0]["mean_abs_log_ratio"], 0.4)  # the sampler gap is still reported
+        self.assertAlmostEqual(report.clip_check[0]["threshold_log_ratio"], math.log(1.2))
+        # Resume: the baseline is persisted before the first step, so the second step clips against it.
+        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=2, seed=7, clip_ratio=0.2, clip_reference="training")
+        reference = _TinyLM(seed=3)
+        wanted = policy_gradient_update(reference, _with_record(_TinyLM(seed=3), _rows()), settings)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = UpdateCheckpoint(directory=Path(directory), save_model=_save_tiny, every_rows=2)
+            # Six baseline forwards come first; the run then completes step one (three rows), saves two rows of
+            # step two and is preempted on the third, as in the plain resume test.
+            with self.assertRaises(_Preempted):
+                policy_gradient_update(_TinyLM(seed=3, fail_after=11), _with_record(_TinyLM(seed=3), _rows()), settings,
+                                       checkpoint=checkpoint)
+            self.assertEqual(checkpoint.load_state()["old_logprobs_file"], "old_logprobs.pt")
+            self.assertEqual((checkpoint.load_state()["completed_chunks"], checkpoint.load_state()["chunk_rows_done"]), (1, 2))
+            resumed_model = _load_tiny(checkpoint.model_dir(), seed=3)
+            resumed = policy_gradient_update(resumed_model, _with_record(_TinyLM(seed=3), _rows()), settings, checkpoint=checkpoint)
+            self.assertTrue(torch.allclose(resumed_model.table, reference.table, atol=1e-6))
+            self.assertEqual(len(resumed.clip_check), 2)
+            for got, want in zip(resumed.clip_check, wanted.clip_check):
+                self.assertAlmostEqual(got["mean_abs_log_ratio"], want["mean_abs_log_ratio"], places=5)
+        with self.assertRaises(ValueError):
+            UpdateSettings(clip_reference="bogus").validate()
+
     def test_a_first_step_off_policy_beyond_the_tolerance_is_refused_before_it_is_applied(self) -> None:
         model = _TinyLM(seed=2)
         rows = _with_record(model, _rows_after_token_3(), shift=0.5)

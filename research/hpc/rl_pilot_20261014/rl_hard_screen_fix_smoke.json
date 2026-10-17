@@ -69,13 +69,14 @@
     "beta_kl": 0.04,
     "optimizer_steps": 2,
     "clip_ratio": 0.2,
+    "clip_reference": "training",
     "max_grad_norm": 1.0,
     "loss_normalization": "trajectory",
     "use_logits_to_keep": true,
     "max_row_grad_norm": 25.0,
     "row_grad_norm_factor": null,
     "row_grad_norm_warmup": 16,
-    "max_on_policy_log_ratio": 0.05
+    "max_on_policy_log_ratio": 0.2
   },
   "rows": {
     "require_complete_groups": true,

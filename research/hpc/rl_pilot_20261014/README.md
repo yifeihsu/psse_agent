@@ -14,7 +14,7 @@ from its own sampled rollouts, scored by the offline audit
 | `rl_hard_screen_strat_kl.json` | The screen arm rerun with stratified roots (`root_sampling`, fixed counts per hard-draw stratum) and a KL penalty to the starting adapter (`beta_kl` 0.04); run note section 5 |
 | `rl_hard_screen_strat_kl_smoke.json` | One short iteration of that rerun (8 roots, no evaluation) that exercises the KL update on the real model |
 | `rl_hard_screen_fix.json` | The screen arm with the estimator and data-contract fixes of 2026-10-17: advantages in reward units, trajectory normalization with whole-trajectory optimizer steps, the clipped ratio against the recorded sampling probabilities, the on-policy tolerance, prompt digests, complete groups, preservation rows for the KL term; stratified mix and `beta_kl` 0.04 kept; run note section 9 |
-| `rl_hard_screen_fix_smoke.json` | One short iteration of that config (8 roots, no evaluation); its update report must show every row with a sampling record and a prompt digest, preservation rows, a first-step mean log-ratio under 0.05 and a KL of zero at the first step |
+| `rl_hard_screen_fix_smoke.json` | One short iteration of that config (8 roots, no evaluation); its update report must show every row with a sampling record and a prompt digest, preservation rows, a `clip_check` of zero at the first step (the clip baseline is the training pass), a sampler gap under 0.2 and a KL of zero at the first step. Its first run (job 20189365) measured the sampler gap at 0.053 overall and 0.56 on the decision tokens; run note section 9 |
 
 Deploy and submit from the Windows checkout (needs the SSH master):
 

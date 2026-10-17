@@ -562,3 +562,53 @@ step (`tokens_beyond_threshold` zero).
 The decision rule stays the one of section 5: paired gains and losses
 against the control on the 209 roots, by stratum, above all harmonic
 (does the seesaw stop?) and misranked (unchanged by every run so far).
+
+### The smoke test measured the sampling-versus-training gap (2026-10-17)
+
+Smoke job 20189365 (source 745fc7f) sampled the same 8 roots as the
+section 5 smoke test (identical rollouts, so the digest recording changed
+nothing in the sampler), built 188 rows (153 policy rows, 35 preservation
+rows, no digest, truncation or record rejections) and then refused its
+first optimizer step: over the step's rows the mean absolute log-ratio
+between the recomputed and the recorded sampling log-probabilities was
+0.053 against the limit of 0.05, and over the 179 decision tokens
+(recorded probability below 0.99) it was 0.56, with single tokens off by
+up to 31 nats. The decision tokens are the tool names: `get` at 0.0055 and
+`harmonic` at 0.92 inside a `get_harmonic_context` call, `topology` at
+0.017, `measurement` at 0.61, `three` at 0.32; the formatting tokens around
+them are near-certain and agree to 1e-3. So the training pass reproduces
+the sampling pass everywhere except at the few tokens that carry the
+decision, where it is systematically sharper: a token the sampler drew at
+5e-4 can come back at 1e-17.
+
+Two passes differ: the sampler decodes with the KV cache in bf16 through
+the inference loader, the update runs a full-sequence forward through the
+4-bit training preparation (norms and embeddings in float32, gradient
+checkpointing). Which of the two causes the gap at the decision tokens is
+not yet attributed; a GPU diagnostic that scores the stored smoke rows
+under both loaders, with and without the cache, is the next measurement.
+Every earlier run trained on this gap without knowing it: the plain loss
+takes the training pass's gradient on tokens the sampler drew from a
+flatter distribution, which is an importance-sampling bias of the whole
+method, not of the clip.
+
+Two consequences for the rerun, deployed as the follow-up commit:
+
+- `update.clip_reference: "training"`. The clipped ratio is taken against
+  the training pass itself before the first optimizer step (one extra
+  forward per row, persisted with the checkpoint as `old_logprobs.pt`), as
+  verl and TRL do, so the first step has a ratio of exactly one and the
+  second clips against the true pre-update policy. Against the sampler's
+  record, a decision token off by 0.56 nats was clipped or scaled by a
+  factor of 1.75 at the first step for a numerical reason, and a token off
+  by 31 nats would have been scaled by a factor of 10^13 when its
+  advantage was negative. The sampler's record now feeds the on-policy
+  check only; the update report adds `clip_check`, the same statistics
+  against the clip baseline, whose first step must read zero.
+- `update.max_on_policy_log_ratio: 0.2`. The guard keeps its purpose, a
+  broken template or tokenizer gives gaps of several nats, but no longer
+  trips on the measured 0.05.
+
+The rerun job 20189366 was sampling when this was found; its update phase
+is a separate process that reads the source and the config when it starts,
+so the redeploy reached it before its first update.
