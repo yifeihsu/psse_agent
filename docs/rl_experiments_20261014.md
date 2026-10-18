@@ -612,3 +612,74 @@ Two consequences for the rerun, deployed as the follow-up commit:
 The rerun job 20189366 was sampling when this was found; its update phase
 is a separate process that reads the source and the config when it starts,
 so the redeploy reached it before its first update.
+
+## 10. The bfloat16 loader (prepared 2026-10-18)
+
+The third update of the fix rerun measured where the time goes. Its batch
+is 1,311 rows (one per sampled step); each row's prompt is the re-rendered
+state view, 5,672 tokens on average (median 5,839, p90 7,576, max 10,597,
+none truncated), and its completion is the tool call, about 23 tokens, so
+0.4% of the tokens pushed through the model carry loss. Every row is
+processed five times: the clip baseline's forward, the KL reference's
+forward under the starting adapter, the training forward, the gradient
+checkpoint's recompute and the backward; about 37 million token passes
+through the 12B model per update.
+
+On an A100-SXM4-80GB the baseline's forward took 3.3 s per row (18 rows a
+minute) and a training row 17 s (3.5 rows a minute), about 7.4 h of GPU
+time for the update, delivered in 30-minute preemption slots of which
+eight minutes load the model. A forward over 5.7k tokens of a 12B model
+is about 1.6e14 FLOPs, 0.5 s at the card's 312 TFLOP/s, so the forward
+runs at about 15% of peak and the training pass at about 12%. The card
+holds 15 GB of its 80 GB. The stack, not the arithmetic, sets the pace:
+
+- The base weights are 4-bit NF4 (bitsandbytes), dequantized inside every
+  linear layer of every one of the five passes, the known two-to-three-fold
+  penalty of QLoRA over bfloat16 LoRA on long sequences, paid here for
+  memory the card does not need. The sampler loads the same quantization,
+  and its training preparation (norms and embeddings in float32) is the
+  loader difference behind the sampling-versus-training gap of section 9.
+- Gradient checkpointing adds the recompute pass, a quarter of the
+  training cost, again a memory trade.
+- One row at a time: at 5.7k tokens a row saturates the card, so batching
+  gains little, but attention is the default implementation.
+- A100 rather than H100/H200 nodes (two to three times), and the
+  preemption cadence.
+
+A bfloat16 run of the same estimator at 40% of peak would take about 5 s
+per training row, two hours per update on an A100, one on an H100; the
+rest of the cost is the estimator itself, which back-propagates through a
+5.7k-token prompt for 23 loss tokens. Running the prompt forward once
+without gradient (a prefix cache) and training the completion positions
+only would be about five times cheaper per row but drops the gradient
+through the prompt-side adapter contributions, a different estimator and
+a research decision rather than a tuning.
+
+The prepared change is the loader only: `rl_hard_screen_bf16.json` is the
+fix config with `load_in_4bit: false` and the output `out/hard_screen_bf16_v1`;
+nothing else differs. The switch is already wired: the trainer's
+`_load_research_base` loads `dtype=bfloat16` without a quantization config
+and `attach_research_adapter` skips `prepare_model_for_kbit_training`, the
+sampler's loader drops its `BitsAndBytesConfig` and keeps `dtype=bfloat16`,
+gradient checkpointing stays on (24 GB of weights plus checkpointed
+activations of a 10k-token row fit the 48 GB and 80 GB cards; two sampler
+workers of 24 GB plus their caches fit an 80 GB card, and the job script's
+70,000 MiB rule keeps one worker on smaller cards). The LoRA weights stay
+float32 under PEFT's adapter autocast in both loaders. Expected: two to
+three times the rows per minute in both passes, and with both loaders in
+bfloat16 a smaller decision-token gap in the on-policy check; the smoke
+config `rl_hard_screen_bf16_smoke.json` (8 roots, no evaluation, output
+`out/smoke_bf16`) measures both before the full run. The fix rerun keeps
+its 4-bit loader to the end: changing the loader under a run would change
+the clip baseline and the KL reference mid-way.
+
+Deploy and smoke, once the fix rerun is done or the user decides to run
+both:
+
+```bash
+SUBMIT=0 bash research/hpc/rl_pilot_20261014/deploy_from_windows.sh "$(git rev-parse HEAD)" rl_hard_screen_bf16.json rl_hard_screen_bf16_smoke.json
+```
+
+```bash
+wsl -- ssh torch "cd /scratch/yx3882/rl_pilot_20261014 && PATH=/opt/slurm/bin:\$PATH sbatch --export=ALL,CONFIG=rl_hard_screen_bf16_smoke.json,ITERATIONS=1 --job-name=rl-smoke-bf16 source/research/hpc/rl_pilot_20261014/rl_pilot.sbatch"
+```
