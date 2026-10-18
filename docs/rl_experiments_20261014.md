@@ -683,3 +683,47 @@ SUBMIT=0 bash research/hpc/rl_pilot_20261014/deploy_from_windows.sh "$(git rev-p
 ```bash
 wsl -- ssh torch "cd /scratch/yx3882/rl_pilot_20261014 && PATH=/opt/slurm/bin:\$PATH sbatch --export=ALL,CONFIG=rl_hard_screen_bf16_smoke.json,ITERATIONS=1 --job-name=rl-smoke-bf16 source/research/hpc/rl_pilot_20261014/rl_pilot.sbatch"
 ```
+
+### The bfloat16 smoke test (job 20270602, 2026-10-18)
+
+Run beside the fix rerun on gr103, an RTX PRO 6000 Blackwell (96 GB):
+40.5 minutes in all, no Traceback, every criterion of section 9 met. Two
+sampler workers took 57 GB; the update process 33 GB.
+
+| | bf16 smoke (167 rows) | 4-bit fix smoke (188 rows) |
+| --- | --- | --- |
+| Rollout, 8 roots × 4 | 16.8 min, two workers | stored rollout reused |
+| Rows | 132 policy + 35 preservation, zero rejections | 153 + 35, zero rejections |
+| Losses, step gradient norms | (−0.0225, 0.0226), (2.09, 50.0) | (−0.0575, 0.0407), (1.22, 24.9) |
+| Largest row norm, clipped | 2.13 / 90.1, 2 clipped at step 2 | 1.16 / 112.1, 1 clipped |
+| KL to the starting adapter | 0.0, 1.32 | 0.0, 0.73 |
+| Clip baseline (training pass) | step 1 exactly 0; step 2 0.0117, 13 of 1,849 tokens beyond, max 7.0 | step 1 exactly 0; step 2 0.0116, 28 of 2,978 beyond, max 7.4 |
+| Sampler gap, all tokens | 0.048, 0.061 | 0.053, 0.092 |
+| Sampler gap, decision tokens (p < 0.99) | **19** tokens, mean **4.52** nats, max 22.7; step 2: 18 tokens, mean 6.0 | **179** tokens, mean **0.56**, max 31.4 |
+| Update time | 1,327 s = **7.9 s per row** | 2,005 s = 10.7 s per row |
+
+Two results. The speed gain is real but smaller than the dequantization
+argument predicted: 7.9 s per row against 10.7, and against the 4-bit
+rerun's own pace on the same node class that evening (rows 160 to 320 of
+its third update on gr106 in about 29 minutes, 5.5 to 6 rows a minute,
+against the smoke's 8.9) about 1.5 times. The Blackwell cards are
+themselves about 1.7 times the A100s (the 4-bit rerun did 3.5 rows a
+minute there). So the five passes over a 5.7k-token prompt, the
+checkpoint recompute and the default attention carry the cost, not the
+4-bit weights.
+
+The parity result changes the attribution of section 9. With both
+loaders in bfloat16 the overall gap is unchanged, but the sampler is far
+sharper: 19 of 1,778 tokens were drawn at a probability below 0.99
+against 179 under 4-bit, so the quantization was flattening the sampling
+distribution. On those 19 tokens the training pass disagrees with the
+sampler's record by 4.5 nats on average, 22.7 at most, and 4 tokens fall
+outside the clip band. The decision-token gap therefore does not come
+from the 4-bit weights; it sits in the generation path (the KV-cache
+decode) against the full forward, or in the numerics of small
+probabilities. The clipped ratio against the training-pass baseline
+makes the update indifferent to it, but the sampled tokens still come
+from a distribution the update cannot reproduce, which is the
+importance-sampling bias noted in section 9. The GPU parity diagnostic
+(the stored smoke rows scored under both loaders with and without the
+cache, on one card) is now the measurement that attributes it.
