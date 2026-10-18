@@ -499,6 +499,39 @@ class UpdateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             UpdateSettings(clip_reference="bogus").validate()
 
+    def test_a_training_pass_preempted_during_the_baseline_resumes_from_its_partial_rows(self) -> None:
+        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=2, seed=7, clip_ratio=0.2, clip_reference="training")
+        reference = _TinyLM(seed=3)
+        wanted = policy_gradient_update(reference, _with_record(_TinyLM(seed=3), _rows()), settings)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = UpdateCheckpoint(directory=Path(directory), save_model=_save_tiny, every_rows=2)
+            # The baseline pass persists its rows two at a time; the third row's forward is preempted, so
+            # two baseline rows survive and no optimizer step has been applied.
+            with self.assertRaises(_Preempted):
+                policy_gradient_update(_TinyLM(seed=3, fail_after=2), _with_record(_TinyLM(seed=3), _rows()), settings,
+                                       checkpoint=checkpoint)
+            self.assertTrue((Path(directory) / "old_logprobs.partial.pt").is_file())
+            self.assertIsNone(checkpoint.load_state())
+            self.assertIsNone(checkpoint.model_dir())
+            # The model has not moved, so the next incarnation loads the starting weights and continues the pass.
+            resumed_model = _TinyLM(seed=3)
+            resumed = policy_gradient_update(resumed_model, _with_record(_TinyLM(seed=3), _rows()), settings,
+                                             checkpoint=checkpoint)
+            self.assertEqual(resumed.resumed_from, {"completed_chunks": 0, "chunk_rows_done": 0, "baseline_rows_done": 2})
+            self.assertFalse((Path(directory) / "old_logprobs.partial.pt").exists())
+            self.assertEqual(checkpoint.load_state()["old_logprobs_file"], "old_logprobs.pt")
+            self.assertTrue(torch.allclose(resumed_model.table, reference.table, atol=1e-6))
+            for got, want in zip(resumed.clip_check, wanted.clip_check):
+                self.assertAlmostEqual(got["mean_abs_log_ratio"], want["mean_abs_log_ratio"], places=5)
+            # The partial file of another batch is refused rather than reused.
+            other = UpdateCheckpoint(directory=Path(directory) / "other", save_model=_save_tiny, every_rows=2)
+            with self.assertRaises(_Preempted):
+                policy_gradient_update(_TinyLM(seed=3, fail_after=2), _with_record(_TinyLM(seed=3), _rows()), settings,
+                                       checkpoint=other)
+            with self.assertRaises(RuntimeError):
+                policy_gradient_update(_TinyLM(seed=3), _with_record(_TinyLM(seed=3), _rows()[:5]), settings,
+                                       checkpoint=other)
+
     def test_a_first_step_off_policy_beyond_the_tolerance_is_refused_before_it_is_applied(self) -> None:
         model = _TinyLM(seed=2)
         rows = _with_record(model, _rows_after_token_3(), shift=0.5)

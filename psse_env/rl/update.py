@@ -618,7 +618,10 @@ def policy_gradient_update(
     # The clip baseline from the training pass: every row's log-probabilities
     # under the model as it stands before the first optimizer step, taken
     # without a gradient, persisted beside the checkpoint so a resumed update
-    # clips against the same baseline after the model has moved.
+    # clips against the same baseline after the model has moved.  The pass
+    # over a full batch of long prompts outlasts a preemption slot, so it
+    # persists its partial result every ``checkpoint.every_rows`` rows and a
+    # restarted update continues from there (the model has not moved yet).
     training_old: list[Any] | None = None
     if settings.clip_ratio is not None and settings.clip_reference == "training":
         if extra_state.get("old_logprobs_file"):
@@ -628,18 +631,24 @@ def policy_gradient_update(
         elif start_chunk > 0 or (checkpoint is not None and checkpoint.model_dir() is not None):
             raise RuntimeError("the update checkpoint has no clip baseline although an optimizer step was applied")
         else:
+            training_old = _partial_baseline(checkpoint, rows, torch)
+            if training_old:
+                resumed_from = {"completed_chunks": 0, "chunk_rows_done": 0, "baseline_rows_done": len(training_old)}
             model.eval()
             with torch.no_grad():
-                training_old = [
-                    completion_logprobs(model, row, use_logits_to_keep=settings.use_logits_to_keep,
-                                        temperature=settings.temperature).detach().float().cpu()
-                    for row in rows
-                ]
+                for index in range(len(training_old), len(rows)):
+                    training_old.append(
+                        completion_logprobs(model, rows[index], use_logits_to_keep=settings.use_logits_to_keep,
+                                            temperature=settings.temperature).detach().float().cpu()
+                    )
+                    if checkpoint is not None and (index + 1) % checkpoint.every_rows == 0 and index + 1 < len(rows):
+                        _save_tensors(checkpoint.directory / PARTIAL_BASELINE_FILE,
+                                      {"rows": len(rows), "logprobs": training_old}, torch)
+                        if progress is not None:
+                            progress({"clip_baseline_rows": index + 1, "rows": len(rows)})
             if checkpoint is not None:
-                checkpoint.directory.mkdir(parents=True, exist_ok=True)
-                temporary = checkpoint.directory / "old_logprobs.pt.tmp"
-                torch.save(training_old, temporary)
-                temporary.replace(checkpoint.directory / "old_logprobs.pt")
+                _save_tensors(checkpoint.directory / "old_logprobs.pt", training_old, torch)
+                (checkpoint.directory / PARTIAL_BASELINE_FILE).unlink(missing_ok=True)
                 extra_state["old_logprobs_file"] = "old_logprobs.pt"
     clip_threshold = math.log(1.0 + float(settings.clip_ratio)) if settings.clip_ratio is not None else math.log(1.2)
 
@@ -857,6 +866,34 @@ def _state_base(rows, chunks, chunk_index, policy_losses, kls, grad_norms) -> di
         "kls": list(kls),
         "grad_norms": list(grad_norms),
     }
+
+
+#: The clip baseline of a preempted training pass, resumed by the next incarnation of the update.
+PARTIAL_BASELINE_FILE = "old_logprobs.partial.pt"
+
+
+def _save_tensors(path: Path, payload: Any, torch_module: Any) -> None:
+    """Write ``payload`` with ``torch.save`` through a temporary file, so a preemption leaves no half-written file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    torch_module.save(payload, temporary)
+    temporary.replace(path)
+
+
+def _partial_baseline(checkpoint: UpdateCheckpoint | None, rows: Sequence[TrainingRow], torch_module: Any) -> list[Any]:
+    """The rows of the clip baseline that a preempted training pass persisted, checked against ``rows``."""
+    if checkpoint is None or not (checkpoint.directory / PARTIAL_BASELINE_FILE).is_file():
+        return []
+    payload = torch_module.load(checkpoint.directory / PARTIAL_BASELINE_FILE, map_location="cpu")
+    saved = list(payload.get("logprobs") or []) if isinstance(payload, Mapping) else []
+    if (
+        not isinstance(payload, Mapping)
+        or int(payload.get("rows", -1)) != len(rows)
+        or len(saved) > len(rows)
+        or any(len(entry) != rows[index].completion_tokens for index, entry in enumerate(saved))
+    ):
+        raise RuntimeError("the partial clip baseline was written for a different batch of rows")
+    return saved
 
 
 def _save_partial(checkpoint, model, optimizer, *, state_base, rows_done, partial_policy, partial_kl, previous) -> None:
