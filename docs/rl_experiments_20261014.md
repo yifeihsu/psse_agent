@@ -776,3 +776,60 @@ path, the policy samples from a distribution that is not the model's and
 the sampler must be repaired. Either way the sampled tokens of the hard
 rows came from a distribution the update cannot reproduce, which is the
 bias section 9 named.
+
+### The probe: a kernel defect in the sampler's prefill (jobs 20279093, 20280069, 20281182)
+
+`psse_env.rl.parity_probe` recomputed the first completion token's
+log-probability of the eight worst bfloat16 rows and of two agreeing
+controls under computations that differ in one thing each. The bad rows
+all behave alike; one of them (r0_28ad…, step 16, first token
+`<channel|>`, prompt 4,609 tokens):
+
+| Computation | log-probability |
+| --- | --- |
+| the sampler's record; the prompt alone with or without the cache; `generate` for one token | −0.105 |
+| the full sequence (the update's computation), with all logits, without side inputs, without an attention mask | −21.39 |
+| the full sequence with the completion's attention mask zeroed; the prompt plus pad tokens, random tokens, or its first 1, 2, 4 or 8 completion tokens | −21.39 |
+| the prompt alone under eager attention; the full sequence under eager attention | −21.90, −22.34 |
+| the prompt alone under SDPA with the math backend forced; with the memory-efficient backend forced | −21.36, **−0.105** |
+| the prompt with one left pad token under a zero attention mask, through the forward and through `generate` | −21.48, −21.30 |
+
+So every computation agrees on about −21 except the SDPA forward of the
+exact prompt with the memory-efficient backend, which is what `generate`
+prefills with. Across both parity runs the affected rows are exactly the
+rows whose prompt length is 1 modulo 8 (bfloat16: 8 of 34 such rows show
+a gap above a nat, the other 26 have deterministic first tokens; 4-bit: 8
+of 29), and no row with another residue shows any gap (mean largest gap
+0.000 over 133 and 159 rows). The decode steps are unaffected: on the
+rows with another residue, the gaps at later positions are zero at every
+residue of the cache length. The defect is therefore the memory-efficient
+SDPA kernel of PyTorch 2.10 corrupting the last query row of a
+bfloat16 prefill under the materialized mask Gemma 4 builds whenever the
+query length is 1 modulo 8 — the row `generate` draws the first token
+from, on one prompt in eight. The training forward never uses the last
+row of its sequence (it would predict the token after the completion),
+which is why the update's log-probabilities and clip baseline were right
+and why the full-sequence length showed no pattern.
+
+Consequences. The sampler, not the update, was the deviating path: every
+rollout, every greedy evaluation and the DAgger data collection drew the
+first token of about an eighth of their steps from a corrupted
+distribution (the following tokens are conditioned on the corrupted
+hidden state of that position, mildly), and the scores of sections 5 and
+9 measure the model together with this quirk. The "decision-token gap"
+of section 9 was this defect, not the quantization or the loader, and
+the importance-sampling bias it implied is an artefact of the sampler.
+
+The cure is the one the probe validated: `generate_text` now puts one
+pad token with a zero attention mask before any prompt whose length is 1
+modulo 8 (`prefill_pad_tokens`, `left_pad_model_inputs` in
+`psse_env/dagger/research_policy_factory.py`; `PSSE_SDPA_PREFILL_PAD=0`
+switches it off for measurements), which moves the prefill to the next
+residue and reproduces the math kernel; the record's prompt digest, the
+prompt length and the completion slice refer to the unpadded prompt, so
+the update's rows are unchanged. The action metrics carry
+`prefill_pad_tokens`. The fix changes the policy's behaviour on the
+affected prompts, so the control and the experts' student comparisons
+must be re-measured under it before any run is compared with the
+numbers above; the fix rerun keeps the old sampler to the end of its
+four iterations.

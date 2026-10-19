@@ -31,6 +31,37 @@ class GenerationRecordTests(unittest.TestCase):
         self.assertAlmostEqual(probabilities[0], 0.5)
         self.assertGreater(probabilities[1], 0.99)
 
+    def test_the_prefill_pad_moves_prompts_off_the_corrupted_residue_and_can_be_switched_off(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        from psse_env.dagger.research_policy_factory import prefill_pad_tokens
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PSSE_SDPA_PREFILL_PAD", None)
+            self.assertEqual([prefill_pad_tokens(n) for n in (4609, 5857, 7713, 1, 9)], [1, 1, 1, 1, 1])
+            self.assertEqual([prefill_pad_tokens(n) for n in (4608, 4610, 2451, 4383, 8)], [0, 0, 0, 0, 0])
+        with patch.dict(os.environ, {"PSSE_SDPA_PREFILL_PAD": "0"}):
+            self.assertEqual(prefill_pad_tokens(4609), 0)
+
+    @unittest.skipIf(torch is None, "torch is not installed")
+    def test_the_left_pad_masks_one_leading_position_of_every_aligned_tensor(self) -> None:
+        from psse_env.dagger.research_policy_factory import left_pad_model_inputs
+
+        inputs = {
+            "input_ids": torch.tensor([[5, 6, 7]]),
+            "attention_mask": torch.tensor([[1, 1, 1]]),
+            "mm_token_type_ids": torch.tensor([[0, 0, 0]]),
+            "scalar": torch.tensor(3),
+        }
+        padded = left_pad_model_inputs(inputs, pad_tokens=1, pad_token_id=0)
+        self.assertEqual(padded["input_ids"].tolist(), [[0, 5, 6, 7]])
+        self.assertEqual(padded["attention_mask"].tolist(), [[0, 1, 1, 1]])
+        self.assertEqual(padded["mm_token_type_ids"].tolist(), [[0, 0, 0, 0]])
+        self.assertEqual(int(padded["scalar"]), 3)
+        self.assertEqual(left_pad_model_inputs(inputs, pad_tokens=0, pad_token_id=0)["input_ids"].tolist(), [[5, 6, 7]])
+        self.assertEqual(left_pad_model_inputs(inputs, pad_tokens=1, pad_token_id=None)["input_ids"].tolist(), [[0, 5, 6, 7]])
+
     def test_generation_options_validation(self) -> None:
         GenerationOptions().validate()
         GenerationOptions(do_sample=True, temperature=1.2, top_p=1.0, seed=3).validate()

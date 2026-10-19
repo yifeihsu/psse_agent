@@ -103,6 +103,51 @@ class GenerationOptions:
         return asdict(self)
 
 
+#: The memory-efficient SDPA kernel (PyTorch 2.10, bfloat16, a materialized 4D
+#: mask as Gemma 4 builds) corrupts the last query row of a prefill whose
+#: query length is 1 modulo 8, which is the row ``generate`` draws the first
+#: token from; one left pad token under a zero attention mask moves the
+#: prefill to the next residue and reproduces the math kernel
+#: (docs/rl_experiments_20261014.md, section 10).  ``PSSE_SDPA_PREFILL_PAD=0``
+#: disables the pad, for measurements of the defect.
+PREFILL_PAD_MODULUS = 8
+PREFILL_PAD_RESIDUE = 1
+
+
+def prefill_pad_tokens(prompt_length: int) -> int:
+    """How many pad tokens to put before a prompt of ``prompt_length`` tokens so its prefill avoids the corrupted residue."""
+
+    import os
+
+    if str(os.environ.get("PSSE_SDPA_PREFILL_PAD", "1")).strip().lower() in {"0", "false", "no", "off"}:
+        return 0
+    return 1 if int(prompt_length) % PREFILL_PAD_MODULUS == PREFILL_PAD_RESIDUE else 0
+
+
+def left_pad_model_inputs(model_inputs: Mapping[str, Any], *, pad_tokens: int, pad_token_id: int | None) -> dict[str, Any]:
+    """``model_inputs`` with ``pad_tokens`` masked pad positions before every token-aligned tensor.
+
+    ``input_ids`` get the pad token, ``attention_mask`` zeros and every other
+    aligned tensor (token types) zeros; the padded positions carry no
+    attention and keep the real tokens' positions (``generate`` derives
+    positions from the attention mask).
+    """
+
+    import torch
+
+    if pad_tokens <= 0:
+        return dict(model_inputs)
+    padded: dict[str, Any] = {}
+    fill = int(pad_token_id) if pad_token_id is not None else 0
+    for key, value in model_inputs.items():
+        if not hasattr(value, "shape") or value.ndim < 2:
+            padded[key] = value
+            continue
+        lead = torch.full((*value.shape[:-1], int(pad_tokens)), fill if key == "input_ids" else 0, dtype=value.dtype, device=value.device)
+        padded[key] = torch.cat([lead, value], dim=-1)
+    return padded
+
+
 def sampled_token_probabilities(scores: Sequence[Any], sampled_ids: Any) -> list[float]:
     """Probability of each sampled token under the distribution it was drawn from.
 
@@ -782,6 +827,12 @@ class _CanonicalResearchNativePolicy:
 
         stop_ids = get_stop_token_ids(self._bundle.processor)
         pad_token_id = resolve_pad_token_id(self._bundle.processor)
+        # The prompt the record describes (and the update re-renders) is the
+        # unpadded one; the pad only moves the prefill off the corrupted residue.
+        prompt_ids_for_record = model_inputs["input_ids"].detach().cpu()
+        prefill_pad = prefill_pad_tokens(prompt_length)
+        if prefill_pad:
+            model_inputs = left_pad_model_inputs(model_inputs, pad_tokens=prefill_pad, pad_token_id=pad_token_id)
         started = time.perf_counter()
         self._bundle.model.eval()
         generation_kwargs = self._generation_kwargs(torch)
@@ -802,7 +853,7 @@ class _CanonicalResearchNativePolicy:
             )
         generation_seconds = time.perf_counter() - started
         sequences = generated.sequences if want_scores else generated
-        sampled_ids = sequences[0][prompt_length:].detach().cpu()
+        sampled_ids = sequences[0][prompt_length + prefill_pad :].detach().cpu()
         token_probabilities = (
             sampled_token_probabilities(generated.scores, sampled_ids) if want_scores else None
         )
@@ -823,6 +874,7 @@ class _CanonicalResearchNativePolicy:
             "hit_max_new_tokens": int(generated_tokens) >= MAX_NEW_TOKENS,
             "forced_tool_prefix": None,
             "trimmed_trailing_pad_tokens": int(trimmed_pad_tokens),
+            "prefill_pad_tokens": int(prefill_pad),
             **repetition,
         }
         self._record_generation(
@@ -833,7 +885,7 @@ class _CanonicalResearchNativePolicy:
             original_prompt_length=original_prompt_length,
             text=text,
             token_probabilities=token_probabilities,
-            prompt_ids=model_inputs["input_ids"].detach().cpu(),
+            prompt_ids=prompt_ids_for_record,
         )
         try:
             action = _validated_generated_action(text, visible_parameters)
