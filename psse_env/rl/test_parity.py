@@ -56,6 +56,23 @@ class ParityTests(unittest.TestCase):
         self.assertEqual(summary["worst_pair"], "record_vs_training")
         self.assertEqual([t["token_id"] for t in summary["worst"]], [3, 2])
 
+    def test_the_probe_selects_the_worst_first_tokens_and_agreeing_controls(self) -> None:
+        from psse_env.rl.parity_probe import select_probe_rows
+
+        tokens = [
+            {"root": "a", "sample": 0, "step": 1, "position": 0, "record": -0.1, "forward": -20.0},
+            {"root": "a", "sample": 0, "step": 1, "position": 1, "record": -0.1, "forward": -30.0},  # not the first token
+            {"root": "b", "sample": 1, "step": 2, "position": 0, "record": -1.0, "forward": -3.0},
+            {"root": "c", "sample": 0, "step": 3, "position": 0, "record": -0.2, "forward": -0.21},
+            {"root": "d", "sample": 2, "step": 4, "position": 0, "record": -0.5, "forward": -0.6},
+        ]
+        selection = select_probe_rows(tokens, worst=1, controls=1)
+        self.assertEqual(selection["bad"], [("a", 0, 1)])
+        self.assertEqual(selection["control"], [("c", 0, 3)])
+        selection = select_probe_rows(tokens, worst=8, controls=8)
+        self.assertEqual(selection["bad"], [("a", 0, 1), ("b", 1, 2)])
+        self.assertEqual(selection["control"], [("c", 0, 3), ("d", 2, 4)])
+
     @unittest.skipIf(torch is None, "torch is not installed")
     def test_the_forced_sequence_processor_leaves_only_the_forced_token(self) -> None:
         processor = ForcedSequence([4, 2])
