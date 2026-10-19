@@ -107,5 +107,28 @@ class DecisionAuditTests(unittest.TestCase):
         self.assertEqual(bound["arguments"]["state_id"], "new:c1")
 
 
+    def test_the_truth_guided_policy_applies_corrections_only_on_clear_states(self) -> None:
+        from research.rl.decision_audit import TruthGuidedPolicy
+
+        class Expert:
+            def act(self, observation):
+                return {"tool": "run_wls", "arguments": {"state_id": observation["active_state_id"]}}
+
+        truth = [{"tool": "correct_measurements", "arguments": {"state_id": "old", "suspect_group": [4, 9]}},
+                 {"tool": "correct_parameters", "arguments": {"state_id": "old", "line_index": 7}}]
+        policy = TruthGuidedPolicy([{"tool": "run_wls", "arguments": {"state_id": "old"}}], truth, Expert())
+        clear = {"active_state_id": "s0", "candidate_state_id": None, "has_open_candidate": False, "has_unverified_candidate": False}
+        open_candidate = {"active_state_id": "s0", "candidate_state_id": "c1", "has_open_candidate": True, "has_unverified_candidate": True}
+        self.assertEqual(policy.act(clear)["tool"], "run_wls")  # the prefix
+        first = policy.act(clear)
+        self.assertEqual((first["tool"], first["arguments"]["suspect_group"], first["arguments"]["state_id"]), ("correct_measurements", [4, 9], "s0"))
+        self.assertEqual(policy.act(open_candidate)["tool"], "run_wls")  # the expert verifies the open candidate
+        second = policy.act(clear)
+        self.assertEqual((second["tool"], second["arguments"]["line_index"]), ("correct_parameters", 7))
+        self.assertEqual(policy.act(clear)["tool"], "run_wls")  # nothing pending: the expert
+        self.assertEqual(len(policy.applied), 2)
+        self.assertEqual(policy.pending, [])
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

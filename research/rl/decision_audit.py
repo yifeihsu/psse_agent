@@ -164,19 +164,36 @@ def alternative_features(observation: Mapping[str, Any], action: Mapping[str, An
     }
     if isinstance(parameter, Mapping):
         features["parameter_dominance_ratio"] = parameter.get("parameter_ranking_dominance_ratio")
+        features["parameter_dominance_threshold"] = parameter.get("parameter_ranking_dominance_threshold")
+        features["parameter_dominant"] = parameter.get("parameter_ranking_dominant")
+        features["parameter_top_abs_lambda"] = parameter.get("parameter_ranking_top_abs_lambda")
+        features["parameter_runner_up_abs_lambda"] = parameter.get("parameter_ranking_runner_up_abs_lambda")
+        features["parameter_route_status_reason"] = parameter.get("route_status_reason")
         ranked = parameter.get("parameter_ranking_distinct_lines") or []
         features["parameter_candidates"] = [
-            {k: item.get(k) for k in ("line_index1", "abs_lambda", "lambda", "rank") if isinstance(item, Mapping) and k in item}
-            for item in ranked[:5] if isinstance(item, Mapping)
+            {k: item.get(k) for k in ("line_index1", "abs_lambda_score", "abs_lambda", "lambda", "rank") if isinstance(item, Mapping) and k in item}
+            for item in ranked[:6] if isinstance(item, Mapping)
         ]
+        line = features.get("line_index")
+        if line is not None:
+            scores = {int(item["line_index1"]): float(item.get("abs_lambda_score") or item.get("abs_lambda") or 0.0)
+                      for item in ranked if isinstance(item, Mapping) and item.get("line_index1") is not None}
+            own = scores.get(int(line))
+            top = max(scores.values()) if scores else None
+            features["candidate_abs_lambda"] = own
+            features["candidate_lambda_ratio_to_top"] = (own / top) if own is not None and top else None
+            features["candidate_context_rank"] = next((i for i, item in enumerate(ranked) if isinstance(item, Mapping) and item.get("line_index1") == line), None)
     if isinstance(measurement, Mapping):
         findings = measurement.get("measurement_findings") or []
         features["measurement_findings"] = [
-            {k: item.get(k) for k in ("index", "index0", "measurement_index", "normalized_residual", "score") if isinstance(item, Mapping) and k in item}
-            for item in findings[:6] if isinstance(item, Mapping)
+            {k: item.get(k) for k in ("index", "index0", "measurement_index", "channel_index0", "normalized_residual", "abs_normalized_residual", "score", "residual")
+             if isinstance(item, Mapping) and k in item}
+            for item in findings[:8] if isinstance(item, Mapping)
         ]
+        features["measurement_context_keys"] = sorted(k for k in measurement.keys() if k.startswith("measurement_"))[:12]
     if isinstance(wls, Mapping):
-        features["wls"] = {k: wls.get(k) for k in ("chi_square_statistic", "chi_square_threshold", "normalized_residual_max", "dof") if k in wls}
+        features["wls"] = {k: wls.get(k) for k in ("chi_square_statistic", "chi_square_threshold", "chi_square_alarm", "max_normalized_residual",
+                                                   "normalized_residual_alarm", "anomaly_breadth", "dominant_residual_block", "dof") if k in wls}
     return features
 
 
@@ -248,6 +265,33 @@ class ScriptedThenExpertPolicy:
         self.calls += 1
         if index < len(self.script):
             return self.rebind(self.script[index], observation)
+        return self.expert.act(observation)
+
+
+class TruthGuidedPolicy(ScriptedThenExpertPolicy):
+    """Replay ``prefix``, then apply every truth correction in turn, letting the expert verify and commit between them.
+
+    A correction is only legal on a state without an open candidate, so after
+    each scripted correction the expert runs the lifecycle (verification,
+    commit or rollback) and the next truth correction follows once the state
+    is clear again.  The audit's probe of the interface and the evidence; not a
+    policy action.
+    """
+
+    def __init__(self, prefix: Sequence[Mapping[str, Any]], truth_actions: Sequence[Mapping[str, Any]], expert: Any) -> None:
+        super().__init__(prefix, [], expert)
+        self.pending = [copy.deepcopy(dict(a)) for a in truth_actions]
+        self.applied: list[dict[str, Any]] = []
+
+    def act(self, observation: Mapping[str, Any]) -> dict[str, Any]:
+        index = self.calls
+        if index < len(self.script):
+            return super().act(observation)
+        self.calls += 1
+        if self.pending and not observation.get("has_open_candidate") and not observation.get("candidate_state_id"):
+            action = self.rebind(self.pending.pop(0), observation)
+            self.applied.append(action)
+            return action
         return self.expert.act(observation)
 
 
@@ -388,14 +432,15 @@ def audit_root(root: Mapping[str, Any], *, harness: _Harness, max_states: int, m
             truth_actions = truth_correction_actions(root, str(observation.get("active_state_id")))
             if truth_actions:
                 truth_done = True
-                policy = ScriptedThenExpertPolicy(prefix, truth_actions[:1], harness.expert_policy())
+                policy = TruthGuidedPolicy(prefix, truth_actions, harness.expert_policy())
                 episode = harness.run(root, policy)
                 episodes_run += 1
                 branch_steps = policy_steps(episode.get("trace") or [])
                 taken = branch_steps[index] if index < len(branch_steps) else {}
                 outcome = outcome_of(episode)
                 outcome["reward"] = harness.reward(episode, family)
-                truth_branch = {"action": truth_actions[0], "all_truth_actions": truth_actions,
+                truth_branch = {"action": truth_actions[0], "all_truth_actions": truth_actions, "applied": policy.applied,
+                                "unapplied": policy.pending,
                                 "execution_status": taken.get("execution_status"), "error_code": taken.get("error_code"),
                                 "outcome": outcome, "better": better(outcome, reference)}
         state_bin = classify_state(reference, alternatives, truth_branch)
