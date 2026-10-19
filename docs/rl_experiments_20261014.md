@@ -727,3 +727,52 @@ from a distribution the update cannot reproduce, which is the
 importance-sampling bias noted in section 9. The GPU parity diagnostic
 (the stored smoke rows scored under both loaders with and without the
 cache, on one card) is now the measurement that attributes it.
+
+### The parity diagnostic (job 20276081, 2026-10-18)
+
+`psse_env.rl.parity` rebuilt the rows of both smoke rollouts as the update
+builds them and scored every completion token four ways on one card: the
+sampler's record, `generate`'s cached decode path teacher-forced through
+the recorded completion (the raw logits of each step), the full-sequence
+forward of the sampling loader (the update's `completion_logprobs`) and
+the full-sequence forward of the training loader (the clip baseline).
+Mean and largest absolute gap in nats, and the number of tokens beyond
+the clip band of ln 1.2:
+
+| Pair | bf16 smoke (167 rows, 3,627 tokens) | 4-bit smoke (188 rows, 4,878 tokens) |
+| --- | --- | --- |
+| record vs decode | **0.0000**, max 0.000, 0 beyond | **0.0000**, max 0.000, 0 beyond |
+| forward vs training | **0.0000**, max 0.000, 0 beyond | 0.0117, max 3.44, 53 beyond |
+| decode vs forward | 0.0516, max **22.7**, 10 beyond | 0.0732, max **32.4**, 232 beyond |
+| decode vs forward, tokens at p ≥ 0.99 | 0.0014, max 5.06 | 0.0003, max 0.67 |
+| decode vs forward, tokens at 0.5 ≤ p < 0.99 | 4.04, max 22.7 (25 tokens) | 0.24, max 32.4 (387 tokens) |
+| decode vs forward, tokens at 0.01 ≤ p < 0.5 | 6.75, max 21.7 (12 tokens) | 0.86, max 26.8 (233 tokens) |
+
+Three facts follow. The forced decode reproduces the sampler's record to
+the last digit, so the record is exactly what `generate`'s path computes
+and sampling-time nondeterminism is nil. The two loaders agree exactly in
+bfloat16 and differ only mildly under 4-bit (the training preparation's
+float32 norms and embeddings), so the loader is not the gap. The whole
+gap lies between the cached decode path and the full-sequence forward on
+identical weights, and it is not spread over the tokens: in bfloat16 it
+sits on the first completion token of 8 of 167 rows (five distinct
+prompts, 4.6k to 7.7k tokens long, in the normal range), where the first
+generated token, `<channel|>` in six of them, has a log-probability of
+−0.03 to −3.2 under the decode path and −15 to −24 under the full
+forward; the 4-bit run shows the same at position 0 of its worst rows
+(`<channel|>`, `1`, `thought`, `Architect`, `.`, at −24 to −33 against
+−0.4 to −7.5) with a little spill into the next positions. On the other
+rows the two paths agree to a thousandth of a nat.
+
+A causal model's logits at the last prompt position cannot depend on the
+completion appended after it, and the prefill of `generate` over the
+prompt alone is that same computation, so one of the two paths is not
+computing the model's causal distribution for those prompts. Which one is
+the question the probe of the next subsection answers, and the answer
+decides the fix: if the full forward leaks the completion backwards (the
+mask), the update has been training on corrupted log-probabilities and
+the forward must be repaired; if the cached prefill is the deviating
+path, the policy samples from a distribution that is not the model's and
+the sampler must be repaired. Either way the sampled tokens of the hard
+rows came from a distribution the update cannot reproduce, which is the
+bias section 9 named.
