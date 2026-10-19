@@ -613,6 +613,77 @@ The rerun job 20189366 was sampling when this was found; its update phase
 is a separate process that reads the source and the config when it starts,
 so the redeploy reached it before its first update.
 
+### Results after four iterations (job 20189366, completed 2026-10-19 06:15 EDT)
+
+One Slurm job carried the run through 20 preemptions and about 37 hours
+of wall time (10.5 hours of GPU time in its last, uninterrupted
+incarnation on gr104); the baseline-pass checkpoint of commit 3279c2c
+was needed on the way, and the sampler of every iteration carried the
+prefill defect of section 10, as the control did. The four updates:
+
+| Iteration | Informative groups | Rows (policy + preservation) | Policy loss (step 1, 2) | Step gradient norm | Largest row norm, clipped | KL to the start | Sampler gap, all / decision tokens (step 1; step 2) | Clip-baseline gap, beyond (step 1; step 2) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 15 of 64 (23%) | 1,232 = 995 + 237 | −0.039, 0.035 | 3.41, 5.24 | 2.28 / 2.12, none | 0.0, 0.072 | 0.053 / 1.49; 0.067 / 0.97 | 0.0015, 19 (cross-node); 0.0084, 122 |
+| 2 | 17 (27%) | 1,178 = 985 + 193 | −0.0048, 0.0075 | 2.57, 1.94 | 1.86 / 1.82, none | 0.0072, 0.023 | 0.098 / 1.10; 0.113 / 0.97 | 0, 0; 0.0081, 90 |
+| 3 | 20 (31%) | 1,311 = 1,088 + 223 | −0.065, 0.063 | 4.72, 4.18 | 3.31 / 2.48, none | 0.0073, 0.011 | 0.071 / 1.54; 0.088 / 1.23 | 0.0023, 44 (cross-node); 0.0069, 87 |
+| 4 | 13 (20%) | 1,062 = 845 + 217 | 0.0047, −0.0038 | 26.1, 4.92 | 55.4 / 3.01, one | 0.0073, 0.0043 | 0.104 / 1.31; 0.084 / 1.37 | 0, 0; 0.0057, 78 |
+
+Every row of every update carried a matching prompt digest and a
+sampling record (no rejections), the preservation rows came from 24
+uninformative groups each time, the clip baseline was exact wherever
+the baseline and the step ran on one node, and the KL to the starting
+adapter stayed below 0.08 throughout. The sampler gap of 0.05 to 0.10
+with decision tokens at 1 to 1.5 nats is the prefill defect of section
+10, not an estimator property.
+
+Greedy evaluation on the 209 development roots, with the control (the
+frozen starting adapter), the previous stratified rerun of section 5 and
+the two experts:
+
+| | it 1 | it 2 | it 3 | it 4 | Control | Previous rerun it 4 | Expert | Ranked expert |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Solved | 171 | 176 | 175 | **178** | 174 | 171 | 185 | 193 |
+| harmonic (16) | 14 | 15 | 14 | **16** | 12 | 11 | | |
+| mimic same sign (24) | 13 | 14 | 14 | **17** | 14 | 13 | | |
+| mimic opposite sign (24) | 16 | 17 | 18 | 16 | 19 | 18 | | |
+| multi-measurement (24) | 23 | 24 | 24 | 24 | 23 | 23 | | |
+| measurement (24) | 23 | 24 | 23 | 23 | 24 | 24 | | |
+| misranked, m+p (8) / p (9) | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | | |
+| other strata (80) | 80 | 80 | 80 | 80 | 80 | 80 | | |
+| Invalid actions | 60 | 40 | 56 | 42 | 42 | 42 | | |
+| False commits | 10 | 8 | 10 | 9 | 9 | 3 | | |
+| Loop episodes | 33 | 24 | 26 | 27 | 30 | 27 | | |
+
+The previous rerun's iterations scored 173, 176, 167, 171. The fourth
+adapter is four above the control and seven above the previous rerun's
+last, the first run of the series to end above its control, with the
+whole gain on two strata: harmonic goes to 16 of 16 with no invalid
+action (the control loops on four of them), and the same-sign mimics
+gain three. The opposite-sign mimics lose three (the policy answers
+them with the harmonic context and loops where the control corrects the
+measurement), one measurement root is lost the same way, and the
+misranked roots never move, as in every run. 168 roots are solved by
+all four adapters and 26 by none; four control-solved roots are lost at
+the end.
+
+The run also shows what the estimator fixes bought and what they did
+not. The reward-unit advantages and the trajectory normalization kept
+the per-row norms in the single digits (one row clipped in four
+updates, against two with a largest norm of 97 in the previous rerun's
+first update), and the KL penalty held the policy within 0.08 nats of
+its start; the harmonic path was learned in the first update and never
+unlearned, where the previous rerun lost it in its third. What the
+fixes did not change is the seesaw on the mimic strata: the
+three-phase and harmonic requests, reinforced on the harmonic roots,
+leak onto mimic prompts in one iteration and retreat in the next
+(three-phase requests on 14, 9, 10 and 10 of the 48 mimic roots against
+the control's 9), so the mimic score moves by ±3 between iterations
+without a trend, and the run-to-run spread of the whole score is still
+about ±3. The fourth evaluation is one draw of that spread, taken with
+a sampler that is wrong on one prompt in eight; the comparison that
+counts is the one under the repaired sampler, where the control itself
+has to be re-measured first.
+
 ## 10. The bfloat16 loader (prepared 2026-10-18)
 
 The third update of the fix rerun measured where the time goes. Its batch

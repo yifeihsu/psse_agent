@@ -47,6 +47,19 @@ if (Test-SshMaster -Alias $HostAlias) {
     exit 0
 }
 
+# A master that died (a sleep, a reboot of WSL) leaves its control socket
+# behind; ssh then refuses to start a new master ("ControlSocket ... already
+# exists, disabling multiplexing") and runs a plain connection instead, which
+# is what the earlier "SSH returned success, but no reusable master" meant.
+# Remove the stale socket first; the check above already proved it is dead.
+$staleSocket = & wsl.exe -- sh -c "ssh -G $HostAlias | awk '/^controlpath /{print `$2}'" 2>$null
+$staleSocket = ("$staleSocket").Trim()
+if ($staleSocket) {
+    & wsl.exe -- sh -c "test -S '$staleSocket' && rm -f '$staleSocket' && echo removed" 2>$null | ForEach-Object {
+        if ($_ -eq 'removed') { Write-Host "Removed the stale control socket $staleSocket." }
+    }
+}
+
 Write-Host "Starting one persistent WSL SSH master for '$HostAlias'."
 Write-Host 'Complete Microsoft device authentication once if prompted.'
 & wsl.exe -- ssh -MNf $HostAlias
