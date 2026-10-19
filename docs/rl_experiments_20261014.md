@@ -904,3 +904,32 @@ affected prompts, so the control and the experts' student comparisons
 must be re-measured under it before any run is compared with the
 numbers above; the fix rerun keeps the old sampler to the end of its
 four iterations.
+
+### The controls under the repaired sampler (jobs 20330002 and 20330086, 2026-10-19)
+
+Both frozen controls were re-measured with the prefill pad deployed
+(source d2206f3), each as a run seeded at iteration 0, phase `evaluate`,
+into a new directory beside the old result:
+
+| Control | Old (defective prefill) | New (padded prefill) | Roots whose outcome changed | Roots whose tool sequence changed |
+| --- | --- | --- | --- | --- |
+| screen cell's round-2 adapter | 174 of 209; 42 invalid, 9 false commits, 30 loops | 174; 44 invalid, 9 false commits, 31 loops | **0** | 3 |
+| classifier cell's round-2 adapter | 182; 51 invalid, 14 false commits, 7 loops | 182; 52 invalid, 14 false commits, 7 loops | **0** | 1 |
+
+Every stratum count is identical to the old evaluation in both runs; the
+three screen roots and the one classifier root whose sequences changed
+took a different route to the same outcome (one extra invalid step or
+context request). So the defect, which moves the first token's
+distribution by twenty nats on prompts of length 1 modulo 8, almost
+never changes the tool that greedy decoding ends up calling: on those
+prompts the corrupted row mostly decides the channel preamble, not the
+call. The historical greedy scores of sections 5 and 9 therefore stand.
+Where the defect did matter is the sampled rollouts: the recorded
+probabilities of one step in six to eight were those of the corrupted
+row, which is the whole "decision-token gap" of the on-policy check, and
+the policy gradient of every run was taken from samples drawn from that
+slightly wrong distribution while the log-probabilities and the clip
+baseline came from the correct training pass — a mild off-policy bias on
+the affected steps, not a corruption of the rewards. A clean RL
+comparison still needs fresh rollouts under the repaired sampler, but
+the evaluations do not need redoing.
