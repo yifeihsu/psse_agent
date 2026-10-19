@@ -169,8 +169,62 @@ def probe_row_pass2(model: Any, row: TrainingRow, *, temperature: float, pad_tok
     return out
 
 
+def probe_row_pass3(model: Any, row: TrainingRow, *, temperature: float, pad_token_id: int | None) -> dict[str, Any]:
+    """Third pass: which SDPA backend corrupts the last query row of a prompt whose length is 1 modulo 8, and does a left pad cure it?
+
+    ``sdpa_<backend>``: the prompt alone with that backend forced through ``torch.nn.attention.sdpa_kernel``;
+    ``left_pad_forward``: the prompt preceded by one pad token with a zero attention mask (query length L + 1);
+    ``left_pad_generate``: ``generate`` for one token from that padded prompt (the sampler's path with the cure).
+    """
+
+    import torch
+
+    from psse_env.rl.update import _model_device, _row_tensors
+
+    device = _model_device(model)
+    inputs = _row_tensors(row, device, torch)
+    n = row.completion_tokens
+    first = int(inputs["input_ids"][0, -n].item())
+    prompt = {key: value[:, :-n] for key, value in inputs.items()}
+    out: dict[str, Any] = {"prompt_length_mod_8": int(prompt["input_ids"].shape[1]) % 8}
+    try:
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+    except Exception as exc:  # pragma: no cover - old torch
+        out["sdpa_backends_error"] = f"{type(exc).__name__}: {exc}"
+        sdpa_kernel = None
+        SDPBackend = None
+    with torch.no_grad():
+        if sdpa_kernel is not None:
+            for name in ("MATH", "EFFICIENT_ATTENTION", "FLASH_ATTENTION", "CUDNN_ATTENTION"):
+                backend = getattr(SDPBackend, name, None)
+                if backend is None:
+                    continue
+                try:
+                    with sdpa_kernel([backend]):
+                        logits = model(**prompt, use_cache=False).logits
+                    out[f"sdpa_{name.lower()}"] = _first_token_logprob(logits[0, -1], first, temperature, torch)
+                except Exception as exc:
+                    out[f"sdpa_{name.lower()}"] = None
+                    out[f"sdpa_{name.lower()}_error"] = f"{type(exc).__name__}: {str(exc)[:160]}"
+        pad = int(pad_token_id) if pad_token_id is not None else 0
+        padded = {}
+        for key, value in prompt.items():
+            lead = torch.full((1, 1), pad if key == "input_ids" else 0, dtype=value.dtype, device=device)
+            padded[key] = torch.cat([lead, value], dim=1)
+        padded["attention_mask"] = torch.cat([torch.zeros((1, 1), dtype=prompt["attention_mask"].dtype, device=device),
+                                              prompt["attention_mask"]], dim=1)
+        logits = model(**padded, use_cache=False).logits
+        out["left_pad_forward"] = _first_token_logprob(logits[0, -1], first, temperature, torch)
+        kwargs = {"pad_token_id": pad} if pad_token_id is not None else {}
+        with torch.inference_mode():
+            generated = model.generate(**padded, max_new_tokens=1, do_sample=False, use_cache=True, output_logits=True,
+                                       return_dict_in_generate=True, **kwargs)
+        out["left_pad_generate"] = _first_token_logprob(generated.logits[0][0], first, temperature, torch)
+    return out
+
+
 def run_probe(*, config_path: str, iteration: Path, parity_path: Path, output: Path, worst: int = 8, controls: int = 2,
-              pass2: bool = False) -> dict[str, Any]:
+              pass2: bool = False, pass3: bool = False) -> dict[str, Any]:
     import torch
 
     from psse_env.dagger.research_policy_factory import _load_research_bundle
@@ -217,6 +271,8 @@ def run_probe(*, config_path: str, iteration: Path, parity_path: Path, output: P
         entry.update(probe_row(bundle.model, row, temperature=temperature, pad_token_id=pad_token_id))
         if pass2:
             entry.update(probe_row_pass2(bundle.model, row, temperature=temperature, pad_token_id=pad_token_id))
+        if pass3:
+            entry.update(probe_row_pass3(bundle.model, row, temperature=temperature, pad_token_id=pad_token_id))
         entry["first_token"] = decoder.decode([entry["first_token_id"]]) if decoder is not None else None
         results.append(entry)
         print(json.dumps({k: (round(v, 4) if isinstance(v, float) else v) for k, v in entry.items() if k != "side_inputs"}), flush=True)
@@ -241,9 +297,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--worst", type=int, default=8)
     parser.add_argument("--controls", type=int, default=2)
     parser.add_argument("--pass2", action="store_true", help="add the content/length/mask/kernel variants")
+    parser.add_argument("--pass3", action="store_true", help="add the SDPA-backend and left-pad variants")
     args = parser.parse_args(argv)
     run_probe(config_path=args.config, iteration=Path(args.iteration), parity_path=Path(args.parity), output=Path(args.output),
-              worst=args.worst, controls=args.controls, pass2=args.pass2)
+              worst=args.worst, controls=args.controls, pass2=args.pass2, pass3=args.pass3)
     return 0
 
 
