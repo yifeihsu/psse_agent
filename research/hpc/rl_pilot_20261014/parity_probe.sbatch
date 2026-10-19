@@ -16,9 +16,11 @@
 # a parity run's worst rows under variants that differ in one thing each.
 #
 #   sbatch --export=ALL,RUNS="rl_hard_screen_bf16_smoke.json:smoke_bf16/iteration_000" parity_probe.sbatch
+#   sbatch --export=ALL,RUNS="...",PROBE_ARGS="--pass2",OUT_NAME=parity_probe2.json parity_probe.sbatch
 set -euo pipefail
 WORK=/scratch/yx3882/rl_pilot_20261014
 RUNS=${RUNS:?set RUNS to config:iteration pairs}
+OUT_NAME=${OUT_NAME:-parity_probe.json}
 SRC=$WORK/source
 LOGS=$WORK/logs
 PY=/scratch/yx3882/.conda/envs/gemma4_research_5104/bin/python
@@ -38,7 +40,7 @@ cd "$SRC"
 for pair in $RUNS; do
   config=${pair%%:*}; iteration=${pair##*:}
   parity="$WORK/out/$iteration/parity.json"
-  out="$WORK/out/$iteration/parity_probe.json"
+  out="$WORK/out/$iteration/$OUT_NAME"
   if [[ -s "$out" ]]; then echo "[probe] $iteration already done"; continue; fi
   [[ -s "$parity" ]] || { echo "no parity.json for $iteration" >&2; exit 2; }
   echo "[probe] $config $iteration $(date -u +%FT%TZ)"
