@@ -933,3 +933,67 @@ baseline came from the correct training pass — a mild off-policy bias on
 the affected steps, not a corruption of the rewards. A clean RL
 comparison still needs fresh rollouts under the repaired sampler, but
 the evaluations do not need redoing.
+
+## 11. The decision-opportunity audit (Gate 2, 2026-10-19)
+
+`research/rl/decision_audit.py` (plan: `docs/decision_audit_plan_20261019.md`)
+rolled the observable ledger-ranked expert out on the 176 training roots of
+the failure-prone strata under the suspicion-gated profile, found the
+decision states of each trajectory (a rule-expert choice among at least two
+admissible actions of its own observable menu), replayed the reference
+actions on fresh episodes to take up to three alternatives at up to four
+states per root with the expert finishing, and let the evaluator score every
+branch as the runs are scored. At the first correction decision a
+truth-guided probe applied every true target with the expert's lifecycle in
+between. 176 roots, 2,205 branches, 53 minutes on four local cores, no
+errors (`docs/decision_audit_20261019/train176_summary.md`).
+
+| Stratum | Roots | Expert solves | rule_best | legal_alternative | evidence_limit | Truth probe solves |
+| --- | --- | --- | --- | --- | --- | --- |
+| parameter, ambiguous / dominant | 40 / 8 | 48 | 48 | 0 | 0 | 48 / 48 |
+| measurement+parameter, ambiguous / dominant | 32 / 8 | 40 | 40 | 0 | 0 | 40 / 40 |
+| misranked, parameter / m+p | 4 / 4 | 4 | 4 | **4** | 0 | 6 / 8 |
+| mimic, opposite sign | 24 | 18 | 15 | **8** (5 failures recovered, 3 cheaper) | 1 | 21 / 24 |
+| mimic, same sign | 24 | 22 | 22 | **1** | 1 | 22 / 24 |
+| multi-measurement | 32 | 31 | 29 | **3** (1 recovered, 2 cheaper) | 0 | 31 / 32 |
+| **all** | 176 | 163 | 158 | 16 | 2 | — |
+
+No state fell in `interface_limit`: wherever the reference and every legal
+alternative failed, the truth probe failed too, so the action interface
+(singleton corrections, grouped meter corrections, the three contexts, the
+acquisitions, the handoff) is not what is missing on this draw.
+
+Of the expert's **13 failures, 11 have a legal alternative at a state the
+expert visits that leads to a truth-audited success**, and 2 are evidence
+limits (two mimics where no correction, true or not, passes the audit). The
+alternatives are of two kinds:
+
+- **Misranked parameter roots (4 of 4 failures).** At the correction
+  decision the expert takes the parameter context's top line and the
+  **runner-up line solves the root** in 6 to 10 steps; the expert's commit of
+  the top line ends in a handoff. The dominance ratios are 1.04, 1.07, 1.18
+  and 1.32, so "runner-up when the ratio is under the 1.2 threshold" is not
+  the rule: one failure sits above it, and 71 ambiguous-ratio roots are
+  solved by the top line. Whether the context's own scores separate the
+  cases is the predictability question.
+- **Mimics and multi-meter roots (7 failures).** At the first meter
+  correction the expert takes the residual-ranked flow meter and the
+  **correction of a different meter** (a third- or fourth-ranked channel)
+  solves the root; on the three cheaper opposite-sign roots the same
+  reordering saves six of eighteen steps.
+
+On the 120 ambiguous and dominant parameter roots the top line is right
+every time and no alternative beats the rule, which is the baseline the
+predictability test must beat: a ranker that reorders the top two lines
+helps on the 4 misranked failures and must not cost any of the 120.
+
+**Decision.** Gate 2 passes for the ordering decision, narrowly: the
+headroom on the training draw is 11 roots of 176, all of it in which
+hypothesis to verify first, none of it in the interface and little in the
+evidence. The next measurement is the predictability test of the plan
+(phase 3): a ranker over each candidate's observable features (its abs-λ
+score, ratio to the top, context rank, the dominance ratio and route
+status; for meters the normalized residuals of the findings), trained with
+physical parents held out, against the fixed rule — then the same audit
+from the student's own recorded states (phase 2), since the RL runs' losses
+are the student's deviations, not the expert's.

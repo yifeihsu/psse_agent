@@ -1,0 +1,198 @@
+{
+  "bins": {
+    "evidence_limit": 2,
+    "legal_alternative": 16,
+    "rule_best": 158
+  },
+  "contract": "rl_decision_audit_v1",
+  "expert": "ledger_ranked",
+  "max_alternatives": 3,
+  "max_states": 4,
+  "max_steps": 40,
+  "profile": "suspicion_gated_diagnostics",
+  "roots": 176,
+  "seed": 20261019,
+  "strata": {
+    "measurement+parameter:ambiguous": {
+      "alternatives": 183,
+      "alternatives_better": 0,
+      "bins": {
+        "rule_best": 32
+      },
+      "decision_states": 97,
+      "episodes": 247,
+      "errors": 0,
+      "reference_success": 32,
+      "roots": 32,
+      "seconds": 1713.2999999999997,
+      "state_bins": {
+        "rule_best": 97
+      },
+      "truth_success": 32,
+      "truth_tried": 32
+    },
+    "measurement+parameter:dominant": {
+      "alternatives": 59,
+      "alternatives_better": 0,
+      "bins": {
+        "rule_best": 8
+      },
+      "decision_states": 24,
+      "episodes": 75,
+      "errors": 0,
+      "reference_success": 8,
+      "roots": 8,
+      "seconds": 412.20000000000005,
+      "state_bins": {
+        "rule_best": 24
+      },
+      "truth_success": 8,
+      "truth_tried": 8
+    },
+    "measurement+parameter:misranked": {
+      "alternatives": 30,
+      "alternatives_better": 3,
+      "bins": {
+        "legal_alternative": 3,
+        "rule_best": 1
+      },
+      "decision_states": 12,
+      "episodes": 38,
+      "errors": 0,
+      "reference_success": 1,
+      "roots": 4,
+      "seconds": 187.4,
+      "state_bins": {
+        "evidence_limit": 6,
+        "legal_alternative": 3,
+        "rule_best": 3
+      },
+      "truth_success": 2,
+      "truth_tried": 4
+    },
+    "mimic:flow_pair_opposite_sign": {
+      "alternatives": 191,
+      "alternatives_better": 22,
+      "bins": {
+        "evidence_limit": 1,
+        "legal_alternative": 8,
+        "rule_best": 15
+      },
+      "decision_states": 86,
+      "episodes": 239,
+      "errors": 0,
+      "reference_success": 18,
+      "roots": 24,
+      "seconds": 2426.9,
+      "state_bins": {
+        "evidence_limit": 18,
+        "legal_alternative": 11,
+        "rule_best": 57
+      },
+      "truth_success": 21,
+      "truth_tried": 24
+    },
+    "mimic:flow_pair_same_sign": {
+      "alternatives": 117,
+      "alternatives_better": 1,
+      "bins": {
+        "evidence_limit": 1,
+        "legal_alternative": 1,
+        "rule_best": 22
+      },
+      "decision_states": 67,
+      "episodes": 165,
+      "errors": 0,
+      "reference_success": 22,
+      "roots": 24,
+      "seconds": 1140.2,
+      "state_bins": {
+        "evidence_limit": 5,
+        "legal_alternative": 1,
+        "rule_best": 61
+      },
+      "truth_success": 22,
+      "truth_tried": 24
+    },
+    "multi_measurement": {
+      "alternatives": 287,
+      "alternatives_better": 5,
+      "bins": {
+        "legal_alternative": 3,
+        "rule_best": 29
+      },
+      "decision_states": 120,
+      "episodes": 351,
+      "errors": 0,
+      "reference_success": 31,
+      "roots": 32,
+      "seconds": 5157.299999999999,
+      "state_bins": {
+        "evidence_limit": 2,
+        "legal_alternative": 5,
+        "rule_best": 113
+      },
+      "truth_success": 31,
+      "truth_tried": 32
+    },
+    "parameter:ambiguous": {
+      "alternatives": 120,
+      "alternatives_better": 0,
+      "bins": {
+        "rule_best": 40
+      },
+      "decision_states": 80,
+      "episodes": 200,
+      "errors": 0,
+      "reference_success": 40,
+      "roots": 40,
+      "seconds": 1246.9999999999998,
+      "state_bins": {
+        "rule_best": 80
+      },
+      "truth_success": 40,
+      "truth_tried": 40
+    },
+    "parameter:dominant": {
+      "alternatives": 32,
+      "alternatives_better": 0,
+      "bins": {
+        "rule_best": 8
+      },
+      "decision_states": 16,
+      "episodes": 48,
+      "errors": 0,
+      "reference_success": 8,
+      "roots": 8,
+      "seconds": 209.2,
+      "state_bins": {
+        "rule_best": 16
+      },
+      "truth_success": 8,
+      "truth_tried": 8
+    },
+    "parameter:misranked": {
+      "alternatives": 13,
+      "alternatives_better": 1,
+      "bins": {
+        "legal_alternative": 1,
+        "rule_best": 3
+      },
+      "decision_states": 9,
+      "episodes": 21,
+      "errors": 0,
+      "reference_success": 3,
+      "roots": 4,
+      "seconds": 156.0,
+      "state_bins": {
+        "evidence_limit": 2,
+        "legal_alternative": 1,
+        "rule_best": 6
+      },
+      "truth_success": 4,
+      "truth_tried": 4
+    }
+  },
+  "suite": "output/rl_hard_draw_20261015/hard_training_screen.json",
+  "total_seconds": 3191.5
+}
