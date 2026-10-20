@@ -184,13 +184,34 @@ def alternative_features(observation: Mapping[str, Any], action: Mapping[str, An
             features["candidate_lambda_ratio_to_top"] = (own / top) if own is not None and top else None
             features["candidate_context_rank"] = next((i for i, item in enumerate(ranked) if isinstance(item, Mapping) and item.get("line_index1") == line), None)
     if isinstance(measurement, Mapping):
-        findings = measurement.get("measurement_findings") or []
-        features["measurement_findings"] = [
-            {k: item.get(k) for k in ("index", "index0", "measurement_index", "channel_index0", "normalized_residual", "abs_normalized_residual", "score", "residual")
-             if isinstance(item, Mapping) and k in item}
-            for item in findings[:8] if isinstance(item, Mapping)
-        ]
-        features["measurement_context_keys"] = sorted(k for k in measurement.keys() if k.startswith("measurement_"))[:12]
+        findings = [dict(item) for item in (measurement.get("measurement_findings") or []) if isinstance(item, Mapping)]
+        features["measurement_findings"] = findings[:10]
+        features["measurement_finding_count"] = len(findings)
+        group = arguments.get("suspect_group")
+        if isinstance(group, list) and group:
+            by_index = {}
+            for position, item in enumerate(findings):
+                for key in ("index0", "index", "measurement_index"):
+                    if item.get(key) is not None:
+                        by_index[int(item[key])] = (position, item)
+                        break
+            own = [by_index.get(int(i)) for i in group if by_index.get(int(i)) is not None]
+            values = [float(item.get("value") or 0.0) for _p, item in own]
+            top = max((float(item.get("value") or 0.0) for item in findings), default=None)
+            features["meter_context_rank"] = min((p for p, _i in own), default=None)
+            features["meter_value"] = max(values) if values else None
+            features["meter_value_ratio_to_top"] = (max(values) / top) if values and top else None
+            features["meter_channels"] = [str(item.get("channel")) for _p, item in own]
+            features["meter_offsets"] = [item.get("channel_offset") for _p, item in own]
+            features["meter_group_size"] = len(group)
+            # A flow pair shares one branch: another finding on the same offset with the partner channel.
+            partners = 0
+            for _p, item in own:
+                offset, channel = item.get("channel_offset"), str(item.get("channel"))
+                partner = {"Pf": "Pt", "Pt": "Pf", "Qf": "Qt", "Qt": "Qf"}.get(channel)
+                if partner and any(other.get("channel_offset") == offset and str(other.get("channel")) == partner for other in findings):
+                    partners += 1
+            features["meter_same_branch_partner"] = partners
     if isinstance(wls, Mapping):
         features["wls"] = {k: wls.get(k) for k in ("chi_square_statistic", "chi_square_threshold", "chi_square_alarm", "max_normalized_residual",
                                                    "normalized_residual_alarm", "anomaly_breadth", "dominant_residual_block", "dof") if k in wls}
