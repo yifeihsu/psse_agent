@@ -1,0 +1,259 @@
+{
+  "contract": "candidate_comparison_check_v1",
+  "strata": {
+    "measurement+parameter:ambiguous": {
+      "roots": 32,
+      "solved": 32,
+      "steps": 352,
+      "comparisons": 32,
+      "roots_with_comparison": 32,
+      "comparison_changed_first_line": 0,
+      "comparison_best_is_true": 32,
+      "comparison_best_known": 32,
+      "errors": 0,
+      "baseline_solved": 32,
+      "baseline_steps": 320,
+      "paired": 32
+    },
+    "measurement+parameter:dominant": {
+      "roots": 8,
+      "solved": 8,
+      "steps": 81,
+      "comparisons": 1,
+      "roots_with_comparison": 1,
+      "comparison_changed_first_line": 0,
+      "comparison_best_is_true": 1,
+      "comparison_best_known": 1,
+      "errors": 0,
+      "baseline_solved": 8,
+      "baseline_steps": 80,
+      "paired": 8
+    },
+    "measurement+parameter:misranked": {
+      "roots": 4,
+      "solved": 4,
+      "steps": 44,
+      "comparisons": 4,
+      "roots_with_comparison": 4,
+      "comparison_changed_first_line": 4,
+      "comparison_best_is_true": 4,
+      "comparison_best_known": 4,
+      "errors": 0,
+      "baseline_solved": 1,
+      "baseline_steps": 40,
+      "paired": 4
+    },
+    "parameter:ambiguous": {
+      "roots": 40,
+      "solved": 40,
+      "steps": 280,
+      "comparisons": 40,
+      "roots_with_comparison": 40,
+      "comparison_changed_first_line": 0,
+      "comparison_best_is_true": 40,
+      "comparison_best_known": 40,
+      "errors": 0,
+      "baseline_solved": 40,
+      "baseline_steps": 240,
+      "paired": 40
+    },
+    "parameter:dominant": {
+      "roots": 8,
+      "solved": 8,
+      "steps": 49,
+      "comparisons": 1,
+      "roots_with_comparison": 1,
+      "comparison_changed_first_line": 0,
+      "comparison_best_is_true": 1,
+      "comparison_best_known": 1,
+      "errors": 0,
+      "baseline_solved": 8,
+      "baseline_steps": 48,
+      "paired": 8
+    },
+    "parameter:misranked": {
+      "roots": 4,
+      "solved": 4,
+      "steps": 28,
+      "comparisons": 4,
+      "roots_with_comparison": 4,
+      "comparison_changed_first_line": 4,
+      "comparison_best_is_true": 4,
+      "comparison_best_known": 4,
+      "errors": 0,
+      "baseline_solved": 3,
+      "baseline_steps": 28,
+      "paired": 4
+    }
+  },
+  "totals": {
+    "roots": 96,
+    "solved": 96,
+    "steps": 834,
+    "comparisons": 82,
+    "roots_with_comparison": 82,
+    "comparison_changed_first_line": 8,
+    "comparison_best_is_true": 82,
+    "comparison_best_known": 82,
+    "errors": 0,
+    "baseline_solved": 92,
+    "baseline_steps": 756,
+    "paired": 96
+  },
+  "changes": [
+    {
+      "root": "r0_1e263d720ffb",
+      "stratum": "parameter:misranked",
+      "true_lines": [
+        6
+      ],
+      "baseline": {
+        "success": false,
+        "steps": 10,
+        "healthy_preserved": false
+      },
+      "variant": {
+        "success": true,
+        "steps": 7,
+        "healthy_preserved": true
+      },
+      "comparisons": [
+        {
+          "line_indices": [
+            3,
+            6
+          ],
+          "ranked_line_indices": [
+            6,
+            3
+          ],
+          "best_line_index": 6
+        }
+      ],
+      "first_parameter_correction": {
+        "step": 3,
+        "line_index": 6,
+        "context_top_line": 3,
+        "dominant": false,
+        "dominance_ratio": 1.1822975038206827,
+        "execution_status": "success"
+      }
+    },
+    {
+      "root": "r0_96f831d958dc",
+      "stratum": "measurement+parameter:misranked",
+      "true_lines": [
+        6
+      ],
+      "baseline": {
+        "success": false,
+        "steps": 10,
+        "healthy_preserved": false
+      },
+      "variant": {
+        "success": true,
+        "steps": 11,
+        "healthy_preserved": true
+      },
+      "comparisons": [
+        {
+          "line_indices": [
+            3,
+            6
+          ],
+          "ranked_line_indices": [
+            6,
+            3
+          ],
+          "best_line_index": 6
+        }
+      ],
+      "first_parameter_correction": {
+        "step": 7,
+        "line_index": 6,
+        "context_top_line": 3,
+        "dominant": false,
+        "dominance_ratio": 1.0710742083061018,
+        "execution_status": "success"
+      }
+    },
+    {
+      "root": "r0_a8ab061f6aa7",
+      "stratum": "measurement+parameter:misranked",
+      "true_lines": [
+        6
+      ],
+      "baseline": {
+        "success": false,
+        "steps": 10,
+        "healthy_preserved": false
+      },
+      "variant": {
+        "success": true,
+        "steps": 11,
+        "healthy_preserved": true
+      },
+      "comparisons": [
+        {
+          "line_indices": [
+            3,
+            6
+          ],
+          "ranked_line_indices": [
+            6,
+            3
+          ],
+          "best_line_index": 6
+        }
+      ],
+      "first_parameter_correction": {
+        "step": 7,
+        "line_index": 6,
+        "context_top_line": 3,
+        "dominant": false,
+        "dominance_ratio": 1.0383499803724867,
+        "execution_status": "success"
+      }
+    },
+    {
+      "root": "r0_b8b0b2e6e5da",
+      "stratum": "measurement+parameter:misranked",
+      "true_lines": [
+        6
+      ],
+      "baseline": {
+        "success": false,
+        "steps": 10,
+        "healthy_preserved": false
+      },
+      "variant": {
+        "success": true,
+        "steps": 11,
+        "healthy_preserved": true
+      },
+      "comparisons": [
+        {
+          "line_indices": [
+            3,
+            6,
+            4
+          ],
+          "ranked_line_indices": [
+            6,
+            3,
+            4
+          ],
+          "best_line_index": 6
+        }
+      ],
+      "first_parameter_correction": {
+        "step": 3,
+        "line_index": 6,
+        "context_top_line": 3,
+        "dominant": true,
+        "dominance_ratio": 1.319856182090114,
+        "execution_status": "success"
+      }
+    }
+  ]
+}

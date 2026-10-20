@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from psse_env.actions import (
+    COMPARE_PARAMETER_CANDIDATES,
+    comparison_line_indices,
+    parameter_comparison_evidence,
+    parameter_comparison_ranked_lines,
     ANOMALY_FAMILY_MARKERS,
     blocking_waveform_signatures,
     ASK_FOR_MORE_EVIDENCE,
@@ -446,6 +450,38 @@ class ProcessValidityOracle:
                 error_code, error_detail = "state_reference_mismatch", "context_state_not_active"
             elif strict and not successful_current_wls(state):
                 error_code, error_detail = "missing_precondition", "current_balanced_wls_required"
+        elif tool == COMPARE_PARAMETER_CANDIDATES:
+            # A read-only comparison of the ranked parameter candidates: the
+            # preconditions of a context request on the active state, a fresh
+            # parameter context whose supported corrections name every
+            # requested line, and no comparison of those lines on this state
+            # yet (a repeat would recompute the same verdicts).
+            requested = args.get("state_id") or active_id
+            lines = comparison_line_indices(args.get("line_indices"))
+            if has_open_candidate:
+                error_code, error_detail = "candidate_lifecycle_violation", "comparison_with_open_candidate"
+            elif not self._known_current_state(store, requested):
+                error_code, error_detail = "unknown_state_id", str(requested)
+            elif str(requested) != str(active_id):
+                error_code, error_detail = "state_reference_mismatch", "comparison_state_not_active"
+            elif strict and not successful_current_wls(state):
+                error_code, error_detail = "missing_precondition", "current_balanced_wls_required"
+            elif not self._context_is_fresh(state, "parameter"):
+                error_code, error_detail = "missing_precondition", "parameter_context_missing"
+            elif lines is None:
+                error_code, error_detail = "schema_error", "comparison_line_indices_invalid"
+            else:
+                supported_lines = {
+                    int(action["arguments"]["line_index"])
+                    for action in self._supported_corrections_for_family(state, "parameter")
+                    if isinstance(action["arguments"].get("line_index"), int)
+                }
+                compared = parameter_comparison_evidence(state)
+                compared_lines = set(parameter_comparison_ranked_lines(state)) if compared is not None else set()
+                if not set(lines) <= supported_lines:
+                    error_code, error_detail = "missing_precondition", "comparison_candidate_not_supported"
+                elif set(lines) <= compared_lines:
+                    error_code, error_detail = "missing_precondition", "parameter_comparison_already_recorded"
         elif tool in {RUN_WLS, VERIFY_CANDIDATE}:
             expected = candidate_id if has_open_candidate else active_id
             requested = args.get("state_id") or expected
@@ -892,6 +928,18 @@ class ProcessValidityOracle:
                 )
                 tool = GET_HARMONIC_CONTEXT if has_anomaly else RUN_WLS
                 return [{"tool": tool, "arguments": {"state_id": active_id}}]
+            if error_detail in {"parameter_comparison_already_recorded", "comparison_candidate_not_supported"}:
+                # The verdicts are already on the state: the repair is the
+                # best-ranked compared line that is still supported.
+                supported = {
+                    int(action["arguments"]["line_index"]): action
+                    for action in self._supported_corrections_for_family(state, "parameter")
+                    if isinstance(action["arguments"].get("line_index"), int)
+                }
+                for line in parameter_comparison_ranked_lines(state):
+                    if line in supported:
+                        return [dict(supported[line])]
+                return self._safe_actions_for_state(state)
             tool = {
                 "parameter_context_missing": GET_PARAMETER_CONTEXT,
                 "topology_context_missing": GET_TOPOLOGY_CONTEXT,

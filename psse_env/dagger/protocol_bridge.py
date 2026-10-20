@@ -32,6 +32,7 @@ from typing import Any, Mapping
 from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
+    COMPARE_PARAMETER_CANDIDATES,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
@@ -71,6 +72,7 @@ INTERNAL_TO_CANONICAL_TOOL: dict[str, str] = {
     GET_MEASUREMENT_CONTEXT: GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT: GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT: GET_TOPOLOGY_CONTEXT,
+    COMPARE_PARAMETER_CANDIDATES: COMPARE_PARAMETER_CANDIDATES,
     CORRECT_MEASUREMENTS: CORRECT_MEASUREMENTS_FROM_PATH,
     CORRECT_PARAMETERS: CORRECT_PARAMETERS_FROM_PATH,
     CORRECT_TOPOLOGY: CORRECT_TOPOLOGY_FROM_PATH,
@@ -131,6 +133,38 @@ _TRANSACTIONAL_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "case_path": {"type": "string", "description": "Case identifier or path."},
                 },
                 "required": ["case_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": COMPARE_PARAMETER_CANDIDATES,
+            "description": (
+                "Compare two or three parameter candidates offered by the current "
+                "parameter context before correcting one. Each line's correction "
+                "and its verification solve run on an isolated copy of the active "
+                "case; the reply lists every line's observable verdict (candidate "
+                "disposition, chi-square after the refit, global progress) and the "
+                "best-ranked line. One action; no candidate is opened and no state "
+                "changes. Use it when the ranking does not clearly dominate."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_path": {"type": "string", "description": "Case identifier or path."},
+                    "line_indices": {
+                        "type": "array",
+                        "description": (
+                            "Two or three distinct 1-based line indices from the "
+                            "parameter context's supported corrections."
+                        ),
+                        "items": {"type": "integer"},
+                        "minItems": 2,
+                        "maxItems": 3,
+                    },
+                },
+                "required": ["case_path", "line_indices"],
             },
         },
     },

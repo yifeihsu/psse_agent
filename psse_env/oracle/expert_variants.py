@@ -10,7 +10,11 @@ construct the same expert:
 * ``ledger``: the baseline following the balanced screen's hypothesis ledger
   (``ExpertPolicyOracle(hypothesis_ledger=True)``, step 3);
 * ``ledger_ranked``: the ledger expert with the learned ranker's acquisition
-  deferral (``learned_ranker=DEFAULT_RANKER_MODEL``, step 4 decision).
+  deferral (``learned_ranker=DEFAULT_RANKER_MODEL``, step 4 decision);
+* ``ledger_ranked_compare``: ``ledger_ranked`` that compares the ranked
+  parameter candidates on isolated branches before correcting one when the
+  ranking does not clearly dominate (``candidate_comparison=True``, the
+  decision audit's interface repair of 2026-10-19).
 
 Research only.  The default is the baseline, so nothing changes unless a
 run names a variant; receipts record the variant beside the evidence
@@ -25,7 +29,7 @@ from psse_env.oracle.learned_ranker import DEFAULT_RANKER_MODEL
 
 EXPERT_VARIANT_ENV = "PSSE_EXPERT_VARIANT"
 DEFAULT_EXPERT_VARIANT = "baseline"
-EXPERT_VARIANTS = ("baseline", "ledger", "ledger_ranked")
+EXPERT_VARIANTS = ("baseline", "ledger", "ledger_ranked", "ledger_ranked_compare")
 
 
 def current_expert_variant(variant: str | None = None) -> str:
@@ -47,7 +51,13 @@ def expert_variant_options(variant: str | None = None, *, learned_ranker: Any = 
         return {}
     if name == "ledger":
         return {"hypothesis_ledger": True}
-    return {"hypothesis_ledger": True, "learned_ranker": learned_ranker if learned_ranker is not None else str(DEFAULT_RANKER_MODEL)}
+    options: dict[str, Any] = {
+        "hypothesis_ledger": True,
+        "learned_ranker": learned_ranker if learned_ranker is not None else str(DEFAULT_RANKER_MODEL),
+    }
+    if name == "ledger_ranked_compare":
+        options["candidate_comparison"] = True
+    return options
 
 
 __all__ = ["DEFAULT_EXPERT_VARIANT", "EXPERT_VARIANTS", "EXPERT_VARIANT_ENV", "current_expert_variant", "expert_variant_options"]

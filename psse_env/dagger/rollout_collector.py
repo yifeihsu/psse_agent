@@ -327,6 +327,31 @@ def observable_rank_one_target_proof(
         }
 
     parameter_tools = {"correct_parameters", "correct_parameters_from_path"}
+    if preferred["tool"] in parameter_tools:
+        # After a bounded candidate comparison on this state the deterministic
+        # target is the comparison's best-ranked line, policy-visible in the
+        # same ledger as the context (2026-10-19); the multiplier ranking no
+        # longer orders the compared lines.
+        from psse_env.actions import parameter_comparison_ranked_lines
+
+        compared = parameter_comparison_ranked_lines(observation)
+        preferred_line = preferred["arguments"].get("line_index")
+        active_state = str(observation.get("active_state_id") or "")
+        if (
+            compared
+            and isinstance(preferred_line, int)
+            and not isinstance(preferred_line, bool)
+            and int(preferred_line) == compared[0]
+            and all(str(action["arguments"].get("state_id") or "") == active_state for action in actions)
+        ):
+            return {
+                "contract": "observable_rank_one_target_v1",
+                "passed": True,
+                "basis": "branch_verified_comparison_best",
+                "expert_action_count": len(actions),
+                "preferred_line_index1": int(preferred_line),
+                "compared_line_indices": list(compared),
+            }
     if preferred["tool"] not in parameter_tools or any(
         action["tool"] not in parameter_tools for action in actions
     ):

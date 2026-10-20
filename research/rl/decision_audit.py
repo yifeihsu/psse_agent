@@ -584,7 +584,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--suite", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--profile", default="suspicion_gated_diagnostics")
-    parser.add_argument("--expert", default="ledger_ranked", choices=("baseline", "ledger", "ledger_ranked"))
+    parser.add_argument("--expert", default="ledger_ranked", choices=("baseline", "ledger", "ledger_ranked", "ledger_ranked_compare"))
     parser.add_argument("--triage-model", default=None)
     parser.add_argument("--progress-basis", default=None)
     parser.add_argument("--strata", nargs="*", default=None, help="root strata to audit (hard_draw_report.root_stratum names)")

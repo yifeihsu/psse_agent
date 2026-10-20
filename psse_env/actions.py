@@ -73,6 +73,24 @@ AMBIGUOUS_BRANCH_CANDIDATES_REQUEST = (
 )
 #: How many ranked lines the parameter context offers when no line dominates.
 PARAMETER_RANKING_AMBIGUITY_CANDIDATES = 2
+#: Bounded comparison of the ranked parameter candidates (2026-10-19).  One
+#: policy action fits each requested line on an isolated branch of the active
+#: state, runs the same verification solve ``run_wls`` would run on that
+#: candidate, and reports the observable verdicts side by side; no candidate is
+#: opened and no state changes.  The decision audit of the hard draw found the
+#: expert's parameter ordering wrong on 4 of 8 misranked training roots while
+#: the runner-up line verified and solved the root; the fixed rule picks the
+#: top-ranked line and commits a healthy branch instead.
+COMPARE_PARAMETER_CANDIDATES = "compare_parameter_candidates"
+PARAMETER_COMPARISON_MIN_CANDIDATES = 2
+PARAMETER_COMPARISON_MAX_CANDIDATES = 3
+PARAMETER_COMPARISON_CONTRACT = "branch_verified_parameter_comparison_v1"
+#: The ``fresh_context_evidence`` family that records the comparison on the
+#: active state; dropped with the other balanced contexts when the state changes.
+PARAMETER_COMPARISON_FAMILY = "parameter_comparison"
+_COMPARISON_DISPOSITION_RANK = {
+    "ACCEPT_FINAL": 0, "ACCEPT_PARTIAL": 1, "INCONCLUSIVE": 2, "REJECT": 3,
+}
 
 
 def ambiguous_branch_candidate_lines(observation: Mapping[str, Any]) -> list[int] | None:
@@ -123,6 +141,92 @@ def ambiguous_branch_candidate_lines(observation: Mapping[str, Any]) -> list[int
     if not set(candidates) <= rejected:
         return None
     return candidates
+def comparison_line_indices(value: Any) -> list[int] | None:
+    """The distinct positive 1-based line indices of a comparison request.
+
+    ``None`` when the request is malformed: not a list, a non-integer or
+    boolean entry, a non-positive line, a repeated line, or a count outside
+    the bounded window.
+    """
+    if not isinstance(value, (list, tuple)):
+        return None
+    lines: list[int] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int) or item <= 0 or item in lines:
+            return None
+        lines.append(int(item))
+    if not PARAMETER_COMPARISON_MIN_CANDIDATES <= len(lines) <= PARAMETER_COMPARISON_MAX_CANDIDATES:
+        return None
+    return lines
+
+
+def _comparison_sort_key(candidate: Mapping[str, Any]) -> tuple[int, float, float, int]:
+    disposition = candidate.get("verification_verdict")
+    if candidate.get("execution_status") != "success" or disposition is None:
+        rank = len(_COMPARISON_DISPOSITION_RANK)
+    else:
+        rank = _COMPARISON_DISPOSITION_RANK.get(str(disposition), len(_COMPARISON_DISPOSITION_RANK))
+
+    def finite(value: Any, default: float) -> float:
+        if isinstance(value, bool) or value is None:
+            return default
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+        return number if number == number and abs(number) != float("inf") else default
+
+    progress = finite(candidate.get("global_progress"), float("-inf"))
+    statistic = finite(candidate.get("chi_square_statistic"), float("inf"))
+    request_rank = candidate.get("request_rank")
+    request_rank = int(request_rank) if isinstance(request_rank, int) and not isinstance(request_rank, bool) else 0
+    return (rank, -progress, statistic, request_rank)
+
+
+def rank_parameter_comparison(candidates: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Order the per-line verdicts of a comparison, best first.
+
+    An accepted verification (final before partial) beats an inconclusive one,
+    which beats a rejection or a failed fit; within a class the larger global
+    progress of the verification solve wins, then the smaller chi-square
+    statistic, then the order of the request.  ``verification_verdict`` is the
+    environment's own truth-free verdict on the branch candidate and the other
+    keys are the verification metrics the policy reads anyway.
+    """
+    ordered = sorted((dict(item) for item in candidates), key=_comparison_sort_key)
+    for position, item in enumerate(ordered):
+        item["comparison_rank"] = position + 1
+    return ordered
+
+
+def parameter_comparison_evidence(observation: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The comparison recorded on the active state, else ``None``."""
+    contexts = observation.get("fresh_context_evidence")
+    contexts = contexts if isinstance(contexts, Mapping) else {}
+    evidence = contexts.get(PARAMETER_COMPARISON_FAMILY)
+    if not isinstance(evidence, Mapping):
+        return None
+    active_id = str(observation.get("active_state_id") or "")
+    if active_id and str(evidence.get("state_id") or "") != active_id:
+        return None
+    if not isinstance(evidence.get("candidates"), (list, tuple)):
+        return None
+    return evidence
+
+
+def parameter_comparison_ranked_lines(observation: Mapping[str, Any]) -> list[int]:
+    """The compared lines of the active state, best verdict first (empty without a comparison)."""
+    evidence = parameter_comparison_evidence(observation)
+    if evidence is None:
+        return []
+    lines: list[int] = []
+    for item in rank_parameter_comparison([c for c in evidence["candidates"] if isinstance(c, Mapping)]):
+        line = item.get("line_index")
+        if isinstance(line, int) and not isinstance(line, bool) and line not in lines:
+            lines.append(int(line))
+    return lines
+
+
 # An accepted correction can make the candidate WLS statistic quiescent
 # without proving that every physical error has been removed.  Production
 # mode persists this policy-visible protocol obligation until a same-state
@@ -210,6 +314,7 @@ MACRO_ACTIONS = {
     GET_MEASUREMENT_CONTEXT,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
+    COMPARE_PARAMETER_CANDIDATES,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,

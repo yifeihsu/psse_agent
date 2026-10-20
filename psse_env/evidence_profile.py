@@ -114,7 +114,8 @@ PRECOMPUTED_DIAGNOSIS_FIELDS = frozenset({
 })
 SCADA_ALLOWED_TOOLS = frozenset({
     "run_wls", "verify_candidate", "get_measurement_context", "get_parameter_context",
-    "get_topology_context", "correct_measurements", "correct_parameters", "correct_topology",
+    "get_topology_context", "compare_parameter_candidates",
+    "correct_measurements", "correct_parameters", "correct_topology",
     "commit_state", "rollback_state", "finalize_diagnosis", "ask_for_more_evidence",
 })
 SCADA_DISABLED_TOOLS = frozenset({
@@ -368,7 +369,7 @@ def sanitize_scada_observation(value: Any) -> Any:
                 result[text] = {
                     family: sanitize_scada_observation(record)
                     for family, record in (item.items() if isinstance(item, Mapping) else [])
-                    if family in {"wls", "measurement", "parameter", "topology"}
+                    if family in {"wls", "measurement", "parameter", "topology", "parameter_comparison"}
                 }
             else:
                 result[text] = sanitize_scada_observation(item)

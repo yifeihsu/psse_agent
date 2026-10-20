@@ -1,0 +1,413 @@
+{
+  "contract": "candidate_comparison_check_v1",
+  "strata": {
+    "measurement+parameter:ambiguous": {
+      "roots": 16,
+      "solved": 16,
+      "steps": 176,
+      "comparisons": 16,
+      "roots_with_comparison": 16,
+      "comparison_changed_first_line": 0,
+      "comparison_best_is_true": 16,
+      "comparison_best_known": 16,
+      "errors": 0,
+      "baseline_solved": 16,
+      "baseline_steps": 160,
+      "paired": 16
+    },
+    "measurement+parameter:dominant": {
+      "roots": 8,
+      "solved": 8,
+      "steps": 85,
+      "comparisons": 1,
+      "roots_with_comparison": 1,
+      "comparison_changed_first_line": 0,
+      "comparison_best_is_true": 1,
+      "comparison_best_known": 1,
+      "errors": 0,
+      "baseline_solved": 8,
+      "baseline_steps": 84,
+      "paired": 8
+    },
+    "measurement+parameter:misranked": {
+      "roots": 8,
+      "solved": 8,
+      "steps": 88,
+      "comparisons": 8,
+      "roots_with_comparison": 8,
+      "comparison_changed_first_line": 8,
+      "comparison_best_is_true": 8,
+      "comparison_best_known": 8,
+      "errors": 0,
+      "baseline_solved": 4,
+      "baseline_steps": 86,
+      "paired": 8
+    },
+    "parameter:ambiguous": {
+      "roots": 24,
+      "solved": 24,
+      "steps": 168,
+      "comparisons": 24,
+      "roots_with_comparison": 24,
+      "comparison_changed_first_line": 0,
+      "comparison_best_is_true": 24,
+      "comparison_best_known": 24,
+      "errors": 0,
+      "baseline_solved": 24,
+      "baseline_steps": 144,
+      "paired": 24
+    },
+    "parameter:dominant": {
+      "roots": 8,
+      "solved": 8,
+      "steps": 50,
+      "comparisons": 2,
+      "roots_with_comparison": 2,
+      "comparison_changed_first_line": 0,
+      "comparison_best_is_true": 2,
+      "comparison_best_known": 2,
+      "errors": 0,
+      "baseline_solved": 8,
+      "baseline_steps": 48,
+      "paired": 8
+    },
+    "parameter:misranked": {
+      "roots": 9,
+      "solved": 9,
+      "steps": 63,
+      "comparisons": 9,
+      "roots_with_comparison": 9,
+      "comparison_changed_first_line": 9,
+      "comparison_best_is_true": 9,
+      "comparison_best_known": 9,
+      "errors": 0,
+      "baseline_solved": 5,
+      "baseline_steps": 58,
+      "paired": 9
+    }
+  },
+  "totals": {
+    "roots": 73,
+    "solved": 73,
+    "steps": 630,
+    "comparisons": 60,
+    "roots_with_comparison": 60,
+    "comparison_changed_first_line": 17,
+    "comparison_best_is_true": 60,
+    "comparison_best_known": 60,
+    "errors": 0,
+    "baseline_solved": 65,
+    "baseline_steps": 580,
+    "paired": 73
+  },
+  "changes": [
+    {
+      "root": "r0_2f7496b3ef2c",
+      "stratum": "parameter:misranked",
+      "true_lines": [
+        6
+      ],
+      "baseline": {
+        "success": false,
+        "steps": 10,
+        "healthy_preserved": false
+      },
+      "variant": {
+        "success": true,
+        "steps": 7,
+        "healthy_preserved": true
+      },
+      "comparisons": [
+        {
+          "line_indices": [
+            3,
+            6
+          ],
+          "ranked_line_indices": [
+            6,
+            3
+          ],
+          "best_line_index": 6
+        }
+      ],
+      "first_parameter_correction": {
+        "step": 3,
+        "line_index": 6,
+        "context_top_line": 3,
+        "dominant": false,
+        "dominance_ratio": 1.1822975038206827,
+        "execution_status": "success"
+      }
+    },
+    {
+      "root": "r0_3ad37c833dc5",
+      "stratum": "measurement+parameter:misranked",
+      "true_lines": [
+        6
+      ],
+      "baseline": {
+        "success": false,
+        "steps": 10,
+        "healthy_preserved": false
+      },
+      "variant": {
+        "success": true,
+        "steps": 11,
+        "healthy_preserved": true
+      },
+      "comparisons": [
+        {
+          "line_indices": [
+            3,
+            6,
+            4
+          ],
+          "ranked_line_indices": [
+            6,
+            3,
+            4
+          ],
+          "best_line_index": 6
+        }
+      ],
+      "first_parameter_correction": {
+        "step": 7,
+        "line_index": 6,
+        "context_top_line": 3,
+        "dominant": true,
+        "dominance_ratio": 1.3036151181225657,
+        "execution_status": "success"
+      }
+    },
+    {
+      "root": "r0_4feaa499d7b8",
+      "stratum": "measurement+parameter:misranked",
+      "true_lines": [
+        6
+      ],
+      "baseline": {
+        "success": false,
+        "steps": 10,
+        "healthy_preserved": false
+      },
+      "variant": {
+        "success": true,
+        "steps": 11,
+        "healthy_preserved": true
+      },
+      "comparisons": [
+        {
+          "line_indices": [
+            3,
+            6
+          ],
+          "ranked_line_indices": [
+            6,
+            3
+          ],
+          "best_line_index": 6
+        }
+      ],
+      "first_parameter_correction": {
+        "step": 7,
+        "line_index": 6,
+        "context_top_line": 3,
+        "dominant": false,
+        "dominance_ratio": 1.0710731526178983,
+        "execution_status": "success"
+      }
+    },
+    {
+      "root": "r0_8013605195d2",
+      "stratum": "parameter:misranked",
+      "true_lines": [
+        6
+      ],
+      "baseline": {
+        "success": false,
+        "steps": 6,
+        "healthy_preserved": false
+      },
+      "variant": {
+        "success": true,
+        "steps": 7,
+        "healthy_preserved": true
+      },
+      "comparisons": [
+        {
+          "line_indices": [
+            3,
+            6,
+            4
+          ],
+          "ranked_line_indices": [
+            6,
+            3,
+            4
+          ],
+          "best_line_index": 6
+        }
+      ],
+      "first_parameter_correction": {
+        "step": 3,
+        "line_index": 6,
+        "context_top_line": 3,
+        "dominant": true,
+        "dominance_ratio": 1.303707550312555,
+        "execution_status": "success"
+      }
+    },
+    {
+      "root": "r0_9710751295b8",
+      "stratum": "parameter:misranked",
+      "true_lines": [
+        6
+      ],
+      "baseline": {
+        "success": false,
+        "steps": 6,
+        "healthy_preserved": false
+      },
+      "variant": {
+        "success": true,
+        "steps": 7,
+        "healthy_preserved": true
+      },
+      "comparisons": [
+        {
+          "line_indices": [
+            3,
+            6
+          ],
+          "ranked_line_indices": [
+            6,
+            3
+          ],
+          "best_line_index": 6
+        }
+      ],
+      "first_parameter_correction": {
+        "step": 3,
+        "line_index": 6,
+        "context_top_line": 3,
+        "dominant": false,
+        "dominance_ratio": 1.071084274711645,
+        "execution_status": "success"
+      }
+    },
+    {
+      "root": "r0_bb0177c569e5",
+      "stratum": "parameter:misranked",
+      "true_lines": [
+        6
+      ],
+      "baseline": {
+        "success": false,
+        "steps": 6,
+        "healthy_preserved": false
+      },
+      "variant": {
+        "success": true,
+        "steps": 7,
+        "healthy_preserved": true
+      },
+      "comparisons": [
+        {
+          "line_indices": [
+            3,
+            6
+          ],
+          "ranked_line_indices": [
+            6,
+            3
+          ],
+          "best_line_index": 6
+        }
+      ],
+      "first_parameter_correction": {
+        "step": 3,
+        "line_index": 6,
+        "context_top_line": 3,
+        "dominant": false,
+        "dominance_ratio": 1.0399851461898884,
+        "execution_status": "success"
+      }
+    },
+    {
+      "root": "r0_e5ec58bf6605",
+      "stratum": "measurement+parameter:misranked",
+      "true_lines": [
+        6
+      ],
+      "baseline": {
+        "success": false,
+        "steps": 10,
+        "healthy_preserved": false
+      },
+      "variant": {
+        "success": true,
+        "steps": 11,
+        "healthy_preserved": true
+      },
+      "comparisons": [
+        {
+          "line_indices": [
+            3,
+            6
+          ],
+          "ranked_line_indices": [
+            6,
+            3
+          ],
+          "best_line_index": 6
+        }
+      ],
+      "first_parameter_correction": {
+        "step": 7,
+        "line_index": 6,
+        "context_top_line": 3,
+        "dominant": false,
+        "dominance_ratio": 1.040168278424302,
+        "execution_status": "success"
+      }
+    },
+    {
+      "root": "r0_e8b8de144865",
+      "stratum": "measurement+parameter:misranked",
+      "true_lines": [
+        6
+      ],
+      "baseline": {
+        "success": false,
+        "steps": 16,
+        "healthy_preserved": false
+      },
+      "variant": {
+        "success": true,
+        "steps": 11,
+        "healthy_preserved": true
+      },
+      "comparisons": [
+        {
+          "line_indices": [
+            3,
+            6
+          ],
+          "ranked_line_indices": [
+            6,
+            3
+          ],
+          "best_line_index": 6
+        }
+      ],
+      "first_parameter_correction": {
+        "step": 7,
+        "line_index": 6,
+        "context_top_line": 3,
+        "dominant": false,
+        "dominance_ratio": 1.1821392489960862,
+        "execution_status": "success"
+      }
+    }
+  ]
+}

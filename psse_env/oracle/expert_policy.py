@@ -7,7 +7,11 @@ from typing import Any, Mapping, Sequence
 from psse_env.actions import (
     AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
     ASK_FOR_MORE_EVIDENCE,
+    COMPARE_PARAMETER_CANDIDATES,
+    PARAMETER_COMPARISON_MAX_CANDIDATES,
+    PARAMETER_COMPARISON_MIN_CANDIDATES,
     ambiguous_branch_candidate_lines,
+    parameter_comparison_ranked_lines,
     CONTEXT_TOOLS,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
@@ -83,8 +87,14 @@ class _ExpertContext:
 # actions.  The partition is stable and runs after admissibility ranking, so
 # it never resurrects a filtered proposal or reorders within a path.
 STRUCTURAL_PATH_TOOLS = frozenset(
-    {CORRECT_PARAMETERS, CORRECT_TOPOLOGY, GET_PARAMETER_CONTEXT, GET_TOPOLOGY_CONTEXT}
+    {CORRECT_PARAMETERS, CORRECT_TOPOLOGY, GET_PARAMETER_CONTEXT, GET_TOPOLOGY_CONTEXT, COMPARE_PARAMETER_CANDIDATES}
 )
+#: A parameter ranking that observably dominates by less than this ratio is
+#: still compared on branches before a line is corrected (the candidate
+#: comparison of 2026-10-19).  The context's own admission ratio is 1.2; of the
+#: four misranked hard training roots the fixed rule lost, one dominated at
+#: 1.32 and the others fell below 1.2.  The dominant stratum starts at 1.43.
+DEFAULT_COMPARISON_DOMINANCE_BAND = 1.5
 MEASUREMENT_PATH_TOOLS = frozenset({CORRECT_MEASUREMENTS, GET_MEASUREMENT_CONTEXT})
 _BALANCED_CONTEXT_FAMILIES = {
     GET_MEASUREMENT_CONTEXT: "measurement",
@@ -121,7 +131,7 @@ def _structural_first_order(
 
 _TRIAGE_FAMILY_TOOLS = {
     "measurement": MEASUREMENT_PATH_TOOLS,
-    "parameter": frozenset({CORRECT_PARAMETERS, GET_PARAMETER_CONTEXT}),
+    "parameter": frozenset({CORRECT_PARAMETERS, GET_PARAMETER_CONTEXT, COMPARE_PARAMETER_CANDIDATES}),
     "topology": frozenset({CORRECT_TOPOLOGY, GET_TOPOLOGY_CONTEXT}),
 }
 
@@ -165,6 +175,8 @@ class ExpertPolicyOracle:
         termination_expert: TerminationExpert | None = None,
         hypothesis_ledger: bool = False,
         learned_ranker: LearnedRanker | str | None = None,
+        candidate_comparison: bool = False,
+        comparison_dominance_band: float = DEFAULT_COMPARISON_DOMINANCE_BAND,
     ) -> None:
         # Step 3 (2026-10-01): order the balanced families and their targets by
         # the screen's accepted sequence and cap verified candidates per family
@@ -178,6 +190,13 @@ class ExpertPolicyOracle:
         self.learned_ranker = resolve_ranker(learned_ranker)
         if self.learned_ranker is not None and not self.hypothesis_ledger:
             raise ValueError("learned_ranker requires hypothesis_ledger=True")
+        # Interface repair (2026-10-19): when the parameter ranking does not
+        # observably dominate, compare the ranked lines on isolated branches
+        # (``compare_parameter_candidates``) before correcting one, and order
+        # the corrections by the verdicts.  Off by default so every earlier
+        # variant keeps its behaviour; ``ledger_ranked_compare`` turns it on.
+        self.candidate_comparison = bool(candidate_comparison)
+        self.comparison_dominance_band = float(comparison_dominance_band)
         self.process_oracle = process_oracle or ProcessValidityOracle()
         # Kept as a public collaborator for callers that use the expert policy
         # and candidate assessment through one object.
@@ -491,6 +510,11 @@ class ExpertPolicyOracle:
             blocked_correction_tools=blocked_correction_tools,
             mandatory=False,
         )
+        if self.candidate_comparison and ranked:
+            ranked = self._with_parameter_comparison(
+                ranked, policy,
+                seen_signatures=seen_signatures, blocked_correction_tools=blocked_correction_tools,
+            )
         if ranked:
             if self.hypothesis_ledger and all(budget_exhausted(proposal) for proposal in ranked):
                 # The ledger's budget is spent on every family still offering a
@@ -1508,6 +1532,118 @@ class ExpertPolicyOracle:
             if semantic:
                 released.add(semantic)
         return {item for item in seen_signatures if item not in released}
+
+    def _parameter_comparison_wanted(self, policy: PolicyObservation | Mapping[str, Any]) -> bool:
+        """Whether the fresh parameter ranking on the active state calls for a comparison.
+
+        A ranking the context did not mark dominant, or one dominant by less
+        than ``comparison_dominance_band``, is compared; a clearly dominant
+        ranking is corrected directly as before.
+        """
+        contexts = self._get(policy, "fresh_context_evidence", {}) or {}
+        evidence = contexts.get("parameter") if isinstance(contexts, Mapping) else None
+        if not isinstance(evidence, Mapping):
+            return False
+        if str(evidence.get("state_id") or "") != str(self._get(policy, "active_state_id")):
+            return False
+        if evidence.get("parameter_ranking_dominant") is not True:
+            return True
+        ratio = evidence.get("parameter_ranking_dominance_ratio")
+        if isinstance(ratio, bool) or ratio is None:
+            return False
+        try:
+            value = float(ratio)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return value == value and value < self.comparison_dominance_band
+
+    def _with_parameter_comparison(
+        self,
+        ranked: list[ExpertActionProposal],
+        policy: PolicyObservation | Mapping[str, Any],
+        *,
+        seen_signatures: set[str],
+        blocked_correction_tools: set[str],
+    ) -> list[ExpertActionProposal]:
+        """Bounded candidate comparison for ambiguous parameter rankings (2026-10-19).
+
+        With a comparison recorded on the active state, the parameter
+        corrections keep their slots in the ranked list but follow the
+        verdict order, best first.  Without one, when the ranking does not
+        observably dominate and at least two supported lines are proposed,
+        the comparison of the first ``PARAMETER_COMPARISON_MAX_CANDIDATES``
+        of them (in the expert's own order) is inserted ahead of the first
+        parameter correction.  The proposal passes the same process gate and
+        seen-signature filter as every other action.
+        """
+        positions = [
+            index for index, proposal in enumerate(ranked)
+            if safe_normalize_action(proposal.action)["tool"] == CORRECT_PARAMETERS
+        ]
+        if not positions:
+            return ranked
+
+        def line_of(proposal: ExpertActionProposal) -> int | None:
+            line = safe_normalize_action(proposal.action)["arguments"].get("line_index")
+            return int(line) if isinstance(line, int) and not isinstance(line, bool) else None
+
+        order = parameter_comparison_ranked_lines(policy if isinstance(policy, Mapping) else policy.as_dict())
+        if order:
+            proposals = [ranked[index] for index in positions]
+
+            def key(item: tuple[int, ExpertActionProposal]) -> tuple[int, int]:
+                line = line_of(item[1])
+                return (order.index(line) if line in order else len(order), item[0])
+
+            reordered: list[ExpertActionProposal] = []
+            for _, proposal in sorted(enumerate(proposals), key=key):
+                line = line_of(proposal)
+                if line in order:
+                    codes = [*proposal.evidence_codes, f"parameter_comparison_rank={order.index(line) + 1}"]
+                    if order.index(line) == 0:
+                        codes.append("parameter_comparison_best")
+                    proposal = replace(proposal, evidence_codes=codes)
+                reordered.append(proposal)
+            result = list(ranked)
+            for position, proposal in zip(positions, reordered):
+                result[position] = proposal
+            return result
+        if budget_exhausted(ranked[positions[0]]) or not self._parameter_comparison_wanted(policy):
+            return ranked
+        lines: list[int] = []
+        for index in positions:
+            line = line_of(ranked[index])
+            if line is not None and line not in lines:
+                lines.append(line)
+            if len(lines) >= PARAMETER_COMPARISON_MAX_CANDIDATES:
+                break
+        if len(lines) < PARAMETER_COMPARISON_MIN_CANDIDATES:
+            return ranked
+        first = ranked[positions[0]]
+        proposal = ExpertActionProposal(
+            action={
+                "tool": COMPARE_PARAMETER_CANDIDATES,
+                "arguments": {"state_id": self._get(policy, "active_state_id"), "line_indices": lines},
+            },
+            source_expert="parameter_expert",
+            confidence=first.confidence + 0.001,
+            evidence_codes=[
+                "parameter_ranking_not_observably_dominant",
+                "branch_verified_comparison_before_correction",
+                *[f"comparison_line={line}" for line in lines],
+            ],
+            admissible=True,
+            estimated_immediate_risk=0.01,
+        )
+        checked = self._rank_and_filter(
+            [proposal], policy,
+            seen_signatures=seen_signatures, blocked_correction_tools=blocked_correction_tools, mandatory=False,
+        )
+        if not checked:
+            return ranked
+        result = list(ranked)
+        result.insert(positions[0], checked[0])
+        return result
 
     def _seen_action_signatures(
         self,

@@ -997,3 +997,154 @@ status; for meters the normalized residuals of the findings), trained with
 physical parents held out, against the fixed rule — then the same audit
 from the student's own recorded states (phase 2), since the RL runs' losses
 are the student's deviations, not the expert's.
+
+### The predictability test (phase 3, 2026-10-19)
+
+`research/rl/decision_ranker.py` takes every audited decision state whose
+chosen action and alternatives are corrections, labels each candidate by the
+outcome of its branch (the chosen action by the reference), and trains a
+logistic model and a gradient-boosted model over the candidates' observable
+features with grouped cross-validation by root (every fold's test roots are
+unseen; parents are not shared across the hard draw's roots). It reports,
+per stratum, how many decisions the fixed rule (take the first) gets right,
+how many the ranker gets right, and the audited oracle (the best branch,
+retrospective, the ceiling).
+
+| Decision | States | Fixed rule | Ranker (logistic / GBM) | Oracle | AUC |
+| --- | --- | --- | --- | --- | --- |
+| parameter line (96 parameter-bearing roots) | 96 | 92 | 91 / 89 | 96 | 0.69 / 0.82 |
+| meter (80 mimic and multi-meter roots, first run, residual features) | 202 | 181 | 181 / 183 | 189 | 0.61 / 0.62 |
+| meter (same 80 roots, channel, offset, branch-pair and group features) | 157 | 140 | 144 / 142 | 148 | 0.76 / 0.71 |
+
+The parameter ordering is **not predictable from the context's scores**:
+both rankers lose decisions against the rule (the abs-λ score, its ratio to
+the top, the context rank, the dominance ratio and route reason do not
+separate the 4 misranked failures from the 120 roots where the top line is
+right), and the ledger's refit ranking names the same wrong line on the
+failed misranked roots. The meter ordering gains a little with the richer
+features (4 of the 5 recoverable opposite-sign mimics, at the cost of one
+same-sign mimic), AUC 0.76; a learned reorder of the meter candidates is
+worth about three roots of 80.
+
+**What that implies for the parameter decision.** The right line is not in
+the context's numbers but it is in the environment: on every misranked
+failure the runner-up line verifies and solves the root. The information the
+policy lacks is the verification verdict of the alternative, which the
+interface only reveals after committing to one candidate. Section 12 builds
+the interface repair the plan prescribes for this case: a bounded comparison
+of the ranked candidates on isolated branches before one is corrected, given
+to the expert and to every student alike.
+
+## 12. The bounded candidate comparison (interface repair, 2026-10-19)
+
+The audit's misranked failures all have the same shape: the parameter
+context ranks two lines within a few percent of each other, the expert
+corrects the top one, its verification *accepts* it (a healthy line adjacent
+to the fault lowers the chi-square enough for a partial acceptance), the
+commit retains a modified healthy branch, and the episode ends in a handoff
+with the true line never tried. The runner-up's verification would have
+been better, but the interface reveals a verdict only after the policy has
+opened that one candidate, and the ledger budget and the seen-signature
+rule keep it from going back. The repair is a read-only action that reveals
+the verdicts of the ranked candidates side by side before one is chosen.
+
+**The tool.** `compare_parameter_candidates(state_id, line_indices)` takes
+two or three lines from the fresh parameter context's supported corrections
+on the active state. For each line the controller clones the environment
+(`TransactionalPSSEEnv.clone`, the counterfactual generator's branch), runs
+`correct_parameters` and the candidate's verification solve on the clone
+exactly as the policy would, and keeps the clone's verdict: the branch
+store's disposition (`verification_verdict`, labelled without hidden truth
+on a comparison branch; under the strict profiles it never had any), the
+chi-square after the refit, the global progress, the alarms, or the
+executor's failure. The clones are discarded, no candidate opens on the
+live state, the store is unchanged, and the step costs one policy action;
+the internal fits are reported in the output
+(`internal_correction_calls`, `internal_wls_calls`). The verdicts are
+recorded in `fresh_context_evidence["parameter_comparison"]`, bound to the
+active state like a balanced context and dropped with it, with the lines in
+verdict order: an accepted verification (final before partial) before an
+inconclusive one before a rejection or a failed fit, then the larger global
+progress, then the smaller statistic, then the request order
+(`psse_env.actions.rank_parameter_comparison`). The process gate admits it
+under the preconditions of a context request plus a fresh parameter
+context naming every requested line, refuses a repeat of lines already
+compared on the state (its repair hint is the best compared line), and the
+tool is on the canonical model-visible surface for every profile, SCADA-only
+included (`psse_env/dagger/protocol_bridge.py`).
+
+**The expert.** Variant `ledger_ranked_compare`
+(`ExpertPolicyOracle(candidate_comparison=True)`, off in every earlier
+variant) inserts the comparison of the first three ranked parameter
+corrections ahead of the first one whenever the context did not mark the
+ranking dominant or it dominates by less than 1.5 (the four audit failures
+sat at 1.04, 1.07, 1.18 and 1.32; the dominant stratum starts at 1.43); once
+a comparison is on the state, the parameter corrections keep their slots in
+the ranked list but follow the verdict order. The DAgger rank-one proof
+accepts the comparison's best line as the deterministic target
+(`observable_rank_one_target_proof`, basis
+`branch_verified_comparison_best`), so a student can be taught the step.
+Tests: `psse_env/test_candidate_comparison.py` (16: the helpers, the gate,
+the surface, the environment on a toy two-line fit under the auxiliary and
+SCADA-only profiles, the expert's proposal and reorder, the proof).
+
+**Training roots.** `research/rl/candidate_comparison_check.py` rolled the
+comparison variant and the ledger-ranked control out on the 96
+parameter-bearing training roots (8 workers, 42 s each arm):
+
+| Stratum | Roots | Control solved | Comparison solved | Mean steps control / comparison | Roots compared | Best line = true line |
+| --- | --- | --- | --- | --- | --- | --- |
+| parameter, ambiguous | 40 | 40 | 40 | 6.0 / 7.0 | 40 | 40 / 40 |
+| parameter, dominant | 8 | 8 | 8 | 6.0 / 6.1 | 1 | 1 / 1 |
+| parameter, misranked | 4 | 3 | **4** | 7.0 / 7.0 | 4 | 4 / 4 |
+| measurement+parameter, ambiguous | 32 | 32 | 32 | 10.0 / 11.0 | 32 | 32 / 32 |
+| measurement+parameter, dominant | 8 | 8 | 8 | 10.0 / 10.1 | 1 | 1 / 1 |
+| measurement+parameter, misranked | 4 | 1 | **4** | 10.0 / 11.0 | 4 | 4 / 4 |
+| **all** | 96 | 92 | **96** | 7.9 / 8.7 | 82 | 82 / 82 |
+
+All four misranked failures are recovered and nothing is lost; the price
+is one policy action on the 82 compared roots (120 internal fits in all,
+none charged to the budget). Of the 82 comparisons, 65 were decided by the
+verdict class (the runner-up's refit failed in the executor on 48, was
+rejected on 2, was only partial against a final on 17) and 17 by the
+progress tie-break within the same class, with margins of 0.005 to 0.12
+(median 0.05) in global progress; the best line was the true line every
+time (`docs/decision_audit_20261019/compare_train96_summary.md`).
+
+**Held-out development roots.** The same two arms on the 73
+parameter-bearing roots of the hard development draw, which no part of the
+rule or the band was tuned on (the band's 1.5 was set from the four
+training failures; the context's 1.2 is the long-standing admission ratio):
+
+| Stratum | Roots | Control solved | Comparison solved | Mean steps control / comparison | Roots compared | Best line = true line |
+| --- | --- | --- | --- | --- | --- | --- |
+| parameter, ambiguous | 24 | 24 | 24 | 6.0 / 7.0 | 24 | 24 / 24 |
+| parameter, dominant | 8 | 8 | 8 | 6.0 / 6.2 | 2 | 2 / 2 |
+| parameter, misranked | 9 | 5 | **9** | 6.4 / 7.0 | 9 | 9 / 9 |
+| measurement+parameter, ambiguous | 16 | 16 | 16 | 10.0 / 11.0 | 16 | 16 / 16 |
+| measurement+parameter, dominant | 8 | 8 | 8 | 10.5 / 10.6 | 1 | 1 / 1 |
+| measurement+parameter, misranked | 8 | 4 | **8** | 10.8 / 11.0 | 8 | 8 / 8 |
+| **all** | 73 | 65 | **73** | 7.9 / 8.6 | 60 | 60 / 60 |
+
+All eight held-out misranked failures are recovered (the 17 misranked
+development roots go from 9 to 17), nothing is lost, and two of the
+recovered roots dominated at 1.30, inside the band but above the context's
+1.2 (`docs/decision_audit_20261019/compare_dev73_summary.md`). On the
+whole hard development draw of 209 roots this moves the expert ceiling from
+193 to 201; the earlier RL arms moved the student by at most four roots and
+never on this stratum.
+
+**What it changes for the RL question.** The misranked stratum was the
+draw's clearest case of a decision the fixed rule gets wrong; it is now a
+case of an interface that did not expose the deciding evidence, repaired
+for the expert and for every student alike (the tool is on the model-visible
+surface and the rank-one proof admits the comparison-ordered target). The
+remaining headroom of the audit is the meter ordering on the mimics and
+multi-meter roots (seven failures, three roots' worth of learnable reorder
+at AUC 0.76), which is where a learned ranker or the student's own
+rollouts (phase 2 of the audit) would still have to earn their place.
+
+**Not done.** The comparison is not yet in a DAgger or RL cell: the
+teacher's demonstrations under `ledger_ranked_compare` have to be collected
+and a student trained on them before the student's score on the misranked
+stratum can be claimed. The expert's own meter ordering is unchanged.

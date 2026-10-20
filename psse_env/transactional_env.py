@@ -9,6 +9,11 @@ from typing import Any, Mapping
 
 from .actions import (
     AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
+    COMPARE_PARAMETER_CANDIDATES,
+    PARAMETER_COMPARISON_CONTRACT,
+    PARAMETER_COMPARISON_FAMILY,
+    comparison_line_indices,
+    rank_parameter_comparison,
     ANOMALY_FAMILY_MARKERS,
     WAVEFORM_ANOMALY_FAMILIES,
     ASK_FOR_MORE_EVIDENCE,
@@ -503,6 +508,9 @@ class TransactionalPSSEEnv:
         # Controller-run steps (the conditioned WLS after an accepted HIF
         # estimate) are recorded in the history but are not policy actions.
         self._controller_initiated_count = 0
+        # Set on the isolated branches a candidate comparison runs its fits
+        # on; a branch never compares and never labels against hidden truth.
+        self._comparison_branch = False
         self.terminal = False
         self.terminal_outcome: str | None = None
         self._episode_counter = 0
@@ -1418,6 +1426,8 @@ class TransactionalPSSEEnv:
             return self._step_wls(action)
         if tool in CONTEXT_TOOLS:
             return self._step_context(action)
+        if tool == COMPARE_PARAMETER_CANDIDATES:
+            return self._step_parameter_comparison(action)
         if tool == COMMIT_STATE:
             candidate_id = str(args.get("candidate_state_id") or self.current_candidate_id)
             if self.production_dataset_mode:
@@ -3991,7 +4001,13 @@ class TransactionalPSSEEnv:
                 metrics["measurement_branch_routes_closed"] = (
                     self._measurement_branch_routes_closed()
                 )
-            truth = self.get_oracle_state().truth_dict() if self._oracle_payload.get("truth_complete") and not is_strict_boundary(self.evidence_profile) else None
+            truth = (
+                self.get_oracle_state().truth_dict()
+                if self._oracle_payload.get("truth_complete")
+                and not is_strict_boundary(self.evidence_profile)
+                and not getattr(self, "_comparison_branch", False)
+                else None
+            )
             assessment = self.candidate_quality_oracle.label_candidate(
                 parent_state=parent_payload,
                 source_action=source_action,
@@ -4353,6 +4369,170 @@ class TransactionalPSSEEnv:
             replace_missing=False,
         )
         return self._standard_output(execution_status="success", state_mutated=False, tool_metrics=metrics)
+
+    #: Verification keys a comparison reports per line: the policy reads the
+    #: same keys in every verification output, so nothing new is revealed.
+    _COMPARISON_VERDICT_KEYS = (
+        "global_progress", "global_progress_basis", "parent_anomaly_score",
+        "chi_square_statistic", "chi_square_threshold", "chi_square_dof", "chi_square_alarm",
+        "max_normalized_residual", "normalized_residual_alarm", "remaining_anomaly_score",
+        "globally_resolved", "remaining_suspect_count", "physical_constraints_ok",
+        "target_progress", "target_metric_value", "target_metric_threshold",
+        "converged",
+    )
+
+    def _step_parameter_comparison(self, action: dict[str, Any]) -> dict[str, Any]:
+        """Fit the requested parameter candidates on isolated branches and report their verdicts (2026-10-19).
+
+        For every requested line the controller clones the environment, runs
+        ``correct_parameters`` and the candidate's verification solve on the
+        clone exactly as the policy would run them, and keeps only the
+        observable verification output (disposition, chi-square after the
+        refit, global progress).  The clones are discarded: no candidate opens
+        on the live state and nothing in the store changes.  The verdicts are
+        recorded under ``fresh_context_evidence["parameter_comparison"]``,
+        bound to the active state like a balanced context, so the expert and a
+        student can order the corrections by them.  The step is one policy
+        action; the internal fits are reported in its output.
+        """
+        args = action["arguments"]
+        active_id = str(self.store.active_state_id)
+        active_payload = self.store.get_state(active_id)
+        lines = comparison_line_indices(args.get("line_indices"))
+        if lines is None:
+            return self._standard_output(
+                execution_status="failure", error_code="schema_error",
+                error_detail="comparison_line_indices_invalid", state_mutated=False,
+            )
+        if getattr(self, "_comparison_branch", False):
+            return self._standard_output(
+                execution_status="failure", error_code="comparison_unavailable",
+                error_detail="comparison_inside_comparison_branch", state_mutated=False,
+            )
+        if self.current_candidate_id is not None:
+            return self._standard_output(
+                execution_status="failure", error_code="candidate_lifecycle_violation",
+                error_detail="comparison_with_open_candidate", state_mutated=False,
+            )
+        if self.wls_runner is None or not callable(self.correction_executors.get(CORRECT_PARAMETERS)):
+            return self._standard_output(
+                execution_status="failure", error_code="comparison_unavailable",
+                error_detail="parameter_executor_or_wls_runner_missing", state_mutated=False,
+            )
+        if getattr(self.candidate_quality_oracle, "mode", None) == "synthetic":
+            return self._standard_output(
+                execution_status="failure", error_code="comparison_unavailable",
+                error_detail="synthetic_candidate_assessment_requires_hidden_truth", state_mutated=False,
+            )
+        contexts = self.context_flags.get("fresh_context_evidence") or {}
+        parameter_context = contexts.get("parameter") if isinstance(contexts, Mapping) else None
+        supported_lines: set[int] = set()
+        if isinstance(parameter_context, Mapping) and str(parameter_context.get("state_id") or "") == active_id:
+            for item in parameter_context.get("supported_corrections") or []:
+                try:
+                    normalized = safe_normalize_action(item)
+                except (TypeError, ValueError):
+                    continue
+                line = normalized["arguments"].get("line_index")
+                if normalized["tool"] == CORRECT_PARAMETERS and isinstance(line, int) and not isinstance(line, bool):
+                    supported_lines.add(int(line))
+        if not set(lines) <= supported_lines:
+            return self._standard_output(
+                execution_status="failure", error_code="missing_precondition",
+                error_detail="comparison_candidate_not_supported", state_mutated=False,
+            )
+        candidates: list[dict[str, Any]] = []
+        internal_corrections = 0
+        internal_wls = 0
+        for rank, line in enumerate(lines):
+            verdict: dict[str, Any] = {"line_index": int(line), "request_rank": rank}
+            branch = self.clone()
+            branch._comparison_branch = True
+            correction = {"tool": CORRECT_PARAMETERS, "arguments": {"state_id": active_id, "line_index": int(line)}}
+            try:
+                corrected = branch.dispatch_valid_action(correction)
+            except Exception as exc:  # a provider failure is a verdict, not an episode failure
+                corrected = {"execution_status": "failure", "error_code": "dispatch_error",
+                             "error_detail": type(exc).__name__, "tool_metrics": {}}
+            internal_corrections += 1
+            if corrected.get("execution_status") != "success" or branch.current_candidate_id is None:
+                verdict.update({
+                    "execution_status": "failure", "stage": "correction",
+                    "error_code": corrected.get("error_code"), "error_detail": corrected.get("error_detail"),
+                    "verification_verdict": None,
+                })
+                candidates.append(verdict)
+                continue
+            branch._record_transition(correction, corrected, source_state_id=active_id, source_candidate_id=None)
+            wls_action = {"tool": RUN_WLS, "arguments": {"state_id": str(branch.current_candidate_id)}}
+            try:
+                verified = branch.dispatch_valid_action(wls_action)
+            except Exception as exc:
+                verified = {"execution_status": "failure", "error_code": "dispatch_error",
+                            "error_detail": type(exc).__name__, "tool_metrics": {}}
+            internal_wls += 1
+            metrics = verified.get("tool_metrics") if isinstance(verified.get("tool_metrics"), Mapping) else {}
+            # The branch store holds the verification verdict the process gate
+            # would apply to this candidate (commit or rollback legality).  On
+            # a comparison branch it is labelled without hidden truth, so it is
+            # the environment's own observable verdict, reported under its own
+            # name: the oracle's disposition keys stay out of policy payloads.
+            try:
+                candidate_payload = branch.store.get_state(str(branch.current_candidate_id))
+            except StateStoreError:
+                candidate_payload = {}
+            assessment = candidate_payload.get("candidate_assessment")
+            assessment = assessment if isinstance(assessment, Mapping) else {}
+            verdict.update({
+                "execution_status": str(verified.get("execution_status") or "failure"),
+                "stage": "verification",
+                "error_code": verified.get("error_code"),
+                "error_detail": verified.get("error_detail"),
+                "verification_verdict": candidate_payload.get("candidate_disposition"),
+                "verification_rationale": [str(code) for code in assessment.get("rationale_codes") or []],
+            })
+            for key in self._COMPARISON_VERDICT_KEYS:
+                if key in metrics:
+                    verdict[key] = metrics[key]
+            candidates.append(verdict)
+        # An earlier comparison of other lines on this exact state stays in
+        # the ledger; the new verdicts replace any for the same line.
+        prior = contexts.get(PARAMETER_COMPARISON_FAMILY) if isinstance(contexts, Mapping) else None
+        if (
+            isinstance(prior, Mapping)
+            and str(prior.get("state_id") or "") == active_id
+            and str(prior.get("state_hash") or "") == str(active_payload["state_hash"])
+        ):
+            candidates = [
+                dict(item) for item in prior.get("candidates") or []
+                if isinstance(item, Mapping) and item.get("line_index") not in set(lines)
+            ] + candidates
+        ranked = rank_parameter_comparison(candidates)
+        best = ranked[0] if ranked else None
+        best_line = (
+            int(best["line_index"])
+            if best is not None and best.get("execution_status") == "success" and best.get("verification_verdict")
+            else None
+        )
+        record = policy_safe_copy({
+            "context_tool": COMPARE_PARAMETER_CANDIDATES,
+            "contract": PARAMETER_COMPARISON_CONTRACT,
+            "context_binding": "direct_context",
+            "state_id": active_id,
+            "state_hash": active_payload["state_hash"],
+            "evidence_source": "controller_observed:branch_verification",
+            "line_indices": sorted({int(item["line_index"]) for item in ranked}),
+            "requested_line_indices": list(lines),
+            "candidates": ranked,
+            "ranked_line_indices": [int(item["line_index"]) for item in ranked],
+            "best_line_index": best_line,
+            "internal_correction_calls": internal_corrections,
+            "internal_wls_calls": internal_wls,
+        })
+        context_evidence = dict(self.context_flags.get("fresh_context_evidence") or {})
+        context_evidence[PARAMETER_COMPARISON_FAMILY] = record
+        self.context_flags["fresh_context_evidence"] = context_evidence
+        return self._standard_output(execution_status="success", state_mutated=False, tool_metrics=record)
 
     def _standard_output(
         self,
