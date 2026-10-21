@@ -52,6 +52,19 @@ files = {}
 for name, source in (('r1_training.json', 'hard_training_screen.json'), ('development.json', 'hard_development_screen.json')):
     rows = json.loads((suite / name).read_text(encoding='utf-8'))
     assert isinstance(rows, list) and rows, name
+    if name == 'r1_training.json':
+        # The mimic roots of the hard draw were stamped split=development by
+        # research/rl/build_mimic_suite.py whatever their use; the collector's
+        # supervision policy accepts only train/dagger_train roots (the first
+        # collection, job 20537310, stopped at the first mimic root after 208).
+        relabelled = 0
+        for row in rows:
+            grouping = row.setdefault('grouping', {})
+            if grouping.get('split') not in ('train', 'dagger_train'):
+                grouping['split'] = 'dagger_train'
+                relabelled += 1
+        (suite / name).write_text(json.dumps(rows, indent=1, sort_keys=True) + chr(10), encoding='utf-8')
+        print('relabelled training roots to dagger_train:', relabelled)
     files[name] = {
         'copied_from': str(hard / source),
         'sha256': hashlib.sha256((suite / name).read_bytes()).hexdigest(),

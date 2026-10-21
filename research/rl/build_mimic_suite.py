@@ -30,6 +30,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--per-variant", type=int, default=24)
     parser.add_argument("--seed", type=int, default=20261015)
     parser.add_argument("--profile", default="classifier_gated_diagnostics")
+    parser.add_argument("--split", default="development", choices=("development", "dagger_train", "train"),
+                        help="grouping.split stamped on every root; a training suite the DAgger collector rolls "
+                             "out on needs dagger_train (its supervision policy refuses development roots)")
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
 
@@ -44,12 +47,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         scenario_id = str(root["execution"]["scenario_id"])
         root["execution"]["evidence_profile"] = profile
         root.setdefault("audit", {})["mimic"] = {"variant": families[scenario_id]}
-        root.setdefault("grouping", {})["split"] = "development"
+        root.setdefault("grouping", {})["split"] = str(args.split)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(roots, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({"roots": len(roots), "variants": dict(Counter(families.values())), "profile": profile,
-                      "output": str(output)}))
+                      "split": str(args.split), "output": str(output)}))
     return 0
 
 
