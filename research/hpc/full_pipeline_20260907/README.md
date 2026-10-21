@@ -186,6 +186,8 @@ regenerated aggregate drew none of the hard draw's roots (the 2026-10-01 and
 roots, trains one pass on the 1:1 mixture, and scores the frozen student, the
 adapted candidate and the teacher on the 209 development roots per family
 and stratum.
+Submitted 2026-10-21T04:51Z from dd699ac: `fp-d0` 20499714, `fp-r1c`
+20499717, `fp-r1t` 20499720, `fp-r1e` 20499722 (dependency chain).
 
 ## Ambiguity design (ranked testing with escalation fallback)
 
