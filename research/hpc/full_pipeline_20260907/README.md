@@ -187,7 +187,14 @@ roots, trains one pass on the 1:1 mixture, and scores the frozen student, the
 adapted candidate and the teacher on the 209 development roots per family
 and stratum.
 Submitted 2026-10-21T04:51Z from dd699ac: `fp-d0` 20499714, `fp-r1c`
-20499717, `fp-r1t` 20499720, `fp-r1e` 20499722 (dependency chain).
+20499717, `fp-r1t` 20499720, `fp-r1e` 20499722 (dependency chain).  Stage 0
+completed in 2 h 43 m (522 roots, 4,020 rows; the ranked cell's 514 roots
+plus 8; no hard-draw root in the aggregate).  The first collection attempt
+aborted at its third root on an unverifiable off-path label (the teacher's
+NLM screen on a harmonic root's student-visited state), so the cell runs
+with `UNVERIFIED_EXPERT_LABEL_POLICY=stop` from 187e8f4: resubmitted
+2026-10-21T14:16Z as `fp-r1c` 20537310, `fp-r1t` 20537311, `fp-r1e`
+20537312 (the collection resumes from its two completed roots).
 
 ## Ambiguity design (ranked testing with escalation fallback)
 
