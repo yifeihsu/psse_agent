@@ -213,6 +213,13 @@ recomputed the 81 stored verdicts in place (backups under
 D1 files and the stage receipt were moved to `out/r1/attempt3_assembly/`,
 and the chain was resubmitted 2026-10-21T18:24Z as `fp-r1c` 20556240
 (reassembly only, every root complete), `fp-r1t` 20556243, `fp-r1e` 20556247.
+With the GPU pool closed to new allocations for the evening (QOS
+`gpu48`, reason `QOSMaxGRESPerUser`), the reassembly ran as a CPU copy of
+the collection stage (`stage_collect_cpu.sbatch`, partition cs, job
+20571593, 3 minutes): 256 roots, label yield 0.886, 1,770 safe rows of
+which 59 carry the comparison as the target, mixture 3,540 rows with 70
+comparison-targeted rows (59 collected, 11 from the aggregate).  The GPU
+copy skips on the receipt and the chain continues with training.
 
 ## Ambiguity design (ranked testing with escalation fallback)
 
