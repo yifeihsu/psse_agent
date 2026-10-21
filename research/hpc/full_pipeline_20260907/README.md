@@ -203,7 +203,16 @@ collector's supervision policy refuses.  The 48 roots were relabelled
 collection config updated in place; the builder now takes `--split` and the
 launcher relabels the copied suite) and the chain was resubmitted
 2026-10-21T16:55Z as `fp-r1c` 20549673, `fp-r1t` 20549676, `fp-r1e`
-20549677, resuming from the 208 completed roots.
+20549677, resuming from the 208 completed roots.  That collection finished
+(256 of 256 roots, one stopped episode, label yield 0.857, 1,711 safe rows)
+but none of its 81 comparison-labelled rows was eligible: the offline
+teacher-target audit knew no such action class.  The audit now admits the
+comparison as a read-only target (906374d), `restamp_offline_audit.py`
+recomputed the 81 stored verdicts in place (backups under
+`rollouts_before_restamp/`, receipt `restamp_receipt.json`), the assembled
+D1 files and the stage receipt were moved to `out/r1/attempt3_assembly/`,
+and the chain was resubmitted 2026-10-21T18:24Z as `fp-r1c` 20556240
+(reassembly only, every root complete), `fp-r1t` 20556243, `fp-r1e` 20556247.
 
 ## Ambiguity design (ranked testing with escalation fallback)
 
