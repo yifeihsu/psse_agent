@@ -83,8 +83,8 @@ print(f"triage classifier {classifier.model_id}: {len(classifier.models)} seeds,
 PY
   )
 fi
-# The ranked teacher reads the learned ranker export the source tree carries.
-if [[ "$EXPERT_VARIANT" == ledger_ranked ]]; then
+# The ranked teachers read the learned ranker export the source tree carries.
+if [[ "$EXPERT_VARIANT" == ledger_ranked || "$EXPERT_VARIANT" == ledger_ranked_compare ]]; then
   RANKER_MODEL=$SRC/psse_env/oracle/models/learned_ranker_ieee14_20261001.json
   [[ -s "$RANKER_MODEL" ]] || { echo "ledger_ranked needs the ranker export: $RANKER_MODEL" >&2; exit 2; }
   "$PY" - "$RANKER_MODEL" <<'PY'

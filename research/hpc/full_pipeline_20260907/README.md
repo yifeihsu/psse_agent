@@ -164,6 +164,29 @@ branch and submits them in that order (`deploy_cell_from_windows.sh` with
 `SUBMIT=0` and `REMOTE_PREPARE` for the links and copies, then
 `submit_pipeline.sh`).
 
+## Comparison-teacher cell on the hard draw (2026-10-21)
+
+`overrides/compare_hard_20261021.env` (`research_full_pipeline_20261021_compare`)
+runs one DAgger round of the frozen screen student (the 2026-10-01 ranked
+cell's round-2 adapter, the hard draw's screen-arm starting point at 174 of
+209) on the hard training draw of 2026-10-15 under the
+`ledger_ranked_compare` teacher: `ledger_ranked` with the bounded candidate
+comparison (`compare_parameter_candidates`) before an ambiguous parameter
+correction, which alone scores 96/96 training and 73/73 development
+parameter-bearing roots against 92 and 65 (`docs/rl_experiments_20261014.md`
+section 12).  Chain `d0 -> r1c -> r1t -> r1e`: stage 0 regenerates the
+expert aggregate with the new teacher (the pool has to demonstrate the
+comparison) and links the frozen adapter as `bc0`; the suites are the hard
+draw's screen files copied by `launch_compare_cell_20261021.sh` into
+`out/suite` (256 training roots as `r1_training.json`, 209 development
+roots as `development.json`) with a copied-suite receipt, so no suite is
+drawn; `check_suite_exclusion.py` confirms after stage 0 that the
+regenerated aggregate drew none of the hard draw's roots (the 2026-10-01 and
+2026-10-07 aggregates share none with it).  Round 1 collects on the 256
+roots, trains one pass on the 1:1 mixture, and scores the frozen student, the
+adapted candidate and the teacher on the 209 development roots per family
+and stratum.
+
 ## Ambiguity design (ranked testing with escalation fallback)
 
 A parameter fault on one line often raises the Lagrange multiplier of an

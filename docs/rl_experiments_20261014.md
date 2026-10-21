@@ -945,8 +945,10 @@ actions on fresh episodes to take up to three alternatives at up to four
 states per root with the expert finishing, and let the evaluator score every
 branch as the runs are scored. At the first correction decision a
 truth-guided probe applied every true target with the expert's lifecycle in
-between. 176 roots, 2,205 branches, 53 minutes on four local cores, no
-errors (`docs/decision_audit_20261019/train176_summary.md`).
+between. 176 roots, 511 decision states, 1,384 evaluator episodes (176
+references, 1,032 alternative branches, 176 truth probes), 53 minutes on
+four local cores, no errors (`docs/decision_audit_20261019/train176_summary.md`;
+the plan's 168 roots became 176 because both dominant strata hold 8).
 
 | Stratum | Roots | Expert solves | rule_best | legal_alternative | evidence_limit | Truth probe solves |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -982,10 +984,29 @@ alternatives are of two kinds:
   solves the root; on the three cheaper opposite-sign roots the same
   reordering saves six of eighteen steps.
 
-On the 120 ambiguous and dominant parameter roots the top line is right
-every time and no alternative beats the rule, which is the baseline the
-predictability test must beat: a ranker that reorders the top two lines
-helps on the 4 misranked failures and must not cost any of the 120.
+On the 88 ambiguous and dominant parameter roots (40 + 8 parameter, 32 + 8
+mixed) the top line is right every time and no alternative beats the rule,
+which is the baseline the predictability test must beat: a ranker that
+reorders the top two lines helps on the 4 misranked failures and must not
+cost any of the 88.
+
+**Validity of the recoveries (checked 2026-10-21).** The audit records but
+does not enforce two branch checks, so they were applied afterwards: every
+successful alternative at a failed-reference state (17 branches on the 11
+recovered roots) replayed to the identical observation hash at the decision
+state, executed the intended action, and ended in a truth-audited success
+with basis `counterfactual_resolution` and healthy components preserved. No
+recovery rests on a cheaper handoff or a mismatched state.
+
+**What the bins can and cannot say.** `rule_best` means no better
+alternative was found among the expert's own top three proposals at the
+first four decision states with the expert finishing; an action the expert
+never proposes (the grouped flow-pair correction, say) is outside the
+audit. The truth probe runs once per root, at the first correction state,
+so `evidence_limit` at a later state means only "unresolved under the tested
+alternatives"; and the probe is a loose test even where it runs, since it
+solves 2 of the 4 mixed misranked roots that legal alternatives recover. The
+two roots left in that bin are unresolved, not proven unidentifiable.
 
 **Decision.** Gate 2 passes for the ordering decision, narrowly: the
 headroom on the training draw is 11 roots of 176, all of it in which
@@ -1010,21 +1031,28 @@ per stratum, how many decisions the fixed rule (take the first) gets right,
 how many the ranker gets right, and the audited oracle (the best branch,
 retrospective, the ceiling).
 
-| Decision | States | Fixed rule | Ranker (logistic / GBM) | Oracle | AUC |
+| Decision | Decisions (roots) | Fixed rule | Ranker (logistic / GBM) | Oracle | AUC |
 | --- | --- | --- | --- | --- | --- |
-| parameter line (96 parameter-bearing roots) | 96 | 92 | 91 / 89 | 96 | 0.69 / 0.82 |
-| meter (80 mimic and multi-meter roots, first run, residual features) | 202 | 181 | 181 / 183 | 189 | 0.61 / 0.62 |
-| meter (same 80 roots, channel, offset, branch-pair and group features) | 157 | 140 | 144 / 142 | 148 | 0.76 / 0.71 |
+| parameter line (96 parameter-bearing roots) | 96 (96, one each) | 92 | 91 / 89 | 96 | 0.69 / 0.82 |
+| meter (176-root audit, residual features) | 202 (125, up to four each) | 181 | 181 / 183 | 189 | 0.61 / 0.62 |
+| meter (80 mimic and multi-meter roots, channel, offset, branch-pair and group features) | 157 | 140 | 144 / 142 | 148 | 0.76 / 0.71 |
+
+The counts are decisions, not solved roots: the parameter decisions happen
+to be one per root (and the 96 roots are 96 distinct physical parents, so
+the root-grouped folds are parent-disjoint), the meter decisions are not.
+The label is the branch's success alone; the five cheaper-alternative
+opportunities are not what this test learns.
 
 The parameter ordering is **not predictable from the context's scores**:
 both rankers lose decisions against the rule (the abs-λ score, its ratio to
 the top, the context rank, the dominance ratio and route reason do not
-separate the 4 misranked failures from the 120 roots where the top line is
-right), and the ledger's refit ranking names the same wrong line on the
+separate the 4 misranked failures from the 92 decisions where the top line
+is right), and the ledger's refit ranking names the same wrong line on the
 failed misranked roots. The meter ordering gains a little with the richer
-features (4 of the 5 recoverable opposite-sign mimics, at the cost of one
-same-sign mimic), AUC 0.76; a learned reorder of the meter candidates is
-worth about three roots of 80.
+features (4 of the 5 recoverable opposite-sign decisions, at the cost of one
+same-sign one), AUC 0.76; a learned reorder of the meter candidates is
+worth three to four of the 157 decisions, and what that is worth in solved
+roots needs the ranker deployed in full episodes.
 
 **What that implies for the parameter decision.** The right line is not in
 the context's numbers but it is in the environment: on every misranked
