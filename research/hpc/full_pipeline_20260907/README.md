@@ -194,7 +194,16 @@ aborted at its third root on an unverifiable off-path label (the teacher's
 NLM screen on a harmonic root's student-visited state), so the cell runs
 with `UNVERIFIED_EXPERT_LABEL_POLICY=stop` from 187e8f4: resubmitted
 2026-10-21T14:16Z as `fp-r1c` 20537310, `fp-r1t` 20537311, `fp-r1e`
-20537312 (the collection resumes from its two completed roots).
+20537312 (the collection resumes from its two completed roots).  That
+attempt collected 208 roots in 2 h 27 m (one episode stopped on an
+unverifiable label) and failed at the first mimic root: the mimic roots
+carried `split=development` from `build_mimic_suite.py`, which the
+collector's supervision policy refuses.  The 48 roots were relabelled
+`dagger_train` in the cell's suite and stored scenarios (receipts and the
+collection config updated in place; the builder now takes `--split` and the
+launcher relabels the copied suite) and the chain was resubmitted
+2026-10-21T16:55Z as `fp-r1c` 20549673, `fp-r1t` 20549676, `fp-r1e`
+20549677, resuming from the 208 completed roots.
 
 ## Ambiguity design (ranked testing with escalation fallback)
 
