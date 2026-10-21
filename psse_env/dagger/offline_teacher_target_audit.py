@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from psse_env.actions import (
+    COMPARE_PARAMETER_CANDIDATES,
     ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
     CONTEXT_TOOLS,
@@ -87,6 +88,12 @@ _OBSERVABLE_ONLY_ACTIONS = frozenset(
         ASK_FOR_MORE_EVIDENCE,
         *CONTEXT_TOOLS,
         *DIAGNOSTIC_TOOLS,
+        # The bounded candidate comparison (2026-10-19) fits the ranked lines on
+        # discarded branches and mutates nothing; like a context fetch it needs
+        # no hidden family in advance.  Without it here every comparison label
+        # of the 2026-10-21 cell's collection was quarantined as an unknown
+        # action class (81 of 81 rows).
+        COMPARE_PARAMETER_CANDIDATES,
     }
 )
 _AUDIT_FIELDS = frozenset(

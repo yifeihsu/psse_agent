@@ -738,6 +738,13 @@ class OfflineTeacherTargetAuditTests(unittest.TestCase):
         action = {"tool": RUN_WLS, "arguments": {"state_id": "episode:s0"}}
         self.assertTrue(self._audit(action, observable=True)["passed"])
         self.assertFalse(self._audit(action, observable=False)["passed"])
+        # The bounded candidate comparison mutates nothing: a read-only target.
+        comparison = {"tool": "compare_parameter_candidates",
+                      "arguments": {"state_id": "episode:s0", "line_indices": [3, 6]}}
+        admitted = self._audit(comparison, observable=True)
+        self.assertTrue(admitted["passed"])
+        self.assertEqual(admitted["action_class"], "read_only")
+        self.assertFalse(self._audit(comparison, observable=False)["passed"])
         unknown = self._audit(
             {"tool": "future_state_mutator", "arguments": {}}, observable=True
         )
