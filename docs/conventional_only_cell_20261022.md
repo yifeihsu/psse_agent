@@ -202,7 +202,56 @@ the false-commit count is zero. So the teacher's ceiling on the fresh draw is
 
 ## 4. Launch
 
-PENDING
+Deployed 2026-10-22T06:32Z from 01ac598 (the incremental bundle 906374d..01ac598,
+22.8 kB, uploaded over ssh stdin into a clone of the 2026-10-21 comparison
+cell's source; the dry-run prerequisites passed):
+
+```bash
+PIPE=/scratch/yx3882/research_full_pipeline_20261022_conventional \
+SOURCE_CELL=/scratch/yx3882/research_full_pipeline_20261021_compare BASE=906374d \
+BRANCH=claude/clever-roentgen-03b19c OVERRIDES=conventional_only_20261022.env ALLOW_PARALLEL_CHAIN=1 \
+bash research/hpc/full_pipeline_20260907/deploy_cell_from_windows.sh 01ac5983a1933eb117ad1685821618cbd7a2039f
+```
+
+Chain submitted 06:32:55 UTC: d0 20594198 (CPU partition `cs`, started at
+once on cs623), bc0 20594219, r1c 20594220, r1t 20594222, r1e 20594224, r2c
+20594225, r2t 20594226, r2e 20594227 (GPU stages on the
+`a100|h100|h200|rtx6000` union with preemption opt-in and requeue, no GPU
+type pinned). Status:
+
+```bash
+MSYS_NO_PATHCONV=1 wsl -- ssh torch bash /scratch/yx3882/research_full_pipeline_20261022_conventional/status_pipeline.sh
+```
+
+GPU quota. The 2026-10-21 comparison cell (`research_full_pipeline_20261021_compare`)
+runs at the same time: its r1t 20556243 holds one GPU (preempted and requeued
+every 30 minutes or so) and its r1e 20556247 follows. The per-user limit of
+QOS `gpu48` is 16 GPUs, so its one GPU does not by itself block this chain,
+but on 2026-10-21 the cluster held new GPU allocations under
+`QOSMaxGRESPerUser` for hours; this chain's GPU stages may queue behind that
+cell or the same throttle. Both cells share the `fp-` job names, which is why
+the submission needed `ALLOW_PARALLEL_CHAIN=1`; read the job ids above, not
+the names.
+
+Expected durations from the 2026-10-07 cell, scaled to this cell's sizes: d0
+about 2 h for 370 roots, BC0 about 2.5 h (about 2,600 training rows, one
+pass), each collection under 1 h for 74 roots, each round's training about 1
+h, the round-1 evaluation (BC0, R1 and the expert on 192 roots) about 2.5 h
+and round 2 (R1, R2) about 1.5 h, so a day or more with queueing.
+
+After stage 0, on torch: the cell's development suite against its own D0 and
+rounds and every earlier cell's aggregate and suites (`check_suite_exclusion.py`
+with `--reference-suite` for the 2026-10-01, 2026-10-07 and 2026-10-21 cells'
+`out/d0/aggregate.raw.jsonl` and `out/suite/*.json`), and the development
+file's sha256 against the local draw's (`fedf867685f2`).
+
+Resume after a failure (receipts `out/d0.done`, `out/suite.done`,
+`out/bc0.done`, `out/r{1,2}/collection.done`, `out/r{1,2}/training.done`,
+`out/r{1,2}/round_summary.json`):
+
+```bash
+MSYS_NO_PATHCONV=1 wsl -- ssh torch "cd /scratch/yx3882/research_full_pipeline_20261022_conventional && FROM=<stage> ALLOW_PARALLEL_CHAIN=1 bash submit_pipeline.sh"
+```
 
 ## 5. Results
 
