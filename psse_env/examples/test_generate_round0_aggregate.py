@@ -2516,11 +2516,16 @@ class SystemSwitchTests(unittest.TestCase):
         round0_module._validate_plan_for_system(parse(base), {"measurement": 1, "topology": 0})
         with self.assertRaisesRegex(ValueError, "Unsupported system"):
             round0_module._validate_plan_for_system(parse(["--system", "case300"]), {"measurement": 1})
-        # IEEE 118 takes the same balanced route as IEEE 57.
+        # IEEE 118 takes the balanced route plus the waveform families and
+        # corpora of its three-phase model (2026-10-11); it has no topology model.
         base118 = ["--system", "case118", "--measurement-corpus", "c.jsonl", "--balanced-artifact-dir", "art"]
         round0_module._validate_plan_for_system(parse(base118), {"measurement": 1, "measurement+parameter": 1})
+        round0_module._validate_plan_for_system(
+            parse(base118 + ["--hif-corpus", "h.jsonl", "--imbalance-corpus", "u.jsonl"]),
+            {"measurement": 1, "hif": 1, "measurement+hif": 1, "three_phase_unbalance": 1, "harmonic": 1},
+        )
         with self.assertRaisesRegex(ValueError, "does not support plan families"):
-            round0_module._validate_plan_for_system(parse(base118), {"measurement": 1, "hif": 1})
+            round0_module._validate_plan_for_system(parse(base118), {"measurement": 1, "topology": 1})
         # The tracked IEEE 14 default plan is not a case57 plan.
         with self.assertRaisesRegex(ValueError, "does not support plan families"):
             round0_module._validate_plan_for_system(parse(base), round0_module.DEFAULT_PLAN)
