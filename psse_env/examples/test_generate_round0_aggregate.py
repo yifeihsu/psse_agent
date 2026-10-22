@@ -306,6 +306,7 @@ class GeneratorCliTests(unittest.TestCase):
             "episode_rows": 1,
             "recovery_rows": 2,
             "quarantined_rows": 0,
+            "unverified_expert_labels": 0,
             "split_rows": {"train_view": 1, "validation": 1, "test": 1},
             "state_class_distribution": {"diagnosis": 1},
         }
