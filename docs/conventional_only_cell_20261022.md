@@ -304,4 +304,31 @@ round-1 training 20594222 (219 steps) started at 13:25 on ga007 (A100).
 The torch SSH session expired at 12:29 UTC and was reopened by the user at
 about 13:30; the chain ran on unaffected.
 
-Per-policy table: PENDING (when both round summaries exist).
+**Round 1 (2026-10-22, `out/r1/round_summary.json`, written 19:00 UTC).** R1
+trained 219 steps on the 874-row mixture; the evaluation rolled BC0, R1 and
+the teacher out on the 192 test roots (all 192 paired):
+
+| Test roots (192) | Expert | BC0 | R1 |
+| --- | --- | --- | --- |
+| Successes | 192 | 189 | 191 |
+| Invalid-action episodes (invalid actions) | 0 (0) | 19 (39) | 0 (0) |
+| False-commit episodes | 0 | 3 | 0 |
+| Loop episodes | 0 | 2 | 0 |
+| Mean actions per episode | 9.87 | 10.38 | 9.85 |
+| Mean WLS calls per episode | 2.50 | 2.60 | 2.50 |
+| Bounded comparisons | 25 | 22 | 20 |
+| Misranked parameter roots (3) | 3 | 3 | 3 |
+| Ambiguous parameter roots (17) | 17 | 17 | 17 |
+
+Every policy solves the three misranked roots the same way: one comparison,
+then the comparison's best line, 8 actions. BC0's failures: a meter+R/X root
+(r0_3386c1ad8700) where it cycles parameter correction, commit and rollback
+into the 40-action budget (11 invalid actions, 8 false commits); a
+meter+breaker root (r0_c253469c06d3) where it repeats the context requests and
+meter edits into the budget (a loop); and a multi-meter root
+(r0_f5eefea5a905) where it hands off after two meter repairs in 11 actions.
+R1 fails only that multi-meter root, the same way, and has no invalid action,
+false commit or loop on any root. Round 2 started at 18:56 UTC (r2c 20594225
+on gr103).
+
+Per-policy table: PENDING (when the round-2 summary exists).
