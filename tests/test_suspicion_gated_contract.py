@@ -296,8 +296,13 @@ def test_the_expert_requests_phasors_on_a_suspicion_and_solves(roots):
         tools = [step["action"]["tool"] for step in episode["trace"]]
         assert episode["truth_audited_task_success"], (family, tools)
         if family == "hif":
-            assert tools[:5] == [RUN_WLS, GET_THREE_PHASE_CONTEXT, RUN_THREE_PHASE_NLM_FROM_PATH,
-                                 ESTIMATE_HIF_FROM_PATH, RUN_WLS], tools
+            # The WLS conditioned on the accepted estimate runs inside the
+            # estimate's step (2026-10-07), so the expert finalizes next.
+            assert tools == [RUN_WLS, GET_THREE_PHASE_CONTEXT, RUN_THREE_PHASE_NLM_FROM_PATH,
+                             ESTIMATE_HIF_FROM_PATH, "finalize_diagnosis"], tools
+            conditioned = episode["trace"][3]["policy_tool_output"]["tool_metrics"]["conditioned_wls"]
+            assert conditioned["execution_status"] == "success", conditioned
+            assert conditioned["hif_conditioning"]["status"] == "ready", conditioned
         elif family == "measurement+hif":
             assert tools[1] == GET_THREE_PHASE_CONTEXT and "correct_measurements" in tools, tools
         elif family == "three_phase_unbalance":
