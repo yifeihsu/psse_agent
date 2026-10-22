@@ -144,9 +144,9 @@ ambiguous. Topology: 25 isolated line terminals and 7 bus splits;
 meter+topology: 24 isolated terminals. Multi-meter roots carry 2 to 5 bad
 meters (5, 3, 5 and 11 roots with 2, 3, 4 and 5). The 182 injected meter
 errors span 10.0 to 29.8 noise sigmas (median 13.1); the R/X factors lie in
-[0.10, 0.50] or [2.04, 4.91]. `development.json` sha256 begins `fedf867685f2`;
-the cluster draws the same file unless one of its 370 D0 roots collides with
-a development candidate, which section 4 checks.
+[0.10, 0.50] or [2.04, 4.91]. `development.json` sha256 begins `fedf867685f2`.
+The cluster's draw (section 4) is the test set; it differs from this local
+one in part.
 
 **Disjointness.** `check_suite_exclusion.py` over the local draw
 (`preflight_A/disjointness_local.json`): no physical root shared between the
@@ -239,11 +239,45 @@ pass), each collection under 1 h for 74 roots, each round's training about 1
 h, the round-1 evaluation (BC0, R1 and the expert on 192 roots) about 2.5 h
 and round 2 (R1, R2) about 1.5 h, so a day or more with queueing.
 
-After stage 0, on torch: the cell's development suite against its own D0 and
-rounds and every earlier cell's aggregate and suites (`check_suite_exclusion.py`
-with `--reference-suite` for the 2026-10-01, 2026-10-07 and 2026-10-21 cells'
-`out/d0/aggregate.raw.jsonl` and `out/suite/*.json`), and the development
-file's sha256 against the local draw's (`fedf867685f2`).
+**Stage 0 (done 07:57 UTC).** d0 20594198 ran 1 h 15 min on cs623: the
+expert aggregate holds 3,648 rows from all 370 planned roots (train 2,747
+rows from 279 roots, validation 533 from 54, test 368), none quarantined, no
+unverifiable expert label; then the suite. BC0 20594219 started at 07:58 on
+ga034 (A100) without queueing.
+
+The suite on torch, seed 20261022 (`out/suite/`, `development.json` sha256
+`9baf9ff6db36...`): 192 development roots (16/32/24/32/32/32/24) and 74 + 74
+round roots. Development strata: parameter 18 dominant, 11 ambiguous, 3
+misranked; meter+parameter 26 dominant, 6 ambiguous. This is the test set.
+It shares 139 of its 192 scenario ids with the local preflight draw: every
+topology, meter+topology, meter+parameter and clean root, and 13 of 32
+single-meter, 8 of 24 multi-meter and 14 of 32 parameter roots. Seven of the
+53 local-only roots are roots of the cluster's 370-root aggregate, which the
+cluster draw therefore had to exclude; the others follow from the allocation
+downstream of those exclusions and of platform-level numerical differences
+(shared topology roots differ by at most 5e-11 pu between the Windows and
+Linux solves, enough to change a fingerprint); I did not trace each one.
+
+Disjointness on torch (`out/disjointness_check.json`, `check_suite_exclusion.py`,
+passed): no physical root shared between the development set and the cell's
+370-root aggregate or either round, none between the rounds, and none between
+the development set and any of the eleven references: the aggregates of the
+2026-10-01 ranked, 2026-10-07 classifier and 2026-10-21 comparison cells and
+their suites (development 160, 160 and 209 roots; round training 122 + 122,
+122 + 122 and 256).
+
+The expert on the test set, before the cell's own expert arm: the same
+end-to-end run as section 3 on the cluster's `development.json`
+(`output/conventional_only_20261022/cluster_suite/e2e_development/` in the
+worktree, 4.6 min) solves **192 of 192** (single meter 32, multi-meter 24,
+R/X 32, breaker status 32, meter + R/X 32, meter + breaker 24, clean 16):
+no phasor or spectra request, no false commit, no invalid-action or loop
+episode, 25 comparisons (18 on R/X roots, 7 on meter + R/X roots), every
+misranked root solved; mean actions 7.0, 20.6, 7.6, 8.0, 11.2, 12.0, 2.0 and
+mean WLS calls 2.0, 4.3, 2.0, 2.0, 3.0, 3.0, 1.0 in the same order. The 7 bus
+splits again carry the healthy-component flag with a truth-audited success.
+The round-1 evaluation's expert arm rolls the same teacher out on the same
+roots on torch and is the number the table uses.
 
 Resume after a failure (receipts `out/d0.done`, `out/suite.done`,
 `out/bc0.done`, `out/r{1,2}/collection.done`, `out/r{1,2}/training.done`,
