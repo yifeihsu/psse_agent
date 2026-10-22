@@ -128,22 +128,27 @@ def _run(root, profile=CLASSIFIER_GATED_PROFILE, max_steps=30):
     import scripts.run_dagger_research as research
     from psse_env.dagger.release_factories import select_observable_expert_actions
 
-    research.RESEARCH_ENVIRONMENT_OPTIONS["evidence_profile"] = profile
-    research.RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"] = 4.0
-    env = research.resolve_environment_factory("research", profile)()
-    oracle = ExpertPolicyOracle(process_oracle=env.process_oracle)
-    env.reset(copy.deepcopy(root["execution"]))
-    history, steps = [], []
-    for _ in range(max_steps):
-        observation = env.get_policy_observation(history).as_dict()
-        action = select_observable_expert_actions(policy_observation=observation, expert_oracle=oracle).preferred_action
-        budget_before = observation["remaining_budget"]
-        _, output = env.step(action)
-        history.append({"state_id": observation["active_state_id"], "candidate_state_id": observation.get("candidate_state_id"),
-                        "action": copy.deepcopy(action), "tool_output": copy.deepcopy(output)})
-        steps.append((action, output, budget_before, env.get_policy_observation(history).as_dict()))
-        if env.terminal:
-            break
+    original = dict(research.RESEARCH_ENVIRONMENT_OPTIONS)
+    try:
+        research.RESEARCH_ENVIRONMENT_OPTIONS["evidence_profile"] = profile
+        research.RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"] = 4.0
+        env = research.resolve_environment_factory("research", profile)()
+        oracle = ExpertPolicyOracle(process_oracle=env.process_oracle)
+        env.reset(copy.deepcopy(root["execution"]))
+        history, steps = [], []
+        for _ in range(max_steps):
+            observation = env.get_policy_observation(history).as_dict()
+            action = select_observable_expert_actions(policy_observation=observation, expert_oracle=oracle).preferred_action
+            budget_before = observation["remaining_budget"]
+            _, output = env.step(action)
+            history.append({"state_id": observation["active_state_id"], "candidate_state_id": observation.get("candidate_state_id"),
+                            "action": copy.deepcopy(action), "tool_output": copy.deepcopy(output)})
+            steps.append((action, output, budget_before, env.get_policy_observation(history).as_dict()))
+            if env.terminal:
+                break
+    finally:
+        research.RESEARCH_ENVIRONMENT_OPTIONS.clear()
+        research.RESEARCH_ENVIRONMENT_OPTIONS.update(original)
     return env, steps
 
 
