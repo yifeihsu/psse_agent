@@ -289,4 +289,19 @@ MSYS_NO_PATHCONV=1 wsl -- ssh torch "cd /scratch/yx3882/research_full_pipeline_2
 
 ## 5. Results
 
-PENDING (when the chain completes).
+**BC0 and the round-1 collection (2026-10-22).** BC0 20594219 started 07:56
+UTC on ga034 (A100), was preempted and restarted from the beginning at 08:38
+on gr101 (RTX PRO 6000), and finished at 12:45: 687 optimizer steps over the
+2,747-row training view, best validation loss 0.0046 at step 256 (that
+checkpoint is the adapter). The round-1 collection 20594220 (gr101, 12:48 to
+13:24) rolled BC0 out on the 74 round-1 roots: 74 of 74 episodes, 743
+labelled states, 437 safe rows (label yield 0.867, against 0.864 in the
+2026-10-07 cell), no invalid student action, student and teacher choosing a
+different tool on 3.2% of the student's steps, no unverifiable expert label;
+the mixture is 874 rows (437 collected and 437 drawn from the 2,747 D0 rows).
+The safe targets include 13 breaker corrections and one comparison. The
+round-1 training 20594222 (219 steps) started at 13:25 on ga007 (A100).
+The torch SSH session expired at 12:29 UTC and was reopened by the user at
+about 13:30; the chain ran on unaffected.
+
+Per-policy table: PENDING (when both round summaries exist).
