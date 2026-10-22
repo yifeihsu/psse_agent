@@ -248,15 +248,21 @@ def test_summary_tables_split_by_stratum_and_carry_the_expert() -> None:
     families = summarize.family_by_root(development)
     strata = summarize.stratum_by_root(development)
     assert strata == {"a": "dominant", "b": "ambiguous", "c": "misranked"}
-    def episode(root, ok, basis=None):
+    def episode(root, ok, basis=None, wls_calls=2, tool_counts=None):
         # Evaluator episodes carry the success flag at top level as well as
         # inside the audit assessment; it must be counted exactly once.
-        return {"physical_root": root, "steps": 3, "truth_audited_task_success": ok, "audit": {"truth_audited_task_assessment": {"eligible": ok, "basis": basis}}}
+        return {"physical_root": root, "steps": 3, "truth_audited_task_success": ok, "wls_calls": wls_calls,
+                "tool_counts": tool_counts or {}, "audit": {"truth_audited_task_assessment": {"eligible": ok, "basis": basis}}}
     block = summarize.per_family_outcomes(
-        {"episodes": [episode("a", True, "counterfactual_resolution"), episode("b", True, "bounded_localization_handoff")]},
+        {"episodes": [episode("a", True, "counterfactual_resolution"),
+                      episode("b", True, "bounded_localization_handoff", wls_calls=3,
+                              tool_counts={"compare_parameter_candidates": 1, "run_wls": 3})]},
         families,
         strata,
     )
+    # Solver cost per episode: WLS calls and bounded comparisons, as histograms.
+    assert block["outcomes"]["parameter"]["wls_calls"] == {"2": 1, "3": 1}
+    assert block["outcomes"]["parameter"]["tool_counts.compare_parameter_candidates"] == {"0": 1, "1": 1}
     assert block["success_by_stratum"]["parameter"] == {
         "ambiguous": {"successes": 1, "episodes": 1},
         "dominant": {"successes": 1, "episodes": 1},
@@ -267,6 +273,58 @@ def test_summary_tables_split_by_stratum_and_carry_the_expert() -> None:
         "dominant": {"successes": 1, "episodes": 1},
     }
     assert summarize.success_table(block) == {"parameter": {"successes": 2, "episodes": 2}}
+
+
+def test_suite_exclusion_checks_d0_the_rounds_and_earlier_suites(tmp_path: Path) -> None:
+    check = _load("check_suite_exclusion.py")
+    def root(name: str) -> dict:
+        return {"grouping": {"physical_root_fingerprint": name}}
+    (tmp_path / "d0.jsonl").write_text("".join(json.dumps(root(n)) + "\n" for n in ("d1", "d2")), encoding="utf-8")
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "manifest.json").write_text(json.dumps({"files": {}}), encoding="utf-8")
+    (suite / "r1_training.json").write_text(json.dumps([root("t1"), root("t2")]), encoding="utf-8")
+    (suite / "r2_training.json").write_text(json.dumps([root("t3")]), encoding="utf-8")
+    (suite / "development.json").write_text(json.dumps([root("v1"), root("v2")]), encoding="utf-8")
+    (tmp_path / "old_development.json").write_text(json.dumps([root("o1"), root("o2")]), encoding="utf-8")
+    base = ["--d0-raw", str(tmp_path / "d0.jsonl"), "--suite-dir", str(suite)]
+    assert check.main(base + ["--reference-suite", str(tmp_path / "old_development.json"),
+                              "--reference-suite", str(tmp_path / "d0.jsonl")]) == 0
+    # A development root drawn before fails the fresh-draw check.
+    (tmp_path / "old_development.json").write_text(json.dumps([root("v2")]), encoding="utf-8")
+    assert check.main(base + ["--reference-suite", str(tmp_path / "old_development.json")]) == 1
+    # So does a root shared by a training round and the development set.
+    (suite / "r2_training.json").write_text(json.dumps([root("v1")]), encoding="utf-8")
+    assert check.main(base) == 1
+
+
+def test_policy_table_reads_both_rounds_and_the_solver_cost() -> None:
+    policy_table = _load("policy_table.py")
+    def outcomes(successes: int, *, invalid: int = 0, wls: dict | None = None) -> dict:
+        block = {
+            "truth_audited_task_success": {"True": successes, "False": 2 - successes},
+            "invalid_action_count": {"0": 2 - invalid, "3": invalid} if invalid else {"0": 2},
+            "false_commit_count": {"0": 2},
+            "loop_detected": {"False": 2},
+            "steps": {"7": 1, "9": 1},
+            "tool_counts.compare_parameter_candidates": {"0": 1, "1": 1},
+        }
+        if wls is not None:
+            block["wls_calls"] = wls
+        return {"parameter": block}
+    r1 = {"per_family": {
+        "expert": {"outcomes": outcomes(2, wls={"3": 2})},
+        "bc0": {"outcomes": outcomes(1, invalid=1, wls={"3": 1, "5": 1})},
+        "r1": {"outcomes": outcomes(2, wls={"3": 2})},
+    }}
+    r2 = {"per_family": {"r1": {"outcomes": outcomes(2, wls={"3": 2})}, "r2": {"outcomes": outcomes(2)}}}
+    result = policy_table.table(r1, r2, ["parameter", "topology"])
+    assert result["policies"]["bc0"]["successes"] == 1 and result["policies"]["bc0"]["invalid_action_episodes"] == 1
+    assert result["policies"]["bc0"]["mean_wls_calls"] == 4.0 and result["policies"]["expert"]["mean_actions"] == 8.0
+    assert result["policies"]["r2"]["mean_wls_calls"] is None  # a summary without the field
+    assert result["policies"]["expert"]["comparisons"] == 1 and result["r1_consistent_across_rounds"]
+    text = policy_table.markdown(result)
+    assert "| Line R/X error | 2 | 2 | 1 | 2 | 2 |" in text and "| Mean WLS calls per episode | | 3.00 | 4.00 | 3.00 | n/a |" in text
 
 
 def test_split_rounds_deals_each_family_across_rounds() -> None:

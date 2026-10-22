@@ -1,15 +1,23 @@
 """Check a suite copied from another cell against this cell's expert aggregate.
 
     python check_suite_exclusion.py --d0-raw OUT/d0/aggregate.raw.jsonl --suite-dir OUT/suite \\
-        [--reference-d0-raw OTHER/out/d0/aggregate.raw.jsonl]
+        [--reference-d0-raw OTHER/out/d0/aggregate.raw.jsonl] \\
+        [--reference-suite OTHER/out/suite/development.json ...]
 
 The suite builder excludes every D0 root from the suites it draws.  A suite
 copied from another cell was drawn around that cell's aggregate, so once this
 cell has regenerated its own aggregate the exclusion has to be checked again:
 no root of the copied suites may be a D0 root here.  With --reference-d0-raw
 the two aggregates' root sets are compared as well (a regenerated aggregate
-with the same seed and plan is expected to draw the same roots).  Exits 1 on
-an overlap, 0 otherwise; prints a JSON report.
+with the same seed and plan is expected to draw the same roots).
+
+The suite files are also checked against each other (no root in two of them:
+the rounds and the development set are disjoint), and with --reference-suite
+(repeatable: earlier cells' suites or aggregates, JSON lists or JSONL rows)
+the development set must share no root with any reference, so a freshly drawn
+development set is also disjoint from every set used earlier (2026-10-22,
+the conventional-only cell).  Exits 1 on an overlap, 0 otherwise; prints a
+JSON report.
 """
 from __future__ import annotations
 
@@ -55,15 +63,26 @@ def suite_roots(files: Iterable[Path]) -> dict[str, set[str]]:
     return out
 
 
+def reference_roots(path: Path) -> set[str]:
+    """Roots of an earlier suite (a JSON list) or aggregate (JSONL rows)."""
+    if path.suffix == ".jsonl":
+        return d0_roots(path)
+    roots = suite_roots([path]).get(path.name)
+    if roots is None:
+        raise SystemExit(f"{path} is not a suite file with physical_root_fingerprint roots")
+    return roots
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--d0-raw", required=True, type=Path)
     parser.add_argument("--suite-dir", required=True, type=Path)
     parser.add_argument("--reference-d0-raw", type=Path, default=None)
+    parser.add_argument("--reference-suite", type=Path, action="append", default=[])
     args = parser.parse_args(argv)
     here = d0_roots(args.d0_raw)
     suites = suite_roots(sorted(args.suite_dir.glob("*.json")))
-    report: dict[str, Any] = {"d0_roots": len(here), "suites": {}, "overlap": {}}
+    report: dict[str, Any] = {"d0_roots": len(here), "suites": {}, "overlap": {}, "between_suites": {}}
     overlap = False
     for name, roots in suites.items():
         shared = sorted(roots & here)
@@ -71,6 +90,23 @@ def main(argv: list[str] | None = None) -> int:
         if shared:
             overlap = True
             report["overlap"][name] = shared
+    names = sorted(suites)
+    for index, first in enumerate(names):
+        for second in names[index + 1:]:
+            shared = sorted(suites[first] & suites[second])
+            report["between_suites"][f"{first}|{second}"] = len(shared)
+            if shared:
+                overlap = True
+                report["overlap"][f"{first}|{second}"] = shared
+    if args.reference_suite:
+        development = suites.get("development.json", set())
+        report["development_against_references"] = {}
+        for path in args.reference_suite:
+            shared = sorted(development & reference_roots(path))
+            report["development_against_references"][str(path)] = len(shared)
+            if shared:
+                overlap = True
+                report["overlap"][f"development.json|{path}"] = shared
     if args.reference_d0_raw is not None:
         reference = d0_roots(args.reference_d0_raw)
         report["reference"] = {

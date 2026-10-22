@@ -38,7 +38,13 @@ OUTCOME_FIELDS = (
     "invalid_action_count",
     "loop_detected",
     "steps",
+    # Solver cost (2026-10-22): run_wls and verify_candidate calls per episode,
+    # as the evaluator counts them.
+    "wls_calls",
 )
+# Tools whose per-episode call counts are tallied beside the outcome fields
+# (``tool_counts`` of the evaluator episode; absent counts as zero).
+COUNTED_TOOLS = ("compare_parameter_candidates",)
 STUDENT_LABEL = {"r1": "bc0", "r2": "r1"}
 CANDIDATE_LABEL = {"r1": "r1", "r2": "r2"}
 
@@ -138,6 +144,9 @@ def per_family_outcomes(
         counts[family] += 1
         for field in OUTCOME_FIELDS:
             tables[family][field][str(episode.get(field))] += 1
+        tool_counts = episode.get("tool_counts") if isinstance(episode.get("tool_counts"), Mapping) else {}
+        for tool in COUNTED_TOOLS:
+            tables[family][f"tool_counts.{tool}"][str(int(tool_counts.get(tool) or 0))] += 1
         matched = _nested_flag(episode.get("audit"), "diagnostic_truth_matched")
         if matched is not None:
             tables[family]["audit.diagnostic_truth_matched"][str(matched)] += 1

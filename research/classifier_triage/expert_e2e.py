@@ -11,6 +11,11 @@ decision changes: truth-audited success, phasor and spectra acquisitions
 classifier profile the first triage report of each episode (its request
 score, whether the request was admitted, the first family) so recall and
 unneeded requests of the gate in closed loop sit beside the offline figures.
+
+``--profile scada_only`` with ``--expert baseline_compare`` is the preflight of
+the conventional-only cell (2026-10-22): no auxiliary tool and no triage
+report; the table then also carries the workflow metrics of that cell's
+summary (invalid-action and loop episodes, WLS calls, bounded comparisons).
 """
 from __future__ import annotations
 
@@ -32,12 +37,33 @@ from psse_env.dagger.evaluator import evaluate_rollout_suites  # noqa: E402
 from psse_env.dagger.release_factories import deterministic_case_loader  # noqa: E402
 from psse_env.transactional_env import DEFAULT_PROGRESS_BASIS, PROGRESS_BASES  # noqa: E402
 from psse_env.evidence_profile import (  # noqa: E402
-    CLASSIFIER_GATED_PROFILE, SUSPICION_GATED_PROFILE, WLS_GATED_PROFILE, validate_evidence_profile,
+    CLASSIFIER_GATED_PROFILE, SCADA_ONLY_PROFILE, SUSPICION_GATED_PROFILE, WLS_GATED_PROFILE, validate_evidence_profile,
 )
-from research.hypothesis_ranking.expert_e2e import EXPERTS, NEEDS_PHASORS, NEEDS_SPECTRA, _basis, _escalation_request, summarize  # noqa: E402
+from psse_env.oracle.expert_variants import EXPERT_VARIANTS  # noqa: E402
+from research.hypothesis_ranking.expert_e2e import NEEDS_PHASORS, NEEDS_SPECTRA, _basis, _escalation_request, summarize  # noqa: E402
 from research.hypothesis_ranking.features import json_safe  # noqa: E402
 
-PROFILES = (WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE, CLASSIFIER_GATED_PROFILE)
+PROFILES = (SCADA_ONLY_PROFILE, WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE, CLASSIFIER_GATED_PROFILE)
+COMPARE_TOOL = "compare_parameter_candidates"
+
+
+def workflow_summary(episodes: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per family: invalid-action, false-commit and loop episodes, WLS calls and comparisons."""
+    by_family: dict[str, Counter] = {}
+    for episode in episodes:
+        counter = by_family.setdefault(str(episode.get("family")), Counter())
+        counter["n"] += 1
+        counter["invalid_action_episodes"] += int(int(episode.get("invalid_action_count") or 0) > 0)
+        counter["false_commit_episodes"] += int(int(episode.get("false_commit_count") or 0) > 0)
+        counter["loop_episodes"] += int(bool(episode.get("loop_detected")))
+        counter["wls_calls"] += int(episode.get("wls_calls") or 0)
+        counter["comparisons"] += int((episode.get("tool_counts") or {}).get(COMPARE_TOOL) or 0)
+    table = {}
+    for family, counter in sorted(by_family.items()):
+        entry = dict(counter)
+        entry["mean_wls_calls"] = counter["wls_calls"] / max(1, counter["n"])
+        table[family] = entry
+    return table
 
 
 def first_triage(episode: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -106,7 +132,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--suite", required=True, help="partitioned release roots (the pipeline's development.json)")
     parser.add_argument("--profile", choices=PROFILES, default=CLASSIFIER_GATED_PROFILE)
-    parser.add_argument("--expert", choices=EXPERTS, default="baseline")
+    parser.add_argument("--expert", choices=EXPERT_VARIANTS, default="baseline")
     parser.add_argument("--triage-model", default=None, help="runtime directory of the triage classifier (default: the tracked model)")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--families", nargs="*", default=None)
@@ -146,6 +172,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             episode["family"] = family_of.get(str(episode.get("scenario_id")), str(episode.get("family")))
     summary = summarize(episodes)
     summary["triage"] = triage_summary(episodes)
+    summary["workflow"] = workflow_summary(episodes)
     summary.update(profile=profile, expert=args.expert, triage_model=args.triage_model, progress_basis=args.progress_basis,
                    suite=str(args.suite), roots=len(roots),
                    seed=args.seed, max_steps=int(args.max_steps), total_seconds=time.perf_counter() - started)
@@ -153,8 +180,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     with (out / "episodes.jsonl").open("w", encoding="utf-8") as stream:
         for episode in episodes:
             compact = {key: episode.get(key) for key in (
-                "scenario_id", "family", "terminal", "terminal_outcome", "truth_audited_task_success",
-                "false_commit_count", "healthy_components_preserved", "steps")}
+                "scenario_id", "family", "physical_root", "terminal", "terminal_outcome", "truth_audited_task_success",
+                "false_commit_count", "invalid_action_count", "loop_detected", "wls_calls",
+                "healthy_components_preserved", "steps")}
             compact["tools"] = [str((step.get("action") or {}).get("tool")) for step in episode.get("trace") or []]
             compact["escalation_request"] = _escalation_request(episode)
             compact["basis"] = _basis(episode)
@@ -167,13 +195,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if str((step.get("action") or {}).get("tool")) in ("correct_measurements", "correct_parameters", "correct_topology")]
             stream.write(json.dumps(json_safe(compact), sort_keys=True) + "\n")
     lines = [f"# Expert end to end under {profile} ({args.expert} expert, {len(roots)} roots)\n",
-             "| family | n | success | phasors | unnecessary phasors | spectra | false commits | mean steps | admitted at first WLS |",
-             "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+             "| family | n | success | phasors | unnecessary phasors | spectra | false commits | mean steps | admitted at first WLS "
+             "| invalid-action episodes | loop episodes | mean WLS calls | comparisons |",
+             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for family, entry in sorted(summary["by_family"].items()):
         triage = summary["triage"]["by_family"].get(family, {})
+        workflow = summary["workflow"].get(family, {})
         lines.append(f"| {family} | {entry['n']} | {entry.get('truth_audited_success', 0)} | {entry.get('phasors_acquired', 0)} | "
                      f"{entry.get('unnecessary_phasors', 0)} | {entry.get('spectra_acquired', 0)} | {entry.get('false_commits', 0)} | "
-                     f"{entry['mean_steps']:.1f} | {triage.get('admitted_first', 'n/a')} |")
+                     f"{entry['mean_steps']:.1f} | {triage.get('admitted_first', 'n/a')} | "
+                     f"{workflow.get('invalid_action_episodes', 0)} | {workflow.get('loop_episodes', 0)} | "
+                     f"{workflow.get('mean_wls_calls', 0.0):.1f} | {workflow.get('comparisons', 0)} |")
     totals = summary["totals"]
     lines += ["", f"Totals: success {totals['truth_audited_success']}/{totals['n']}, phasors {totals['phasors_acquired']} "
                   f"(unnecessary {totals['unnecessary_phasors']}), spectra {totals['spectra_acquired']} (unnecessary {totals['unnecessary_spectra']}), "

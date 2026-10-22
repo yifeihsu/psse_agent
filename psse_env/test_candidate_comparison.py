@@ -10,7 +10,9 @@ dominate and then orders the corrections by the verdicts.
 from __future__ import annotations
 
 import copy
+import os
 import unittest
+from unittest import mock
 
 from psse_env.actions import (
     COMMIT_STATE,
@@ -35,7 +37,7 @@ from psse_env.dagger.protocol_bridge import (
 from psse_env.dagger.release_factories import ObservableExpertPolicy
 from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE, SCADA_ONLY_PROFILE
 from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
-from psse_env.oracle.expert_variants import expert_variant_options
+from psse_env.oracle.expert_variants import EXPERT_VARIANT_ENV, expert_variant_options
 from psse_env.state_store import find_forbidden_policy_paths
 from psse_env.transactional_env import TransactionalPSSEEnv
 
@@ -274,6 +276,11 @@ class ProtocolSurfaceTests(unittest.TestCase):
         self.assertNotIn("candidate_comparison", expert_variant_options("ledger_ranked"))
         self.assertIs(expert_variant_options("ledger_ranked_compare")["candidate_comparison"], True)
 
+    def test_the_baseline_compare_variant_adds_only_the_comparison(self) -> None:
+        # No ledger and no ranker: the teacher of profiles without the balanced screen (scada_only).
+        self.assertEqual(expert_variant_options("baseline_compare"), {"candidate_comparison": True})
+        self.assertEqual(expert_variant_options("baseline"), {})
+
 
 class ProcessGateTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -414,6 +421,22 @@ class ExpertComparisonTests(unittest.TestCase):
         self.assertNotIn(COMPARE_PARAMETER_CANDIDATES, [proposal.action["tool"] for proposal in ordered])
         # The baseline expert still corrects the top-ranked line on the same observation.
         self.assertEqual(self._expert(env).next_actions(after)[0]["arguments"]["line_index"], WRONG_LINE)
+
+    def test_the_baseline_compare_variant_named_by_the_environment_compares_under_scada_only(self) -> None:
+        env = _env(profile=SCADA_ONLY_PROFILE)
+        active = _prepared(env)
+        observation = env.get_policy_observation().as_dict()
+        with mock.patch.dict(os.environ, {EXPERT_VARIANT_ENV: "baseline_compare"}):
+            expert = self._expert(env, **expert_variant_options())
+        self.assertTrue(expert.candidate_comparison)
+        self.assertFalse(expert.hypothesis_ledger)
+        self.assertIsNone(expert.learned_ranker)
+        self.assertEqual(expert.next_actions(observation)[0], _compare(active, [WRONG_LINE, TRUE_LINE]))
+        _, output = env.step(_compare(active, [WRONG_LINE, TRUE_LINE]))
+        self.assertEqual(output["execution_status"], "success", output)
+        after = env.get_policy_observation().as_dict()
+        self.assertEqual(expert.next_actions(after)[0],
+                         {"tool": CORRECT_PARAMETERS, "arguments": {"state_id": active, "line_index": TRUE_LINE}})
 
     def test_a_clearly_dominant_ranking_is_corrected_without_a_comparison(self) -> None:
         env = _env(profile=SCADA_ONLY_PROFILE, dominant=True, ratio=2.0)
