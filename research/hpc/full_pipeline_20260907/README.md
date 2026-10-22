@@ -220,6 +220,10 @@ the collection stage (`stage_collect_cpu.sbatch`, partition cs, job
 which 59 carry the comparison as the target, mixture 3,540 rows with 70
 comparison-targeted rows (59 collected, 11 from the aggregate).  The GPU
 copy skips on the receipt and the chain continues with training.
+Training (885 steps) finished after nine preempted and resumed runs and the
+evaluation completed 2026-10-22: frozen student 178, trained student 197,
+teacher 201 of 209 development roots, no root lost by the round
+(`docs/rl_experiments_20261014.md` section 13).
 
 ## Ambiguity design (ranked testing with escalation fallback)
 
