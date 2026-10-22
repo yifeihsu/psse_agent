@@ -43,9 +43,23 @@ def _scenario():
             "hif_scan_window": {"scans": [{"label": {"phase": "A"}}]},
             "nlm_diagnostic": {"top_hif_groups": [{"branch_row0": 3}]},
             "op_point": {"load_scale": 8.}, "label": {"family": "hif"},
-            "reported_breaker_status": {"CB3": False}, "substation_telemetry": {"secret": 9},
+            "three_phase_sigma": .005, "branch_current_sigma_pu": .001, "harmonic_orders": [5, 7],
+            "pristine_model_dir": "unused_pristine_model", "slack_bus": 0, "gnn_screen": {"hif_probability": .9},
+            # The node/breaker substation channel (SCADA-class, kept by scada_only).
+            "reported_breaker_status": {"CB3": False}, "substation_telemetry": {"node_vm": {"B3": 1.01}},
+            "operator_layout": {"bus_count": 14}, "topology_model_id": "ieee14_full_v1",
         },
     }
+
+
+#: Auxiliary streams, simulator truth, labels, learned screens and triage data:
+#: scada_only strips every one of them.
+AUXILIARY_METADATA_KEYS = (
+    "hif_runtime", "hif_scan_window", "nlm_diagnostic", "three_phase_voltages", "three_phase_branch_currents",
+    "harmonic_measurements", "op_point", "label", "three_phase_sigma", "branch_current_sigma_pu",
+    "harmonic_orders", "pristine_model_dir", "slack_bus", "gnn_screen",
+)
+NODE_BREAKER_METADATA_KEYS = ("reported_breaker_status", "substation_telemetry", "operator_layout", "topology_model_id")
 
 
 class RecordingProvider:
@@ -82,10 +96,11 @@ class SCADAEvidenceBoundaryTests(unittest.TestCase):
         self.assertEqual(env.get_policy_observation().available_evidence, [])
         stored = env.store.get_state(state["active_state_id"])
         metadata = stored["metadata"]
-        for key in ("hif_runtime", "hif_scan_window", "nlm_diagnostic", "three_phase_voltages",
-                    "three_phase_branch_currents", "harmonic_measurements", "op_point", "label",
-                    "reported_breaker_status", "substation_telemetry"):
+        for key in AUXILIARY_METADATA_KEYS:
             self.assertNotIn(key, metadata)
+        # The topology route's node/breaker substation channel stays (2026-10-22).
+        for key in NODE_BREAKER_METADATA_KEYS:
+            self.assertEqual(metadata[key], scenario["metadata"][key])
         self.assertEqual(set(metadata["noise_contract"]["channels"]), {"scada"})
         self.assertIn("applied_sigma_per_component", metadata["noise_contract"]["channels"]["scada"])
         self.assertEqual(set(metadata["parameter_scans"]), {"z_scans", "sigma_z"})
@@ -141,6 +156,23 @@ class SCADAEvidenceBoundaryTests(unittest.TestCase):
         self.assertEqual(result["unresolved_signatures"], ["wls_residual_outlier index=40"])
         self.assertEqual(result["semantic_field_provenance"], value["semantic_field_provenance"])
 
+    def test_the_node_breaker_channel_reaches_the_providers_and_nothing_auxiliary_rides_with_it(self):
+        providers = MatpowerDeploymentProviders(evidence_profile=SCADA_ONLY_PROFILE)
+        seen = providers._evidence_state(_scenario())
+        for key in NODE_BREAKER_METADATA_KEYS:
+            self.assertEqual(seen["metadata"][key], _scenario()["metadata"][key])
+        for key in AUXILIARY_METADATA_KEYS:
+            self.assertNotIn(key, seen["metadata"])
+        with self.assertRaises(ValueError):  # scada_only runs no triage classifier
+            MatpowerDeploymentProviders(evidence_profile=SCADA_ONLY_PROFILE, triage_classifier="any_export")
+
+    def test_triage_reports_and_learned_screens_never_ride_into_a_scada_only_observation(self):
+        value = {"fresh_context_evidence": {"wls": {"successful": True, "chi_square_alarm": True,
+                                                    "triage": {"request_admitted": True, "first_family": "hif"},
+                                                    "gnn_screen": {"hif_probability": .9}}}}
+        self.assertEqual(sanitize_scada_observation(value)["fresh_context_evidence"]["wls"],
+                         {"successful": True, "chi_square_alarm": True})
+
     def test_stale_auxiliary_explanations_and_conditioning_cannot_reappear(self):
         env = TransactionalPSSEEnv(evidence_profile=SCADA_ONLY_PROFILE)
         state = env.reset(_scenario())
@@ -163,10 +195,11 @@ class SCADAEvidenceBoundaryTests(unittest.TestCase):
             remaining_anomaly_score=-88., no_material_anomaly_remaining=False,
             oracle_action_hints=[{"tool": "correct_measurements", "arguments": {"suspect_group": [9]}}],
             hidden_truth={"true_hif_errors": [{"branch_row0": 15, "phase": "C"}]})
-        for key in ("three_phase_voltages", "three_phase_branch_currents", "harmonic_measurements",
-                    "hif_runtime", "hif_scan_window", "nlm_diagnostic", "op_point", "label",
-                    "reported_breaker_status", "substation_telemetry"):
+        # Every auxiliary, simulator-truth, label, learned-screen and triage field
+        # changes; the node/breaker substation channel is observable and stays.
+        for key in AUXILIARY_METADATA_KEYS:
             second["metadata"][key] = {"changed_auxiliary_or_label": 999}
+        second["metadata"]["triage"] = {"request_admitted": True, "first_family": "hif"}
         second["metadata"]["parameter_scans"]["initial_states"] = [[999.]]
         states, outputs, public_actions, private_actions, hashes = [], [], [], [], []
         for scenario in (first, second):

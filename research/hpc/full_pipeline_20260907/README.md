@@ -221,6 +221,30 @@ which 59 carry the comparison as the target, mixture 3,540 rows with 70
 comparison-targeted rows (59 collected, 11 from the aggregate).  The GPU
 copy skips on the receipt and the chain continues with training.
 
+## Conventional-only confirmation cell (2026-10-22)
+
+`overrides/conventional_only_20261022.env`
+(`research_full_pipeline_20261022_conventional`) is the confirmation protocol
+of the PES GM 2027 manuscript (`docs/papers/pesgm2027`, Section VI): the seven
+conventional families only (no_error, measurement, multi_measurement,
+parameter, topology, measurement+parameter, measurement+topology) in every
+plan, `EVIDENCE_PROFILE=scada_only` (no auxiliary tool in the schemas or the
+gate, no triage classifier, no triage report), and the `baseline_compare`
+teacher (the baseline expert with the bounded candidate comparison; the ledger
+variants read a screen scada_only does not run).  `scada_only` keeps the
+node/breaker substation telemetry the topology route reads
+(`SCADA_NODE_BREAKER_FIELDS` in `psse_env/evidence_profile.py`); without it the
+topology context falls back to line-status flips and the bus-split roots
+cannot be solved by any policy.  D0 and round counts per conventional family,
+the horizon, admission, meter floor, ranking thresholds, the aggregate and
+round seeds and the training recipe are the 2026-10-07 classifier cell's; the
+suite seed is new (20261022) and the development set is 192 roots, twice that
+cell's 96-root conventional cohort.  Round summaries now carry the WLS calls
+and bounded comparisons per episode (`summarize.py`), `policy_table.py` prints
+the per-policy table, and `check_suite_exclusion.py --reference-suite` checks
+the fresh development set against earlier suites.  Design, preflight, job ids
+and results: `docs/conventional_only_cell_20261022.md`.
+
 ## Ambiguity design (ranked testing with escalation fallback)
 
 A parameter fault on one line often raises the Lagrange multiplier of an

@@ -11,7 +11,9 @@ import re
 from typing import Any, Mapping
 
 
-#: Balanced SCADA and its WLS only; every auxiliary tool is refused.
+#: Balanced SCADA and its WLS only; every auxiliary tool is refused.  The
+#: node/breaker substation telemetry of a topology root is SCADA-class and
+#: stays (``SCADA_NODE_BREAKER_FIELDS``, 2026-10-22).
 SCADA_ONLY_PROFILE = "scada_only"
 #: Research default (2026-09-23). Detection uses only balanced SCADA and WLS:
 #: no fault flags, hints or precomputed diagnoses reach the agent. After a
@@ -149,9 +151,22 @@ _OPERATOR_NOISE_FIELDS = frozenset({
 _PARAMETER_SCAN_FIELDS = frozenset({
     "z_scans", "sigma_z", "scan_indices", "time_tags", "scan_index", "time_tag",
 })
+#: Node/breaker substation channel of the topology route (2026-10-22): the
+#: reported breaker map, the substation telemetry at SCADA accuracies (node
+#: voltages, unit and load meters, terminal and breaker flows), the rendered
+#: operator layout and meter nodes, the model identity, and the record a
+#: breaker correction leaves for its verification.  SCADA-class data, kept
+#: under scada_only so breaker-status errors stay diagnosable by breaker
+#: (docs/conventional_only_cell_20261022.md); phasors, spectra, HIF and
+#: triage data stay stripped.
+SCADA_NODE_BREAKER_FIELDS = frozenset({
+    "substation_telemetry", "reported_breaker_status", "operator_layout",
+    "operator_voltage_meter_nodes", "topology_model_id", "topology_model_fingerprint",
+    "last_topology_correction",
+})
 _SCADA_METADATA_FIELDS = frozenset({
     "sigma_z", "measurement_covariance", "structural_zero_indices",
-})
+}) | SCADA_NODE_BREAKER_FIELDS
 _EXECUTION_FIELDS = frozenset({
     "scenario_id", "id", "episode_id", "case", "case_path", "measurements", "z_obs",
     "state_id", "state_hash", "parent_state_id", "status", "candidate_status",
@@ -167,6 +182,9 @@ _AUXILIARY_FIELDS = frozenset({
     "three_phase_summary", "three_phase_context_status", "anomaly_explanation",
     "diagnostic_acceptance", "physical_fault_still_present", "conditional_meter_scores",
     "op_point", "initial_states", "load_profile", "load_profiles", "label", "labels",
+    # Learned screens and the triage classifier's report: no scada_only provider
+    # produces them, and none may ride into a scada_only observation.
+    "gnn_screen", "triage",
 })
 #: Execution metadata a wls_gated_diagnostics root may carry: balanced SCADA
 #: declarations, the auxiliary measurement streams with their declared sigmas,
