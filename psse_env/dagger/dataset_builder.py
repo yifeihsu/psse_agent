@@ -15,7 +15,13 @@ from hif_search_limits import (
     HIF_R_GRID_SIZE_MAX,
     HIF_R_GRID_SIZE_MIN,
 )
-from psse_env.actions import INVALID_ACTION, MACRO_ACTIONS, safe_normalize_action
+from psse_env.actions import (
+    INVALID_ACTION,
+    MACRO_ACTIONS,
+    PARAMETER_COMPARISON_MAX_CANDIDATES,
+    PARAMETER_COMPARISON_MIN_CANDIDATES,
+    safe_normalize_action,
+)
 from psse_env.dagger.protocol_bridge import (
     INTERNAL_TO_CANONICAL_TOOL,
     internal_to_canonical_action,
@@ -432,6 +438,23 @@ TOOL_JSON_SCHEMAS: list[dict[str, Any]] = [
             "get_topology_context",
         )
     ],
+    _tool_schema(
+        "compare_parameter_candidates",
+        "Verify two or three parameter-context lines on isolated copies of the current state and report each line's observable verdict; no state changes.",
+        _object_schema(
+            {
+                "state_id": _STATE_ID,
+                "line_indices": {
+                    "type": "array",
+                    "description": "Distinct 1-based line indices from the parameter context's supported corrections.",
+                    "items": {"type": "integer"},
+                    "minItems": PARAMETER_COMPARISON_MIN_CANDIDATES,
+                    "maxItems": PARAMETER_COMPARISON_MAX_CANDIDATES,
+                },
+            },
+            required=("state_id", "line_indices"),
+        ),
+    ),
     _tool_schema(
         "correct_measurements",
         "Create a candidate by applying bounded measurement replacements.",
