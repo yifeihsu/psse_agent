@@ -84,6 +84,10 @@ PARAMETER_RANKING_AMBIGUITY_CANDIDATES = 2
 COMPARE_PARAMETER_CANDIDATES = "compare_parameter_candidates"
 PARAMETER_COMPARISON_MIN_CANDIDATES = 2
 PARAMETER_COMPARISON_MAX_CANDIDATES = 3
+#: Comparison policy, distinct from the context's 1.2 admission threshold.
+#: Shared by the default comparison expert and the model-visible tool contract.
+#: Fixed from the training-draw audit of 2026-10-19; not a verifier threshold.
+DEFAULT_COMPARISON_DOMINANCE_BAND = 1.5
 PARAMETER_COMPARISON_CONTRACT = "branch_verified_parameter_comparison_v1"
 #: The ``fresh_context_evidence`` family that records the comparison on the
 #: active state; dropped with the other balanced contexts when the state changes.

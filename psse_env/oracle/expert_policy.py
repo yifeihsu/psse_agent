@@ -8,6 +8,7 @@ from psse_env.actions import (
     AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
     ASK_FOR_MORE_EVIDENCE,
     COMPARE_PARAMETER_CANDIDATES,
+    DEFAULT_COMPARISON_DOMINANCE_BAND,
     PARAMETER_COMPARISON_MAX_CANDIDATES,
     PARAMETER_COMPARISON_MIN_CANDIDATES,
     ambiguous_branch_candidate_lines,
@@ -89,12 +90,6 @@ class _ExpertContext:
 STRUCTURAL_PATH_TOOLS = frozenset(
     {CORRECT_PARAMETERS, CORRECT_TOPOLOGY, GET_PARAMETER_CONTEXT, GET_TOPOLOGY_CONTEXT, COMPARE_PARAMETER_CANDIDATES}
 )
-#: A parameter ranking that observably dominates by less than this ratio is
-#: still compared on branches before a line is corrected (the candidate
-#: comparison of 2026-10-19).  The context's own admission ratio is 1.2; of the
-#: four misranked hard training roots the fixed rule lost, one dominated at
-#: 1.32 and the others fell below 1.2.  The dominant stratum starts at 1.43.
-DEFAULT_COMPARISON_DOMINANCE_BAND = 1.5
 MEASUREMENT_PATH_TOOLS = frozenset({CORRECT_MEASUREMENTS, GET_MEASUREMENT_CONTEXT})
 _BALANCED_CONTEXT_FAMILIES = {
     GET_MEASUREMENT_CONTEXT: "measurement",

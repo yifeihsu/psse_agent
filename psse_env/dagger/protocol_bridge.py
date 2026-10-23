@@ -33,6 +33,7 @@ from psse_env.actions import (
     ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
     COMPARE_PARAMETER_CANDIDATES,
+    DEFAULT_COMPARISON_DOMINANCE_BAND,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
@@ -147,7 +148,15 @@ _TRANSACTIONAL_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "case; the reply lists every line's observable verdict (candidate "
                 "disposition, chi-square after the refit, global progress) and the "
                 "best-ranked line. One action; no candidate is opened and no state "
-                "changes. Use it when the ranking does not clearly dominate."
+                "changes. With at least two supported lines, compare before correcting "
+                "when parameter_ranking_dominant is not true, or when the numeric "
+                "parameter_ranking_dominance_ratio is below "
+                f"{DEFAULT_COMPARISON_DOMINANCE_BAND:g}, even if the dominant flag is true. "
+                "The flag uses the context admission threshold (normally 1.2); it does "
+                "not mean the comparison can be skipped. A dominant ranking at a ratio "
+                f"of {DEFAULT_COMPARISON_DOMINANCE_BAND:g} or above does not need comparison "
+                "under this rule. If a comparison is already recorded on the active "
+                "state, reuse its verdict order instead of repeating it."
             ),
             "parameters": {
                 "type": "object",

@@ -15,6 +15,7 @@ import unittest
 from psse_env.actions import (
     COMMIT_STATE,
     COMPARE_PARAMETER_CANDIDATES,
+    DEFAULT_COMPARISON_DOMINANCE_BAND,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
@@ -431,6 +432,42 @@ class ExpertComparisonTests(unittest.TestCase):
         self.assertEqual(actions[0]["tool"], COMPARE_PARAMETER_CANDIDATES)
         narrow = self._expert(env, candidate_comparison=True, comparison_dominance_band=1.3).next_actions(observation)
         self.assertEqual(narrow[0]["tool"], CORRECT_PARAMETERS)
+
+    def test_comparison_boundary_is_strict_and_independent_of_dominant_flag(self) -> None:
+        for ratio, dominant, expected in (
+            (1.19, False, COMPARE_PARAMETER_CANDIDATES),
+            (1.2, True, COMPARE_PARAMETER_CANDIDATES),
+            (1.30, True, COMPARE_PARAMETER_CANDIDATES),
+            (1.499999, True, COMPARE_PARAMETER_CANDIDATES),
+            (1.5, True, CORRECT_PARAMETERS),
+            (1.500001, True, CORRECT_PARAMETERS),
+        ):
+            with self.subTest(ratio=ratio, dominant=dominant):
+                env = _env(profile=SCADA_ONLY_PROFILE, dominant=dominant, ratio=ratio)
+                _prepared(env)
+                observation = env.get_policy_observation().as_dict()
+                expert = self._expert(env, candidate_comparison=True)
+                self.assertEqual(expert.next_actions(observation)[0]["tool"], expected)
+
+    def test_student_sees_the_band_and_durable_dominant_ratio(self) -> None:
+        from psse_env.dagger.dataset_builder import prepare_model_policy_observation
+
+        env = _env(profile=SCADA_ONLY_PROFILE, dominant=True, ratio=1.30)
+        _prepared(env)
+        view, _ = prepare_model_policy_observation(
+            env.get_policy_observation().as_dict(), history=[],
+        )
+        parameter = view["fresh_context_evidence"]["parameter"]
+        self.assertIs(parameter["parameter_ranking_dominant"], True)
+        self.assertEqual(parameter["parameter_ranking_dominance_ratio"], 1.30)
+        self.assertEqual(find_forbidden_policy_paths(view), [])
+        schema = next(row["function"] for row in unified_tool_schemas()
+                      if row["function"]["name"] == COMPARE_PARAMETER_CANDIDATES)
+        description = schema["description"]
+        self.assertIn(f"below {DEFAULT_COMPARISON_DOMINANCE_BAND:g}", description)
+        self.assertIn("even if the dominant flag is true", description)
+        self.assertIn("reuse its verdict order", description)
+        self.assertEqual(schema["parameters"]["required"], ["case_path", "line_indices"])
 
 
 if __name__ == "__main__":  # pragma: no cover
