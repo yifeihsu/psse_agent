@@ -480,3 +480,12 @@ stand-in students and the teacher on seven validation roots, and the mixture
 builder on the local collection preflight with a 32-root fresh aggregate
 (families kept position by position, every replaced row expert-visited, the
 13 conventional schemas only).
+
+Deployed to the same cell from 331997f on 2026-10-23T18:06Z (no chain
+resubmitted; the follow-ups write under `out/extra/`). Submitted 18:08 UTC
+(`submit_extras_20261023.sh`): fp-xcpu 20748396 (suites, fresh aggregate,
+control mixture); fp-ctrain 20748398 (after the CPU job); fp-xeval
+hard_bc0_r1 20748400 and validation_bc0_r1 20748401 (after the CPU job),
+test_control 20748402, hard_r2_control 20748403 and validation_r2_control
+20748404 (after the control's training). Results:
+`out/extra/evaluations/<name>/summary.json` and `episodes.jsonl`.
