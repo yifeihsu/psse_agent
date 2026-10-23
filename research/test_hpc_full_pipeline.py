@@ -99,6 +99,46 @@ def test_eval_suites_keep_conventional_roots_outside_every_excluded_set() -> Non
     assert report["other_families"] == {"harmonic": 1}
 
 
+def test_followup_tables_pair_by_root_and_apply_the_selection_rule(tmp_path: Path) -> None:
+    tables = _load("followup_tables.py")
+    assert tables.mcnemar(19, 0) == pytest.approx(2 * 0.5 ** 19) and tables.mcnemar(0, 0) == 1.0
+    rows = [{"grouping": {"physical_root_fingerprint": f"root{i}", "scenario_family": "parameter" if i < 2 else "measurement"},
+             "audit": {"parameter_ranking": {"stratum": "misranked" if i == 0 else "dominant"}}} for i in range(4)]
+    def episode(i: int, ok: bool, invalid: int = 0) -> dict:
+        return {"physical_root": f"root{i}", "truth_audited_task_success": ok, "invalid_action_count": invalid,
+                "false_commit_count": 0, "loop_detected": False, "steps": 7, "wls_calls": 2, "tool_counts": {}}
+    def write(path: Path, episodes: list) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"suite_metrics": {"episodes": episodes}}), encoding="utf-8")
+    out = tmp_path / "out"
+    (out / "r1" / "collection").mkdir(parents=True)
+    (out / "r1" / "collection" / "development_scenarios.json").write_text(json.dumps(rows), encoding="utf-8")
+    (out / "extra" / "suites").mkdir(parents=True)
+    for suite in ("hard", "validation"):
+        (out / "extra" / "suites" / f"{suite}.json").write_text(json.dumps(rows), encoding="utf-8")
+    ok = [episode(i, True) for i in range(4)]
+    write(out / "r1" / "collection" / "evaluation" / "expert_eval.json", ok)
+    write(out / "r1" / "collection" / "evaluation" / "bc0_eval.json", [episode(0, False, 2), episode(1, True, 1)] + ok[2:])
+    write(out / "r1" / "collection" / "evaluation" / "r1_eval.json", ok)
+    write(out / "r2" / "collection" / "evaluation" / "r1_eval.json", [episode(0, True, 1)] + ok[1:])
+    write(out / "extra" / "evaluations" / "test_control" / "bc0_eval.json", [episode(0, False, 1)] + ok[1:])
+    for suite in ("hard", "validation"):
+        write(out / "extra" / "evaluations" / f"{suite}_bc0_r1" / "expert_eval.json", ok)
+        write(out / "extra" / "evaluations" / f"{suite}_bc0_r1" / "bc0_eval.json", [episode(0, False)] + ok[1:])
+        write(out / "extra" / "evaluations" / f"{suite}_bc0_r1" / "r1_eval.json", ok)
+        write(out / "extra" / "evaluations" / f"{suite}_r2_control" / "bc0_eval.json", [episode(1, True, 1)] + ok[:1] + ok[2:])
+        write(out / "extra" / "evaluations" / f"{suite}_r2_control" / "r1_eval.json", ok)
+    result = tables.build(tmp_path)
+    test = result["test"]
+    assert test["policies"]["bc0"]["successes"] == 3 and test["policies"]["bc0"]["violation_episodes"] == 2
+    assert test["policies"]["bc0"]["by_stratum"]["misranked"] == {"successes": 0, "episodes": 1}
+    assert test["paired_against_r1"]["bc0_vs_r1"]["violations"]["only_first"] == 2
+    assert test["paired_against_r1"]["control_vs_r1"]["success_failures"]["only_first"] == 1
+    # R1 and R2 tie on successes (4 each); R1 has fewer violations, so R1 is selected.
+    assert result["round_selection"]["selected"] == "r1" and result["round_selection"]["order"] == ["r1", "r2", "bc0"]
+    assert "### test" in tables.markdown(result)
+
+
 def test_suite_evaluation_takes_one_or_two_labelled_adapters() -> None:
     evaluate = _load("evaluate_suite.py")
     assert evaluate.parse_policies(["bc0=/x/a", "r1=/x/b"]) == [("bc0", Path("/x/a")), ("r1", Path("/x/b"))]
