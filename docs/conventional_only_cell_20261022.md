@@ -489,3 +489,26 @@ hard_bc0_r1 20748400 and validation_bc0_r1 20748401 (after the CPU job),
 test_control 20748402, hard_r2_control 20748403 and validation_r2_control
 20748404 (after the control's training). Results:
 `out/extra/evaluations/<name>/summary.json` and `episodes.jsonl`.
+
+**The CPU stage (fp-xcpu 20748396, cs641, 2 h 18 min).** The suites keep
+every candidate root (validation 96, hard 193; none is a root of this cell's
+370-root D0, its rounds or its test set). The fresh expert aggregate (seed
+20261123, 222 roots) holds 2,252 rows (666 of them forced-recovery rows), none
+quarantined, no unverifiable expert label; its balanced training view has
+1,586 rows, 214 of which belong to roots excluded from the control (D0, round,
+test, validation or hard roots). The control mixture
+(`out/extra/control/mixture.jsonl`, sha256 `ee7ffd3d...`) has R1's 874 rows,
+the 437 D0 rows in place and 437 fresh rows in the places of the collected
+ones at R1's family counts (measurement 47, meter + R/X 76, meter + breaker
+73, multi-meter 126, clean 4, R/X 48, breaker 63; candidates per family 119
+to 286, clean 52); none of its states was visited by the student.
+
+The first control training job (fp-ctrain 20748398) stopped at once on a
+wrong report path in `stage_control_train.sbatch` (it looked for
+`mixture.jsonl.report.json`; the builder writes `mixture.report.json`), and
+Slurm cancelled its three dependents (20748402 to 20748404). Fixed in
+4d79282, redeployed at 21:47 UTC (only that script changed; the two running
+evaluations were untouched) and resubmitted at 21:48: fp-ctrain 20762467,
+then test_control 20762468, hard_r2_control 20762469 and
+validation_r2_control 20762470. hard_bc0_r1 20748400 (gr103) and
+validation_bc0_r1 20748401 (gr104) started at 21:35 and 21:38.
