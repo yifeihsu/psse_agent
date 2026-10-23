@@ -28,9 +28,11 @@ EXTRA=$OUT/extra
 CONTROL_DIR=$EXTRA/control
 TRAIN_DIR=$CONTROL_DIR/training
 MIXTURE=$CONTROL_DIR/mixture.jsonl
+# build_control_mixture.py writes the report beside the mixture as mixture.report.json.
+MIXTURE_REPORT=$CONTROL_DIR/mixture.report.json
 VALIDATION_SUBSET=$BC0_DIR/validation.subset.jsonl
 echo "[ctrain] job ${SLURM_JOB_ID:-manual} restart ${SLURM_RESTART_COUNT:-0} node ${SLURMD_NODENAME:-?} $(date -u +%FT%TZ)"
-[[ -s "$MIXTURE" && -s "$MIXTURE.report.json" ]] || { echo "the control mixture is missing (stage_extra_cpu.sbatch)" >&2; exit 2; }
+[[ -s "$MIXTURE" && -s "$MIXTURE_REPORT" ]] || { echo "the control mixture is missing (stage_extra_cpu.sbatch)" >&2; exit 2; }
 [[ -s "$BC0_DIR/lora/adapter_model.safetensors" && -s "$VALIDATION_SUBSET" ]] || { echo "BC0 or its validation rows missing" >&2; exit 2; }
 nvidia-smi --query-gpu=name,memory.total,uuid,driver_version --format=csv,noheader \
   > "$LOGS/gpu-ctrain-${SLURM_JOB_ID:-manual}-r${SLURM_RESTART_COUNT:-0}.csv" || true
@@ -42,7 +44,7 @@ trap stage_cleanup EXIT
 
 cd "$SRC"
 read -r TRAIN_MAX_STEPS MIXTURE_ROWS < <(
-"$PY" - "$MIXTURE" "$MIXTURE.report.json" "$R1_DIR/training.done" <<'PY'
+"$PY" - "$MIXTURE" "$MIXTURE_REPORT" "$R1_DIR/training.done" <<'PY'
 import json
 import math
 import sys
