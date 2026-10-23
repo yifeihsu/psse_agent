@@ -12,10 +12,13 @@ from psse_env.systems import resolve_system
 CELL = Path(__file__).resolve().parent / "hpc" / "full_pipeline_20260907"
 GPU_STAGES = (
     "stage_bc0.sbatch", "stage_collect.sbatch", "stage_train.sbatch", "stage_eval.sbatch",
-    "stage_zeroshot.sbatch",
+    "stage_zeroshot.sbatch", "stage_control_train.sbatch", "stage_eval_suite.sbatch",
 )
 CPU_STAGES = ("stage_d0.sbatch",)
-SHELL_FILES = ("prerequisites.sh", "submit_pipeline.sh", "status_pipeline.sh", "deploy_remote.sh")
+# Follow-up stages of a finished cell (2026-10-23): CPU work outside stage 0.
+EXTRA_CPU_STAGES = ("stage_extra_cpu.sbatch",)
+SHELL_FILES = ("prerequisites.sh", "submit_pipeline.sh", "status_pipeline.sh", "deploy_remote.sh",
+               "submit_extras_20261023.sh")
 PYTHON_FILES = ("build_suite.py", "summarize.py")
 
 
@@ -43,9 +46,65 @@ def test_gpu_stages_follow_the_cluster_routing_rules(name: str) -> None:
     # Collection and evaluation run the parallel OpenDSS search beside the
     # policy GPU; training stages need no more than the default.
     expected_cpus = (
-        16 if name in ("stage_collect.sbatch", "stage_eval.sbatch", "stage_zeroshot.sbatch") else 8
+        16 if name in ("stage_collect.sbatch", "stage_eval.sbatch", "stage_zeroshot.sbatch", "stage_eval_suite.sbatch")
+        else 8
     )
     assert f"#SBATCH --cpus-per-task={expected_cpus}" in header
+
+
+@pytest.mark.parametrize("name", EXTRA_CPU_STAGES)
+def test_extra_cpu_stages_request_no_gpu_and_are_deployed(name: str) -> None:
+    text = (CELL / name).read_text(encoding="utf-8")
+    header = [line for line in text.splitlines() if line.startswith("#SBATCH")]
+    assert "#SBATCH --account=torch_pr_627_general" in header
+    assert not any("gpu" in line for line in header)
+    assert any(line.startswith("#SBATCH --partition=") for line in header)
+    assert "\r" not in text
+    deploy = (CELL / "deploy_remote.sh").read_text(encoding="utf-8")
+    for deployed in (name, "stage_control_train.sbatch", "stage_eval_suite.sbatch", "submit_extras_20261023.sh"):
+        assert deployed in deploy, deployed
+
+
+def test_control_mixture_replaces_each_collected_row_by_a_fresh_row_of_its_family() -> None:
+    builder = _load("build_control_mixture.py")
+    def row(example_id: str, family: str, root: str) -> dict:
+        return {"example_id": example_id, "scenario_family": family, "physical_root_fingerprint": root}
+    mixture = [row("d0a", "parameter", "p0"), row("d1a", "parameter", "c1"), row("d1b", "topology", "c2"),
+               row("d0b", "topology", "p1"), row("d1c", "parameter", "c3")]
+    fresh = [row(f"f{i}", family, f"n{i}") for i, family in enumerate(["parameter", "parameter", "parameter", "topology"])]
+    result, report = builder.replace_collected_rows(mixture, {"d1a", "d1b", "d1c"}, fresh, seed=7)
+    assert len(result) == len(mixture)
+    assert [r["scenario_family"] for r in result] == [r["scenario_family"] for r in mixture]
+    assert result[0]["example_id"] == "d0a" and result[3]["example_id"] == "d0b"  # D0 rows keep their places
+    assert {result[1]["example_id"], result[4]["example_id"]} <= {"f0", "f1", "f2"} and result[2]["example_id"] == "f3"
+    assert report["replaced_by_family"] == {"parameter": 2, "topology": 1}
+    again, _ = builder.replace_collected_rows(mixture, {"d1a", "d1b", "d1c"}, fresh, seed=7)
+    assert again == result  # seeded
+    with pytest.raises(ValueError, match="short per family"):
+        builder.replace_collected_rows(mixture, {"d1a", "d1b", "d1c"}, fresh[:1] + fresh[3:], seed=7)
+    with pytest.raises(ValueError, match="kept D0 rows"):  # a fresh root that is a kept D0 root
+        builder.replace_collected_rows(mixture, {"d1a", "d1b", "d1c"},
+                                       [row("g0", "parameter", "p0"), row("g1", "parameter", "p1"), row("g2", "topology", "n9")], seed=7)
+
+
+def test_eval_suites_keep_conventional_roots_outside_every_excluded_set() -> None:
+    suites = _load("build_eval_suites.py")
+    def row(root: str, family: str) -> dict:
+        return {"grouping": {"physical_root_fingerprint": root, "scenario_family": family}}
+    rows = [row("a", "parameter"), row("b", "harmonic"), row("c", "topology"), row("d", "measurement")]
+    kept, report = suites.select(rows, {"d0": {"c"}, "suite:development": {"c", "d"}},
+                                 lambda r: r["grouping"]["physical_root_fingerprint"])
+    assert [r["grouping"]["physical_root_fingerprint"] for r in kept] == ["a"]
+    assert report["dropped"] == {"c": ["d0", "suite:development"], "d": ["suite:development"]}
+    assert report["other_families"] == {"harmonic": 1}
+
+
+def test_suite_evaluation_takes_one_or_two_labelled_adapters() -> None:
+    evaluate = _load("evaluate_suite.py")
+    assert evaluate.parse_policies(["bc0=/x/a", "r1=/x/b"]) == [("bc0", Path("/x/a")), ("r1", Path("/x/b"))]
+    for bad in (["a"], ["a=/x", "a=/y"], ["expert=/x"], ["a=/x", "b=/y", "c=/z"], []):
+        with pytest.raises(ValueError):
+            evaluate.parse_policies(bad)
 
 
 @pytest.mark.parametrize("name", CPU_STAGES)

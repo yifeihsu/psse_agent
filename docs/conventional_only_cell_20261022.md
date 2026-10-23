@@ -418,3 +418,65 @@ demonstrations: every policy, BC0 included, solves all three misranked
 parameter roots with one comparison, where in the source cell no policy
 solved its one misranked root. One multi-meter root (two meters repaired, the
 rest abandoned) is missed by every student and solved by the teacher.
+
+## 6. Follow-ups (2026-10-23): matched cloning control, stress test, round selection
+
+Why. On the test set success is bounded by the ceiling (the teacher solves
+192 of 192, BC0 189): BC0 against R1 is 2 discordant roots to 0, exact paired
+p = 0.5. The round-1 change in process violations is not: episodes with an
+invalid action go from 19 to 0 (19 discordant roots to 0, p = 3.8e-6), and
+all 19 of BC0's fall on the 80 multi-error roots (meter + R/X, meter + breaker,
+multiple meters; 11 to 21 teacher actions), none on the 112 single-error and
+clean roots (2 to 8 actions; p = 1.5e-8 that all 19 land there by chance).
+Three follow-ups test whether that change is the aggregation's doing and how
+the iterates behave outside the training distribution. The design and the
+selection rule below were written before any of these runs.
+
+1. **Matched cloning control** (`control`). BC0 continued exactly as R1 was
+   trained (BC0 as the initial adapter, 219 steps at 3e-5, micro-batch 1 x 4,
+   seed 20260912, the same 128 validation rows) on R1's own 874-row mixture
+   with each of its 437 learner-visited rows replaced, in place and within its
+   family, by a row from the balanced training view of a fresh expert
+   aggregate (the D0 settings; seed 20261123; plan 18/36/30/36/36/36/30, 222
+   roots; any root of D0, the rounds, the test set, the validation set or the
+   hard roots excluded). The control and R1 share the D0 rows, the row count,
+   the family mix and every training setting; only the source of the new
+   states differs: the expert's own distribution, the one BC0 was cloned
+   from, against the student's. It is evaluated on the 192 test roots with
+   R1's evaluation rows and seed, paired with BC0, R1 and the teacher.
+   Reading fixed in advance: if the control keeps most of BC0's process
+   violations (episodes with an invalid action, a false commit or a loop)
+   while R1 has none, the round-1 change belongs to the on-policy states; if
+   the control removes them too, it was more training on expert-distribution
+   data. The seed: a local trial with 20261023 (the suite seed + 1, the test
+   set's generator stream) reproduced 3 of 32 test roots, so the control uses
+   an unused seed; with it 1 of 32 trial roots still equals a test root (a
+   single-meter root drawn from the same tabular corpus row), which the
+   exclusion drops.
+2. **Stress test** (`hard`). BC0, R1, R2, the control and the teacher on the
+   conventional roots of the 2026-10-15 hard draw's development set (193
+   roots: 24 single-meter; 72 multi-meter, 48 of them flow-meter pairs that
+   mimic a fault on one line; 41 R/X, of them 8 dominant, 24 ambiguous and 9
+   misranked; 32 meter + R/X, 8, 16 and 8; 8 breaker, 8 meter + breaker, 8
+   clean), less any root of this cell's D0, rounds or test set. Outside the
+   training distribution: physical admission instead of the teacher-solvable
+   one, meter errors drawn by WLS effect ratio (1.5 to 3) instead of the
+   10-sigma floor, parameter rankings drawn by stratum.
+3. **Round selection** (`validation`). BC0, R1 and R2 (with the control and
+   the teacher) on the 96 conventional roots of the 2026-10-07 classifier
+   cell's development suite (Table I's roots; disjoint from this test set),
+   less any root of this cell's D0 or rounds. Rule, fixed before the run:
+   the iterate with the most successes; ties go to fewer episodes with any
+   process violation, then to fewer mean actions. The selected iterate's
+   test-set row is the one to report as the DAgger result.
+
+Code (`research/hpc/full_pipeline_20260907/`): `build_eval_suites.py`,
+`build_control_mixture.py`, `evaluate_suite.py` (the runner's evaluation core
+on any saved suite and adapters, no collection), `stage_extra_cpu.sbatch`,
+`stage_control_train.sbatch`, `stage_eval_suite.sbatch`,
+`submit_extras_20261023.sh`. Local smoke tests: the suite builder on the real
+sources (96 validation and 193 hard roots), the evaluation entry point with
+stand-in students and the teacher on seven validation roots, and the mixture
+builder on the local collection preflight with a 32-root fresh aggregate
+(families kept position by position, every replaced row expert-visited, the
+13 conventional schemas only).
