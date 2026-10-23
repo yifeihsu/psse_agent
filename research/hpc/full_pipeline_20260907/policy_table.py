@@ -27,7 +27,7 @@ CONVENTIONAL = (
 )
 LABELS = {
     "measurement": "Single bad meter",
-    "multi_measurement": "Three to five bad meters",
+    "multi_measurement": "Multiple bad meters",
     "parameter": "Line R/X error",
     "topology": "Breaker status error",
     "measurement+parameter": "Meter + R/X error",

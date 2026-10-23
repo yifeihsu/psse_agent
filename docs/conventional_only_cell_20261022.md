@@ -331,4 +331,90 @@ R1 fails only that multi-meter root, the same way, and has no invalid action,
 false commit or loop on any root. Round 2 started at 18:56 UTC (r2c 20594225
 on gr103).
 
-Per-policy table: PENDING (when the round-2 summary exists).
+**Round 2 and the cell's end (2026-10-23, `out/r2/round_summary.json` and
+`out/pipeline_summary.json`, written 02:25 UTC).** R1 collected on the 74
+round-2 roots (18:56 to 19:34 UTC): 74 of 74 episodes, 743 labelled states,
+432 safe rows (label yield 0.867), no invalid student action, a different tool
+from the teacher's on 1.6% of the student's steps, no unverifiable expert
+label; the mixture is 864 rows (432 collected, 432 from the 3,184-row pool of
+D0 and round 1). R2 trained 216 steps (20:03 to 21:45). The round-2
+evaluation (R1 against R2 on the 192 test roots, 2 workers per policy) was
+preempted twice and finished on an H200 at 02:25. R1 scores exactly its
+round-1 numbers in the round-2 evaluation, family by family
+(`adapter_consistency_across_rounds: consistent`). Preemptions over the whole
+chain: BC0 once (restarted from the start), R1's training three times (resumed
+from checkpoint 96), R2's evaluation twice; nothing failed.
+
+**Per-policy table (the confirmation result).** The 192 freshly drawn test
+roots, every policy on the same roots and measurement realizations, 40-action
+budget, `scada_only` (no auxiliary tool, no triage report), every policy
+trained on the seven conventional families only. Expert, BC0 and R1 from
+`out/r1/round_summary.json`, R2 from `out/r2/round_summary.json`;
+`research/hpc/full_pipeline_20260907/policy_table.py` (copies of both
+summaries, the pipeline summary and the table in
+`output/conventional_only_20261022/results/` of the worktree; sha256 of the
+round summaries `0b1efc05...` and `3ff0d120...`).
+
+| Cohort | N | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- | --- |
+| Single bad meter | 32 | 32 | 32 | 32 | 32 |
+| Two to five bad meters | 24 | 24 | 23 | 23 | 23 |
+| Line R/X error | 32 | 32 | 32 | 32 | 32 |
+| Breaker status error | 32 | 32 | 32 | 32 | 31 |
+| Meter + R/X error | 32 | 32 | 31 | 32 | 32 |
+| Meter + breaker status | 24 | 24 | 23 | 24 | 24 |
+| Clean controls | 16 | 16 | 16 | 16 | 16 |
+| **All test roots** | 192 | **192** | **189** | **191** | **190** |
+| Episodes with an invalid action (invalid actions) | | 0 (0) | 19 (39) | 0 (0) | 9 (15) |
+| Episodes with a false commit (false commits) | | 0 (0) | 3 (14) | 0 (0) | 0 (0) |
+| Loop episodes | | 0 | 2 | 0 | 2 |
+| Mean actions per episode | | 9.87 | 10.38 | 9.85 | 9.93 |
+| Mean WLS calls per episode | | 2.50 | 2.60 | 2.50 | 2.51 |
+| Bounded comparisons | | 25 | 22 | 20 | 21 |
+| Misranked parameter roots (3) | | 3 | 3 | 3 | 3 |
+| Ambiguous parameter roots (17) | | 17 | 17 | 17 | 17 |
+
+WLS calls are the evaluator's per-episode `run_wls` plus `verify_candidate`
+calls; the comparison's internal refits are not in them (the comparisons row
+counts the calls). Per family, episodes with an invalid action / with a false
+commit / with a loop, and mean actions and WLS calls:
+
+| Cohort | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| Single bad meter | 0/0/0, 7.0, 2.00 | 0/0/0, 7.0, 2.00 | 0/0/0, 7.0, 2.00 | 0/0/0, 7.0, 2.00 |
+| Two to five bad meters | 0/0/0, 20.6, 4.33 | 3/0/0, 20.5, 4.33 | 0/0/0, 20.7, 4.33 | 4/0/0, 20.9, 4.33 |
+| Line R/X error | 0/0/0, 7.6, 2.00 | 0/0/0, 7.4, 2.00 | 0/0/0, 7.4, 2.00 | 0/0/0, 7.4, 2.00 |
+| Breaker status error | 0/0/0, 8.0, 2.00 | 0/0/0, 8.2, 2.00 | 0/0/0, 8.0, 2.00 | 1/0/1, 7.9, 1.97 |
+| Meter + R/X error | 0/0/0, 11.2, 3.00 | 7/2/0, 13.0, 3.38 | 0/0/0, 11.2, 3.00 | 1/0/0, 11.3, 3.03 |
+| Meter + breaker status | 0/0/0, 12.0, 3.00 | 9/1/2, 13.7, 3.29 | 0/0/0, 12.0, 3.00 | 3/0/1, 12.3, 3.04 |
+| Clean controls | 0/0/0, 2.0, 1.00 | 0/0/0, 2.0, 1.00 | 0/0/0, 2.0, 1.00 | 0/0/0, 2.0, 1.00 |
+
+R2 in detail. Its two failures: the multi-meter root every student misses
+(r0_f5eefea5a905, handoff after two meter repairs in 11 actions) and an
+isolated-terminal breaker root (r0_b7a5d222a6fe) where, with its breaker
+candidate open, it requests a measurement context and then `correct_topology`
+again; both are refused and the episode stops after 6 actions, non-terminal,
+with a loop detected. Its **9 episodes with an invalid action** (15
+invalid actions in all): four multi-meter roots (r0_07c625097ff5,
+r0_2021f9f90fa4, r0_6a050ffec868, r0_85fa9fdc6ab2, two each, all solved), three
+meter + breaker roots (r0_292a72a8c05c and r0_dd6143eb45bf one each, a second
+`correct_topology` before verifying the first; r0_c98700d89772 two, the second
+loop episode; all three solved), one meter + R/X root (r0_9d4100f19719, one,
+solved) and the failed breaker root (two). No false commit.
+
+Against Table I (2026-10-07 classifier cell, 96 conventional development
+roots: expert 95, BC0 94, R1 95, R2 95; invalid-action episodes 0/2/3/1;
+false-commit episodes 0/1/1/1; loops 0/1/0/0; mean actions
+9.57/9.55/9.61/9.53): with the triage report and the auxiliary tools removed,
+training on the conventional families only, a comparison-demonstrating
+teacher, and a test set drawn fresh for this cell, the students again sit
+within one or two roots of the teacher: R1 191 and R2 190 of 192 (99.5% and
+99.0%) against the teacher's 192, BC0 189 (98.4%). Round 1 removes BC0's
+invalid actions, false commits and loops entirely (19, 3 and 2 episodes to
+none) at the teacher's episode length and solver cost; round 2 does not
+improve on round 1 (one more lost root, 9 invalid-action and 2 loop episodes
+where R1 had none, no false commit). The comparison step is learned from the
+demonstrations: every policy, BC0 included, solves all three misranked
+parameter roots with one comparison, where in the source cell no policy
+solved its one misranked root. One multi-meter root (two meters repaired, the
+rest abandoned) is missed by every student and solved by the teacher.
