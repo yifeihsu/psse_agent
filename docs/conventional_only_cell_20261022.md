@@ -512,3 +512,102 @@ evaluations were untouched) and resubmitted at 21:48: fp-ctrain 20762467,
 then test_control 20762468, hard_r2_control 20762469 and
 validation_r2_control 20762470. hard_bc0_r1 20748400 (gr103) and
 validation_bc0_r1 20748401 (gr104) started at 21:35 and 21:38.
+
+**Results (2026-10-24, all seven jobs completed by 01:56 UTC).** The control
+trained 219 steps on gr102 (RTX PRO 6000, 1 h 47 min); the five evaluations
+ran 59 min to 2 h 05 min (hard_bc0_r1 was preempted twice and resumed from its
+episode checkpoints). Tables from `followup_tables.py` (`out/extra/followup_tables.{json,md}`
+on torch; copies in `output/conventional_only_20261022/results/` of the
+worktree). Process-violation episodes are episodes with an invalid action, a
+false commit or a loop; p values are exact two-sided McNemar tests on the
+paired roots against R1.
+
+Test set (the 192 roots; expert, BC0, R1 and R2 as in section 5):
+
+| | Expert | BC0 | R1 | R2 | Control |
+| --- | --- | --- | --- | --- | --- |
+| Single bad meter (32) | 32 | 32 | 32 | 32 | 32 |
+| Two to five bad meters (24) | 24 | 23 | 23 | 23 | 23 |
+| Line R/X error (32) | 32 | 32 | 32 | 32 | 29 |
+| Breaker status error (32) | 32 | 32 | 32 | 31 | 32 |
+| Meter + R/X error (32) | 32 | 31 | 32 | 32 | 27 |
+| Meter + breaker status (24) | 24 | 23 | 24 | 24 | 24 |
+| Clean controls (16) | 16 | 16 | 16 | 16 | 16 |
+| **All (192)** | **192** | **189** | **191** | **190** | **183** |
+| Misranked parameter roots (3) | 3 | 3 | 3 | 3 | 0 |
+| Process-violation episodes | 0 | 19 | 0 | 9 | 8 |
+| (invalid action / false commit / loop) | 0/0/0 | 19/3/2 | 0/0/0 | 9/0/2 | 8/7/2 |
+| Mean actions; mean WLS calls | 9.87; 2.50 | 10.38; 2.60 | 9.85; 2.50 | 9.93; 2.51 | 10.96; 2.82 |
+| Bounded comparisons | 25 | 22 | 20 | 21 | 1 |
+| Failures only this / only R1 (p) | 0/1 (1) | 2/0 (0.5) | | 1/0 (1) | 8/0 (0.008) |
+| Violations only this / only R1 (p) | 0/0 | 19/0 (4e-6) | | 9/0 (0.004) | 8/0 (0.008) |
+
+Hard-draw stress roots (193, outside the training distribution):
+
+| | Expert | BC0 | R1 | R2 | Control |
+| --- | --- | --- | --- | --- | --- |
+| **All (193)** | **185** | **182** | **183** | **182** | **170** |
+| R/X error (41) / meter + R/X (32) | 41 / 32 | 40 / 30 | 40 / 31 | 39 / 31 | 33 / 25 |
+| Misranked (17) / ambiguous (40) / dominant (16) | 17/40/16 | 15/40/15 | 15/40/16 | 14/40/16 | 2/40/16 |
+| Multi-meter (72; 48 meter-pair mimics) | 64 | 64 | 64 | 64 | 64 |
+| Process-violation episodes | 0 | 22 | 1 | 5 | 9 |
+| (invalid action / false commit / loop) | 0/0/0 | 22/2/1 | 1/1/1 | 5/2/0 | 8/6/2 |
+| Mean actions; mean WLS calls | 11.30; 2.70 | 11.39; 2.74 | 11.31; 2.73 | 11.42; 2.76 | 11.80; 2.92 |
+| Bounded comparisons | 60 | 57 | 55 | 54 | 3 |
+| Failures only this / only R1 (p) | 0/2 (0.5) | 1/0 (1) | | 1/0 (1) | 13/0 (2e-4) |
+| Violations only this / only R1 (p) | 0/1 (1) | 21/0 (1e-6) | | 4/0 (0.13) | 8/0 (0.008) |
+
+Every other family is solved by every policy (single meter 24, breaker 8,
+meter + breaker 8, clean 8); the 8 multi-meter roots no policy solves are
+meter-pair mimics (20 of 24 of each sign for every policy, the teacher
+included).
+
+Validation roots (96) and the round selection:
+
+| | Expert | BC0 | R1 | R2 | Control |
+| --- | --- | --- | --- | --- | --- |
+| **All (96)** | **96** | **96** | **96** | **96** | **92** |
+| Process-violation episodes | 0 | 6 | 1 | 4 | 8 |
+| (invalid action / false commit / loop) | 0/0/0 | 6/0/0 | 1/0/0 | 4/0/1 | 7/5/1 |
+| Mean actions; mean WLS calls | 10.01; 2.56 | 10.07; 2.56 | 10.05; 2.56 | 10.07; 2.57 | 11.59; 2.99 |
+| Violations only this / only R1 (p) | 0/1 (1) | 5/0 (0.06) | | 4/1 (0.38) | 8/1 (0.04) |
+
+The control's four misses are three meter + R/X roots and the misranked R/X
+root. **Round selection (rule of section 6): BC0, R1 and R2 tie at 96
+successes; R1 has the fewest process-violation episodes (1, against R2's 4 and
+BC0's 6). Selected: R1**, whose test row is 191 of 192 with no
+process-violation episode, at the teacher's episode length (9.85 actions
+against 9.87) and solver cost (2.50 WLS calls against 2.50).
+
+Why the control went the other way. The two mixtures share the 437 D0 rows,
+the families and every training setting; the other 437 rows teach different
+things. R1's collected rows, at states the student reached, are mostly which
+context to request (190: measurement 104, parameter 55, breaker 31), commits
+(88), solves (88) and handoffs (47), with 19 corrections (6 meter, 13
+breaker, no parameter correction: the observable rank-one proof keeps few
+correction labels at student states) and 1 comparison. The fresh expert rows
+hold 110 corrections (69 meter, 23 parameter, 18 breaker) against 4
+comparisons. Continued cloning on them moved the policy toward correcting the
+top-ranked line directly: the control compares on 1 test root against R1's
+20, fails all three misranked test roots and 15 of 17 on the hard draw, and
+commits wrong candidates (7 false-commit episodes on the test set). Its loss
+on the 128 held-out D0 rows rose over the pass (0.0086 at step 16 to 0.0100
+at step 219, lowest 0.0076 at step 32), while R1's fell (0.0090 to 0.0011,
+lowest 0.00065 at step 144).
+
+Reading. (1) The round-1 change is not explained by more training: with the
+same rows, steps and optimizer on expert-distribution data, the control
+removes none of BC0's process violations it would need to (8 violation
+episodes on the test set, 9 on the hard draw) and loses success (183 against
+BC0's 189), whereas the on-policy round removes them (19 to 0 on the test
+set, 22 to 1 on the hard draw, 6 to 1 on validation; paired p 4e-6 and 1e-6 on
+the first two). (2) The reliability gain holds out of distribution: on the
+hard draw all iterates stay within 2 to 3 roots of the teacher (182 to 183
+against 185; the teacher solves all 17 misranked roots, R1 15), and BC0's
+violation episodes persist (22) where R1 has 1. (3) Round 2 adds nothing on
+any set (test 9 violation episodes against R1's 0, p = 0.004; hard 5 against
+1; validation 4 against 1), and the validation set selects R1. One control,
+one seed: the control's degradation may partly reflect its row mix (more
+direct corrections than the collected rows hold), which is what
+expert-distribution data looks like in this pipeline; repeated seeds would
+bound it.
