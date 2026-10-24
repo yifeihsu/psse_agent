@@ -596,12 +596,12 @@ at step 219, lowest 0.0076 at step 32), while R1's fell (0.0090 to 0.0011,
 lowest 0.00065 at step 144).
 
 Reading. (1) The round-1 change is not explained by more training: with the
-same rows, steps and optimizer on expert-distribution data, the control
-removes none of BC0's process violations it would need to (8 violation
-episodes on the test set, 9 on the hard draw) and loses success (183 against
-BC0's 189), whereas the on-policy round removes them (19 to 0 on the test
-set, 22 to 1 on the hard draw, 6 to 1 on validation; paired p 4e-6 and 1e-6 on
-the first two). (2) The reliability gain holds out of distribution: on the
+same rows, steps and optimizer on expert-distribution data, the control still
+has 8 process-violation episodes on the test set (BC0 19, R1 0) and 9 on the
+hard draw (BC0 22, R1 1), and it loses success (183 against BC0's 189 and
+R1's 191), whereas the on-policy round removes them (19 to 0 on the test set,
+22 to 1 on the hard draw, 6 to 1 on validation; paired p 4e-6 and 1e-6 on the
+first two). (2) The reliability gain holds out of distribution: on the
 hard draw all iterates stay within 2 to 3 roots of the teacher (182 to 183
 against 185; the teacher solves all 17 misranked roots, R1 15), and BC0's
 violation episodes persist (22) where R1 has 1. (3) Round 2 adds nothing on
