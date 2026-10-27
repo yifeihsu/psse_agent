@@ -778,8 +778,21 @@ on a GPU of 70 GB or more. Specs `out/extra/specs/test_budget{12,16,20}.env`
 the adapter trees, `{expert,bc0,r1}_eval.json`, `episodes.jsonl`,
 `summary.json`); tables from
 `research/hpc/full_pipeline_20260907/budget_tables.py --cell-dir $PIPE`.
+The three jobs completed by 07:58 UTC (12 actions: 1 h 34 min on gr102; 16 and
+20 actions: preempted once at about 06:15 UTC, resumed from the per-episode
+checkpoints on gr104 and gh120, 1 h 25 min and 1 h 21 min of run time).
+
+**R2 at the budgets** (asked by the paper session on 2026-10-27, since Table I
+carries an R2 column): deployed 13:12 UTC from 4d34050 (the submit script's
+`ADAPTER_BUDGETS=1`, the R2-aware `budget_tables.py`), submitted 13:15 UTC:
+fp-xeval test_budget12_r2 21101407, test_budget16_r2 21101408 and
+test_budget20_r2 21101409, each R2 alone (`out/r2/training/lora`, the
+evaluator's first adapter slot, no expert arm) on the same rows, seed and
+horizon as the matching three-arm job; records
+`out/extra/evaluations/test_budget<b>_r2/`. R2's 40-action point is the
+candidate slot of the round-2 evaluation.
 Status:
 
 ```bash
-MSYS_NO_PATHCONV=1 wsl -- ssh torch "export PATH=/opt/slurm/bin:\$PATH; sacct -j 21070126,21070127,21070128 -o JobID%12,JobName%10,State%12,Elapsed%12,NodeList%10; ls /scratch/yx3882/research_full_pipeline_20261022_conventional/out/extra/evaluations/"
+MSYS_NO_PATHCONV=1 wsl -- ssh torch "export PATH=/opt/slurm/bin:\$PATH; sacct -j 21070126,21070127,21070128,21101407,21101408,21101409 -o JobID%12,JobName%10,State%12,Elapsed%12,NodeList%10; ls /scratch/yx3882/research_full_pipeline_20261022_conventional/out/extra/evaluations/"
 ```
