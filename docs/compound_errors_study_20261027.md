@@ -19,8 +19,11 @@ takes the ceiling to 609 (48%) and the single-breaker control to 50 of 50,
 at the cost of the mirror-image masking on 38 parameter roots.  A bus-split
 correction re-renders the operator model and the node/breaker binding then
 fails on every later topology action, so two splits are unsolvable (0 of
-45).  The impedance of a line whose terminal is open is not identifiable
-and the audit still asks for it (0 of 75).  The adjacent-line pair is an
+45).  The impedance of a line whose terminal is open is not identifiable;
+the audit asked for it until the decision of 2026-10-28 scored it as not
+applicable in the compound work, which re-scores that class to 47 of 75
+(75 of 75 under topology-first) and the ceilings to 546 (43%) and 692
+(54%), section 3.2.  The adjacent-line pair is an
 estimator problem (one more alternating pass brings 112 of 131 estimates
 within tolerance), the same-line meter pair a verifier problem (the correct
 impedance is rejected on 61 of 64 roots because the line's own bad meter
@@ -349,6 +352,60 @@ clean-flip or flow-at-noise condition is the recommended rule (section 6);
 the flag as it stands is the measured upper bound of what the order alone
 buys, 114 net roots.
 
+### 3.2 The isolated-line rule (decision (b), 2026-10-28)
+
+The rule, implemented in `psse_env/dagger/release_audit.py` and switched on
+by a mark only compound roots carry: a parameter fault whose truth row says
+`not_applicable: line_isolated_by_breaker`, and whose branch row is also the
+row of a `dangling_line_terminal` topology fault of the same truth, is
+excluded from the remaining-fault count (derived and supplied ledger), from
+the final-case comparison and from the accepted-target non-regression check
+(a committed estimate on that line is recorded as `not_applicable`, neither
+regression nor repair).  It stays a declared target for the accepted-target
+and healthy-case checks (an edit on it is not a false target), the breaker
+fault stays required, and every other check is untouched, so a root with a
+wrong target beside the breaker fix still fails.  The mark counts only
+beside the isolating breaker's own truth row: a mark without that breaker,
+or an unmarked fault, is required exactly as before, and the seven
+conventional families, whose truths never carry the mark, score as they
+always did (`IsolatedLineNotApplicableTests` in
+`psse_env/dagger/test_release_audit.py`; the generator writes the mark,
+`psse_env/providers/test_compound_scenarios.py`; the suite's 84 marked rows
+were patched in place).  The rule touches 84 roots: the 75 same-line roots
+and 9 three-atom roots whose breaker atom happened to isolate the faulted
+line.  Those roots were re-run under the rule for both teachers
+(`isolated_line_rescore/`, `expert_baseline_compare_rule_b/`,
+`expert_baseline_compare_topology_first_rule_b/`); every trajectory is
+identical to the original run, so this is a re-scoring of the same
+rollouts.
+
+| class | baseline_compare: before, after | topology first: before, after |
+| --- | --- | --- |
+| R/X + breaker, same line (75) | 0, 47 | 0, 75 |
+| R/X + breaker + meter, the 9 roots with an isolated line | 0, 4 | 0, 8 |
+| all 1,275 | 495 (39%), 546 (43%) | 609 (48%), 692 (54%) |
+
+What stays failed under the baseline teacher (28 same-line roots): on 26
+the breaker is never fixed because a parameter correction, usually on a
+neighbouring line, made the solve clean first and the episode handed off
+(`resolved_episode_has_remaining_true_faults` 26, with
+`accepted_parameter_target_outside_same_family_truth` on 12 and wrong meter
+targets on 6); on 2 the breaker is fixed but a wrong target was accepted
+beside it.  Under topology-first every same-line root passes (the breaker
+is fixed first in 7 actions and the line is left alone) and the one
+remaining three-atom failure is a meter outside tolerance.
+
+Two readings the rule leaves open.  A line isolated at one terminal is the
+only case the suite contains (the sampler never opens both terminals of one
+line); it is de-energised from that end, carries no current, and the rule
+applies.  An isolated line the expert nevertheless corrected: the rule
+records the committed estimate as not applicable rather than as a
+regression (the lenient reading); a stricter reading that counts such a
+commit against the root changes nothing here, because on every root where
+the expert committed an estimate of the isolated line the solve was clean
+afterwards and the episode handed off with the breaker unfixed, which fails
+either way (47 and 75 of 75 under both readings).
+
 ## 4. The decision audit
 
 `audit.py` over `research/rl/decision_audit.py` (`audit/`, 46 min on 14
@@ -512,7 +569,8 @@ verifier accepts as final (the open terminal explained as a near-infinite
 line).  This is an evidence limit by construction: the impedance of an
 isolated line is not identifiable from any snapshot, and the right behaviour
 is the breaker fix plus an explicit abstention on that line's parameters,
-which the audit should score as not applicable.
+which the audit now scores as not applicable in the compound work (section
+3.2: 47 of 75 under the baseline teacher, 75 of 75 under topology-first).
 
 ### 5.3 Two wrong lines: adjacent (150) against distant (150)
 
@@ -575,8 +633,11 @@ The decision audit (section 4) bins the 847 audited roots as 36 rule-best, 132 l
 truth audit):
 
 - the impedance of a line whose terminal is open (`R/X + breaker, same
-  line`, 75 roots, and the same pair whenever it arises inside a larger
-  set): unidentifiable from any snapshot, section 5.2;
+  line`, 75 roots, and the same pair on 9 three-atom roots): unidentifiable
+  from any snapshot, section 5.2; since the decision of 2026-10-28 the
+  compound audit scores it as not applicable (section 3.2), so the class
+  is now limited by the breaker fix alone (47 of 75 reached under the
+  baseline teacher, 75 of 75 under topology-first);
 - a structural atom whose own effect is below the alarm (the second line of
   121 of the 150 distant pairs, 60 of the adjacent pairs, 92 of the meter +
   two R/X roots and so on, section 2): after the first fix the solve is
@@ -682,7 +743,9 @@ root; the deployed rule, verifier or executor does not):
    parameters as not applicable.  The same abstention applies to a
    structural atom whose own effect is below the alarm once the solve is
    clean, where today the episode is scored a failure for a fault no
-   snapshot statistic can see.
+   snapshot statistic can see.  The audit half of this item is done for the
+   compound work (section 3.2); the handoff half, an explicit abstention
+   statement by the agent, is stage 2.
 
 6. **Does the structural-first ordering hold for parameter + breaker
    roots?**  No, in its current form.  Both are structural, so the order
@@ -719,8 +782,13 @@ conditioned version is validated on the conventional suite."  So
 `baseline_compare_topology_first` stays a flagged variant of the compound
 work until a run under the flow-at-noise or clean-flip condition shows the
 conventional suite's expert still at 192 of 192 and the manuscript's numbers
-unchanged.  Two questions are still open with the user and nothing is to be
-acted on yet: whether the truth audit should score an isolated line's
-impedance as not applicable (item 5), and whether future suites keep the
-uniform-metadata convention, scans on every root, that exposed the ordering
-problem (section 3.1).  Stage 2 has not been requested.
+unchanged.  On the audit (item 5), the user's decision, in their words: "Yes: change
+the truth audit so an isolated line's impedance is scored not applicable,
+in the compound work only."  Implemented and re-scored in section 3.2 (the
+rule, the mark that scopes it to compound roots, the tests that show the
+conventional families unchanged, 84 roots re-scored on identical
+trajectories: 51 change from failed to solved under the baseline teacher
+and 83 under topology-first).  Still open with the user and not to be acted
+on: whether future suites keep the uniform-metadata convention, scans on
+every root, that exposed the ordering problem (section 3.1).  Stage 2
+beyond this change has not been requested.

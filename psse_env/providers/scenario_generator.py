@@ -4639,6 +4639,16 @@ class Round0ScenarioGenerator:
             }
         )
         scenario["true_measurement_errors"] = measurement_errors
+        # A line isolated by one of the root's own breaker atoms carries no
+        # current, so its impedance is not identifiable from any snapshot; the
+        # release audit scores such a fault as not applicable (the user's
+        # decision of 2026-10-28, scoped to the compound work by this mark,
+        # which the audit honours only beside the isolating breaker's truth).
+        isolating_breaker = {
+            int(atom["branch_row0"]): str(atom["cb_name"])
+            for atom in breaker_atoms
+            if atom["physical_effect"] == "dangling_line_terminal"
+        }
         scenario["true_parameter_errors"] = [
             {
                 "branch_row0": atom["branch_row0"],
@@ -4650,6 +4660,14 @@ class Round0ScenarioGenerator:
                 "x_factor": atom["x_factor"],
                 "from_bus": atom["from_bus"],
                 "to_bus": atom["to_bus"],
+                **(
+                    {
+                        "not_applicable": "line_isolated_by_breaker",
+                        "isolated_by_cb_name": isolating_breaker[int(atom["branch_row0"])],
+                    }
+                    if int(atom["branch_row0"]) in isolating_breaker
+                    else {}
+                ),
             }
             for atom in parameter_atoms
         ]
@@ -4712,6 +4730,7 @@ class Round0ScenarioGenerator:
             "atoms": [*parameter_atoms, *breaker_atoms, *meter_atoms],
             "relations": relations,
             "meters_on_faulted_elements": sum(1 for atom in meter_atoms if atom["on_faulted_element"]),
+            "not_applicable_lines": sorted(int(row0) + 1 for row0 in isolating_breaker if any(int(a["branch_row0"]) == int(row0) for a in parameter_atoms)),
             "detection": {"reported_model": reported_detail, "true_model": true_detail},
             "solo_effects": solo_effects,
             "parameter_ranking": parameter_ranking,

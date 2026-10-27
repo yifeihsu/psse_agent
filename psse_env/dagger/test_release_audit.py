@@ -11,6 +11,8 @@ from psse_env.actions import (
 from psse_env.dagger.release_audit import (
     ACCEPTED_TARGET_NONREGRESSION_CHECK,
     ACCEPTED_TARGETS_CHECK,
+    ISOLATED_LINE_CHECK,
+    ISOLATED_LINE_NOT_APPLICABLE,
     DIAGNOSTIC_LOCALIZATION_CHECK,
     EXPLANATION_ONLY_DIAGNOSTIC_CONTRACT,
     FINAL_CASE_CHECK,
@@ -1661,6 +1663,122 @@ class AuditBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(scenario, before_scenario)
         self.assertEqual(final_state, before_final)
+
+
+class IsolatedLineNotApplicableTests(unittest.TestCase):
+    """A line isolated by the scenario's own breaker error: its impedance is not applicable (2026-10-28, compound work only)."""
+
+    def _scenario(self, *, mark: bool = True, dangling: bool = True) -> dict[str, object]:
+        scenario = _base_scenario()
+        scenario["scenario_family"] = "compound"
+        scenario["measurements"] = [1.0, 2.0, 3.0]
+        scenario["clean_measurements"] = [1.0, 2.0, 3.0]
+        scenario["true_measurement_errors"] = []
+        clean = _case()
+        clean["branch"][1][2] = 0.01  # type: ignore[index]
+        clean["branch"][1][3] = 0.02  # type: ignore[index]
+        clean["branch"][1][10] = 0.0  # type: ignore[index]
+        scenario["clean_case"] = clean
+        fault: dict[str, object] = {"branch_row0": 1, "line_index1": 2, "parameter": "rx", "clean_r": 0.01, "clean_x": 0.02}
+        if mark:
+            fault["not_applicable"] = ISOLATED_LINE_NOT_APPLICABLE
+            fault["isolated_by_cb_name"] = "CB_2_L23_B1"
+        scenario["true_parameter_errors"] = [fault]
+        if dangling:
+            scenario["true_topology_errors"] = [
+                {"branch_row0": 1, "line_index1": 2, "expected_status": 0, "cb_name": "CB_2_L23_B1",
+                 "physical_effect": "dangling_line_terminal", "true_cb_closed": False}
+            ]
+        else:
+            scenario["true_topology_errors"] = []
+            clean["branch"][1][10] = 1.0  # type: ignore[index]
+        return scenario
+
+    @staticmethod
+    def _breaker_fixed_case() -> dict[str, object]:
+        case = _case()
+        case["branch"][1][10] = 0.0  # type: ignore[index]
+        return case
+
+    @staticmethod
+    def _ledger(*rows: dict[str, object]) -> dict[str, object]:
+        remaining = [copy.deepcopy(row) for row in rows]
+        return {"remaining_true_faults": remaining, "remaining_true_fault_count": len(remaining), "truth_complete": True}
+
+    def test_breaker_fixed_and_line_left_alone_passes(self) -> None:
+        scenario = self._scenario()
+        line_fault = scenario["true_parameter_errors"][0]  # type: ignore[index]
+        final_state = _final_state({"tool": "correct_topology", "arguments": {"line_index1": 2, "status": 0}})
+        result = _audit_resolved(scenario, final_state, active=_active(case=self._breaker_fixed_case()),
+                                 remaining=self._ledger(line_fault))
+        self.assertEqual(result["problems"], [])
+        self.assertEqual(result["checks"][ISOLATED_LINE_CHECK]["status"], "not_applicable")
+        self.assertEqual(result["checks"][ISOLATED_LINE_CHECK]["targets"], [["branch_row0", 1]])
+        self.assertEqual(result["checks"][FINAL_CASE_CHECK]["status"], "passed")
+        self.assertEqual(result["checks"][REMAINING_FAULTS_CHECK]["status"], "passed")
+        assessment = audit_truth_audited_task_success(
+            scenario, final_state, actual_terminal=True, actual_terminal_outcome="operator_escalation",
+            active_physical_state=_active(case=self._breaker_fixed_case()), remaining_truth=self._ledger(line_fault),
+        )
+        self.assertTrue(assessment["eligible"])
+        self.assertEqual(assessment["initial_true_fault_count"], 1)
+
+    def test_breaker_left_in_place_still_fails(self) -> None:
+        scenario = self._scenario()
+        rows = [*scenario["true_parameter_errors"], *scenario["true_topology_errors"]]  # type: ignore[misc]
+        result = _audit_resolved(scenario, _final_state(), active=_active(), remaining=self._ledger(*rows))
+        self.assertIn("resolved_episode_has_remaining_true_faults", result["problems"])
+        self.assertIn("final_case_outside_clean_tolerance", result["problems"])
+
+    def test_a_wrong_target_beside_the_breaker_fix_is_not_a_success(self) -> None:
+        scenario = self._scenario()
+        final_case = self._breaker_fixed_case()
+        final_case["branch"][0][2] = 0.5  # type: ignore[index]
+        result = _audit_resolved(
+            scenario,
+            _final_state({"tool": "correct_topology", "arguments": {"line_index1": 2, "status": 0}},
+                         {"tool": "correct_parameters", "arguments": {"line_index1": 1}}),
+            active=_active(case=final_case),
+            remaining=self._ledger(*scenario["true_parameter_errors"]),  # type: ignore[misc]
+        )
+        self.assertIn("accepted_parameter_target_outside_same_family_truth", result["problems"])
+
+    def test_an_estimate_committed_on_the_isolated_line_is_neither_regression_nor_repair(self) -> None:
+        scenario = self._scenario()
+        final_case = self._breaker_fixed_case()
+        final_case["branch"][1][2] = 0.9  # type: ignore[index]
+        final_case["branch"][1][3] = 0.9  # type: ignore[index]
+        result = _audit_resolved(
+            scenario,
+            _final_state({"tool": "correct_parameters", "arguments": {"line_index1": 2}},
+                         {"tool": "correct_topology", "arguments": {"line_index1": 2, "status": 0}}),
+            active=_active(case=final_case),
+            remaining=self._ledger(),
+        )
+        self.assertEqual(result["problems"], [])
+        evidence = result["checks"][ACCEPTED_TARGET_NONREGRESSION_CHECK]["target_evidence"]
+        parameter = [item for item in evidence if item["family"] == "parameter"]
+        self.assertEqual(parameter[0]["status"], "not_applicable")
+
+    def test_the_mark_counts_only_with_the_isolating_breaker(self) -> None:
+        scenario = self._scenario(dangling=False)
+        result = _audit_resolved(scenario, _final_state(), active=_active(),
+                                 remaining=self._ledger(*scenario["true_parameter_errors"]))  # type: ignore[misc]
+        self.assertNotIn(ISOLATED_LINE_CHECK, result["checks"])
+        self.assertIn("final_case_outside_clean_tolerance", result["problems"])
+        self.assertIn("resolved_episode_has_remaining_true_faults", result["problems"])
+
+    def test_an_unmarked_isolated_line_is_required_as_before(self) -> None:
+        scenario = self._scenario(mark=False)
+        result = _audit_resolved(
+            scenario,
+            _final_state({"tool": "correct_topology", "arguments": {"line_index1": 2, "status": 0}}),
+            active=_active(case=self._breaker_fixed_case()),
+            remaining=self._ledger(*scenario["true_parameter_errors"]),  # type: ignore[misc]
+        )
+        self.assertNotIn(ISOLATED_LINE_CHECK, result["checks"])
+        self.assertIn("final_case_outside_clean_tolerance", result["problems"])
+        self.assertIn("resolved_episode_has_remaining_true_faults", result["problems"])
 
 
 if __name__ == "__main__":

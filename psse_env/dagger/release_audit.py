@@ -532,6 +532,69 @@ def _branch_truth_targets(
     return targets
 
 
+ISOLATED_LINE_NOT_APPLICABLE = "line_isolated_by_breaker"
+ISOLATED_LINE_CHECK = "isolated_line_impedance"
+
+
+def _not_applicable_parameter_targets(scenario: Mapping[str, Any]) -> set[tuple[str, Any]]:
+    """Parameter faults the audit scores as not applicable: a line isolated by the scenario's own breaker error.
+
+    Compound-error roots (the user's decision of 2026-10-28, scoped to the
+    compound work) mark such a fault with ``not_applicable`` set to
+    ``line_isolated_by_breaker``.  The mark counts only when a
+    dangling-terminal topology fault of the same truth names the same branch
+    row: an open terminal leaves the line without current, so its impedance
+    has no effect on any measurement and no estimator can recover it.  A
+    fault without the mark, or a mark without that breaker, is required
+    exactly as before, so the seven conventional families (whose truths never
+    carry the mark) score as they always did.
+    """
+
+    parameter_rows = _as_sequence(scenario.get("true_parameter_errors", [])) or []
+    topology_rows = _as_sequence(scenario.get("true_topology_errors", [])) or []
+    isolated: set[tuple[str, Any]] = set()
+    for fault in topology_rows:
+        if (
+            isinstance(fault, Mapping)
+            and str(fault.get("physical_effect") or "") == "dangling_line_terminal"
+        ):
+            target = _branch_target(fault)
+            if target is not None and target[0] == "branch_row0":
+                isolated.add(target)
+    targets: set[tuple[str, Any]] = set()
+    for fault in parameter_rows:
+        if (
+            not isinstance(fault, Mapping)
+            or str(fault.get("not_applicable") or "") != ISOLATED_LINE_NOT_APPLICABLE
+        ):
+            continue
+        target = _branch_target(fault)
+        if target is not None and target in isolated:
+            targets.add(target)
+    return targets
+
+
+def _not_applicable_rows_in_ledger(
+    source: Mapping[str, Any], targets: set[tuple[str, Any]]
+) -> int:
+    """How many of a supplied remaining-fault ledger's rows are not-applicable parameter faults."""
+
+    if not targets:
+        return 0
+    for container in _ledger_containers(source):
+        rows = _as_sequence(container.get("remaining_true_faults"))
+        if rows is None:
+            continue
+        return sum(
+            1
+            for row in rows
+            if isinstance(row, Mapping)
+            and str(row.get("not_applicable") or "") == ISOLATED_LINE_NOT_APPLICABLE
+            and _branch_target(row) in targets
+        )
+    return 0
+
+
 def _measurement_action_targets(arguments: Mapping[str, Any]) -> set[int] | None:
     return _shared_measurement_action_targets(arguments)
 
@@ -1132,6 +1195,7 @@ def _target_case_fields_match(
     *,
     case_loader: Callable[[Any], Any] | None,
     tolerances: ReleaseAuditTolerances,
+    skip_targets: set[tuple[str, Any]] | None = None,
 ) -> bool | None:
     """Compare correction targets while preservation checks guard healthy state.
 
@@ -1183,12 +1247,18 @@ def _target_case_fields_match(
         return _as_sequence(observed_branches[row0])
 
     comparisons: list[tuple[Any, Any, bool]] = []
+    skipped = 0
     for fault in parameter_rows:
         if not isinstance(fault, Mapping):
             return None
         target = _branch_target(fault)
         if target is None or target[0] != "branch_row0":
             return None
+        if skip_targets and target in skip_targets:
+            # The impedance of a line isolated by the scenario's own breaker
+            # error is not applicable: neither required nor compared.
+            skipped += 1
+            continue
         row0 = int(target[1])
         actual_row = observed_branch(row0)
         if actual_row is None:
@@ -1229,7 +1299,7 @@ def _target_case_fields_match(
         comparisons.append((actual_row[10], clean_value, True))
 
     if not comparisons:
-        return None
+        return True if skipped else None
     return all(
         _values_close(
             actual,
@@ -1371,6 +1441,7 @@ def _accepted_target_nonregression(
     accepted_parameters: set[tuple[str, Any]],
     accepted_topology: set[tuple[str, Any]],
     final_metadata: Mapping[str, Any] | None = None,
+    not_applicable_targets: set[tuple[str, Any]] | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
     """Prove that every committed true target is no worse than at reset.
 
@@ -1505,6 +1576,18 @@ def _accepted_target_nonregression(
     for target in sorted(
         accepted_parameters, key=lambda item: (str(item[0]), str(item[1]))
     ):
+        if not_applicable_targets and target in not_applicable_targets:
+            # A committed estimate of an isolated line's impedance is neither
+            # a regression nor a repair: the audit expresses no opinion on it.
+            evidence.append(
+                {
+                    "family": "parameter",
+                    "target": list(target),
+                    "status": "not_applicable",
+                    "reason": ISOLATED_LINE_NOT_APPLICABLE,
+                }
+            )
+            continue
         malformed = target[0] != "branch_row0" or parameter_truth_rows is None
         row0 = int(target[1]) if target[0] == "branch_row0" else -1
         initial_row = _branch_row(initial_branches, row0)
@@ -1896,6 +1979,14 @@ def audit_episode_against_truth(
     record(ACCEPTED_TARGETS_CHECK, target_problems)
     if measurement_reference["problems"]:
         record("measurement_reference_contract", measurement_reference["problems"])
+    not_applicable_parameter_targets = _not_applicable_parameter_targets(scenario)
+    if not_applicable_parameter_targets:
+        checks[ISOLATED_LINE_CHECK] = {
+            "status": "not_applicable",
+            "reason": ISOLATED_LINE_NOT_APPLICABLE,
+            "targets": sorted(list(target) for target in not_applicable_parameter_targets),
+            "problems": [],
+        }
 
     outcome = str(terminal_outcome) if terminal_outcome is not None else None
     resolved = outcome == "resolved"
@@ -1978,7 +2069,10 @@ def audit_episode_against_truth(
 
     derived_remaining_count = (
         len(measurement_targets - accepted_measurement_targets)
-        + len(parameter_targets - accepted_parameter_targets)
+        + len(
+            (parameter_targets - not_applicable_parameter_targets)
+            - accepted_parameter_targets
+        )
         + len(topology_targets - accepted_topology_targets)
         + remaining_diagnostic_faults
     )
@@ -1992,6 +2086,10 @@ def audit_episode_against_truth(
             remaining_problems.append("supplied_remaining_truth_ledger_incomplete")
         else:
             supplied_count, supplied_valid = _complete_ledger_count(remaining_truth)
+            if supplied_valid and supplied_count is not None:
+                supplied_count -= _not_applicable_rows_in_ledger(
+                    remaining_truth, not_applicable_parameter_targets
+                )
             if not supplied_valid or supplied_count is None:
                 remaining_problems.append(
                     "supplied_remaining_truth_ledger_missing_or_malformed"
@@ -2042,6 +2140,7 @@ def audit_episode_against_truth(
             accepted_parameters=accepted_parameter_targets,
             accepted_topology=accepted_topology_targets,
             final_metadata=physical.get("metadata"),
+            not_applicable_targets=not_applicable_parameter_targets,
         )
         record(ACCEPTED_TARGET_NONREGRESSION_CHECK, nonregression_problems)
         checks[ACCEPTED_TARGET_NONREGRESSION_CHECK]["target_evidence"] = (
@@ -2187,6 +2286,7 @@ def audit_episode_against_truth(
             clean_case,
             case_loader=case_loader,
             tolerances=tolerance_profile,
+            skip_targets=not_applicable_parameter_targets,
         )
     )
     final_case_problems = (
@@ -2296,7 +2396,7 @@ def _initial_true_fault_count(
     measurement_targets = _measurement_truth_targets(scenario, problems)
     parameter_targets = _branch_truth_targets(
         scenario, "true_parameter_errors", problems
-    )
+    ) - _not_applicable_parameter_targets(scenario)
     topology_targets = _branch_truth_targets(scenario, "true_topology_errors", problems)
     diagnostic_truth, diagnostic_problems = _diagnostic_truth(scenario)
     problems.extend(diagnostic_problems)
@@ -3010,6 +3110,8 @@ __all__ = [
     "HEALTHY_CASE_CHECK",
     "HEALTHY_MEASUREMENTS_CHECK",
     "REMAINING_FAULTS_CHECK",
+    "ISOLATED_LINE_CHECK",
+    "ISOLATED_LINE_NOT_APPLICABLE",
     "ReleaseAuditTolerances",
     "audit_post_correction_controller_handoff",
     "audit_truth_audited_task_success",

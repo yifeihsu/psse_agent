@@ -95,6 +95,16 @@ class CompoundScenarioTests(unittest.TestCase):
         self.assertEqual(breaker["physical_effect"], "dangling_line_terminal")
         self.assertEqual(breaker["branch_row0"], line["branch_row0"])
 
+        # The isolated line's impedance is marked not applicable for the release
+        # audit (the user's decision of 2026-10-28); the mark names the breaker.
+        self.assertEqual(line["not_applicable"], "line_isolated_by_breaker")
+        self.assertEqual(line["isolated_by_cb_name"], breaker["cb_name"])
+        self.assertEqual(same_line["compound"]["not_applicable_lines"], [line["line_index1"]])
+        for name in ("rx2_adjacent", "meter_on_rx"):
+            for atom in self.roots[name]["true_parameter_errors"]:
+                self.assertNotIn("not_applicable", atom)
+            self.assertEqual(self.roots[name]["compound"]["not_applicable_lines"], [])
+
         mixed = self.roots["cb2_mixed"]
         effects = sorted(atom["physical_effect"] for atom in mixed["true_topology_errors"])
         self.assertEqual(effects, ["bus_split", "dangling_line_terminal"])
