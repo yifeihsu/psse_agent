@@ -351,7 +351,85 @@ buys, 114 net roots.
 
 ## 4. The decision audit
 
-RESULTS_AUDIT
+`audit.py` over `research/rl/decision_audit.py` (`audit/`, 46 min on 14
+workers): every root the expert failed (780 after the re-roll) and six solved
+roots per class, 847 in all, under the same profile and teacher.  For each
+root the audit replays the reference trajectory, takes at the first two
+decision states (where the expert's own menu holds at least two admissible
+actions) up to two menu alternatives each and lets the expert finish, and at
+the first decision state offering a correction applies the truth corrections
+(every true meter, line and breaker, breakers by name) with the expert
+verifying and committing between them.  Two probe repairs were needed for
+compound roots and are committed: the probe requests the family context the
+process gate demands before each truth correction (without it every
+correction of a family other than the expert's current one was refused as
+`missing_precondition`), and it retries a correction the context did not
+advertise once the others are applied (the topology context offers one
+breaker of a pair at a time).  Bins as the plan defines them: `rule_best`
+(no alternative beats the reference), `legal_alternative` (a menu alternative
+solves a root the expert failed), `interface_limit` (only the truth probe
+solves it), `evidence_limit` (nothing does).
+
+| class | audited (failed + solved) | legal alternative | interface limit | evidence limit | rule best | truth probe solves failed roots | the alternative that solves |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| two R/X lines, adjacent | 100 + 6 | 6 | 1 | 93 | 5 | 4 of 99 | the other true line at the first correction (5) |
+| two R/X lines, distant | 78 + 6 | 0 | 0 | 78 | 6 | 0 of 78 | |
+| R/X + breaker, same line | 75 + 0 | 0 | 0 | 75 | 0 | 0 of 75 | |
+| R/X + breaker, shared bus | 43 + 6 | 15 | 8 | 26 | 0 | 17 of 43 | `get_topology_context` first (9) |
+| R/X + breaker, distant | 77 + 6 | 33 | 13 | 35 | 2 | 42 of 77 | `get_topology_context` first (29) |
+| meter + two R/X | 89 + 6 | 1 | 1 | 87 | 6 | 2 of 89 | |
+| meter on the faulted line + R/X | 61 + 6 | 0 | 0 | 61 | 6 | 0 of 61 | |
+| R/X + breaker + meter | 95 + 6 | 29 | 9 | 60 | 3 | 35 of 95 | `get_topology_context` first (26) |
+| two breakers, both dangling | 44 + 6 | 16 | 27 | 7 | 0 | 37 of 44 | `get_topology_context` first (10) |
+| two breakers, dangling + split | 44 + 1 | 1 | 10 | 34 | 0 | 10 of 44 | |
+| two breakers, both splits | 45 + 0 | 0 | 0 | 45 | 0 | 0 of 45 | |
+| control: one R/X line | 7 + 6 | 1 | 0 | 5 | 6 | 1 of 6 | |
+| control: one breaker | 19 + 6 | 25 | 0 | 0 | 0 | 19 of 19 | `get_topology_context` first (19) |
+| control: 1 to 3 meters | 3 + 6 | 5 | 1 | 1 | 2 | 2 of 3 | a different meter (2) |
+| all | 847 | 132 | 70 | 607 | 36 | | |
+
+The legal alternatives are almost all one action: requesting the topology
+context instead of the parameter context at the first decision state (step
+1 of the trajectory) on breaker-bearing roots, which is what the flagged
+variant of section 3.1 does by rule.  On the single-breaker control every
+failed root is solved by that alternative and by the truth probe; on the two
+R/X + breaker classes and the three-atom class 29, 9 and 26 roots are.
+
+**What the evidence-limit bin contains.**  The bin is the plan's mechanical
+definition (no alternative and no truth probe solves the root) and it is not
+the same as "the evidence cannot separate the atoms".  Read with the probe's
+own refusals and the suite's solo effects, it decomposes as follows (the
+probe's refusals are counted over the failed roots of each class):
+
+- *an atom whose own effect is below the alarm*: 74 of the 78 distant
+  pairs, 63 of 87 meter + two R/X, 47 of 93 adjacent pairs, 29 of 35
+  R/X + breaker distant, 34 of 60 three-atom roots, 24 of 61 same-line
+  meter roots carry one; after the first fix the solve is clean and the
+  probe's next correction is refused by the post-commit confirmation gate
+  (`post_correction_confirmation_required`: 55 distant, 15 adjacent, 14
+  meter + two R/X, 13 same-line meter) or, when it runs, has nothing to fit;
+- *the isolated line* (all 75 same-line roots; the probe's line correction
+  fails 60 times and is refused by the confirmation gate 15 times after the
+  breaker fix);
+- *the corrector or the context, not the evidence*: the probe's line
+  correction fails to converge (`parameter_correction_failure`: 59 adjacent,
+  55 meter + two R/X, 27 same-line meter, 20 shared-bus, 13 distant
+  breaker roots) or the context does not advertise the true target
+  (`correction_not_supported_by_current_context`: the true meter under
+  branch dominance on 49 meter + two R/X, 27 same-line meter and 44
+  three-atom roots; the true line on 26 adjacent, 25 meter + two R/X, 22
+  distant-breaker and 23 three-atom roots).  These are interface limits in
+  substance that the probe cannot certify because the probe itself goes
+  through the same gates; sections 5.1 and 5.3 certify them directly.
+
+So the honest reading per class is: the single-breaker control and the
+R/X + breaker classes are legal-alternative and interface limits (the
+ordering and the masking executor), the two-breaker classes are interface
+limits (the re-rendered binding; the probe fixes both dangling terminals on 37 of 44 failed both-dangling roots once it retries the breaker the context did not advertise first, 10 of 44 dangling + split roots, and none of the two-split roots, where the context itself fails after the first split), the same-line breaker class
+and the undetectable second atoms are evidence limits by construction, and
+the adjacent-line and same-line-meter classes are interface limits the
+probe misses (the single-line corrector and the single-target verifier,
+sections 5.3 and 5.1).
 
 ## 5. Identifiability of the flagged pairs
 
@@ -491,7 +569,7 @@ breaker fix are the main failure of those classes (section 3).
 
 ### 6.1 Which failures are which
 
-AUDIT_BINS_SUMMARY
+The decision audit (section 4) bins the 847 audited roots as 36 rule-best, 132 legal-alternative, 70 interface-limit and 607 evidence-limit by its mechanical definition; read with the probe's refusals and the suite's solo effects (section 4), the honest split is below.  The legal alternatives are the topology context requested first on breaker roots; the interface limits the probe certifies are the breaker fixes the expert never reaches; the evidence-limit bin holds the undetectable second atoms and the isolated lines, but also the probe's own refusals by the corrector and the context gates, which are interface limits the probes of section 5 certify.
 
 *Evidence limits* (no correction the interface can represent would pass the
 truth audit):

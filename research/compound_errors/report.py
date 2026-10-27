@@ -251,7 +251,7 @@ def audit_view(summary: Mapping[str, Any] | None, roots: Sequence[Mapping[str, A
     if not summary:
         return {}
     out: dict[str, dict[str, Any]] = {}
-    for stratum, entry in (summary.get("by_stratum") or {}).items():
+    for stratum, entry in (summary.get("strata") or {}).items():
         name = str(stratum).removeprefix("compound:")
         out[name] = {"roots": entry.get("roots"), "expert_solves": entry.get("reference_success"), "bins": dict(entry.get("bins") or {}),
                      "decision_states": entry.get("decision_states"), "alternatives": entry.get("alternatives"),
