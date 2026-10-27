@@ -17,7 +17,13 @@ construct the same expert:
   decision audit's interface repair of 2026-10-19);
 * ``baseline_compare``: the baseline with the same bounded comparison and no
   ledger or ranker, the teacher for profiles without the balanced screen the
-  ledger reads (scada_only; the conventional-only cell of 2026-10-22).
+  ledger reads (scada_only; the conventional-only cell of 2026-10-22);
+* ``baseline_compare_topology_first``: ``baseline_compare`` with the breaker
+  route ahead of the parameter route inside the structural tier
+  (``topology_first=True``; the compound-error study of 2026-10-27, which
+  found the parameter route masking breaker errors on roots that carry both
+  parameter scans and the node/breaker channel).  ``baseline_compare`` and
+  the seven conventional families are untouched.
 
 Research only.  The default is the baseline, so nothing changes unless a
 run names a variant; receipts record the variant beside the evidence
@@ -32,7 +38,8 @@ from psse_env.oracle.learned_ranker import DEFAULT_RANKER_MODEL
 
 EXPERT_VARIANT_ENV = "PSSE_EXPERT_VARIANT"
 DEFAULT_EXPERT_VARIANT = "baseline"
-EXPERT_VARIANTS = ("baseline", "ledger", "ledger_ranked", "ledger_ranked_compare", "baseline_compare")
+EXPERT_VARIANTS = ("baseline", "ledger", "ledger_ranked", "ledger_ranked_compare", "baseline_compare",
+                   "baseline_compare_topology_first")
 
 
 def current_expert_variant(variant: str | None = None) -> str:
@@ -54,6 +61,8 @@ def expert_variant_options(variant: str | None = None, *, learned_ranker: Any = 
         return {}
     if name == "baseline_compare":
         return {"candidate_comparison": True}
+    if name == "baseline_compare_topology_first":
+        return {"candidate_comparison": True, "topology_first": True}
     if name == "ledger":
         return {"hypothesis_ledger": True}
     options: dict[str, Any] = {

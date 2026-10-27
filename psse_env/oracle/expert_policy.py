@@ -111,9 +111,25 @@ def _process_rejection(output: Mapping[str, Any]) -> bool:
     )
 
 
+TOPOLOGY_PATH_TOOLS = frozenset({CORRECT_TOPOLOGY, GET_TOPOLOGY_CONTEXT})
+
+
 def _structural_first_order(
     ranked: list[ExpertActionProposal],
+    *,
+    topology_first: bool = False,
 ) -> list[ExpertActionProposal]:
+    """Structural proposals before meter ones; with ``topology_first`` the breaker route leads the structural tier.
+
+    The compound-error study (docs/compound_errors_study_20261027.md,
+    section 5.4) found that on a root carrying both parameter scans and the
+    node/breaker channel the parameter route is actionable before the
+    topology route and corrects the dangling line's impedance first.  With
+    ``topology_first`` the topology context and corrections precede the
+    parameter context, comparison and corrections; the relative order inside
+    each group and the meter tier are unchanged.  Off by default, so every
+    existing variant keeps its order.
+    """
     def path(proposal: ExpertActionProposal) -> str:
         tool = safe_normalize_action(proposal.action)["tool"]
         if tool in STRUCTURAL_PATH_TOOLS:
@@ -126,6 +142,9 @@ def _structural_first_order(
         return ranked
     non_measurement = [p for p in ranked if path(p) != "measurement"]
     measurement = [p for p in ranked if path(p) == "measurement"]
+    if topology_first:
+        topology = [p for p in non_measurement if safe_normalize_action(p.action)["tool"] in TOPOLOGY_PATH_TOOLS]
+        non_measurement = topology + [p for p in non_measurement if p not in topology]
     return non_measurement + measurement
 
 
@@ -177,7 +196,12 @@ class ExpertPolicyOracle:
         learned_ranker: LearnedRanker | str | None = None,
         candidate_comparison: bool = False,
         comparison_dominance_band: float = DEFAULT_COMPARISON_DOMINANCE_BAND,
+        topology_first: bool = False,
     ) -> None:
+        # Compound-error study (2026-10-27): the breaker route ahead of the
+        # parameter route inside the structural tier.  Off by default; only
+        # the ``baseline_compare_topology_first`` variant turns it on.
+        self.topology_first = bool(topology_first)
         # Step 3 (2026-10-01): order the balanced families and their targets by
         # the screen's accepted sequence and cap verified candidates per family
         # and per state (psse_env.oracle.hypothesis_ledger).  Off by default so
@@ -541,7 +565,7 @@ class ExpertPolicyOracle:
             if is_classifier_gated(policy):
                 state_view = policy if isinstance(policy, Mapping) else policy.as_dict()
                 return _triage_first_order(ranked, triage_first_family(current_triage_report(state_view)))
-            return _structural_first_order(ranked)
+            return _structural_first_order(ranked, topology_first=self.topology_first)
         escalation = self._recovery_exhaustion_proposals(policy, context.history)
         return self._rank_and_filter(
             escalation,

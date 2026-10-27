@@ -134,8 +134,10 @@ class DecisionAuditTests(unittest.TestCase):
         truth = [{"tool": "correct_measurements", "arguments": {"state_id": "old", "suspect_group": [4, 9]}},
                  {"tool": "correct_parameters", "arguments": {"state_id": "old", "line_index": 7}}]
         policy = TruthGuidedPolicy([{"tool": "run_wls", "arguments": {"state_id": "old"}}], truth, Expert())
-        clear = {"active_state_id": "s0", "candidate_state_id": None, "has_open_candidate": False, "has_unverified_candidate": False}
-        open_candidate = {"active_state_id": "s0", "candidate_state_id": "c1", "has_open_candidate": True, "has_unverified_candidate": True}
+        fresh = {"has_fresh_measurement_context": True, "measurement_context_state_id": "s0",
+                 "has_fresh_parameter_context": True, "parameter_context_state_id": "s0"}
+        clear = {"active_state_id": "s0", "candidate_state_id": None, "has_open_candidate": False, "has_unverified_candidate": False, **fresh}
+        open_candidate = {"active_state_id": "s0", "candidate_state_id": "c1", "has_open_candidate": True, "has_unverified_candidate": True, **fresh}
         self.assertEqual(policy.act(clear)["tool"], "run_wls")  # the prefix
         first = policy.act(clear)
         self.assertEqual((first["tool"], first["arguments"]["suspect_group"], first["arguments"]["state_id"]), ("correct_measurements", [4, 9], "s0"))
@@ -145,6 +147,35 @@ class DecisionAuditTests(unittest.TestCase):
         self.assertEqual(policy.act(clear)["tool"], "run_wls")  # nothing pending: the expert
         self.assertEqual(len(policy.applied), 2)
         self.assertEqual(policy.pending, [])
+
+    def test_the_truth_guided_policy_fetches_each_family_context_first_and_retries_a_refused_group_as_singles(self) -> None:
+        from research.rl.decision_audit import TruthGuidedPolicy
+
+        class Expert:
+            def act(self, observation):
+                return {"tool": "run_wls", "arguments": {"state_id": observation["active_state_id"]}}
+
+        truth = [{"tool": "correct_topology", "arguments": {"state_id": "old", "cb_name": "CB_4_N1_N2", "status": 0}},
+                 {"tool": "correct_measurements", "arguments": {"state_id": "old", "suspect_group": [4, 9]}}]
+        policy = TruthGuidedPolicy([], truth, Expert())
+        clear = {"active_state_id": "s0", "candidate_state_id": None, "has_open_candidate": False, "has_unverified_candidate": False}
+        # No fresh topology context on s0: the probe asks for it, then issues the breaker correction.
+        self.assertEqual(policy.act(clear), {"tool": "get_topology_context", "arguments": {"state_id": "s0"}})
+        breaker = policy.act({**clear, "has_fresh_topology_context": True, "topology_context_state_id": "s0"})
+        self.assertEqual((breaker["tool"], breaker["arguments"]["cb_name"]), ("correct_topology", "CB_4_N1_N2"))
+        # A context already requested on this state is not requested twice even if it is still not fresh.
+        after_commit = {**clear, "active_state_id": "s1", "last_tool": "commit_state", "last_tool_output": {}}
+        self.assertEqual(policy.act(after_commit), {"tool": "get_measurement_context", "arguments": {"state_id": "s1"}})
+        group = policy.act({**after_commit, "last_tool": "get_measurement_context"})
+        self.assertEqual(group["arguments"]["suspect_group"], [4, 9])
+        # The group is refused as unsupported: the probe retries the single meters, context first.
+        refused = {**after_commit, "last_tool": "correct_measurements",
+                   "last_tool_output": {"execution_status": "failure", "error_code": "correction_not_supported_by_current_context"},
+                   "has_fresh_measurement_context": True, "measurement_context_state_id": "s1"}
+        single = policy.act(refused)
+        self.assertEqual((single["tool"], single["arguments"]["suspect_group"]), ("correct_measurements", [4]))
+        self.assertEqual(policy.pending[0]["arguments"]["suspect_group"], [9])
+        self.assertEqual(len(policy.applied), 3)
 
 
 if __name__ == "__main__":  # pragma: no cover

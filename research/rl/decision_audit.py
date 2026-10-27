@@ -40,6 +40,9 @@ from psse_env.actions import (  # noqa: E402
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
     CORRECT_TOPOLOGY,
+    GET_MEASUREMENT_CONTEXT,
+    GET_PARAMETER_CONTEXT,
+    GET_TOPOLOGY_CONTEXT,
     RUN_WLS,
 )
 from psse_env.oracle.expert_variants import EXPERT_VARIANTS  # noqa: E402
@@ -356,27 +359,65 @@ class ScriptedThenExpertPolicy:
         return self.expert.act(observation)
 
 
+CONTEXT_TOOL_OF = {
+    CORRECT_MEASUREMENTS: GET_MEASUREMENT_CONTEXT,
+    CORRECT_PARAMETERS: GET_PARAMETER_CONTEXT,
+    CORRECT_TOPOLOGY: GET_TOPOLOGY_CONTEXT,
+}
+FAMILY_OF_CORRECTION = {CORRECT_MEASUREMENTS: "measurement", CORRECT_PARAMETERS: "parameter", CORRECT_TOPOLOGY: "topology"}
+
+
 class TruthGuidedPolicy(ScriptedThenExpertPolicy):
     """Replay ``prefix``, then apply every truth correction in turn, letting the expert verify and commit between them.
 
     A correction is only legal on a state without an open candidate, so after
     each scripted correction the expert runs the lifecycle (verification,
     commit or rollback) and the next truth correction follows once the state
-    is clear again.  The audit's probe of the interface and the evidence; not a
-    policy action.
+    is clear again.  The process gate also demands a fresh context of the
+    correction's family on the active state, so the probe requests that
+    context first when the observation does not show one (once per state and
+    family; a correction the context then does not advertise is still
+    issued and its refusal recorded).  A multi-meter group the context does
+    not support is retried as the single meters it names.  The audit's probe
+    of the interface and the evidence; not a policy action.
     """
 
     def __init__(self, prefix: Sequence[Mapping[str, Any]], truth_actions: Sequence[Mapping[str, Any]], expert: Any) -> None:
         super().__init__(prefix, [], expert)
         self.pending = [copy.deepcopy(dict(a)) for a in truth_actions]
         self.applied: list[dict[str, Any]] = []
+        self.context_requests: list[tuple[str, str]] = []
+        self._expanded: set[str] = set()
+
+    def _expand_refused_group(self, observation: Mapping[str, Any]) -> None:
+        if not self.applied or str(observation.get("last_tool")) != CORRECT_MEASUREMENTS:
+            return
+        last = self.applied[-1]
+        group = list((last.get("arguments") or {}).get("suspect_group") or [])
+        output = observation.get("last_tool_output") if isinstance(observation.get("last_tool_output"), Mapping) else {}
+        signature = action_signature(last)
+        if (len(group) < 2 or signature in self._expanded
+                or str(output.get("error_code") or "") != "correction_not_supported_by_current_context"):
+            return
+        self._expanded.add(signature)
+        singles = [{"tool": CORRECT_MEASUREMENTS, "arguments": {"state_id": last["arguments"].get("state_id"), "suspect_group": [int(i)]}}
+                   for i in group]
+        self.pending = singles + self.pending
 
     def act(self, observation: Mapping[str, Any]) -> dict[str, Any]:
         index = self.calls
         if index < len(self.script):
             return super().act(observation)
         self.calls += 1
+        self._expand_refused_group(observation)
         if self.pending and not observation.get("has_open_candidate") and not observation.get("candidate_state_id"):
+            tool = str(self.pending[0].get("tool"))
+            family = FAMILY_OF_CORRECTION.get(tool)
+            active = str(observation.get("active_state_id"))
+            fresh = bool(observation.get(f"has_fresh_{family}_context")) and str(observation.get(f"{family}_context_state_id")) == active
+            if family and not fresh and (active, family) not in self.context_requests:
+                self.context_requests.append((active, family))
+                return {"tool": CONTEXT_TOOL_OF[tool], "arguments": {"state_id": observation.get("active_state_id")}}
             action = self.rebind(self.pending.pop(0), observation)
             self.applied.append(action)
             return action
