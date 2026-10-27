@@ -9,8 +9,11 @@
 #     those of the round-1 evaluation.  Results: out/extra/evaluations/test_budget<b>.
 #   ADAPTER="label=/path/to/lora" (optional): that adapter alone on the test,
 #     validation and hard suites at the 40-action horizon (test_<label>,
-#     validation_<label>, hard_<label>), to be paired with the existing records
-#     by followup_tables.py --extra-policy <label>.
+#     validation_<label>, hard_<label>; ADAPTER_SUITES=0 skips them), to be
+#     paired with the existing records by followup_tables.py --extra-policy
+#     <label>; with ADAPTER_BUDGETS=1 also alone at every budget
+#     (test_budget<b>_<label>, EVAL_EXPERT=0), which budget_tables.py reads for
+#     the label r2 (the round-2 adapter, out/r2/training/lora).
 # Every job is output-guarded, so resubmitting after a failure redoes only what
 # is missing.  ONLY="name ..." submits just those evaluations.
 set -euo pipefail
@@ -47,13 +50,21 @@ done
 if [[ -n "${ADAPTER:-}" ]]; then
   label=${ADAPTER%%=*}
   path=${ADAPTER#*=}
-  [[ "$label" =~ ^[a-z][a-z0-9_]*$ && "$label" != bc0 && "$label" != r1 && "$label" != r2 && "$label" != control && "$label" != expert ]] \
-    || { echo "ADAPTER label must be a fresh lower-case name: $label" >&2; exit 2; }
+  [[ "$label" =~ ^[a-z][a-z0-9_]*$ && "$label" != bc0 && "$label" != r1 && "$label" != control && "$label" != expert ]] \
+    || { echo "ADAPTER label must be a lower-case name other than bc0, r1, control or expert: $label" >&2; exit 2; }
   [[ -s "$path/adapter_model.safetensors" ]] || { echo "adapter missing: $path" >&2; exit 2; }
-  SPEC_FILE[test_$label]=$(spec "test_$label" "$TEST" 0 "$EVAL_MAX_STEPS" "$label=$path")
-  SPEC_FILE[validation_$label]=$(spec "validation_$label" "$VALIDATION" 0 "$EVAL_MAX_STEPS" "$label=$path")
-  SPEC_FILE[hard_$label]=$(spec "hard_$label" "$HARD" 0 "$EVAL_MAX_STEPS" "$label=$path")
-  ORDER="$ORDER test_$label validation_$label hard_$label"
+  if [[ "${ADAPTER_SUITES:-1}" == 1 ]]; then
+    SPEC_FILE[test_$label]=$(spec "test_$label" "$TEST" 0 "$EVAL_MAX_STEPS" "$label=$path")
+    SPEC_FILE[validation_$label]=$(spec "validation_$label" "$VALIDATION" 0 "$EVAL_MAX_STEPS" "$label=$path")
+    SPEC_FILE[hard_$label]=$(spec "hard_$label" "$HARD" 0 "$EVAL_MAX_STEPS" "$label=$path")
+    ORDER="$ORDER test_$label validation_$label hard_$label"
+  fi
+  if [[ "${ADAPTER_BUDGETS:-0}" == 1 ]]; then
+    for budget in $BUDGETS; do
+      SPEC_FILE[test_budget${budget}_$label]=$(spec "test_budget${budget}_$label" "$TEST" 0 "$budget" "$label=$path")
+      ORDER="$ORDER test_budget${budget}_$label"
+    done
+  fi
 fi
 [[ -z "${ONLY:-}" ]] || ORDER=$ONLY
 submitted=()

@@ -193,6 +193,11 @@ def test_budget_tables_join_budgets_by_root_and_compare_with_the_approximation(t
           evaluation(episode(0, True, 18), episode(1, True, 10), episode(2, True, 7), episode(3, True, 7)))
     write(out / "bc0.done", {"adapter_tree_sha256": "a" * 64})
     write(out / "r1" / "training.done", {"candidate_tree_sha256": "b" * 64})
+    write(out / "r2" / "training.done", {"candidate_tree_sha256": "c" * 64})
+    # R2 at 40 is the candidate slot of the round-2 evaluation: it loses root1 in 40 actions.
+    write(out / "r2" / "collection" / "evaluation" / "comparison.json", {"max_steps": 40})
+    write(out / "r2" / "collection" / "evaluation" / "r1_eval.json",
+          evaluation(episode(0, True, 16), episode(1, False, 40, 0, False), episode(2, True, 7), episode(3, True, 7)))
     # At 12 actions: the expert hands root0 off; BC0 runs root0 to the budget and solves root1 in 11 this time (which
     # the approximation from the 40-action episode cannot see); R1 solves root2 with an invalid action.
     evaluated = out / "extra" / "evaluations" / "test_budget12"
@@ -205,8 +210,23 @@ def test_budget_tables_join_budgets_by_root_and_compare_with_the_approximation(t
           evaluation(episode(0, False, 12, 0, False), episode(1, True, 11), episode(2, True, 7), episode(3, True, 7)))
     write(evaluated / "r1_eval.json",
           evaluation(episode(0, False, 12, 0, False), episode(1, True, 10), episode(2, True, 7, 1), episode(3, True, 7)))
+    # R2 alone at 12 actions, in the first adapter slot of its own evaluation.
+    r2_dir = out / "extra" / "evaluations" / "test_budget12_r2"
+    write(r2_dir / "policies.json", {"max_steps": 12, "seed": 1, "expert": None,
+                                     "policies": {"bc0": {"label": "r2", "tree_sha256": "c" * 64}}})
+    write(r2_dir / "summary.json", {})
+    write(r2_dir / "bc0_eval.json",
+          evaluation(episode(0, False, 12, 0, False), episode(1, False, 12, 1, False), episode(2, True, 7), episode(3, True, 7)))
     result = budget.build(tmp_path, [12, 16])
     assert sorted(result["budgets"]) == ["12", "40"] and result["full_budget"] == 40
+    assert result["budgets"]["40"]["policies"]["r2"]["successes"] == 3
+    assert result["budgets"]["12"]["policies"]["r2"]["successes"] == 2
+    assert result["budgets"]["12"]["policies"]["r2"]["by_cohort"] == {
+        "multi_error": {"episodes": 2, "successes": 0, "clean_successes": 0, "violation_episodes": 1},
+        "single_or_clean": {"episodes": 2, "successes": 2, "clean_successes": 2, "violation_episodes": 0}}
+    assert result["budgets"]["12"]["paired"]["r1_vs_r2"]["success_failures"]["only_second"] == 1
+    assert result["budgets"]["12"]["approximation_from_full_budget"]["r2"]["success"]["approximated"] == 2
+    assert result["evaluations"]["12_r2"]["adapters_match_receipts"] is True
     at12 = result["budgets"]["12"]
     assert at12["policies"]["expert"]["successes"] == 3 and at12["policies"]["bc0"]["successes"] == 3
     assert at12["policies"]["r1"]["successes"] == 3 and at12["policies"]["r1"]["clean_successes"] == 2
@@ -223,6 +243,7 @@ def test_budget_tables_join_budgets_by_root_and_compare_with_the_approximation(t
     assert result["budgets"]["40"]["approximation_from_full_budget"] == {}
     text = budget.markdown(result)
     assert "### Success under the action budget" in text and "only measured 1" in text
+    assert "### Multi-error roots" in text and "r2 vs expert" in text
     write(evaluated / "policies.json", {"max_steps": 16, "policies": {}})
     with pytest.raises(ValueError):
         budget.build(tmp_path, [12])
@@ -233,6 +254,8 @@ def test_budget_submit_script_writes_the_horizon_into_its_specs() -> None:
     assert 'BUDGETS=${BUDGETS:-"12 16 20"}' in submit
     assert "EVAL_MAX_STEPS=%s" in submit and "stage_eval_suite.sbatch" in submit
     assert '"bc0=$BC0" "r1=$R1"' in submit and 'out/r1/round_summary.json' not in submit
+    # An adapter alone at every budget (R2, 2026-10-27) and, by default, on the three 40-action suites.
+    assert 'test_budget${budget}_$label' in submit and '${ADAPTER_BUDGETS:-0}' in submit and '${ADAPTER_SUITES:-1}' in submit
     stage = (CELL / "stage_eval_suite.sbatch").read_text(encoding="utf-8")
     # The spec is sourced after pipeline.env, so its EVAL_MAX_STEPS overrides the cell's horizon.
     assert stage.index('source "$PIPE/pipeline.env"') < stage.index('source "$EVAL_SPEC"')
