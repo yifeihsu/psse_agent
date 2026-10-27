@@ -699,7 +699,16 @@ and recipe would reproduce BC0 up to kernel nondeterminism. Whether a
 different cloning variant is wanted instead (a repeat of BC0's training to
 bound that nondeterminism; or cloning on the 2,747 natural rows each once,
 without the balancing sampler, at BC0's 687 steps) was put to the paper
-session on 2026-10-27. `submit_extras_20261027.sh` (`ADAPTER=label=/path`) and
+session on 2026-10-27. **Decision (paper session, 2026-10-27): no substitute
+arm.** BC0 stays the pure cloning baseline and the manuscript cites this
+section; the sampler ablation answers a different question, and a repeat of
+the training would only bound kernel nondeterminism around a comparison the
+paper no longer leans on for success (its paired tests are on the violation
+episodes, 19 against 0). The one optional extra is a repeat of BC0's training
+under another seed, reported as the seed stability of its 189 successes and
+19 violation episodes rather than as an arm, to be run only after the
+budget-limited evaluations and only on idle GPU capacity.
+`submit_extras_20261027.sh` (`ADAPTER=label=/path`) and
 `followup_tables.py --extra-policy label` evaluate any such adapter on the
 three suites, paired with the existing records, with the safety-clean success
 and the paired tests against BC0 and R1 that this section's tables use.
