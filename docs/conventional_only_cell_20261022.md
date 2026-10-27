@@ -755,3 +755,22 @@ safety-clean count at each budget adds the process dimension.
 
 Expected cost: about 1 to 2 GPU-hours per budget (the 40-action evaluation of
 the three arms took 2.5 h; the budgets cap BC0's longest episodes).
+
+**Launch.** Deployed 2026-10-27T05:49Z from efbc953 (the incremental bundle
+4d79282..efbc953, 24.5 kB, uploaded over ssh stdin into the cell's source,
+which had stood at 4d79282; `pipeline.overrides.env` unchanged; the dry-run
+prerequisites passed). Submitted 05:50 UTC with `submit_extras_20261027.sh`
+(no chain resubmitted): fp-xeval test_budget12 21070126, test_budget16
+21070127 and test_budget20 21070128, on the `a100|h100|h200|rtx6000` union
+with preemption opt-in and requeue, no GPU type pinned, 2 workers per policy
+on a GPU of 70 GB or more. Specs `out/extra/specs/test_budget{12,16,20}.env`
+(`EVAL_MAX_STEPS` 12, 16, 20; `EVAL_EXPERT=1`); records
+`out/extra/evaluations/test_budget<b>/` (`policies.json` with the horizon and
+the adapter trees, `{expert,bc0,r1}_eval.json`, `episodes.jsonl`,
+`summary.json`); tables from
+`research/hpc/full_pipeline_20260907/budget_tables.py --cell-dir $PIPE`.
+Status:
+
+```bash
+MSYS_NO_PATHCONV=1 wsl -- ssh torch "export PATH=/opt/slurm/bin:\$PATH; sacct -j 21070126,21070127,21070128 -o JobID%12,JobName%10,State%12,Elapsed%12,NodeList%10; ls /scratch/yx3882/research_full_pipeline_20261022_conventional/out/extra/evaluations/"
+```
