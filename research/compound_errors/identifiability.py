@@ -63,11 +63,14 @@ from psse_env.actions import (  # noqa: E402
 )
 
 CONTRACT = "compound_identifiability_v1"
-EXPERIMENTS = ("same_line_meter", "same_terminal_breaker", "adjacent_lines")
+EXPERIMENTS = ("same_line_meter", "same_terminal_breaker", "adjacent_lines", "breaker_masking")
 EXPERIMENT_CLASSES = {
     "same_line_meter": ("meter_on_rx",),
     "same_terminal_breaker": ("rx_cb_same_line",),
     "adjacent_lines": ("rx2_adjacent", "rx2_distant"),
+    # How a parameter correction on the context's top line explains a breaker
+    # error (the masking the parameter-first order exposes, section 5).
+    "breaker_masking": ("control_cb", "rx_cb_distant", "rx_cb_shared_bus", "cb2_dangling"),
 }
 CONTEXT_OF = {CORRECT_MEASUREMENTS: GET_MEASUREMENT_CONTEXT, CORRECT_PARAMETERS: GET_PARAMETER_CONTEXT, CORRECT_TOPOLOGY: GET_TOPOLOGY_CONTEXT}
 ACCEPTING = {"ACCEPT_FINAL", "ACCEPT_PARTIAL"}
@@ -573,7 +576,74 @@ def adjacent_lines(root: Mapping[str, Any]) -> dict[str, Any]:
             "sequential": {"first_line": int(first["line_index1"]), "second_line": int(second["line_index1"]), **run}}
 
 
-EXPERIMENT_FUNCTIONS = {"same_line_meter": same_line_meter, "same_terminal_breaker": same_terminal_breaker, "adjacent_lines": adjacent_lines}
+def breaker_masking(root: Mapping[str, Any]) -> dict[str, Any]:
+    """The context's top parameter line corrected on a breaker root: what the estimator does and what the verifier says."""
+    from mcp_server.matpower_server import _load_python_case
+
+    truth = truth_of(root)
+    breakers = [dict(item) for item in truth.get("true_topology_errors") or []]
+    lines = [int(t["line_index1"]) for t in parameter_truths(root)]
+    dangling = [int(b["line_index1"]) for b in breakers if b.get("line_index1") is not None]
+    env = new_env(root)
+    base = {"signatures": signatures_of(env)[:6], "dominance": dominance_of(signatures_of(env)), "solve": solve(env),
+            "ranking": ranking_view(env, lines or dangling)}
+    top = base["ranking"]["order"][0] if base["ranking"]["order"] else None
+    nominal = _load_python_case(root["execution"]["case"])["branch"]
+    record: dict[str, Any] = {"experiment": "breaker_masking", "root": root["execution"]["scenario_id"], "class": compound_of(root).get("class"),
+                              "breakers": [b["cb_name"] for b in breakers], "effects": [b["physical_effect"] for b in breakers],
+                              "dangling_lines": dangling, "true_lines": lines, "top_line": top,
+                              "top_is_dangling_line": (top in dangling) if top is not None else None,
+                              "top_is_true_line": (top in lines) if top is not None else None,
+                              "top_touches_breaker_bus": None, "base": base}
+    if top is not None:
+        from_bus, to_bus = int(nominal[top - 1][0]), int(nominal[top - 1][1])
+        buses = {int(b) for item in breakers for b in (item.get("affected_planning_buses") or [])}
+        record["top_touches_breaker_bus"] = bool({from_bus, to_bus} & buses)
+        probe = ProviderProbe(root)
+        step_record = probe.apply({"tool": CORRECT_PARAMETERS, "arguments": {"line_index": int(top)}}, row0=top - 1)
+        estimate = step_record.get("estimate")
+        if estimate is not None:
+            r0, x0 = float(nominal[top - 1][2]), float(nominal[top - 1][3])
+            step_record["estimate_ratio"] = {"r": estimate[0] / r0 if r0 else None, "x": estimate[1] / x0 if x0 else None}
+        record["top_line_parameter"] = step_record
+        gated = apply(env, {"tool": CORRECT_PARAMETERS, "arguments": {"line_index": int(top)}}, row0=top - 1)
+        record["top_line_parameter_gated"] = {k: gated.get(k) for k in ("status", "error_code", "disposition", "verification")}
+    breaker_probe = ProviderProbe(root)
+    record["breakers_alone"] = [breaker_probe.apply(breaker_action(item)) for item in breakers]
+    record["breakers_alone_final"] = breaker_probe.solve()
+    return record
+
+
+def summarize_breaker_masking(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for r in records:
+        if not r.get("error"):
+            groups[str(r.get("class"))].append(r)
+    for name, rows in sorted(groups.items()):
+        entry: dict[str, Any] = {"roots": len(rows)}
+        entry["dominance"] = dict(Counter(r["base"]["dominance"] for r in rows))
+        entry["parameter_route_actionable"] = sum(1 for r in rows if r["base"]["ranking"]["route_status"] == "actionable")
+        entry["top_is_dangling_line"] = sum(1 for r in rows if r.get("top_is_dangling_line"))
+        entry["top_is_true_line"] = sum(1 for r in rows if r.get("top_is_true_line"))
+        entry["top_touches_breaker_bus"] = sum(1 for r in rows if r.get("top_touches_breaker_bus"))
+        steps = [r.get("top_line_parameter") or {} for r in rows]
+        entry["top_line_verdicts"] = dict(Counter(_verdict(s) for s in steps))
+        ratios = [s.get("estimate_ratio") for s in steps if s.get("estimate_ratio")]
+        entry["top_line_estimates"] = len(ratios)
+        entry["top_line_x_ratio_median"] = _median([v["x"] for v in ratios if v.get("x") is not None])
+        entry["top_line_x_ratio_above_3"] = sum(1 for v in ratios if (v.get("x") or 0) > 3.0)
+        entry["top_line_x_ratio_above_10"] = sum(1 for v in ratios if (v.get("x") or 0) > 10.0)
+        entry["top_line_gated_verdicts"] = dict(Counter(_verdict(r.get("top_line_parameter_gated") or {}) for r in rows))
+        breaker_steps = [s for r in rows for s in r.get("breakers_alone") or []]
+        entry["breaker_alone_verdicts"] = dict(Counter(_verdict(s) for s in breaker_steps))
+        entry["breakers_alone_resolved"] = sum(1 for r in rows if (r.get("breakers_alone_final") or {}).get("globally_resolved") is True)
+        out[name] = entry
+    return out
+
+
+EXPERIMENT_FUNCTIONS = {"same_line_meter": same_line_meter, "same_terminal_breaker": same_terminal_breaker, "adjacent_lines": adjacent_lines,
+                        "breaker_masking": breaker_masking}
 
 
 def _run(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -694,7 +764,7 @@ def summarize_adjacent_lines(records: Sequence[Mapping[str, Any]]) -> dict[str, 
 
 
 SUMMARIZERS = {"same_line_meter": summarize_same_line_meter, "same_terminal_breaker": summarize_same_terminal_breaker,
-               "adjacent_lines": summarize_adjacent_lines}
+               "adjacent_lines": summarize_adjacent_lines, "breaker_masking": summarize_breaker_masking}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
