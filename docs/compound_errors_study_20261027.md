@@ -709,3 +709,18 @@ and need the stage-1 suite as their test bed.  None needs training: the
 suite, the rollout runner and the probes here re-run in about half an hour
 on 14 CPU workers, so each change can be read off the same 1,275 roots
 before any DAgger round is drawn on compound classes.
+
+### 6.4 Decisions (2026-10-28)
+
+On the ordering flag (item 1 and item 6), the user's decision, in their
+words: "Keep topology-first flagged to the compound work until the
+conditioned version is validated on the conventional suite."  So
+`baseline_compare` stays the teacher for every profile, and
+`baseline_compare_topology_first` stays a flagged variant of the compound
+work until a run under the flow-at-noise or clean-flip condition shows the
+conventional suite's expert still at 192 of 192 and the manuscript's numbers
+unchanged.  Two questions are still open with the user and nothing is to be
+acted on yet: whether the truth audit should score an isolated line's
+impedance as not applicable (item 5), and whether future suites keep the
+uniform-metadata convention, scans on every root, that exposed the ordering
+problem (section 3.1).  Stage 2 has not been requested.
