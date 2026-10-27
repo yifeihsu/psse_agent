@@ -493,8 +493,10 @@ test_control 20748402, hard_r2_control 20748403 and validation_r2_control
 **The CPU stage (fp-xcpu 20748396, cs641, 2 h 18 min).** The suites keep
 every candidate root (validation 96, hard 193; none is a root of this cell's
 370-root D0, its rounds or its test set). The fresh expert aggregate (seed
-20261123, 222 roots) holds 2,252 rows (666 of them forced-recovery rows), none
-quarantined, no unverifiable expert label; its balanced training view has
+20261123, 222 roots) holds 2,252 natural expert rows (its 666 counterfactual
+recovery rows, 3 per root, are in the auxiliary file and enter no training
+view; corrected 2026-10-27, section 7.1), none quarantined, no unverifiable
+expert label; its balanced training view has
 1,586 rows, 214 of which belong to roots excluded from the control (D0, round,
 test, validation or hard roots). The control mixture
 (`out/extra/control/mixture.jsonl`, sha256 `ee7ffd3d...`) has R1's 874 rows,
@@ -611,3 +613,145 @@ one seed: the control's degradation may partly reflect its row mix (more
 direct corrections than the collected rows hold), which is what
 expert-distribution data looks like in this pipeline; repeated seeds would
 bound it.
+
+## 7. Follow-ups (2026-10-27): what the cloning baseline trained on, and success under a fixed action budget
+
+Why. The paper session (PES GM 2027, `docs/papers/pesgm2027`) finds the
+success gap between BC0 and the DAgger iterates on the test set (189 against
+191 and 190 of 192) too small to carry the manuscript's claim and asked for
+two additions on metrics fixed before the runs: a pure-cloning baseline
+trained on the natural expert trajectories only, on the reading that the
+aggregate's injected-recovery demonstrations (`D0_COUNTERFACTUALS=3`; "666 of
+2,252 rows" in section 6) make BC0 a perturbation-augmented clone that has
+already seen off-expert states; and the success-under-budget curve at 12, 16
+and 20 actions measured by re-running the policies under those horizons
+instead of being read off the 40-action episode lengths (that reading gave
+expert 169, BC0 157 and R1 168 of 192 at 12 actions). Branch
+`claude/competent-haibt-e7b0ad`, fast-forwarded from
+`claude/clever-roentgen-03b19c` at d6e6acc; the cell is the same, the records
+go under `out/extra/`.
+
+### 7.1 The cloning baseline's training data (verified 2026-10-27, before any run)
+
+The premise of the first addition does not hold: no injected-recovery row is
+in any training view of this cell, so the "BC-natural" adapter as specified
+is BC0 itself. The counts, read from the cell's files on torch:
+
+| File (`out/d0/`) | Rows | Distinct ids | Roots | `dataset_source` | `state_visited_by` | `production_label_eligible` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `aggregate.raw.jsonl` (the expert's rollouts, beta 1) | 3,648 | 3,648 | 370 | dagger_rollout 3,648 | expert 3,278, initial 370 | True 3,648 |
+| `aggregate.auxiliary_counterfactual.raw.jsonl` (the counterfactual branches) | 1,110 | 1,110 | 370 | synthetic_counterfactual 1,110 | counterfactual_injection 1,110 | False 1,110 |
+| `aggregate.train_view.jsonl` (BC0's training file) | 2,747 | 2,171 | 279 | dagger_rollout 2,747 | expert 2,474, initial 273 | True 2,747 |
+| `aggregate.validation.jsonl` (the 128 validation rows are drawn from it) | 533 | 533 | 54 | dagger_rollout 533 | expert 479, initial 54 | True 533 |
+
+How this comes about (`psse_env/examples/generate_round0_aggregate.py`): the
+round-0 collector rolls the expert out on every planned root (`collect_round0`,
+beta 1; `executed_by: expert` on every row), then, for
+`--counterfactuals-per-scenario 3`, the counterfactual generator executes three
+injected learner mistakes per root in isolated branches and records the
+expert's recovery. Those rows are stamped `dataset_source:
+synthetic_counterfactual`, `state_visited_by: counterfactual_injection` and
+`production_label_eligible: False` (their injected actions may be constructed
+from hidden truth, `psse_env/dagger/counterfactual_generator.py`), and the
+export splits every row by that flag: the eligible rows go to
+`aggregate.raw.jsonl` and its train, validation and test splits, the
+ineligible ones to the auxiliary file. The balanced training view is built
+from the train split with `require_production_label_eligible=True`, so the
+training view, the validation subset and BC0's training (`research_run.json`:
+2,747 training rows; the file's sha256 is in `d0.done`) hold natural rows
+only. `recovery_stratum`, `collection_role` and `research_label_eligible` are
+null on every row of every view. The `state_class` of the training view is
+clean_successful 1,073, accepted_partial_continuation 714,
+accepted_final_commit 390, terminal_operator_escalation 275,
+accepted_partial_commit 248, terminal_resolved 45 and
+rejected_candidate_recovery 2 (the expert's own observable recovery on two
+roots, not an injection). The count the chain printed, `recovery_rows: 1110`
+(`d0_console.json`), is the auxiliary file.
+
+What the balanced view does to the natural rows: the 279 training roots have
+2,747 natural rows, and the view keeps 2,747 rows, but 576 of the natural rows
+(300 accepted_partial_continuation, 258 clean_successful, 18
+terminal_operator_escalation) are left out and 576 others appear twice
+(`max_duplicate_count=2`; the sampler's state-class, tool-category, family and
+per-root targets). None of the dropped rows is a low-margin row (`cost_margin`
+at most 0.05: none in the aggregate).
+
+Section 6's sentence on the control's fresh aggregate, "holds 2,252 rows (666
+of them forced-recovery rows)", is corrected today: that aggregate holds 2,252
+natural rows (`aggregate.raw.jsonl`, all `dagger_rollout`,
+`production_label_eligible` True), its 666 counterfactual rows (222 roots x 3,
+the same structure) are in its auxiliary file, and its 1,586-row balanced view
+holds natural rows only, so the control, too, continued on expert-visited
+states only. The sentence had read `control_d0_console.json` (`episode_rows:
+2252, recovery_rows: 666`) as if the second count were part of the first.
+
+Consequence. BC0 is the pure behavioral-cloning baseline the manuscript
+needs: one pass over the balanced view of the expert's own trajectories, no
+injected state, no recovery demonstration beyond what the expert's own
+rollouts contain (the two rejected-candidate rows). The third explanation of
+the small success gap, BC0 as perturbation-augmented cloning, is withdrawn;
+the two others stand (112 single-error and clean roots solved in 2 to 8
+actions where nothing compounds; the transactional controller makes BC0's
+mistakes recoverable, 16 of its 19 violation episodes still succeed). No
+"BC-natural" adapter is trained: filtering the view by the intervention fields
+removes 0 of 2,747 rows, and retraining on identical rows with the same seed
+and recipe would reproduce BC0 up to kernel nondeterminism. Whether a
+different cloning variant is wanted instead (a repeat of BC0's training to
+bound that nondeterminism; or cloning on the 2,747 natural rows each once,
+without the balancing sampler, at BC0's 687 steps) was put to the paper
+session on 2026-10-27. `submit_extras_20261027.sh` (`ADAPTER=label=/path`) and
+`followup_tables.py --extra-policy label` evaluate any such adapter on the
+three suites, paired with the existing records, with the safety-clean success
+and the paired tests against BC0 and R1 that this section's tables use.
+
+### 7.2 Budget-limited evaluation: design (written before the runs)
+
+Question. The success-under-budget counts of the paper session's analysis
+were read off the 40-action episodes (a root solved in at most b actions
+counts as solved under b). That ignores that the students and the teacher act
+on the budget: the environment binds its action limit to the horizon, every
+observation carries `remaining_budget` counting down from it (the students see
+it in their prompt, the observation is the user payload, as they did in
+training from 40 down; `psse_env/dagger/evaluator.py`,
+`psse_env/episode_budget.py`), and the teacher hands off before opening a
+correction lifecycle it cannot close (`_recovery_budget_proposals` in
+`psse_env/oracle/expert_policy.py`, fewer than 4 actions left) and withholds
+bounded joint retries below 4 remaining actions. Here the policies are re-run
+under the horizons.
+
+Runs. `research/hpc/full_pipeline_20260907/submit_extras_20261027.sh`: three
+`fp-xeval` jobs, `test_budget12`, `test_budget16` and `test_budget20`, each
+`evaluate_suite.py` on the 192 test roots
+(`out/r1/collection/development_scenarios.json`, the round-1 evaluation's rows
+and measurement realizations) with BC0 (`out/bc0/lora`) and R1
+(`out/r1/training/lora`, the iterate section 6 selected) in the two adapter
+slots and the teacher (`baseline_compare`) beside them, seed `SEED_ROUND`
+20260912 as in every evaluation of this cell, `scada_only`, the same
+workers. The only change is `EVAL_MAX_STEPS` = 12, 16 or 20 in the job's spec,
+which `stage_eval_suite.sbatch` passes as `--max-steps` (the spec is sourced
+after `pipeline.env`, whose value is the cell's 40). The round-1 evaluation is
+the 40-action point of the curve. Every evaluation records its horizon and
+adapter tree hashes in `policies.json`; `budget_tables.py` refuses an
+evaluation whose horizon or adapters differ from the budget and the cell's
+receipts.
+
+Metrics, fixed now. Per budget and policy on the 192 roots, and per family:
+successes (truth-audited), safety-clean successes (success with no invalid
+action, false commit or loop), episodes with an invalid action, a false commit
+or a loop, episodes that ran to the budget, mean actions and mean WLS calls.
+Paired exact two-sided McNemar tests at each budget between BC0 and R1 and of
+each against the teacher, on success, on safety-clean success and on process
+violations. The 40-action approximation (solved within b actions at 40) is
+reported next to the measured count with the roots on which the two disagree,
+for every policy; the measured count is the result.
+
+Reading, fixed now. The budget curve is a statement about episode length: at
+12 actions the multi-meter roots the teacher needs about 20 actions for are
+out of reach for every policy, so the curve separates the policies only where
+their episode lengths differ, chiefly on the multi-error roots (BC0 spends
+1.7 more actions there). More successes for R1 than for BC0 at a budget are a
+difference in efficiency, not in what the policies solve at 40; the
+safety-clean count at each budget adds the process dimension.
+
+Expected cost: about 1 to 2 GPU-hours per budget (the 40-action evaluation of
+the three arms took 2.5 h; the budgets cap BC0's longest episodes).

@@ -18,7 +18,7 @@ CPU_STAGES = ("stage_d0.sbatch",)
 # Follow-up stages of a finished cell (2026-10-23): CPU work outside stage 0.
 EXTRA_CPU_STAGES = ("stage_extra_cpu.sbatch",)
 SHELL_FILES = ("prerequisites.sh", "submit_pipeline.sh", "status_pipeline.sh", "deploy_remote.sh",
-               "submit_extras_20261023.sh")
+               "submit_extras_20261023.sh", "submit_extras_20261027.sh")
 PYTHON_FILES = ("build_suite.py", "summarize.py")
 
 
@@ -61,7 +61,8 @@ def test_extra_cpu_stages_request_no_gpu_and_are_deployed(name: str) -> None:
     assert any(line.startswith("#SBATCH --partition=") for line in header)
     assert "\r" not in text
     deploy = (CELL / "deploy_remote.sh").read_text(encoding="utf-8")
-    for deployed in (name, "stage_control_train.sbatch", "stage_eval_suite.sbatch", "submit_extras_20261023.sh"):
+    for deployed in (name, "stage_control_train.sbatch", "stage_eval_suite.sbatch", "submit_extras_20261023.sh",
+                     "submit_extras_20261027.sh"):
         assert deployed in deploy, deployed
 
 
@@ -131,9 +132,23 @@ def test_followup_tables_pair_by_root_and_apply_the_selection_rule(tmp_path: Pat
     result = tables.build(tmp_path)
     test = result["test"]
     assert test["policies"]["bc0"]["successes"] == 3 and test["policies"]["bc0"]["violation_episodes"] == 2
-    assert test["policies"]["bc0"]["by_stratum"]["misranked"] == {"successes": 0, "episodes": 1}
+    assert test["policies"]["bc0"]["by_stratum"]["misranked"] == {"successes": 0, "episodes": 1, "clean_successes": 0}
     assert test["paired_against_r1"]["bc0_vs_r1"]["violations"]["only_first"] == 2
     assert test["paired_against_r1"]["control_vs_r1"]["success_failures"]["only_first"] == 1
+    # Safety-clean success (2026-10-27): BC0 fails root0 and solves root1 with an invalid action, so 2 of its 4 are clean.
+    assert test["policies"]["bc0"]["clean_successes"] == 2 and test["policies"]["r1"]["clean_successes"] == 4
+    assert test["policies"]["bc0"]["by_family"]["parameter"] == {"successes": 1, "episodes": 2, "clean_successes": 0}
+    assert test["paired_against_bc0"]["r1_vs_bc0"]["clean_success_failures"] == {
+        "paired_roots": 4, "only_first": 0, "only_second": 2, "p": 0.5}
+    assert test["paired_against_r1"]["bc0_vs_r1"]["clean_success_failures"]["only_first"] == 2
+    assert "safety-clean successes" in tables.markdown(result) and "r1_vs_bc0" in tables.markdown(result)
+    # An extra adapter evaluated alone on the three suites is joined by its label.
+    write(out / "extra" / "evaluations" / "test_bcx" / "bc0_eval.json", [episode(0, False)] + ok[1:])
+    extra = tables.build(tmp_path, ["bcx"])
+    assert extra["test"]["policies"]["bcx"]["successes"] == 3 and "bcx_vs_bc0" in extra["test"]["paired_against_bc0"]
+    assert "hard" in extra and "bcx" not in extra["hard"]["policies"]
+    with pytest.raises(ValueError):
+        tables.suite_sources(tmp_path, ["bc0"])
     # R1 and R2 tie on successes (4 each); R1 has fewer violations, so R1 is selected.
     assert result["round_selection"]["selected"] == "r1" and result["round_selection"]["order"] == ["r1", "r2", "bc0"]
     assert "### test" in tables.markdown(result)
@@ -145,6 +160,83 @@ def test_suite_evaluation_takes_one_or_two_labelled_adapters() -> None:
     for bad in (["a"], ["a=/x", "a=/y"], ["expert=/x"], ["a=/x", "b=/y", "c=/z"], []):
         with pytest.raises(ValueError):
             evaluate.parse_policies(bad)
+
+
+def test_budget_tables_join_budgets_by_root_and_compare_with_the_approximation(tmp_path: Path) -> None:
+    budget = _load("budget_tables.py")
+    rows = [{"grouping": {"physical_root_fingerprint": f"root{i}",
+                          "scenario_family": "multi_measurement" if i < 2 else "measurement"}, "audit": {}} for i in range(4)]
+
+    def episode(i: int, ok: bool, steps: int, invalid: int = 0, terminal: bool = True) -> dict:
+        return {"physical_root": f"root{i}", "truth_audited_task_success": ok, "invalid_action_count": invalid,
+                "false_commit_count": 0, "loop_detected": False, "steps": steps, "wls_calls": 2, "tool_counts": {},
+                "terminal": terminal}
+
+    def write(path: Path, payload: object) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def evaluation(*episodes: dict) -> dict:
+        return {"suite_metrics": {"episodes": list(episodes)}}
+
+    out = tmp_path / "out"
+    collection = out / "r1" / "collection"
+    write(collection / "development_scenarios.json", rows)
+    write(collection / "evaluation" / "comparison.json", {"max_steps": 40})
+    # At 40 actions: the expert solves root0 in 20 and root1 in 10; BC0 solves root0 in 14 with an invalid action and
+    # runs root1 to the budget; R1 solves everything.
+    write(collection / "evaluation" / "expert_eval.json",
+          evaluation(episode(0, True, 20), episode(1, True, 10), episode(2, True, 7), episode(3, True, 7)))
+    write(collection / "evaluation" / "bc0_eval.json",
+          evaluation(episode(0, True, 14, 1), episode(1, False, 40, 0, False), episode(2, True, 7), episode(3, True, 7)))
+    write(collection / "evaluation" / "r1_eval.json",
+          evaluation(episode(0, True, 18), episode(1, True, 10), episode(2, True, 7), episode(3, True, 7)))
+    write(out / "bc0.done", {"adapter_tree_sha256": "a" * 64})
+    write(out / "r1" / "training.done", {"candidate_tree_sha256": "b" * 64})
+    # At 12 actions: the expert hands root0 off; BC0 runs root0 to the budget and solves root1 in 11 this time (which
+    # the approximation from the 40-action episode cannot see); R1 solves root2 with an invalid action.
+    evaluated = out / "extra" / "evaluations" / "test_budget12"
+    write(evaluated / "policies.json", {"max_steps": 12, "seed": 1, "expert": "baseline_compare", "policies": {
+        "bc0": {"label": "bc0", "tree_sha256": "a" * 64}, "r1": {"label": "r1", "tree_sha256": "b" * 64}}})
+    write(evaluated / "summary.json", {})
+    write(evaluated / "expert_eval.json",
+          evaluation(episode(0, False, 9), episode(1, True, 10), episode(2, True, 7), episode(3, True, 7)))
+    write(evaluated / "bc0_eval.json",
+          evaluation(episode(0, False, 12, 0, False), episode(1, True, 11), episode(2, True, 7), episode(3, True, 7)))
+    write(evaluated / "r1_eval.json",
+          evaluation(episode(0, False, 12, 0, False), episode(1, True, 10), episode(2, True, 7, 1), episode(3, True, 7)))
+    result = budget.build(tmp_path, [12, 16])
+    assert sorted(result["budgets"]) == ["12", "40"] and result["full_budget"] == 40
+    at12 = result["budgets"]["12"]
+    assert at12["policies"]["expert"]["successes"] == 3 and at12["policies"]["bc0"]["successes"] == 3
+    assert at12["policies"]["r1"]["successes"] == 3 and at12["policies"]["r1"]["clean_successes"] == 2
+    assert at12["policies"]["bc0"]["budget_exhausted_episodes"] == 1 and at12["policies"]["bc0"]["non_terminal_episodes"] == 1
+    assert at12["policies"]["bc0"]["by_family"]["multi_measurement"] == {"successes": 1, "episodes": 2, "clean_successes": 1}
+    approximation = at12["approximation_from_full_budget"]
+    assert approximation["bc0"]["success"]["approximated"] == 2 and approximation["bc0"]["success"]["measured"] == 3
+    assert approximation["bc0"]["success"]["only_measured_roots"] == ["root1"]
+    assert approximation["bc0"]["success"]["only_approximated"] == 0
+    assert approximation["expert"]["success"]["only_measured"] == 0 and approximation["expert"]["success"]["only_approximated"] == 0
+    assert at12["paired"]["bc0_vs_r1"]["success_failures"]["only_first"] == 0
+    assert at12["paired"]["r1_vs_expert"]["clean_success_failures"]["only_first"] == 1
+    assert result["evaluations"]["12"]["adapters_match_receipts"] is True
+    assert result["budgets"]["40"]["approximation_from_full_budget"] == {}
+    text = budget.markdown(result)
+    assert "### Success under the action budget" in text and "only measured 1" in text
+    write(evaluated / "policies.json", {"max_steps": 16, "policies": {}})
+    with pytest.raises(ValueError):
+        budget.build(tmp_path, [12])
+
+
+def test_budget_submit_script_writes_the_horizon_into_its_specs() -> None:
+    submit = (CELL / "submit_extras_20261027.sh").read_text(encoding="utf-8")
+    assert 'BUDGETS=${BUDGETS:-"12 16 20"}' in submit
+    assert "EVAL_MAX_STEPS=%s" in submit and "stage_eval_suite.sbatch" in submit
+    assert '"bc0=$BC0" "r1=$R1"' in submit and 'out/r1/round_summary.json' not in submit
+    stage = (CELL / "stage_eval_suite.sbatch").read_text(encoding="utf-8")
+    # The spec is sourced after pipeline.env, so its EVAL_MAX_STEPS overrides the cell's horizon.
+    assert stage.index('source "$PIPE/pipeline.env"') < stage.index('source "$EVAL_SPEC"')
+    assert '--max-steps "$EVAL_MAX_STEPS"' in stage and '"${EVAL_MAX_STEPS:?}"' in stage
 
 
 @pytest.mark.parametrize("name", CPU_STAGES)

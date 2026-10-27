@@ -15,9 +15,12 @@
 # One or two fixed adapters (and the teacher) on a saved suite, without a
 # collection (evaluate_suite.py; the conventional-only cell's follow-ups,
 # 2026-10-23).  EVAL_SPEC names a file setting EVAL_NAME, EVAL_SUITE,
-# EVAL_POLICIES ("label=adapter" words) and EVAL_EXPERT (0 or 1); the results
-# go to $OUT/extra/evaluations/$EVAL_NAME.  Worker processes share the GPU as
-# in stage_eval.sbatch, and a requeued job resumes from their per-episode
+# EVAL_POLICIES ("label=adapter" words) and EVAL_EXPERT (0 or 1), and may set
+# EVAL_MAX_STEPS, the evaluation horizon (2026-10-27: the budget-limited
+# evaluations of note section 7; pipeline.env's EPISODE_MAX_STEPS otherwise,
+# since the spec is sourced after it); the results go to
+# $OUT/extra/evaluations/$EVAL_NAME.  Worker processes share the GPU as in
+# stage_eval.sbatch, and a requeued job resumes from their per-episode
 # checkpoints.
 set -euo pipefail
 PIPE=/scratch/yx3882/research_full_pipeline_20260912
@@ -27,9 +30,10 @@ pipeline_environment
 : "${EVAL_SPEC:?EVAL_SPEC must name the evaluation spec file}"
 # shellcheck source=/dev/null
 source "$EVAL_SPEC"
-: "${EVAL_NAME:?}" "${EVAL_SUITE:?}" "${EVAL_POLICIES:?}"
+: "${EVAL_NAME:?}" "${EVAL_SUITE:?}" "${EVAL_POLICIES:?}" "${EVAL_MAX_STEPS:?}"
+[[ "$EVAL_MAX_STEPS" =~ ^[0-9]+$ && "$EVAL_MAX_STEPS" -ge 1 ]] || { echo "EVAL_MAX_STEPS must be a positive integer: $EVAL_MAX_STEPS" >&2; exit 2; }
 EVAL_OUT=$OUT/extra/evaluations
-echo "[xeval:$EVAL_NAME] job ${SLURM_JOB_ID:-manual} restart ${SLURM_RESTART_COUNT:-0} node ${SLURMD_NODENAME:-?} $(date -u +%FT%TZ)"
+echo "[xeval:$EVAL_NAME] job ${SLURM_JOB_ID:-manual} restart ${SLURM_RESTART_COUNT:-0} node ${SLURMD_NODENAME:-?} horizon $EVAL_MAX_STEPS $(date -u +%FT%TZ)"
 [[ -s "$EVAL_SUITE" ]] || { echo "suite missing: $EVAL_SUITE" >&2; exit 2; }
 mkdir -p "$EVAL_OUT"
 nvidia-smi --query-gpu=name,memory.total,uuid,driver_version --format=csv,noheader \
