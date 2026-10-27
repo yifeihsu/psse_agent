@@ -16,6 +16,9 @@ class HardDrawReportTests(unittest.TestCase):
                  _root("c", "parameter", "ambiguous"), _root("d", "measurement"), _root("e", "harmonic")]
         self.assertEqual(root_stratum(suite[0]), "parameter:misranked")
         self.assertEqual(root_stratum(suite[3]), "measurement")
+        compound = {"execution": {"scenario_id": "z"}, "grouping": {"scenario_family": "compound"},
+                    "audit": {"compound": {"class": "rx2_adjacent"}, "parameter_ranking": {"stratum": "ambiguous"}}}
+        self.assertEqual(root_stratum(compound), "compound:rx2_adjacent")
         tags = [
             {"scenario_id": "a", "tag": "not_separable", "distinguishable_by_final_verdict": True},
             {"scenario_id": "b", "tag": "separable_by_verification"},

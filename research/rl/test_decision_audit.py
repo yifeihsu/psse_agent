@@ -87,6 +87,22 @@ class DecisionAuditTests(unittest.TestCase):
         self.assertEqual(actions[1], {"tool": "correct_parameters", "arguments": {"state_id": "s0", "line_index": 7}})
         self.assertEqual(truth_correction_actions({"audit": {"truth": {}}}, "s0"), [])
 
+    def test_breaker_truths_are_probed_by_breaker_name(self) -> None:
+        root = {"audit": {"truth": {
+            "true_parameter_errors": [{"branch_row0": 2}],
+            "true_topology_errors": [
+                {"cb_name": "CB_4_N1_N2", "true_cb_closed": False, "physical_effect": "bus_split"},
+                {"cb_name": "CB_13R1_13R2", "true_cb_closed": False, "branch_row0": 19, "physical_effect": "dangling_line_terminal"},
+            ],
+        }}}
+        actions = truth_correction_actions(root, "s0")
+        self.assertEqual([a["tool"] for a in actions], ["correct_parameters", "correct_topology", "correct_topology"])
+        self.assertEqual(actions[1]["arguments"], {"state_id": "s0", "cb_name": "CB_13R1_13R2", "status": 0})
+        self.assertEqual(actions[2]["arguments"], {"state_id": "s0", "cb_name": "CB_4_N1_N2", "status": 0})
+        # A line-level truth without a breaker keeps the branch-status probe.
+        line_level = truth_correction_actions({"audit": {"truth": {"true_topology_errors": [{"branch_row0": 5}]}}}, "s0")
+        self.assertEqual(line_level, [{"tool": "correct_topology", "arguments": {"state_id": "s0", "branch_row0": 5}}])
+
     def test_the_scripted_policy_replays_then_defers_to_the_expert_with_live_state_ids(self) -> None:
         class Expert:
             def act(self, observation):

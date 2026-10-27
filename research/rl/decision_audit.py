@@ -42,6 +42,7 @@ from psse_env.actions import (  # noqa: E402
     CORRECT_TOPOLOGY,
     RUN_WLS,
 )
+from psse_env.oracle.expert_variants import EXPERT_VARIANTS  # noqa: E402
 
 AUDIT_CONTRACT = "rl_decision_audit_v1"
 BINS = ("rule_best", "legal_alternative", "interface_limit", "evidence_limit", "no_decision")
@@ -231,8 +232,18 @@ def truth_correction_actions(root: Mapping[str, Any], active_state_id: str) -> l
         actions.append({"tool": CORRECT_MEASUREMENTS, "arguments": {"state_id": active_state_id, "suspect_group": [int(i) for i in meters]}})
     for line in sorted(_truth_branch_targets(truth, "parameter")):
         actions.append({"tool": CORRECT_PARAMETERS, "arguments": {"state_id": active_state_id, "line_index": int(line) + 1}})
-    for branch in sorted(_truth_branch_targets(truth, "topology")):
-        actions.append({"tool": CORRECT_TOPOLOGY, "arguments": {"state_id": active_state_id, "branch_row0": int(branch)}})
+    # A breaker-status truth (the node/breaker roots: every topology root
+    # since 2026-09-12, every compound root) is probed through the breaker
+    # route the deployed executor represents it by, bus splits included; a
+    # line-level truth without a breaker keeps the branch-status probe.
+    named = [item for item in truth.get("true_topology_errors") or [] if isinstance(item, Mapping) and item.get("cb_name")]
+    if named:
+        for item in sorted(named, key=lambda row: str(row["cb_name"])):
+            actions.append({"tool": CORRECT_TOPOLOGY, "arguments": {
+                "state_id": active_state_id, "cb_name": str(item["cb_name"]), "status": int(bool(item.get("true_cb_closed")))}})
+    else:
+        for branch in sorted(_truth_branch_targets(truth, "topology")):
+            actions.append({"tool": CORRECT_TOPOLOGY, "arguments": {"state_id": active_state_id, "branch_row0": int(branch)}})
     return actions
 
 
@@ -242,6 +253,57 @@ def _basis(episode: Mapping[str, Any]) -> str:
     if isinstance(assessment, Mapping) and assessment.get("basis"):
         return str(assessment["basis"])
     return "none" if not episode.get("truth_audited_task_success") else "unknown"
+
+
+def truth_audit_reasons(episode: Mapping[str, Any]) -> list[str]:
+    """The truth audit's reasons for an episode that is not a truth-audited success."""
+    audit = episode.get("audit") if isinstance(episode.get("audit"), Mapping) else {}
+    assessment = audit.get("truth_audited_task_assessment") if isinstance(audit, Mapping) else None
+    if not isinstance(assessment, Mapping):
+        return []
+    return [str(reason) for reason in assessment.get("reasons") or []]
+
+
+_VERIFY_METRIC_KEYS = ("global_progress", "target_progress", "globally_resolved", "remaining_suspect_count",
+                       "target_metric_value", "target_metric_threshold", "physical_constraints_ok", "chi_square_ratio")
+
+
+def correction_outcomes(steps: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Each correction of a policy trace with its verification metrics and the verdict its lifecycle step carried.
+
+    The evaluator records the offline disposition of the open candidate on the
+    step that disposes of it (commit or rollback), so a correction's verdict is
+    read from the first lifecycle step after it; the verification metrics come
+    from the candidate's own WLS solve in between.
+    """
+    out: list[dict[str, Any]] = []
+    for index, step in enumerate(steps):
+        action = step.get("action") or {}
+        tool = str(action.get("tool"))
+        if tool not in CORRECTION_TOOLS:
+            continue
+        arguments = {k: v for k, v in (action.get("arguments") or {}).items() if k != "state_id"}
+        record: dict[str, Any] = {
+            "step": index, "tool": tool, "arguments": arguments,
+            "execution_status": step.get("execution_status"), "error_code": step.get("error_code"),
+            "verification": None, "verdict": None, "lifecycle": None,
+        }
+        if record["execution_status"] == "success":
+            for later in steps[index + 1:]:
+                later_action = later.get("action") or {}
+                later_tool = str(later_action.get("tool"))
+                if later_tool in CORRECTION_TOOLS:
+                    break
+                output = later.get("policy_tool_output") if isinstance(later.get("policy_tool_output"), Mapping) else {}
+                metrics = output.get("tool_metrics") if isinstance(output.get("tool_metrics"), Mapping) else {}
+                if later_tool == RUN_WLS and record["verification"] is None and any(key in metrics for key in _VERIFY_METRIC_KEYS):
+                    record["verification"] = {key: metrics.get(key) for key in _VERIFY_METRIC_KEYS if key in metrics}
+                if later_tool in LIFECYCLE_TOOLS and later_tool != "finalize_diagnosis":
+                    record["verdict"] = later.get("candidate_disposition_offline")
+                    record["lifecycle"] = later_tool
+                    break
+        out.append(record)
+    return out
 
 
 # --------------------------------------------------------------------------- policies
@@ -463,7 +525,11 @@ def audit_root(root: Mapping[str, Any], *, harness: _Harness, max_states: int, m
                 truth_branch = {"action": truth_actions[0], "all_truth_actions": truth_actions, "applied": policy.applied,
                                 "unapplied": policy.pending,
                                 "execution_status": taken.get("execution_status"), "error_code": taken.get("error_code"),
-                                "outcome": outcome, "better": better(outcome, reference)}
+                                "outcome": outcome, "better": better(outcome, reference),
+                                # Why the probe fell short, when it did: the truth audit's
+                                # reasons and how each applied correction fared.
+                                "audit_reasons": truth_audit_reasons(episode),
+                                "corrections": correction_outcomes(branch_steps)}
         state_bin = classify_state(reference, alternatives, truth_branch)
         states.append({
             "step": index,
@@ -584,7 +650,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--suite", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--profile", default="suspicion_gated_diagnostics")
-    parser.add_argument("--expert", default="ledger_ranked", choices=("baseline", "ledger", "ledger_ranked", "ledger_ranked_compare"))
+    parser.add_argument("--expert", default="ledger_ranked", choices=EXPERT_VARIANTS)
     parser.add_argument("--triage-model", default=None)
     parser.add_argument("--progress-basis", default=None)
     parser.add_argument("--strata", nargs="*", default=None, help="root strata to audit (hard_draw_report.root_stratum names)")

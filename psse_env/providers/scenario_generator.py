@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from dataclasses import dataclass
 import json
 import math
 import os
@@ -306,6 +307,173 @@ SCENARIO_FAMILIES = (
     *COMPOSED_FAMILIES,
     "three_phase_unbalance",
     "telemetry_no_disturbance",
+    # Compound errors (2026-10-27) come last so the earlier families' draws
+    # are unchanged whether or not a plan asks for them.
+    "compound",
+)
+
+# --------------------------------------------------------------- compound errors
+#
+# Randomly combined errors (compound-errors assessment of 2026-10-27, stage 1).
+# A compound root draws a set of error atoms: a meter group of one to three
+# gross errors (the existing additive overlay with the sigma floor), one or two
+# line R/X errors (both factors drawn from the corpus's ranges) and one or two
+# breaker-status errors (dangling line terminal or bus split, as the topology
+# family samples them).  The structural atoms change the physical truth and are
+# re-solved on the node/breaker path the topology family uses: an AC OPF on the
+# true contracted topology with the true impedances, a power flow of the
+# 65-node network, one substation telemetry draw, the operator vector read from
+# it on the schematic-normal layout, and eight repeated scans drawn about the
+# same noiseless operating point (the tabular corpus draws its scans the same
+# way).  Admission is physical only: the reported model alarms and the true
+# model is clean; no teacher-solvability gate runs.  The atom set lives in the
+# hidden truth and the offline ``compound`` block; the policy-visible metadata
+# carries the same fields for every class (one more constraint of the strict
+# evidence boundary).
+COMPOUND_FAMILY = "compound"
+COMPOUND_CONTRACT = "compound_errors_v1"
+COMPOUND_SCAN_COUNT = 8
+COMPOUND_FACTOR_RANGES = ((0.1, 0.5), (2.0, 5.0))
+COMPOUND_BREAKER_EFFECTS = ("dangling_line_terminal", "bus_split")
+COMPOUND_PARAMETER_PLACEMENTS = ("any", "adjacent", "distant")
+COMPOUND_BREAKER_PLACEMENTS = ("any", "same_line", "shared_bus", "corridor", "distant")
+COMPOUND_BREAKER_PAIRS = ("any", "mixed")
+COMPOUND_METER_PLACEMENTS = ("random", "on_fault")
+COMPOUND_OVERLAY_MAGNITUDE_RANGE = (0.10, 0.30)
+#: Structural-zero rows of the operator vector (sections without an injection
+#: meter) are exact constraints of the WLS; the multi-scan parameter corrector
+#: takes a strictly positive variance vector, so the scans declare the nominal
+#: injection-meter sigma on those rows (a zero-injection pseudo-measurement).
+COMPOUND_SCAN_PSEUDO_SIGMA_CHANNEL = "inj"
+
+
+@dataclass(frozen=True)
+class CompoundSpec:
+    """One class of compound roots: how many atoms of each kind and where they sit.
+
+    ``meters`` is a count or an inclusive ``(low, high)`` range drawn per root.
+    ``parameter_placement`` constrains two R/X lines (``adjacent``: the lines
+    share a bus; ``distant``: no bus of one is within one branch of a bus of
+    the other).  ``breaker_placement`` constrains one R/X line against one
+    breaker (``same_line``: the breaker isolates a terminal of the faulted line;
+    ``shared_bus``: the breaker's yard is an endpoint of the line but not its
+    own terminal; ``corridor``: either; ``distant``: at least two branches
+    away).  ``breaker_pair`` ``mixed`` asks two breakers of different effects.
+    ``meter_placement`` ``on_fault`` puts the first meter on a flow channel of
+    a faulted line (or the injection of a split bus when no line is faulted).
+    """
+
+    name: str
+    meters: int | tuple[int, int] = 0
+    parameters: int = 0
+    breakers: int = 0
+    parameter_placement: str = "any"
+    breaker_placement: str = "any"
+    breaker_effects: tuple[str, ...] = COMPOUND_BREAKER_EFFECTS
+    breaker_pair: str = "any"
+    meter_placement: str = "random"
+
+    def __post_init__(self) -> None:
+        if not str(self.name).strip():
+            raise ValueError("a compound class needs a name")
+        meters = self.meters
+        if isinstance(meters, (list, tuple)):
+            if len(meters) != 2 or not all(isinstance(v, int) and not isinstance(v, bool) for v in meters):
+                raise ValueError("meters must be an int or an inclusive (low, high) pair")
+            low, high = int(meters[0]), int(meters[1])
+            object.__setattr__(self, "meters", (low, high))
+        else:
+            if isinstance(meters, bool) or not isinstance(meters, int):
+                raise ValueError("meters must be an int or an inclusive (low, high) pair")
+            low = high = int(meters)
+        if not 0 <= low <= high <= 3:
+            raise ValueError("a compound root carries zero to three meter errors")
+        for field_name in ("parameters", "breakers"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 2:
+                raise ValueError(f"{field_name} must be 0, 1 or 2")
+        if self.parameters + self.breakers > 2:
+            raise ValueError("at most two structural atoms per compound root")
+        if low + self.parameters + self.breakers == 0:
+            raise ValueError("a compound class must inject at least one error")
+        if self.parameter_placement not in COMPOUND_PARAMETER_PLACEMENTS:
+            raise ValueError(f"parameter_placement must be one of {COMPOUND_PARAMETER_PLACEMENTS}")
+        if self.parameter_placement != "any" and self.parameters != 2:
+            raise ValueError("parameter_placement constrains a pair of R/X lines")
+        if self.breaker_placement not in COMPOUND_BREAKER_PLACEMENTS:
+            raise ValueError(f"breaker_placement must be one of {COMPOUND_BREAKER_PLACEMENTS}")
+        if self.breaker_placement != "any" and not (self.parameters == 1 and self.breakers == 1):
+            raise ValueError("breaker_placement constrains one R/X line against one breaker")
+        effects = tuple(str(effect) for effect in self.breaker_effects)
+        if not effects or set(effects) - set(COMPOUND_BREAKER_EFFECTS):
+            raise ValueError(f"breaker_effects must be a non-empty subset of {COMPOUND_BREAKER_EFFECTS}")
+        object.__setattr__(self, "breaker_effects", effects)
+        if self.breaker_pair not in COMPOUND_BREAKER_PAIRS:
+            raise ValueError(f"breaker_pair must be one of {COMPOUND_BREAKER_PAIRS}")
+        if self.breaker_pair == "mixed" and (self.breakers != 2 or len(effects) < 2):
+            raise ValueError("a mixed breaker pair needs two breakers and both effects")
+        if self.meter_placement not in COMPOUND_METER_PLACEMENTS:
+            raise ValueError(f"meter_placement must be one of {COMPOUND_METER_PLACEMENTS}")
+        if self.meter_placement == "on_fault" and (low == 0 or self.parameters + self.breakers == 0):
+            raise ValueError("on_fault meter placement needs a meter and a structural atom")
+
+    @property
+    def meter_range(self) -> tuple[int, int]:
+        meters = self.meters
+        return (int(meters[0]), int(meters[1])) if isinstance(meters, tuple) else (int(meters), int(meters))
+
+    def draw_meter_count(self, rng: np.random.Generator) -> int:
+        low, high = self.meter_range
+        return low if low == high else int(rng.integers(low, high + 1))
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any] | "CompoundSpec") -> "CompoundSpec":
+        if isinstance(value, CompoundSpec):
+            return value
+        if not isinstance(value, Mapping):
+            raise TypeError("a compound class is a CompoundSpec or a mapping")
+        payload = dict(value)
+        if "meters" in payload and isinstance(payload["meters"], list):
+            payload["meters"] = tuple(payload["meters"])
+        if "breaker_effects" in payload:
+            payload["breaker_effects"] = tuple(payload["breaker_effects"])
+        return cls(**payload)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "meters": list(self.meters) if isinstance(self.meters, tuple) else int(self.meters),
+            "parameters": int(self.parameters),
+            "breakers": int(self.breakers),
+            "parameter_placement": self.parameter_placement,
+            "breaker_placement": self.breaker_placement,
+            "breaker_effects": list(self.breaker_effects),
+            "breaker_pair": self.breaker_pair,
+            "meter_placement": self.meter_placement,
+        }
+
+
+#: The stage-1 study classes (docs/compound_errors_study_20261027.md): the
+#: assessment's pairs, the three-atom combinations, two breakers by effect pair,
+#: and the current single-error families drawn by the same sampler as controls.
+DEFAULT_COMPOUND_CLASSES: tuple[CompoundSpec, ...] = (
+    CompoundSpec("rx2_adjacent", parameters=2, parameter_placement="adjacent"),
+    CompoundSpec("rx2_distant", parameters=2, parameter_placement="distant"),
+    CompoundSpec("rx_cb_same_line", parameters=1, breakers=1,
+                 breaker_effects=("dangling_line_terminal",), breaker_placement="same_line"),
+    CompoundSpec("rx_cb_shared_bus", parameters=1, breakers=1,
+                 breaker_effects=("dangling_line_terminal",), breaker_placement="shared_bus"),
+    CompoundSpec("rx_cb_distant", parameters=1, breakers=1,
+                 breaker_effects=("dangling_line_terminal",), breaker_placement="distant"),
+    CompoundSpec("meter_rx2", meters=1, parameters=2),
+    CompoundSpec("meter_on_rx", meters=1, parameters=1, meter_placement="on_fault"),
+    CompoundSpec("rx_cb_meter", meters=1, parameters=1, breakers=1, breaker_effects=("dangling_line_terminal",)),
+    CompoundSpec("cb2_dangling", breakers=2, breaker_effects=("dangling_line_terminal",)),
+    CompoundSpec("cb2_mixed", breakers=2, breaker_pair="mixed"),
+    CompoundSpec("cb2_split", breakers=2, breaker_effects=("bus_split",)),
+    CompoundSpec("control_rx", parameters=1),
+    CompoundSpec("control_cb", breakers=1),
+    CompoundSpec("control_meter", meters=(1, 3)),
 )
 
 _SNAPSHOT_PROVENANCE = "deployment_sensor:scada_snapshot"
@@ -508,6 +676,8 @@ class Round0ScenarioGenerator:
         min_measurement_error_sigma: float | None = None,
         evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
         effect_band: tuple[float, float] | str | None = None,
+        compound_classes: Sequence[CompoundSpec | Mapping[str, Any]] | None = None,
+        compound_solo_effects: bool = True,
     ) -> None:
         self.evidence_profile = validate_evidence_profile(evidence_profile)
         # Effect-targeted magnitudes (research.classifier_triage.effect_sampler, 2026-10-12):
@@ -623,6 +793,16 @@ class Round0ScenarioGenerator:
                 f"{sorted(TOPOLOGY_EFFECTS)}, got {sorted(unknown_effects)}"
             )
         self.hif_max_scans = int(hif_max_scans)
+        # Compound-error classes (``build_compound`` and the ``compound`` plan
+        # entry); the solo-effect probes cost one physical solve per
+        # structural atom and change no draw.
+        self.compound_classes: tuple[CompoundSpec, ...] = tuple(
+            CompoundSpec.from_mapping(spec)
+            for spec in (DEFAULT_COMPOUND_CLASSES if compound_classes is None else compound_classes)
+        )
+        if len({spec.name for spec in self.compound_classes}) != len(self.compound_classes):
+            raise ValueError("compound class names must be unique")
+        self.compound_solo_effects = bool(compound_solo_effects)
         self.noise_profile_rows = int(noise_profile_rows)
         self.source_partition = source_partition
         if not (0.0 < float(unbalance_vuf_threshold) < 1.0):
@@ -3909,6 +4089,675 @@ class Round0ScenarioGenerator:
                 }
         return composed
 
+    # ------------------------------------------------------------ compound errors
+
+    def _compound_lines(self) -> list[int]:
+        """Branch rows the tabular corpus perturbs: in-service lines (no tap) with nonzero R and X."""
+        branch = np.asarray(self._clean_case()["branch"], dtype=float)
+        return [
+            k for k in range(self.nl)
+            if float(branch[k, 8]) == 0.0 and abs(float(branch[k, 2])) > 1e-9
+            and abs(float(branch[k, 3])) > 1e-9 and float(branch[k, 10]) > 0.0
+        ]
+
+    def _line_buses(self, row0: int) -> set[int]:
+        branch = np.asarray(self._clean_case()["branch"], dtype=float)
+        return {int(branch[int(row0), 0]), int(branch[int(row0), 1])}
+
+    def _bus_distances(self) -> dict[int, dict[int, int]]:
+        """All-pairs shortest path lengths over the planning bus graph (every branch, transformers included)."""
+        if getattr(self, "_bus_distance_table", None) is None:
+            branch = np.asarray(self._clean_case()["branch"], dtype=float)
+            buses = sorted({int(b) for row in branch for b in (row[0], row[1])})
+            neighbours: dict[int, set[int]] = {b: set() for b in buses}
+            for row in branch:
+                f, t = int(row[0]), int(row[1])
+                neighbours[f].add(t)
+                neighbours[t].add(f)
+            table: dict[int, dict[int, int]] = {}
+            for source in buses:
+                distance = {source: 0}
+                frontier = [source]
+                while frontier:
+                    nxt = []
+                    for node in frontier:
+                        for other in neighbours[node]:
+                            if other not in distance:
+                                distance[other] = distance[node] + 1
+                                nxt.append(other)
+                    frontier = nxt
+                table[source] = distance
+            self._bus_distance_table = table
+        return self._bus_distance_table
+
+    def _bus_set_distance(self, a: Iterable[int], b: Iterable[int]) -> int:
+        table = self._bus_distances()
+        return min(table[int(x)][int(y)] for x in a for y in b)
+
+    def _compound_breaker_catalogue(self) -> list[dict[str, Any]]:
+        """Single breaker-status errors of the two sampled effects, whatever ``topology_effects`` says."""
+        if getattr(self, "_compound_breakers", None) is None:
+            from Transmission.ieee14_full_measurements import single_flip_catalogue
+
+            self._compound_breakers = [
+                {**entry, "effect": _breaker_effect_class(entry["category"])}
+                for entry in single_flip_catalogue(self._full_topology_model())
+                if _breaker_effect_class(entry["category"]) in COMPOUND_BREAKER_EFFECTS
+            ]
+        return self._compound_breakers
+
+    @staticmethod
+    def _breaker_buses(entry: Mapping[str, Any]) -> set[int]:
+        buses = {int(b) for b in (entry.get("affected_planning_buses") or [])}
+        if buses:
+            return buses
+        return {int(part) for part in str(entry.get("yard") or "").split("_") if part.isdigit()}
+
+    def _parameter_pair_relation(self, a: int, b: int) -> tuple[int, str]:
+        distance = self._bus_set_distance(self._line_buses(a), self._line_buses(b))
+        return distance, ("adjacent" if distance == 0 else "one_apart" if distance == 1 else "distant")
+
+    def _parameter_breaker_relation(self, row0: int, entry: Mapping[str, Any]) -> tuple[int, str]:
+        if entry.get("effect") == "dangling_line_terminal" and int(entry.get("equivalent_branch_row0", -1)) == int(row0):
+            return 0, "same_line"
+        distance = self._bus_set_distance(self._breaker_buses(entry), self._line_buses(row0))
+        return distance, ("shared_bus" if distance == 0 else "one_apart" if distance == 1 else "distant")
+
+    def _breaker_pair_relation(self, first: Mapping[str, Any], second: Mapping[str, Any]) -> tuple[int, str]:
+        distance = self._bus_set_distance(self._breaker_buses(first), self._breaker_buses(second))
+        return distance, ("same_bus" if distance == 0 else "one_apart" if distance == 1 else "distant")
+
+    def _compound_breaker_pair_valid(self, first: Mapping[str, Any], second: Mapping[str, Any]) -> bool:
+        """Two flips that keep their catalogued effects beside each other.
+
+        The pair must open exactly two more sections than the normal map, each
+        flip must still read as its catalogued effect once the other is applied
+        (the deployed classifier of ``correct_topology`` decides), and two
+        terminals of one line are not sampled together: on the operator's
+        model the second of them is a no-op.
+        """
+        if first["cb_name"] == second["cb_name"]:
+            return False
+        if (
+            first.get("effect") == "dangling_line_terminal"
+            and second.get("effect") == "dangling_line_terminal"
+            and int(first.get("equivalent_branch_row0", -1)) == int(second.get("equivalent_branch_row0", -2))
+        ):
+            return False
+        from Transmission.ieee14_full_substation import status_labels
+
+        model = self._full_topology_model()
+        pair = {first["cb_name"]: bool(first["true_closed"]), second["cb_name"]: bool(second["true_closed"])}
+        if len(model.components(pair)) != len(model.components({})) + 2:
+            return False
+        reference = self._clean_case()
+        for entry, other in ((first, second), (second, first)):
+            labels = status_labels(model, {other["cb_name"]: bool(other["true_closed"])})
+            effect = MatpowerDeploymentProviders._breaker_effect(
+                model, reference, labels, entry["cb_name"], bool(entry["true_closed"])
+            )
+            if effect.get("effect") != entry.get("effect"):
+                return False
+            if entry.get("effect") == "dangling_line_terminal" and int(effect.get("branch_row0", -1)) != int(entry["equivalent_branch_row0"]):
+                return False
+        return True
+
+    def _draw_compound_structure(self, spec: CompoundSpec) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        """Draw the structural atoms of one root uniformly among the admissible placements."""
+        rng = self._rng
+        lines = self._compound_lines()
+        catalogue = [entry for entry in self._compound_breaker_catalogue() if entry["effect"] in spec.breaker_effects]
+        if spec.breakers and not catalogue:
+            raise ScenarioRejected("compound_breaker_effects_unavailable", str(spec.breaker_effects))
+
+        def pair_ok(a: int, b: int) -> bool:
+            distance, relation = self._parameter_pair_relation(a, b)
+            if spec.parameter_placement == "adjacent":
+                return relation == "adjacent"
+            if spec.parameter_placement == "distant":
+                return distance >= 2
+            return True
+
+        def breaker_ok(row0: int, entry: Mapping[str, Any]) -> bool:
+            distance, relation = self._parameter_breaker_relation(row0, entry)
+            if spec.breaker_placement == "same_line":
+                return relation == "same_line"
+            if spec.breaker_placement == "shared_bus":
+                return relation == "shared_bus"
+            if spec.breaker_placement == "corridor":
+                return relation in {"same_line", "shared_bus"}
+            if spec.breaker_placement == "distant":
+                return distance >= 2
+            return True
+
+        def pick(options: Sequence[Any]) -> Any:
+            if not options:
+                raise ScenarioRejected("compound_placement_unavailable", spec.name)
+            return options[int(rng.integers(len(options)))]
+
+        parameter_rows: list[int] = []
+        breaker_entries: list[dict[str, Any]] = []
+        if spec.parameters == 2:
+            parameter_rows = list(pick([(a, b) for a in lines for b in lines if a < b and pair_ok(a, b)]))
+        elif spec.parameters == 1 and spec.breakers == 1:
+            row0, entry = pick([(k, e) for k in lines for e in catalogue if breaker_ok(k, e)])
+            parameter_rows, breaker_entries = [row0], [entry]
+        elif spec.parameters == 1:
+            parameter_rows = [pick(lines)]
+        if spec.breakers == 2:
+            pairs = [
+                (first, second)
+                for index, first in enumerate(catalogue)
+                for second in catalogue[index + 1:]
+                if (spec.breaker_pair != "mixed" or first["effect"] != second["effect"])
+                and self._compound_breaker_pair_valid(first, second)
+            ]
+            breaker_entries = list(pick(pairs))
+        elif spec.breakers == 1 and not breaker_entries:
+            breaker_entries = [pick(catalogue)]
+
+        branch = np.asarray(self._clean_case()["branch"], dtype=float)
+        parameter_atoms = [
+            {
+                "kind": "parameter",
+                "branch_row0": int(row0),
+                "line_index1": int(row0) + 1,
+                "from_bus": int(branch[row0, 0]),
+                "to_bus": int(branch[row0, 1]),
+                "nominal_r": float(branch[row0, 2]),
+                "nominal_x": float(branch[row0, 3]),
+            }
+            for row0 in parameter_rows
+        ]
+        breaker_atoms = []
+        for entry in breaker_entries:
+            atom = {
+                "kind": "breaker",
+                "cb_name": str(entry["cb_name"]),
+                "cb_yard": str(entry["yard"]),
+                "reported_cb_closed": bool(entry["reported_closed"]),
+                "true_cb_closed": bool(entry["true_closed"]),
+                "physical_effect": str(entry["effect"]),
+                "affected_planning_buses": [int(b) for b in (entry.get("affected_planning_buses") or [])],
+            }
+            if entry["effect"] == "dangling_line_terminal":
+                row0 = int(entry["equivalent_branch_row0"])
+                atom.update(branch_row0=row0, line_index1=row0 + 1, from_bus=int(branch[row0, 0]), to_bus=int(branch[row0, 1]))
+            breaker_atoms.append(atom)
+        atoms = [*parameter_atoms, *breaker_atoms]
+        relations: list[dict[str, Any]] = []
+        for i, first in enumerate(atoms):
+            for j in range(i + 1, len(atoms)):
+                second = atoms[j]
+                if first["kind"] == "parameter" and second["kind"] == "parameter":
+                    distance, relation = self._parameter_pair_relation(first["branch_row0"], second["branch_row0"])
+                elif first["kind"] == "parameter":
+                    distance, relation = self._parameter_breaker_relation(first["branch_row0"], breaker_entries[j - len(parameter_atoms)])
+                elif second["kind"] == "parameter":
+                    distance, relation = self._parameter_breaker_relation(second["branch_row0"], breaker_entries[i - len(parameter_atoms)])
+                else:
+                    distance, relation = self._breaker_pair_relation(
+                        breaker_entries[i - len(parameter_atoms)], breaker_entries[j - len(parameter_atoms)]
+                    )
+                relations.append({"atoms": [i, j], "kinds": [first["kind"], second["kind"]],
+                                  "bus_distance": int(distance), "relation": relation})
+        return parameter_atoms, breaker_atoms, relations
+
+    @staticmethod
+    def _with_impedances(ppc: Mapping[str, Any], parameter_atoms: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        """A copy of ``ppc`` carrying the atoms' true R/X on their lines."""
+        result = copy.deepcopy(dict(ppc))
+        result["branch"] = np.array(result["branch"], dtype=float, copy=True)
+        for atom in parameter_atoms:
+            result["branch"][int(atom["branch_row0"]), 2] = float(atom["clean_r"])
+            result["branch"][int(atom["branch_row0"]), 3] = float(atom["clean_x"])
+        return result
+
+    def _compound_physics(
+        self, true_reference: Mapping[str, Any], true_map: Mapping[str, bool], *, tag: str
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """One physical solution of the true network: AC OPF dispatch, then the node/breaker power flow.
+
+        Returns the noiseless substation telemetry and the contraction info of the
+        true map (its ``node_to_bus`` places the voltage meters).
+        """
+        from Transmission.ieee14_full_measurements import flipped_case
+        from Transmission.ieee14_full_substation import solve_node_breaker, substation_telemetry
+
+        model = self._full_topology_model()
+        truth_case, info, removed = flipped_case(true_reference, dict(true_map), model=model)
+        if removed["dead_buses"]:
+            raise ScenarioRejected("topology_flip_islands_equipment", f"{tag}: {removed}")
+        dispatch = self._solve_ac_opf(truth_case)
+        if dispatch is None:
+            raise ScenarioRejected("opf_diverged", tag)
+        physical, physical_info, physical_removed = solve_node_breaker(
+            model, true_reference, dict(true_map), dispatch, info["node_to_bus"]
+        )
+        if physical is None:
+            raise ScenarioRejected("node_breaker_power_flow_diverged", tag)
+        if physical_removed["dead_buses"]:
+            raise ScenarioRejected("topology_flip_islands_equipment", f"{tag}: {physical_removed}")
+        telemetry = substation_telemetry(physical, model, true_reference, physical_info, physical_removed)
+        return telemetry, info
+
+    def _compound_detection(self, case: str, z: Sequence[float], **noise_options: Any) -> tuple[bool, dict[str, Any]]:
+        """The environment's alarm rule at margin one: chi-square at alpha, or the normalized residual test."""
+        statistic, maximum = self._wls_detection(case, z, **noise_options)
+        limit = self._cached_chi2_limit(case, z, **noise_options)
+        residual_alarm = self._residual_alarm(case, z, **noise_options)
+        alarmed = bool(statistic >= limit or residual_alarm)
+        return alarmed, {
+            "chi_square": float(statistic),
+            "chi_square_threshold": float(limit),
+            "chi_square_ratio": float(statistic / limit) if limit > 0 else None,
+            "max_normalized_residual": float(maximum),
+            "normalized_residual_threshold": self.normalized_residual_threshold,
+            "alarmed": alarmed,
+        }
+
+    def _compound_solo_effects(
+        self,
+        parameter_atoms: Sequence[Mapping[str, Any]],
+        breaker_atoms: Sequence[Mapping[str, Any]],
+        reference: Mapping[str, Any],
+        layout: Mapping[str, Any],
+        noise_options: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Each structural atom alone: its noiseless operator vector's chi-square on the reported model (offline only)."""
+        from Transmission.ieee14_full_substation import operator_vector_for_layout
+
+        effects: list[dict[str, Any]] = []
+        for position, atom in enumerate([*parameter_atoms, *breaker_atoms]):
+            solo_parameters = [atom] if atom["kind"] == "parameter" else []
+            solo_map = {atom["cb_name"]: bool(atom["true_cb_closed"])} if atom["kind"] == "breaker" else {}
+            record: dict[str, Any] = {"atom": position, "kind": atom["kind"]}
+            try:
+                telemetry, _ = self._compound_physics(self._with_impedances(reference, solo_parameters), solo_map, tag=f"solo:{position}")
+                z_solo = _canonicalize_synthesized_measurement_vector(operator_vector_for_layout(telemetry, layout).tolist())
+                _, detail = self._compound_detection(self.case_path, z_solo, **noise_options)
+                record.update(detail)
+            except ScenarioRejected as rejection:
+                record.update(error=rejection.reason)
+            effects.append(record)
+        return effects
+
+    def _compound_parameter_ranking(self, z_obs: Sequence[float], metadata: Mapping[str, Any],
+                                    parameter_atoms: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+        """The deployed parameter context's ranking on the root, with the true lines' ranks (offline only)."""
+        context = self._parameter_gate_provider.get_parameter_context(
+            {
+                "state_id": "offline_compound:root",
+                "case": self.case_path,
+                "measurements": [float(v) for v in z_obs],
+                "metadata": copy.deepcopy(dict(metadata)),
+            }
+        )
+        if context.get("execution_status") == "failure":
+            return None
+        order = [int(item["line_index1"]) for item in context.get("parameter_ranking_distinct_lines") or []]
+        ranks = {
+            str(atom["line_index1"]): (order.index(int(atom["line_index1"])) + 1 if int(atom["line_index1"]) in order else None)
+            for atom in parameter_atoms
+        }
+        present = [rank for rank in ranks.values() if rank is not None]
+        return {
+            **{
+                key: copy.deepcopy(context.get(key))
+                for key in (
+                    "parameter_ranking_dominance_ratio",
+                    "parameter_ranking_top_abs_lambda",
+                    "parameter_ranking_runner_up_abs_lambda",
+                    "parameter_ranking_singleton",
+                    "parameter_ranking_dominant",
+                    "parameter_ranking_candidate_lines",
+                    "route_status",
+                )
+            },
+            "ranked_lines": order,
+            "true_line_ranks": ranks,
+            "true_line_rank": min(present) if present else None,
+            "generation_threshold": self.parameter_ranking_dominance_threshold,
+            "enforced": False,
+            "rank_allowance": None,
+        }
+
+    def _compound_breaker_ranking(self, reference: Mapping[str, Any], telemetry: Mapping[str, Any],
+                                  breaker_atoms: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+        """The node/breaker estimator on the reported map, with the true breakers' ranks (offline only)."""
+        from Transmission.ieee14_full_gse import gse_topology_nlm
+
+        estimate = gse_topology_nlm(self._full_topology_model(), reference, {}, telemetry)
+        if not estimate.get("success"):
+            return None
+        order = [item["cb_name"] for item in estimate["ranking"]]
+        threshold = float(chi2_threshold(max(1, int(estimate["dof"])), self.chi2_alpha))
+        return {
+            "gse_chi_square": float(estimate["chi_square"]),
+            "gse_threshold": threshold,
+            "top_score": float(estimate["ranking"][0]["score"]) if order else None,
+            "runner_up_score": float(estimate["ranking"][1]["score"]) if len(order) > 1 else None,
+            "true_breaker_ranks": {
+                str(atom["cb_name"]): (order.index(atom["cb_name"]) + 1 if atom["cb_name"] in order else None)
+                for atom in breaker_atoms
+            },
+        }
+
+    def _compound_scenario(self, spec: CompoundSpec, index: int) -> dict[str, Any]:
+        """One compound root of ``spec``: structural atoms re-solved, meter atoms overlaid, physically admitted."""
+        from Transmission.ieee14_full_measurements import MODEL_ID, main_section_nodes
+        from Transmission.ieee14_full_substation import (
+            TELEMETRY_SIGMA,
+            add_telemetry_noise,
+            operator_model_from_map,
+            operator_noise_for_layout,
+            operator_vector_for_layout,
+            status_labels,
+        )
+
+        model = self._full_topology_model()
+        rng = self._rng
+        load_scale = self._draw_load_scale()
+        meter_count = spec.draw_meter_count(rng)
+        parameter_atoms, breaker_atoms, relations = self._draw_compound_structure(spec)
+        for atom in parameter_atoms:
+            r_factor = float(rng.uniform(*COMPOUND_FACTOR_RANGES[int(rng.integers(len(COMPOUND_FACTOR_RANGES)))]))
+            x_factor = float(rng.uniform(*COMPOUND_FACTOR_RANGES[int(rng.integers(len(COMPOUND_FACTOR_RANGES)))]))
+            atom.update(
+                r_factor=r_factor,
+                x_factor=x_factor,
+                clean_r=max(1e-6, atom["nominal_r"] * r_factor),
+                clean_x=max(1e-6, atom["nominal_x"] * x_factor),
+            )
+        true_map = {atom["cb_name"]: bool(atom["true_cb_closed"]) for atom in breaker_atoms}
+        tag = f"{spec.name}:{index}"
+        reference = self._scaled_case14(load_scale)
+        true_reference = self._with_impedances(reference, parameter_atoms)
+        telemetry_mean, info = self._compound_physics(true_reference, true_map, tag=tag)
+        telemetry = _canonicalize_telemetry(add_telemetry_noise(telemetry_mean, rng, scale=self.topology_noise_scale))
+        meter_nodes = main_section_nodes(model, info["node_to_bus"], [])
+        clean_case14 = self._clean_case()
+        _, normal_layout = operator_model_from_map(clean_case14, model, {}, meter_nodes)
+        z_clean = _canonicalize_synthesized_measurement_vector(operator_vector_for_layout(telemetry, normal_layout).tolist())
+        operator_noise = operator_noise_for_layout(telemetry, normal_layout)
+        covariance = np.asarray(operator_noise["measurement_covariance"], dtype=float)
+        if not np.array_equal(covariance, np.diag(np.diag(covariance))):
+            raise ScenarioRejected("correlated_operator_noise_unsupported", tag)
+        sigma = [float(value) for value in operator_noise["measurement_sigma"]]
+        structural_zero = [int(i) for i in operator_noise["structural_zero_indices"]]
+        noise_options = {"sigma_z": sigma, "exact_measurement_indices": structural_zero}
+
+        # Eight repeated scans about the noiseless operating point, as the
+        # tabular corpus draws them, with the layout's own sensor sigmas.
+        z_mean = np.asarray(operator_vector_for_layout(telemetry_mean, normal_layout), dtype=float)
+        sigma_array = np.asarray(sigma, dtype=float)
+        scans = [
+            _canonicalize_synthesized_measurement_vector(
+                (z_mean + rng.normal(0.0, 1.0, size=z_mean.shape[0]) * sigma_array).tolist()
+            )
+            for _ in range(COMPOUND_SCAN_COUNT)
+        ]
+        pseudo_sigma = float(TELEMETRY_SIGMA[COMPOUND_SCAN_PSEUDO_SIGMA_CHANNEL]) * self.topology_noise_scale
+        scan_sigma = [value if value > 0.0 else pseudo_sigma for value in sigma]
+
+        # The corrected operator model: the true impedances and the true
+        # breaker map rendered on the planning case.  A bus split re-renders
+        # the layout; a dangling terminal keeps the 14 buses with its line out.
+        clean_reference = self._with_impedances(clean_case14, parameter_atoms)
+        structural_breakers = [atom for atom in breaker_atoms if atom["physical_effect"] == "bus_split"]
+        if structural_breakers:
+            corrected_ppc, corrected_layout = operator_model_from_map(clean_reference, model, true_map, meter_nodes)
+            clean_measurements = _canonicalize_synthesized_measurement_vector(
+                operator_vector_for_layout(telemetry, corrected_layout).tolist()
+            )
+            corrected_noise = operator_noise_for_layout(telemetry, corrected_layout)
+        else:
+            corrected_ppc = copy.deepcopy(clean_reference)
+            for atom in breaker_atoms:
+                corrected_ppc["branch"][int(atom["branch_row0"])][10] = 0.0
+            corrected_layout = None
+            clean_measurements = list(z_clean)
+            corrected_noise = operator_noise
+        corrected_case = self._derived_case(corrected_ppc, "r0_compound")
+        corrected_options = {
+            "sigma_z": [float(v) for v in corrected_noise["measurement_sigma"]],
+            "exact_measurement_indices": [int(i) for i in corrected_noise["structural_zero_indices"]],
+        }
+
+        # Meter atoms: the additive overlay with the sigma floor, on P/Q
+        # channels; ``on_fault`` puts the first one on a faulted element.
+        index_map = measurement_index_map(self.nb, self.nl)
+        channel_of = {
+            i: channel
+            for channel in ("Vm", "Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt")
+            for i in range(index_map[channel].start, index_map[channel].stop)
+        }
+        eligible = [
+            i for channel in ("Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt")
+            for i in range(index_map[channel].start, index_map[channel].stop)
+            if i not in structural_zero
+        ]
+        faulted_channels: dict[int, str] = {}
+        for atom in parameter_atoms:
+            for channel in ("Pf", "Qf", "Pt", "Qt"):
+                faulted_channels[index_map[channel].start + int(atom["branch_row0"])] = "parameter_line"
+        for atom in breaker_atoms:
+            if atom["physical_effect"] == "dangling_line_terminal":
+                for channel in ("Pf", "Qf", "Pt", "Qt"):
+                    faulted_channels.setdefault(index_map[channel].start + int(atom["branch_row0"]), "dangling_line")
+            else:
+                for bus in atom["affected_planning_buses"]:
+                    for channel in ("Pinj", "Qinj"):
+                        faulted_channels.setdefault(index_map[channel].start + int(bus) - 1, "split_bus")
+        chosen: list[int] = []
+        if meter_count and spec.meter_placement == "on_fault":
+            preferred = [i for i, kind in faulted_channels.items() if kind == "parameter_line" and i in eligible]
+            pool = preferred or [i for i in faulted_channels if i in eligible]
+            if not pool:
+                raise ScenarioRejected("compound_no_faulted_meter_channel", tag)
+            chosen.append(int(sorted(pool)[int(rng.integers(len(pool)))]))
+        while len(chosen) < meter_count:
+            pool = [i for i in eligible if i not in chosen]
+            chosen.append(int(pool[int(rng.integers(len(pool)))]))
+        chosen.sort()
+        z_obs = list(z_clean)
+        meter_atoms: list[dict[str, Any]] = []
+        measurement_errors: list[dict[str, Any]] = []
+        for i in chosen:
+            magnitude = float(rng.uniform(*COMPOUND_OVERLAY_MAGNITUDE_RANGE))
+            if self.min_measurement_error_sigma is not None:
+                floor = self.min_measurement_error_sigma * float(sigma[i])
+                magnitude = max(magnitude, floor * float(rng.uniform(1.0, 1.5)))
+            sign = 1.0 if rng.random() < 0.5 else -1.0
+            clean_value = float(z_obs[i])
+            z_obs[i] = clean_value + sign * magnitude
+            channel = channel_of[i]
+            element = (
+                {"bus": i - index_map[channel].start + 1}
+                if channel in {"Vm", "Pinj", "Qinj"}
+                else {"branch_row0": i - index_map[channel].start, "line_index1": i - index_map[channel].start + 1}
+            )
+            measurement_errors.append({"index": int(i), "channel": channel, "observed": float(z_obs[i]), "clean": clean_value})
+            meter_atoms.append(
+                {
+                    "kind": "meter",
+                    "index": int(i),
+                    "channel": channel,
+                    **element,
+                    "offset": float(sign * magnitude),
+                    "sigma_multiple": float(magnitude / sigma[i]) if sigma[i] > 0 else None,
+                    "on_faulted_element": i in faulted_channels,
+                    "faulted_element_kind": faulted_channels.get(i),
+                }
+            )
+
+        # Physical admission: the reported model alarms, the true model is clean.
+        alarmed, reported_detail = self._compound_detection(self.case_path, z_obs, **noise_options)
+        if not alarmed:
+            raise ScenarioRejected(
+                "compound_not_alarmed_on_reported_model",
+                f"{tag}: chi2 {reported_detail['chi_square']:.1f} vs {reported_detail['chi_square_threshold']:.1f}, "
+                f"max|r| {reported_detail['max_normalized_residual']:.2f}",
+            )
+        true_alarmed, true_detail = self._compound_detection(corrected_case, clean_measurements, **corrected_options)
+        if true_alarmed:
+            raise ScenarioRejected(
+                "compound_true_model_not_clean",
+                f"{tag}: chi2 {true_detail['chi_square']:.1f} vs {true_detail['chi_square_threshold']:.1f}, "
+                f"max|r| {true_detail['max_normalized_residual']:.2f}",
+            )
+
+        atom_summary = [
+            *[("parameter", atom["line_index1"], round(atom["r_factor"], 6), round(atom["x_factor"], 6)) for atom in parameter_atoms],
+            *[("breaker", atom["cb_name"], int(atom["true_cb_closed"])) for atom in breaker_atoms],
+            *[("meter", atom["index"], round(atom["offset"], 9)) for atom in meter_atoms],
+        ]
+        scenario = self._base_scenario(
+            self._scenario_id(COMPOUND_FAMILY, spec.name, json.dumps(atom_summary), load_scale, index),
+            case=self.case_path,
+            measurements=z_obs,
+            family=COMPOUND_FAMILY,
+            sigma_z=sigma,
+        )
+        scenario["clean_case"] = corrected_case
+        scenario["clean_measurements"] = list(clean_measurements)
+        scenario["metadata"].update(
+            {
+                "substation_telemetry": telemetry,
+                "reported_breaker_status": status_labels(model),
+                "operator_voltage_meter_nodes": {str(bus): node for bus, node in meter_nodes.items()},
+                "operator_layout": normal_layout,
+                "operator_noise": operator_noise,
+                "structural_zero_indices": structural_zero,
+                "topology_model_id": MODEL_ID,
+                "topology_model_fingerprint": self._full_topology_fingerprint,
+                "parameter_scans": {
+                    "z_scans": scans,
+                    "sigma_z": scan_sigma,
+                    "initial_state_strategy": "observed_vm_plus_configured_case_angles_v1",
+                },
+            }
+        )
+        scenario["true_measurement_errors"] = measurement_errors
+        scenario["true_parameter_errors"] = [
+            {
+                "branch_row0": atom["branch_row0"],
+                "line_index1": atom["line_index1"],
+                "parameter": "rx",
+                "clean_r": atom["clean_r"],
+                "clean_x": atom["clean_x"],
+                "r_factor": atom["r_factor"],
+                "x_factor": atom["x_factor"],
+                "from_bus": atom["from_bus"],
+                "to_bus": atom["to_bus"],
+            }
+            for atom in parameter_atoms
+        ]
+        topology_truth: list[dict[str, Any]] = []
+        for atom in breaker_atoms:
+            truth = {
+                "load_scale": load_scale,
+                "operating_point": "ac_opf",
+                "cb_name": atom["cb_name"],
+                "cb_yard": atom["cb_yard"],
+                "reported_cb_closed": atom["reported_cb_closed"],
+                "true_cb_closed": atom["true_cb_closed"],
+                "physical_effect": atom["physical_effect"],
+                "topology_model_id": MODEL_ID,
+                "topology_model_fingerprint": self._full_topology_fingerprint,
+            }
+            if atom["physical_effect"] == "dangling_line_terminal":
+                truth.update(
+                    expected_status=0,
+                    branch_row0=atom["branch_row0"],
+                    line_index1=atom["line_index1"],
+                    from_bus=atom["from_bus"],
+                    to_bus=atom["to_bus"],
+                )
+            else:
+                truth["affected_planning_buses"] = list(atom["affected_planning_buses"])
+                truth["operator_bus_count_after_fix"] = int(corrected_layout["bus_count"])
+            topology_truth.append(truth)
+        scenario["true_topology_errors"] = topology_truth
+        if parameter_atoms:
+            scenario["release_audit"] = {
+                "tolerances": {
+                    "final_case_abs": max(
+                        max(0.02, 0.10 * max(abs(atom["clean_r"]), abs(atom["clean_x"]))) for atom in parameter_atoms
+                    ),
+                },
+                "tolerance_basis": "multi_scan_parameter_estimator_v2",
+            }
+        self._declare_measurement_recovery_tolerance(scenario, chosen)
+
+        # Offline record of the draw: the atoms, their electrical relations,
+        # each structural atom's solo effect, and the deployed rankings.
+        solo_effects = (
+            self._compound_solo_effects(parameter_atoms, breaker_atoms, reference, normal_layout, noise_options)
+            if self.compound_solo_effects and (len(parameter_atoms) + len(breaker_atoms)) > 0
+            else []
+        )
+        parameter_ranking = (
+            self._compound_parameter_ranking(z_obs, scenario["metadata"], parameter_atoms) if parameter_atoms else None
+        )
+        breaker_ranking = self._compound_breaker_ranking(reference, telemetry, breaker_atoms) if breaker_atoms else None
+        scenario["compound"] = {
+            "contract": COMPOUND_CONTRACT,
+            "class": spec.name,
+            "spec": spec.as_dict(),
+            "load_scale": load_scale,
+            "operating_point": "ac_opf",
+            "atoms": [*parameter_atoms, *breaker_atoms, *meter_atoms],
+            "relations": relations,
+            "meters_on_faulted_elements": sum(1 for atom in meter_atoms if atom["on_faulted_element"]),
+            "detection": {"reported_model": reported_detail, "true_model": true_detail},
+            "solo_effects": solo_effects,
+            "parameter_ranking": parameter_ranking,
+            "breaker_ranking": breaker_ranking,
+            "operator_bus_count_after_fix": int(corrected_layout["bus_count"]) if corrected_layout else self.nb,
+        }
+        if parameter_ranking is not None:
+            scenario["parameter_ranking"] = {
+                key: copy.deepcopy(parameter_ranking.get(key))
+                for key in (
+                    "parameter_ranking_dominance_ratio",
+                    "parameter_ranking_top_abs_lambda",
+                    "parameter_ranking_runner_up_abs_lambda",
+                    "parameter_ranking_singleton",
+                    "true_line_rank",
+                    "true_line_ranks",
+                    "generation_threshold",
+                    "enforced",
+                    "rank_allowance",
+                )
+            }
+        return scenario
+
+    def _build_compound_class(self, spec: CompoundSpec, count: int) -> list[dict[str, Any]]:
+        built: list[dict[str, Any]] = []
+        attempts = 0
+        while len(built) < count and attempts < count * 8:
+            attempts += 1
+            try:
+                scenario = self._compound_scenario(spec, attempts)
+                self._record_built(built, COMPOUND_FAMILY, scenario, "synthesized_pypower")
+            except ScenarioRejected as rejection:
+                self._record_skip(f"{COMPOUND_FAMILY}:{spec.name}", f"synthesized_{attempts}", rejection)
+        return built
+
+    def build_compound(self, plan: Mapping[str, int]) -> list[dict[str, Any]]:
+        """Build compound roots per the class->count plan (classes of ``compound_classes``)."""
+        by_name = {spec.name: spec for spec in self.compound_classes}
+        unknown = sorted(set(plan) - set(by_name))
+        if unknown:
+            raise ValueError(f"Unknown compound classes: {unknown}")
+        scenarios: list[dict[str, Any]] = []
+        for spec in self.compound_classes:
+            count = int(plan.get(spec.name, 0))
+            if count > 0:
+                scenarios.extend(self._build_compound_class(spec, count))
+        return scenarios
+
     # ---------------------------------------------------------------- driver
 
     def build(self, plan: Mapping[str, int]) -> list[dict[str, Any]]:
@@ -3919,6 +4768,9 @@ class Round0ScenarioGenerator:
         supported = set(self.system.supported_families)
         if self.admission_mode == "physical":
             supported &= {"no_error", "measurement", "multi_measurement", "parameter", "measurement+parameter"}
+        if self.system.case_id == "case14":
+            # Compound roots admit themselves physically on the node/breaker model.
+            supported.add(COMPOUND_FAMILY)
         unsupported = sorted(family for family, count in plan.items() if int(count) > 0 and family not in supported)
         if unsupported:
             raise ValueError(f"Unsupported families for {self.system.case_id}/{self.admission_mode}: {unsupported}")
@@ -3930,82 +4782,91 @@ class Round0ScenarioGenerator:
             scenarios.extend(self._build_family(family, count))
         return scenarios
 
+    def _record_built(self, built: list[dict[str, Any]], family: str, scenario: dict[str, Any], source: str) -> None:
+        """Finish a built scenario (tiering, strict-boundary sanitization, manifest) and keep it."""
+        hidden = scenario.get("hidden_truth")
+        hidden = hidden if isinstance(hidden, Mapping) else {}
+        truth_keys = (
+            "true_measurement_errors",
+            "true_parameter_errors",
+            "true_topology_errors",
+        )
+        diagnostic_truth_keys = (
+            "true_harmonic_errors",
+            "true_hif_errors",
+            "true_unbalance_errors",
+        )
+        error_cardinality = sum(
+            len(scenario.get(key) or []) for key in truth_keys
+        ) + sum(len(hidden.get(key) or []) for key in diagnostic_truth_keys)
+        if family == "harmonic" or family == "topology" or "topology" in family or family == COMPOUND_FAMILY:
+            source_tier = "physics_synthesized"
+        elif family == "telemetry_no_disturbance":
+            source_tier = "derived_negative_control"
+        elif family in {"hif", "three_phase_unbalance", "measurement+hif"}:
+            source_tier = "tracked_diagnostic_corpus"
+        elif "+" in family or family == "multi_measurement":
+            source_tier = "tracked_composed_corpus"
+        else:
+            source_tier = "tracked_measurement_corpus"
+        scenario["network_case"] = str(
+            scenario.get("network_case") or self.case_path
+        )
+        scenario["error_cardinality"] = int(error_cardinality)
+        scenario["source_tier"] = source_tier
+        if scenario.get("source_realization_id"):
+            scenario["source_tier"] = "physics_synthesized_balanced"
+        fundamental = scenario.pop("_fundamental_state", None)
+        if is_suspicion_profile(self.evidence_profile):
+            self._attach_true_state_phasors(scenario, fundamental)
+            self._attach_clean_spectra(scenario)
+        if is_strict_boundary(self.evidence_profile):
+            # scada_only keeps balanced SCADA and its declarations only;
+            # wls_gated_diagnostics also keeps the auxiliary streams the
+            # ground truth generated (gated at runtime behind the WLS
+            # alarm) but no seeded signature, hint, label or precomputed
+            # diagnosis.  Keep generator-only truth/grouping fields for
+            # the later execution/audit partition; replace only runtime
+            # fields.
+            strict = sanitize_execution_for_profile(scenario, self.evidence_profile)
+            for key in ("metadata", "semantic_field_provenance", "unresolved_signatures",
+                        "remaining_anomaly_score", "no_material_anomaly_remaining", "requires_measurement_context"):
+                if key in strict:
+                    scenario[key] = strict[key]
+                else:
+                    scenario.pop(key, None)
+            for key in ("family_hint", "correction_hint", "expected_actions", "hint"):
+                scenario.pop(key, None)
+        self.manifest.append(
+            {
+                "scenario_id": scenario["scenario_id"],
+                "scenario_family": family,
+                "source": source,
+                "network_case": scenario["network_case"],
+                "error_cardinality": scenario["error_cardinality"],
+                "source_tier": scenario["source_tier"],
+                "evidence_profile": self.evidence_profile,
+                **({"compound_class": scenario["compound"]["class"]} if isinstance(scenario.get("compound"), Mapping) else {}),
+            }
+        )
+        built.append(scenario)
+
+
     def _build_family(self, family: str, count: int) -> list[dict[str, Any]]:
         built: list[dict[str, Any]] = []
         attempts = 0
 
-        def record(scenario: dict[str, Any], source: str) -> None:
-            hidden = scenario.get("hidden_truth")
-            hidden = hidden if isinstance(hidden, Mapping) else {}
-            truth_keys = (
-                "true_measurement_errors",
-                "true_parameter_errors",
-                "true_topology_errors",
-            )
-            diagnostic_truth_keys = (
-                "true_harmonic_errors",
-                "true_hif_errors",
-                "true_unbalance_errors",
-            )
-            error_cardinality = sum(
-                len(scenario.get(key) or []) for key in truth_keys
-            ) + sum(len(hidden.get(key) or []) for key in diagnostic_truth_keys)
-            if family == "harmonic" or family == "topology" or "topology" in family:
-                source_tier = "physics_synthesized"
-            elif family == "telemetry_no_disturbance":
-                source_tier = "derived_negative_control"
-            elif family in {"hif", "three_phase_unbalance", "measurement+hif"}:
-                source_tier = "tracked_diagnostic_corpus"
-            elif "+" in family or family == "multi_measurement":
-                source_tier = "tracked_composed_corpus"
-            else:
-                source_tier = "tracked_measurement_corpus"
-            scenario["network_case"] = str(
-                scenario.get("network_case") or self.case_path
-            )
-            scenario["error_cardinality"] = int(error_cardinality)
-            scenario["source_tier"] = source_tier
-            if scenario.get("source_realization_id"):
-                scenario["source_tier"] = "physics_synthesized_balanced"
-            fundamental = scenario.pop("_fundamental_state", None)
-            if is_suspicion_profile(self.evidence_profile):
-                self._attach_true_state_phasors(scenario, fundamental)
-                self._attach_clean_spectra(scenario)
-            if is_strict_boundary(self.evidence_profile):
-                # scada_only keeps balanced SCADA and its declarations only;
-                # wls_gated_diagnostics also keeps the auxiliary streams the
-                # ground truth generated (gated at runtime behind the WLS
-                # alarm) but no seeded signature, hint, label or precomputed
-                # diagnosis.  Keep generator-only truth/grouping fields for
-                # the later execution/audit partition; replace only runtime
-                # fields.
-                strict = sanitize_execution_for_profile(scenario, self.evidence_profile)
-                for key in ("metadata", "semantic_field_provenance", "unresolved_signatures",
-                            "remaining_anomaly_score", "no_material_anomaly_remaining", "requires_measurement_context"):
-                    if key in strict:
-                        scenario[key] = strict[key]
-                    else:
-                        scenario.pop(key, None)
-                for key in ("family_hint", "correction_hint", "expected_actions", "hint"):
-                    scenario.pop(key, None)
-            self.manifest.append(
-                {
-                    "scenario_id": scenario["scenario_id"],
-                    "scenario_family": family,
-                    "source": source,
-                    "network_case": scenario["network_case"],
-                    "error_cardinality": scenario["error_cardinality"],
-                    "source_tier": scenario["source_tier"],
-                    "evidence_profile": self.evidence_profile,
-                }
-            )
-            built.append(scenario)
+        if family == COMPOUND_FAMILY:
+            # ``count`` roots of every configured class, class by class.
+            for spec in self.compound_classes:
+                built.extend(self._build_compound_class(spec, count))
+            return built
 
         if family == "topology":
             while len(built) < count and attempts < count * 8:
                 attempts += 1
                 try:
-                    record(self._topology_scenario(attempts), "synthesized_pypower")
+                    self._record_built(built, family, self._topology_scenario(attempts), "synthesized_pypower")
                 except ScenarioRejected as rejection:
                     self._record_skip(family, f"synthesized_{attempts}", rejection)
             return built
@@ -4017,7 +4878,9 @@ class Round0ScenarioGenerator:
                     base = self._topology_scenario(
                         1000 + attempts, effects=("dangling_line_terminal",)
                     )
-                    record(
+                    self._record_built(
+                        built,
+                        family,
                         self._compose_measurement(
                             base, offsets=1, family=family, index=attempts
                         ),
@@ -4031,7 +4894,9 @@ class Round0ScenarioGenerator:
             while len(built) < count and attempts < count * 8:
                 attempts += 1
                 try:
-                    record(
+                    self._record_built(
+                        built,
+                        family,
                         self._harmonic_scenario(
                             self._synthesized_harmonic_row(attempts), attempts
                         ),
@@ -4066,7 +4931,7 @@ class Round0ScenarioGenerator:
                     scenario["source_realization_id"] = row["source_realization_id"]
                     scenario["base_case_version"] = self.system.base_case_hash
                     scenario["scenario_admission_mode"] = self.admission_mode
-                record(scenario, source)
+                self._record_built(built, family, scenario, source)
             except ScenarioRejected as rejection:
                 self._record_skip(family, source, rejection)
         return built
@@ -4171,6 +5036,8 @@ class Round0ScenarioGenerator:
                 "threshold": self.parameter_ranking_dominance_threshold,
             },
             "measurement_error_floor_sigma": self.min_measurement_error_sigma,
+            "compound_classes": [spec.as_dict() for spec in self.compound_classes],
+            "compound_solo_effects": self.compound_solo_effects,
             "synthesized_measurement_canonicalization": {
                 "contract": SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT,
                 "scope": "pypower_topology_z_obs",
@@ -4189,6 +5056,13 @@ class Round0ScenarioGenerator:
 __all__ = [
     "Round0ScenarioGenerator",
     "ScenarioRejected",
+    "CompoundSpec",
+    "COMPOUND_FAMILY",
+    "COMPOUND_CONTRACT",
+    "COMPOUND_SCAN_COUNT",
+    "COMPOUND_FACTOR_RANGES",
+    "COMPOUND_BREAKER_EFFECTS",
+    "DEFAULT_COMPOUND_CLASSES",
     "SCENARIO_FAMILIES",
     "BASE_FAMILIES",
     "COMPOSED_FAMILIES",

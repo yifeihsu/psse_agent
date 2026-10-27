@@ -31,6 +31,11 @@ def root_stratum(root: Mapping[str, Any]) -> str:
     mimic = (root.get("audit") or {}).get("mimic")
     if isinstance(mimic, Mapping) and mimic.get("variant"):
         return f"mimic:{str(mimic['variant']).removeprefix('mimic_')}"
+    # Compound roots (2026-10-27) are stratified by their class, the atom
+    # combination the sampler drew (research.compound_errors.build_suite).
+    compound = (root.get("audit") or {}).get("compound")
+    if isinstance(compound, Mapping) and compound.get("class"):
+        return f"compound:{compound['class']}"
     family = str(root["grouping"]["scenario_family"])
     if family in PARAMETER_FAMILIES:
         ranking = (root.get("audit") or {}).get("parameter_ranking") or {}
