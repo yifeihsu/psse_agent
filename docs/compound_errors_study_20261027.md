@@ -788,7 +788,13 @@ in the compound work only."  Implemented and re-scored in section 3.2 (the
 rule, the mark that scopes it to compound roots, the tests that show the
 conventional families unchanged, 84 roots re-scored on identical
 trajectories: 51 change from failed to solved under the baseline teacher
-and 83 under topology-first).  Still open with the user and not to be acted
-on: whether future suites keep the uniform-metadata convention, scans on
-every root, that exposed the ordering problem (section 3.1).  Stage 2
-beyond this change has not been requested.
+and 83 under topology-first).
+
+On the metadata convention (section 3.1), the user's decision, in their
+words: "Yes: keep the uniform-metadata convention, parameter scans on
+every root, for future suites."  Future compound suites therefore carry the
+scans and the node/breaker channel on every root, as this one does, so the
+parameter route is actionable on every class and the ordering question of
+section 3.1 stays in view; the conventional suites behind the PES GM
+manuscript keep their existing metadata (no scans on topology roots).
+Stage 2 beyond decision (b) has not been requested.
