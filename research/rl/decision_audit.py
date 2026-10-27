@@ -239,8 +239,13 @@ def truth_correction_actions(root: Mapping[str, Any], active_state_id: str) -> l
     named = [item for item in truth.get("true_topology_errors") or [] if isinstance(item, Mapping) and item.get("cb_name")]
     if named:
         for item in sorted(named, key=lambda row: str(row["cb_name"])):
-            actions.append({"tool": CORRECT_TOPOLOGY, "arguments": {
-                "state_id": active_state_id, "cb_name": str(item["cb_name"]), "status": int(bool(item.get("true_cb_closed")))}})
+            arguments: dict[str, Any] = {"state_id": active_state_id, "cb_name": str(item["cb_name"]),
+                                         "status": int(bool(item.get("true_cb_closed")))}
+            # The context offers a dangling-terminal flip with its line, and the
+            # process gate matches the whole argument set.
+            if item.get("line_index1") is not None:
+                arguments["line_index"] = int(item["line_index1"])
+            actions.append({"tool": CORRECT_TOPOLOGY, "arguments": arguments})
     else:
         for branch in sorted(_truth_branch_targets(truth, "topology")):
             actions.append({"tool": CORRECT_TOPOLOGY, "arguments": {"state_id": active_state_id, "branch_row0": int(branch)}})
