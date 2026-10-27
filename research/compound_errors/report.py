@@ -141,6 +141,8 @@ def expert_view(episodes: Sequence[Mapping[str, Any]], detectable: set[str]) -> 
             side = "true" if truthful else "wrong" if truthful is False else "unknown"
             verdict = "refused" if correction.get("execution_status") != "success" else str(correction.get("verdict") or "undisposed")
             entry["verdicts"][(side, verdict)] += 1
+            if correction.get("execution_status") != "success":
+                entry.setdefault("refusals", Counter())[f"{correction['tool']}:{side}:{correction.get('error_code')}"] += 1
     for entry in out.values():
         n = max(1, entry["n"])
         entry["mean_steps"] = entry["steps"] / n
@@ -148,6 +150,7 @@ def expert_view(episodes: Sequence[Mapping[str, Any]], detectable: set[str]) -> 
         entry["verdicts"] = {f"{side}:{verdict}": count for (side, verdict), count in sorted(entry["verdicts"].items())}
         entry["reasons"] = dict(entry["reasons"].most_common(6))
         entry["basis"] = dict(entry["basis"])
+        entry["refusals"] = dict(entry.get("refusals", Counter()).most_common(6))
     return out
 
 
@@ -311,6 +314,12 @@ def markdown(report: Mapping[str, Any]) -> str:
         if not e or not e["reasons"]:
             continue
         lines.append(f"- {CLASS_LABELS.get(name, name)} ({e['n'] - e['solved']} failed): " + "; ".join(f"{k} {v}" for k, v in e["reasons"].items()))
+    lines += ["", "## Refused corrections (executor or process gate) per class", ""]
+    for name in classes:
+        e = expert.get(name)
+        if not e or not e.get("refusals"):
+            continue
+        lines.append(f"- {CLASS_LABELS.get(name, name)}: " + "; ".join(f"{k} {v}" for k, v in e["refusals"].items()))
     if audit:
         lines += ["", "## Decision audit per class", "",
                   "| class | audited | expert solves | rule_best | legal_alternative | interface_limit | evidence_limit | failed roots: bins | truth probe solves | probe reasons |",
