@@ -4656,6 +4656,9 @@ class Round0ScenarioGenerator:
         topology_truth: list[dict[str, Any]] = []
         for atom in breaker_atoms:
             truth = {
+                # The release audit's breaker non-regression reads the expected
+                # status for every breaker, bus splits included.
+                "expected_status": int(atom["true_cb_closed"]),
                 "load_scale": load_scale,
                 "operating_point": "ac_opf",
                 "cb_name": atom["cb_name"],
@@ -4668,7 +4671,6 @@ class Round0ScenarioGenerator:
             }
             if atom["physical_effect"] == "dangling_line_terminal":
                 truth.update(
-                    expected_status=0,
                     branch_row0=atom["branch_row0"],
                     line_index1=atom["line_index1"],
                     from_bus=atom["from_bus"],

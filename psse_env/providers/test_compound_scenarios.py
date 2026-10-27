@@ -76,6 +76,8 @@ class CompoundScenarioTests(unittest.TestCase):
             for atom in root["true_topology_errors"]:
                 self.assertIn(atom["physical_effect"], spec.breaker_effects)
                 self.assertNotEqual(atom["reported_cb_closed"], atom["true_cb_closed"])
+                # The release audit's breaker non-regression reads this for every breaker.
+                self.assertEqual(atom["expected_status"], int(atom["true_cb_closed"]))
 
     def test_placements_are_recorded_as_electrical_distances(self) -> None:
         adjacent = self.roots["rx2_adjacent"]
