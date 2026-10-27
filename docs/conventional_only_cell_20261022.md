@@ -790,9 +790,119 @@ test_budget20_r2 21101409, each R2 alone (`out/r2/training/lora`, the
 evaluator's first adapter slot, no expert arm) on the same rows, seed and
 horizon as the matching three-arm job; records
 `out/extra/evaluations/test_budget<b>_r2/`. R2's 40-action point is the
-candidate slot of the round-2 evaluation.
+candidate slot of the round-2 evaluation. The three jobs ran 51 to 55 min
+each on gr102 and completed by 14:13 UTC.
 Status:
 
 ```bash
 MSYS_NO_PATHCONV=1 wsl -- ssh torch "export PATH=/opt/slurm/bin:\$PATH; sacct -j 21070126,21070127,21070128,21101407,21101408,21101409 -o JobID%12,JobName%10,State%12,Elapsed%12,NodeList%10; ls /scratch/yx3882/research_full_pipeline_20261022_conventional/out/extra/evaluations/"
 ```
+
+**Results (2026-10-27; `out/extra/budget_tables.{json,md}` on torch, copies
+with the per-episode records, specs and console receipts under
+`output/conventional_only_20261022/results/budget_20261027/` of the
+worktree).** Every policy on the 192 test roots and measurement realizations,
+seed 20260912; the 40-action row is the round-1 evaluation (R2: the round-2
+evaluation's candidate slot); every budget-limited evaluation's
+`policies.json` records its horizon and the tree hashes of `bc0.done`,
+`r1/training.done` and `r2/training.done`. Successes, with safety-clean
+successes (solved with no invalid action, false commit or loop) in
+parentheses:
+
+| Budget | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| 12 | 177 (177) | 172 (161) | 176 (176) | 175 (171) |
+| 16 | 178 (178) | 174 (164) | 177 (177) | 177 (172) |
+| 20 | 181 (181) | 179 (165) | 180 (180) | 179 (175) |
+| 40 | 192 (192) | 189 (172) | 191 (191) | 190 (182) |
+
+Process-violation episodes (with an invalid action / a false commit / a
+loop; a false commit is a commit requested for a candidate the verifier had
+not accepted, which the gate refuses), then the episodes that ran to the
+budget:
+
+| Budget | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| 12 | 0; 53 | 13 (13/1/1); 57 | 0; 53 | 5 (5/1/1); 55 |
+| 16 | 0; 1 | 13 (13/3/1); 19 | 0; 14 | 6 (6/1/1); 15 |
+| 20 | 0; 0 | 16 (16/3/1); 14 | 0; 11 | 7 (7/0/2); 11 |
+| 40 | 0; 0 | 19 (19/3/2); 2 | 0; 0 | 9 (9/0/2); 0 |
+
+The 80 multi-error roots (two to five meters, meter + R/X, meter + breaker):
+successes (safety-clean); violation episodes:
+
+| Budget | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| 12 | 65 (65); 0 | 60 (50); 12 | 64 (64); 0 | 63 (60); 4 |
+| 16 | 66 (66); 0 | 62 (52); 13 | 65 (65); 0 | 65 (61); 5 |
+| 20 | 69 (69); 0 | 67 (53); 16 | 68 (68); 0 | 68 (64); 6 |
+| 40 | 80 (80); 0 | 77 (60); 19 | 79 (79); 0 | 79 (71); 8 |
+
+The 112 single-error and clean roots are solved by every policy at every
+budget, except that R2 fails the isolated-terminal breaker root of section 5
+at 20 and 40 actions (111); safety-clean except one BC0 breaker-status root
+at 12 actions and one R2 root per budget (an R/X root at 12 and 16, that
+breaker root at 20 and 40). Per family, the roots not solved are multi-meter
+roots for every policy (of 24: expert 9, 10 and 13 at 12, 16 and 20 actions;
+BC0 7, 10, 14; R1 8, 9, 12; R2 8, 9, 12), for BC0 meter + R/X roots (31, 29,
+30 of 32) and meter + breaker roots (22, 23, 23 of 24), and for R2 one meter +
+breaker root at 12 actions; every other family is 100% at every budget. Mean
+actions and mean WLS calls per episode:
+
+| Budget | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| 12 | 8.79; 2.33 | 8.84; 2.34 | 8.77; 2.34 | 8.78; 2.35 |
+| 16 | 9.01; 2.34 | 9.38; 2.44 | 9.11; 2.41 | 9.18; 2.42 |
+| 20 | 9.35; 2.41 | 9.73; 2.48 | 9.39; 2.41 | 9.43; 2.42 |
+| 40 | 9.87; 2.50 | 10.38; 2.60 | 9.85; 2.50 | 9.93; 2.51 |
+
+Paired exact two-sided McNemar tests (discordant roots, first policy /
+second policy; p):
+
+| Budget | BC0 vs R1, success | BC0 vs R1, safety-clean | BC0 vs expert, success | BC0 vs expert, safety-clean | R1 vs expert, success and safety-clean | R2 vs R1, success | R2 vs R1, safety-clean | R2 vs expert, safety-clean |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 12 | 4/0 (0.125) | 15/0 (6.1e-5) | 5/0 (0.0625) | 16/0 (3.1e-5) | 1/0 (1) | 1/0 (1) | 5/0 (0.0625) | 6/0 (0.031) |
+| 16 | 4/1 (0.375) | 14/1 (9.8e-4) | 5/1 (0.219) | 15/1 (5.2e-4) | 1/0 (1) | 0/0 (1) | 5/0 (0.0625) | 6/0 (0.031) |
+| 20 | 3/2 (1) | 16/1 (2.7e-4) | 4/2 (0.688) | 17/1 (1.4e-4) | 1/0 (1) | 1/0 (1) | 5/0 (0.0625) | 6/0 (0.031) |
+| 40 | 2/0 (0.5) | 19/0 (3.8e-6) | 3/0 (0.25) | 20/0 (1.9e-6) | 1/0 (1) | 1/0 (1) | 9/0 (0.0039) | 10/0 (0.002) |
+
+BC0 against R2 on safety-clean success: 12/2 (p = 0.013), 11/3 (0.057),
+13/3 (0.021) and 15/5 (0.041) at 12, 16, 20 and 40 actions.
+
+Against the approximation from the 40-action episodes (a root solved in at
+most b actions at 40 counts as solved under b), the reading the manuscript
+had printed as a lower bound: at 12 actions the measured counts are higher
+for every policy, expert 169 to 177, BC0 157 to 172, R1 168 to 176, R2 162 to
+175, and no root counted by the approximation is lost in the measured run
+(safety-clean: BC0 152 to 161 with 11 roots only measured and 2 only
+approximated, R2 162 to 171 with 10 and 1); at 16 actions the totals
+coincide, 178, 174, 177 and 176 to 177 (BC0 trades one root each way;
+safety-clean BC0 161 to 164, R2 172 with 2 each way); at 20 actions 181, 177
+to 179, 180 and 179 (safety-clean BC0 164 to 165 with four roots each way, R2
+175 with one each way). The 12-action gap is the budget in the observation:
+the teacher hands off instead of opening a lifecycle it cannot close (53 of
+its episodes end at the budget), and the students shorten their episodes the
+same way (mean actions 8.8 at 12 actions against 9.9 to 10.4 at 40 for every
+policy; 53 to 57 episodes at the budget).
+
+Reading. (1) Under every budget the success gap between BC0 and R1 is 4 to 5
+roots (172 against 176 at 12 actions, 174 against 177, 179 against 180) and
+not significant (p 0.125 to 1); the same holds against the teacher. (2) The
+safety-clean gap is 11 to 15 roots at every budget and significant (p at most
+1e-3): BC0 keeps 13, 13 and 16 process-violation episodes under the budgets,
+all on multi-error roots but one, while R1 has none at any budget and equals
+the teacher's safety-clean count minus the one multi-meter root every
+student misses. (3) R1's episode length and solver cost are the teacher's at
+every budget (8.77 against 8.79 actions at 12, 9.11 against 9.01 at 16, 9.39
+against 9.35 at 20; 2.34 to 2.41 WLS calls); BC0 spends more at 16 and 20
+actions (9.38 and 9.73) and half an action more at 40. (4) R2 sits between
+the two: one success under R1 at 12 and 20 actions and equal at 16, but 5
+safety-clean successes under R1 at every budget (p = 0.0625 each; 9 at 40, p
+= 0.0039) and 6 under the teacher (p = 0.031), from 5 to 7 violation episodes
+under the budgets; round 2 adds nothing to round 1 under any budget, as
+section 6 found at 40 actions. (5) The budget curve is the multi-meter
+curve: with two context requests and about six actions per meter, 12 actions
+hold the two-meter roots only (the teacher solves 9 of 24), 20 actions about
+half (13) and 40 all 24; outside that family the budget costs only BC0,
+whose invalid actions and false commits spend the actions a meter + R/X or
+meter + breaker root needs.
