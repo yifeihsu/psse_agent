@@ -177,6 +177,37 @@ class DecisionAuditTests(unittest.TestCase):
         self.assertEqual(policy.pending[0]["arguments"]["suspect_group"], [9])
         self.assertEqual(len(policy.applied), 3)
 
+    def test_the_truth_guided_policy_retries_a_refused_breaker_after_the_others(self) -> None:
+        from research.rl.decision_audit import TruthGuidedPolicy
+
+        class Expert:
+            def act(self, observation):
+                return {"tool": "run_wls", "arguments": {"state_id": observation["active_state_id"]}}
+
+        truth = [{"tool": "correct_topology", "arguments": {"state_id": "old", "cb_name": "CB_1_B1_N1", "status": 0, "line_index": 2}},
+                 {"tool": "correct_topology", "arguments": {"state_id": "old", "cb_name": "CB_9_N4_B2", "status": 0, "line_index": 15}}]
+        policy = TruthGuidedPolicy([], truth, Expert())
+        fresh = {"active_state_id": "s0", "candidate_state_id": None, "has_open_candidate": False, "has_unverified_candidate": False,
+                 "has_fresh_topology_context": True, "topology_context_state_id": "s0"}
+        first = policy.act(fresh)
+        self.assertEqual(first["arguments"]["cb_name"], "CB_1_B1_N1")
+        # Refused as unsupported: the second breaker goes next, the first is queued again after it.
+        refused = {**fresh, "last_tool": "correct_topology",
+                   "last_tool_output": {"execution_status": "failure", "error_code": "correction_not_supported_by_current_context"}}
+        second = policy.act(refused)
+        self.assertEqual(second["arguments"]["cb_name"], "CB_9_N4_B2")
+        self.assertEqual([a["arguments"]["cb_name"] for a in policy.pending], ["CB_1_B1_N1"])
+        # On the next clear state the retried breaker re-reads the topology context, then is issued; it is not queued a third time.
+        after = {**fresh, "active_state_id": "s1", "last_tool": "commit_state", "last_tool_output": {},
+                 "has_fresh_topology_context": False, "topology_context_state_id": None}
+        self.assertEqual(policy.act(after)["tool"], "get_topology_context")
+        retried = policy.act({**after, "has_fresh_topology_context": True, "topology_context_state_id": "s1", "last_tool": "get_topology_context"})
+        self.assertEqual(retried["arguments"]["cb_name"], "CB_1_B1_N1")
+        refused_again = {**after, "last_tool": "correct_topology",
+                         "last_tool_output": {"execution_status": "failure", "error_code": "correction_not_supported_by_current_context"}}
+        self.assertEqual(policy.act(refused_again)["tool"], "run_wls")
+        self.assertEqual(policy.pending, [])
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

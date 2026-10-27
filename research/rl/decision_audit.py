@@ -386,23 +386,33 @@ class TruthGuidedPolicy(ScriptedThenExpertPolicy):
         super().__init__(prefix, [], expert)
         self.pending = [copy.deepcopy(dict(a)) for a in truth_actions]
         self.applied: list[dict[str, Any]] = []
-        self.context_requests: list[tuple[str, str]] = []
+        self.context_requests: list[tuple[str, str, bool]] = []
         self._expanded: set[str] = set()
 
     def _expand_refused_group(self, observation: Mapping[str, Any]) -> None:
-        if not self.applied or str(observation.get("last_tool")) != CORRECT_MEASUREMENTS:
+        """A refused correction is retried once after the others; a refused meter group as its single meters.
+
+        The context advertises one breaker of a pair at a time (the other's
+        flip clears the floor only once the first is fixed), so a correction
+        the context does not support now may be supported later.
+        """
+        if not self.applied or str(observation.get("last_tool")) not in CORRECTION_TOOLS:
             return
         last = self.applied[-1]
-        group = list((last.get("arguments") or {}).get("suspect_group") or [])
+        if str(last.get("tool")) != str(observation.get("last_tool")):
+            return
         output = observation.get("last_tool_output") if isinstance(observation.get("last_tool_output"), Mapping) else {}
         signature = action_signature(last)
-        if (len(group) < 2 or signature in self._expanded
-                or str(output.get("error_code") or "") != "correction_not_supported_by_current_context"):
+        if signature in self._expanded or str(output.get("error_code") or "") != "correction_not_supported_by_current_context":
             return
         self._expanded.add(signature)
-        singles = [{"tool": CORRECT_MEASUREMENTS, "arguments": {"state_id": last["arguments"].get("state_id"), "suspect_group": [int(i)]}}
-                   for i in group]
-        self.pending = singles + self.pending
+        group = list((last.get("arguments") or {}).get("suspect_group") or [])
+        if str(last.get("tool")) == CORRECT_MEASUREMENTS and len(group) >= 2:
+            singles = [{"tool": CORRECT_MEASUREMENTS, "arguments": {"state_id": last["arguments"].get("state_id"), "suspect_group": [int(i)]}}
+                       for i in group]
+            self.pending = singles + self.pending
+        else:
+            self.pending = self.pending + [copy.deepcopy(dict(last))]
 
     def act(self, observation: Mapping[str, Any]) -> dict[str, Any]:
         index = self.calls
@@ -415,8 +425,11 @@ class TruthGuidedPolicy(ScriptedThenExpertPolicy):
             family = FAMILY_OF_CORRECTION.get(tool)
             active = str(observation.get("active_state_id"))
             fresh = bool(observation.get(f"has_fresh_{family}_context")) and str(observation.get(f"{family}_context_state_id")) == active
-            if family and not fresh and (active, family) not in self.context_requests:
-                self.context_requests.append((active, family))
+            retry = action_signature(self.pending[0]) in self._expanded
+            if family and (not fresh or retry) and (active, family, retry) not in self.context_requests:
+                # A retried correction re-reads its context even on the same
+                # state: the inventory may have changed since the refusal.
+                self.context_requests.append((active, family, retry))
                 return {"tool": CONTEXT_TOOL_OF[tool], "arguments": {"state_id": observation.get("active_state_id")}}
             action = self.rebind(self.pending.pop(0), observation)
             self.applied.append(action)
