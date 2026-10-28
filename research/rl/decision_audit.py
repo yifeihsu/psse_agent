@@ -485,8 +485,12 @@ def node_breaker_cost(steps: Sequence[Mapping[str, Any]]) -> dict[str, int]:
         if tool == "run_wls":
             record = metrics.get("clean_flip")
             if isinstance(record, Mapping):
+                # The solves sit in ``clean_flip_cost`` since the stage-2
+                # review; episodes recorded before it carry them in the record.
+                spent = metrics.get("clean_flip_cost")
+                spent = spent if isinstance(spent, Mapping) else record
                 cost["screens"] += 1
-                cost["screen_solves"] += int(record.get("solves") or 0)
+                cost["screen_solves"] += int(spent.get("solves") or 0)
                 cost["available"] += int(record.get("available") is True)
         elif metrics.get("node_breaker_solves") is not None:
             cost["contexts"] += 1

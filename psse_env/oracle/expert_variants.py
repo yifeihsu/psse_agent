@@ -101,9 +101,12 @@ def expert_variant_options(variant: str | None = None, *, learned_ranker: Any = 
 
 #: Provider options a teacher variant needs in order to see its own routing
 #: signal: the clean-flip teacher reads the provider's clean-flip screen, so
-#: an environment built for it computes the screen (stage 2 item 6).  The
-#: environment factories merge these in unless a run sets the option itself.
+#: an environment built for it computes the screen (stage 2 item 6), and the
+#: guarded teacher reads the open-terminal cue, which no other teacher's
+#: environment reports (the stage-2 review of 2026-10-28).  The environment
+#: factories merge these in unless a run sets the option itself.
 VARIANT_PROVIDER_OPTIONS: dict[str, dict[str, Any]] = {
+    "baseline_compare_topology_guarded": {"flow_at_noise_cue": True},
     "baseline_compare_topology_clean_flip": {"clean_flip_screen": True},
 }
 

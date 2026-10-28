@@ -16,6 +16,15 @@ from psse_env.oracle import DiagnosticsExpert, ExpertPolicyOracle, ProcessValidi
 from psse_env.oracle.termination_expert import TerminationExpert
 
 
+@pytest.fixture(autouse=True, scope="module")
+def baseline_teacher():
+    """Written against the baseline teacher, the default before 2026-10-28; these
+    roots carry no node/breaker channel, which the clean-flip default refuses."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("PSSE_EXPERT_VARIANT", "baseline")
+        yield
+
+
 # These invariants describe the literal scada_only profile.  The research
 # default moved to wls_gated_diagnostics on 2026-09-23, so the profile is
 # named explicitly here; the shared strict-boundary invariants (WLS first, no

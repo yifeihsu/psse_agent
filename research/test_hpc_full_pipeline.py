@@ -564,6 +564,27 @@ def test_zero_shot_stage_and_frozen_student_wiring() -> None:
         assert set(json.loads(match.group(1))) == supported
 
 
+def test_every_shell_variant_check_accepts_exactly_the_registered_teachers() -> None:
+    """The deploy check and the stages' pipeline_environment accept the names
+    of EXPERT_VARIANTS (the 2026-10-28 default switch extended only the deploy
+    check, so every stage refused the new default), the default is one of them,
+    and every recorded overrides file names its teacher, so a later change of
+    the default never re-runs a recorded cell under another teacher."""
+    from psse_env.oracle.expert_variants import DEFAULT_EXPERT_VARIANT, EXPERT_VARIANTS
+
+    pattern = re.compile(r'case "\$EXPERT_VARIANT" in ([a-z_|]+)\)')
+    for name in ("pipeline.env", "deploy_remote.sh"):
+        found = pattern.findall((CELL / name).read_text(encoding="utf-8"))
+        assert found, name
+        for names in found:
+            assert set(names.split("|")) == set(EXPERT_VARIANTS), name
+    env = (CELL / "pipeline.env").read_text(encoding="utf-8")
+    assert f"EXPERT_VARIANT=${{EXPERT_VARIANT:-{DEFAULT_EXPERT_VARIANT}}}" in env
+    for path in sorted((CELL / "overrides").glob("*.env")):
+        text = path.read_text(encoding="utf-8")
+        assert re.search(r"^EXPERT_VARIANT=[a-z_]+$", text, flags=re.MULTILINE), path.name
+
+
 def test_evidence_profile_default_is_suspicion_gated_and_every_guard_accepts_it() -> None:
     """The 2026-09-27 contract: suspicion-gated diagnostics by default (phasors
     only on a balanced HIF suspicion), discovered signatures on every strict

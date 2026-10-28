@@ -152,7 +152,10 @@ class GuardedTopologyFirstTests(unittest.TestCase):
         from psse_env.oracle.expert_variants import variant_provider_options
 
         self.assertEqual(variant_provider_options("baseline_compare_topology_clean_flip"), {"clean_flip_screen": True})
-        for name in ("baseline", "baseline_compare", "baseline_compare_topology_first", "baseline_compare_topology_guarded"):
+        # The guarded teacher reads the open-terminal cue, which no other
+        # teacher's environment reports (the stage-2 review of 2026-10-28).
+        self.assertEqual(variant_provider_options("baseline_compare_topology_guarded"), {"flow_at_noise_cue": True})
+        for name in ("baseline", "baseline_compare", "baseline_compare_topology_first"):
             self.assertEqual(variant_provider_options(name), {}, name)
 
     def test_the_default_teacher_for_new_work_is_the_clean_flip_variant(self) -> None:

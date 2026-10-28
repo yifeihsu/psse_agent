@@ -99,7 +99,9 @@ def production_environment_factory(
 
     ``clean_flip_screen`` (stage 2 item 6 of the compound-error study): None
     computes the provider's clean-flip screen exactly when the current teacher
-    variant reads it (``variant_provider_options``).
+    variant reads it (``variant_provider_options``); the variant's other
+    provider options (the guarded teacher's open-terminal cue) come the same
+    way.
 
     ``seed`` and ``rng`` are accepted only for the evaluator's uniform factory
     calling convention.  The provider stack is deterministic for a fixed
@@ -108,6 +110,9 @@ def production_environment_factory(
     """
 
     del seed, rng
+    provider_options = variant_provider_options()
+    if clean_flip_screen is not None:
+        provider_options["clean_flip_screen"] = bool(clean_flip_screen)
     # The frozen suite and round-0 aggregate are validated at the same
     # significance level.  Relying on the provider's general-purpose default
     # made healthy release roots anomalous only at evaluation time.
@@ -126,15 +131,7 @@ def production_environment_factory(
         hif_resistance_search=hif_resistance_search,
         # Passed only when on, so every other teacher's environment is built
         # by exactly the call it was built by before (stage 2 item 6).
-        **(
-            {"clean_flip_screen": True}
-            if (
-                bool(variant_provider_options().get("clean_flip_screen", False))
-                if clean_flip_screen is None
-                else bool(clean_flip_screen)
-            )
-            else {}
-        ),
+        **{name: True for name, value in provider_options.items() if value},
     )
     env = TransactionalPSSEEnv(
         **providers.env_kwargs(),

@@ -525,6 +525,15 @@ class ObservableExpertFactoryTests(unittest.TestCase):
 
 
 class RealProductionExpertRecoveryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Written against the release expert, the default teacher before
+        # 2026-10-28.  The frozen suites predate the uniform node/breaker
+        # metadata the clean-flip default needs (its environment refuses
+        # their roots), so the class names its teacher.
+        patcher = mock.patch.dict(os.environ, {"PSSE_EXPERT_VARIANT": "baseline"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @staticmethod
     def _evaluator(*, required_suite: str, evidence_profile: str = "scada_only") -> ClosedLoopRolloutEvaluator:
         from functools import partial

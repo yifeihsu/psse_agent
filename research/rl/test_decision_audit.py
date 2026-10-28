@@ -12,6 +12,7 @@ from research.rl.decision_audit import (
     classify_state,
     distinct_actions,
     is_decision_state,
+    node_breaker_cost,
     root_bin,
     truth_correction_actions,
 )
@@ -207,6 +208,23 @@ class DecisionAuditTests(unittest.TestCase):
                          "last_tool_output": {"execution_status": "failure", "error_code": "correction_not_supported_by_current_context"}}
         self.assertEqual(policy.act(refused_again)["tool"], "run_wls")
         self.assertEqual(policy.pending, [])
+
+    def test_node_breaker_cost_reads_the_screen_cost_beside_its_record(self) -> None:
+        """Since the stage-2 review the solves sit in ``clean_flip_cost``; older episodes carry them in the record."""
+        def step(tool: str, metrics: dict) -> dict:
+            return {"action": {"tool": tool}, "tool_output": {"tool_metrics": metrics}}
+
+        steps = [
+            step("run_wls", {"clean_flip": {"available": True}, "clean_flip_cost": {"solves": 9, "cached": False}}),
+            step("run_wls", {"clean_flip": {"available": False, "solves": 4}}),
+            step("get_topology_context", {"node_breaker_solves": 0}),
+            step("run_wls", {}),
+        ]
+        cost = node_breaker_cost(steps)
+        self.assertEqual(cost["screens"], 2)
+        self.assertEqual(cost["screen_solves"], 13)
+        self.assertEqual(cost["available"], 1)
+        self.assertEqual((cost["contexts"], cost["context_solves"], cost["total_solves"]), (1, 0, 13))
 
 
 if __name__ == "__main__":  # pragma: no cover

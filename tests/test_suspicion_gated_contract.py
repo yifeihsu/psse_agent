@@ -44,6 +44,15 @@ AUXILIARY = {GET_THREE_PHASE_CONTEXT, RUN_THREE_PHASE_NLM_FROM_PATH, ESTIMATE_HI
              GET_HARMONIC_CONTEXT, RUN_HSE_FROM_PATH}
 
 
+@pytest.fixture(autouse=True, scope="module")
+def baseline_teacher():
+    """Written against the baseline teacher, the default before 2026-10-28; these
+    roots carry no node/breaker channel, which the clean-flip default refuses."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("PSSE_EXPERT_VARIANT", "baseline")
+        yield
+
+
 def _generator(profile: str = PROFILE, seed: int = SEED) -> Round0ScenarioGenerator:
     if not PHYSICAL_HIF_SAMPLE_PATHS[0].is_file():
         pytest.skip("tracked 20260923opf HIF corpora are not checked out")

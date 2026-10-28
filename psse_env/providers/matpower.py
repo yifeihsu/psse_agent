@@ -154,6 +154,10 @@ _ROUTE_COMPLETE_NEGATIVE = "complete_negative"
 _ROUTE_UNAVAILABLE = "unavailable_or_inconclusive"
 PARAMETER_RANKING_CONTRACT = "distinct_line_abs_lambda_dominance_v1"
 PARAMETER_RANKING_DOMINANCE_THRESHOLD = 1.2
+#: The fields of a clean-flip screen report that reach the WLS metrics as
+#: ``clean_flip`` (and so the durable ledger a policy reads); its cost and
+#: error text go to ``clean_flip_cost``.
+CLEAN_FLIP_ROUTING_FIELDS = ("status", "available", "cb_names", "screened", "reported_chi_square")
 
 
 def parameter_ranking_contract_is_dominant(
@@ -476,9 +480,11 @@ class MatpowerDeploymentProviders:
         lambda_threshold: float = 3.0,
         flow_noise_sigma: float = 3.0,
         flow_noise_residual: float = 8.0,
+        flow_at_noise_cue: bool = False,
         pair_refit_adjacent: bool = False,
         target_first_partial: bool = False,
         clean_flip_screen: bool = False,
+        clean_flip_allow_partial_channel: bool = False,
         chi2_alpha: float = 0.05,
         normalized_residual_threshold: float | None = None,
         breaker_candidate_count: int = 8,
@@ -554,14 +560,19 @@ class MatpowerDeploymentProviders:
         # top-ranked branch candidate whose terminal P flows both read at
         # noise level, whose Q flow reads at noise level at one end, and whose
         # P residuals are large (the stale model still routes flow through it)
-        # is reported as ``flow_at_noise``.  Observable, additive fields; no
-        # default route decision changes.  The residual floor of 8 sigma was
+        # is reported as ``flow_at_noise``.  The residual floor of 8 sigma was
         # set on the compound suite's 625 roots without a breaker atom (the
         # cue fires on 5 at 8, on 24 at 5, on 62 at 3) and holds on the
         # conventional suite (0 of 136 at 8, 2 at 5); at the first solve it
         # shows on 522 of the suite's 650 breaker roots.
         self.flow_noise_sigma = float(flow_noise_sigma)
         self.flow_noise_residual = float(flow_noise_residual)
+        # The cue reaches the WLS metrics and the parameter context, and so
+        # the durable ledgers a policy reads, only when a run reads it: the
+        # guarded teacher (``variant_provider_options``) or the target-first
+        # verifier, whose route the cue closes.  Every other teacher's student
+        # sees the observation it saw before stage 2 (review of 2026-10-28).
+        self.flow_at_noise_cue = bool(flow_at_noise_cue or target_first_partial)
         # Compound-error study, stage 2 item 3 (2026-10-28): when a parameter
         # correction lands on a line adjacent to the line of the last committed
         # parameter correction, the one-shot single-line estimate of each
@@ -586,6 +597,14 @@ class MatpowerDeploymentProviders:
         # screen's own cost is the solves it spends where no context follows.
         # Off by default: nothing is computed or reported unless a run names it.
         self.clean_flip_screen = bool(clean_flip_screen)
+        # The report rides on the policy's WLS ledger from the first anomalous
+        # solve, so on a suite where only some roots carry the node/breaker
+        # channel its presence names their family.  With the screen on, an
+        # environment therefore refuses a root of a node/breaker system that
+        # lacks the channel (``require_node_breaker_channel``; the
+        # uniform-metadata convention of 2026-10-28).  The waiver is for
+        # expert-only checks on older suites, never for data a student sees.
+        self.clean_flip_allow_partial_channel = bool(clean_flip_allow_partial_channel)
         self._node_breaker_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
         self.lambda_threshold = float(lambda_threshold)
         self.chi2_alpha = float(chi2_alpha)
@@ -666,7 +685,7 @@ class MatpowerDeploymentProviders:
         """Keyword arguments wiring this bundle into ``TransactionalPSSEEnv``."""
         from psse_env.oracle import ProcessValidityOracle
 
-        return {
+        kwargs: dict[str, Any] = {
             "evidence_profile": self.evidence_profile,
             "process_oracle": ProcessValidityOracle(executor_hydrated_corrections=True),
             "candidate_quality_oracle": self._deployment_candidate_quality_oracle(),
@@ -691,6 +710,42 @@ class MatpowerDeploymentProviders:
                 ESTIMATE_HIF_MULTISCAN_FROM_PATH: self.estimate_hif_multiscan,
             },
         }
+        if self.clean_flip_screen and not self.clean_flip_allow_partial_channel:
+            # Passed only with the screen on, so every other environment is
+            # built by exactly the call it was built by before.
+            kwargs["scenario_guard"] = self.require_node_breaker_channel
+        return kwargs
+
+    def require_node_breaker_channel(self, scenario: Mapping[str, Any]) -> None:
+        """Refuse a root of a node/breaker system that carries no node/breaker channel (clean-flip screen on).
+
+        Under the screen the policy's WLS ledger carries ``clean_flip`` on
+        every anomalous solve of a root with the channel and on no other, so a
+        suite whose roots do not all carry it would name their family by the
+        report's presence.  A root of a system without a node/breaker model
+        (its case does not have the model's planning buses) never gets a
+        report and passes.
+        """
+        metadata = scenario.get("metadata") if isinstance(scenario.get("metadata"), Mapping) else {}
+        if isinstance(metadata.get("substation_telemetry"), Mapping) and isinstance(
+            metadata.get("reported_breaker_status"), Mapping
+        ):
+            return
+        try:
+            bus_count = int(_load_python_case(self._case_path(scenario))["bus"].shape[0])
+        except Exception:
+            # An unreadable case fails in the episode's own first solve.
+            return
+        planning_buses = len({node.planning_bus for node in self._node_breaker_model().nodes.values()})
+        if bus_count != planning_buses:
+            return
+        raise ValueError(
+            f"scenario {scenario.get('scenario_id', scenario.get('id'))!r} carries no node/breaker channel, but the "
+            "clean-flip screen reports the node/breaker estimate in the policy's WLS ledger on every root that "
+            "does, so a suite that mixes the two names the family by the report (uniform-metadata convention, "
+            "2026-10-28).  Use a suite whose roots all carry substation telemetry, or a teacher without the "
+            "screen (EXPERT_VARIANT=baseline_compare); an expert-only check may set clean_flip_allow_partial_channel."
+        )
 
     def _deployment_candidate_quality_oracle(self) -> Any:
         """Build the one deployment verdict policy used by screen and commit."""
@@ -1992,7 +2047,8 @@ class MatpowerDeploymentProviders:
             # not only the ranked candidates: the line a bus split leaves on an
             # empty section, or the second open terminal of a pair, need not
             # carry a top multiplier.
-            flow_at_noise_lines = self._flow_at_noise_lines(solved, range(int(solved["nl"])))
+            if self.flow_at_noise_cue:
+                flow_at_noise_lines = self._flow_at_noise_lines(solved, range(int(solved["nl"])))
             if self.clean_flip_screen:
                 clean_flip = self._clean_flip_screen(state)
         metrics: dict[str, Any] = {
@@ -2018,16 +2074,26 @@ class MatpowerDeploymentProviders:
             ),
             "unresolved_signatures": _dedupe(signatures),
             "wls_summary": summary,
+        }
+        if self.flow_at_noise_cue:
             # Open-terminal cue over every line (empty when the solve is
             # resolved or a waveform signature stands).
-            "flow_at_noise_lines": list(flow_at_noise_lines),
-            "flow_noise_sigma": self.flow_noise_sigma,
-            "flow_noise_residual": self.flow_noise_residual,
-        }
+            metrics["flow_at_noise_lines"] = list(flow_at_noise_lines)
+            metrics["flow_noise_sigma"] = self.flow_noise_sigma
+            metrics["flow_noise_residual"] = self.flow_noise_residual
         if clean_flip is not None:
             # Whether a top-ranked breaker flip makes the node/breaker
-            # estimate clean on this state (item 6), with the solves it cost.
-            metrics["clean_flip"] = clean_flip
+            # estimate clean on this state (item 6).  Only the routing fields
+            # reach the durable ledger a policy reads; the solves the screen
+            # spent, whether they came from the cache and any error text are
+            # controller bookkeeping (``clean_flip_cost``), so one state reads
+            # the same whatever was fetched on it before.
+            metrics["clean_flip"] = {
+                key: clean_flip[key] for key in CLEAN_FLIP_ROUTING_FIELDS if key in clean_flip
+            }
+            metrics["clean_flip_cost"] = {
+                key: clean_flip[key] for key in ("solves", "cached", "error_detail") if key in clean_flip
+            }
         if conditional:
             metrics["hif_conditioning"] = conditional["conditioning"]
             metrics["conditional_meter_scores"] = conditional["conditional_scores"]
@@ -3018,8 +3084,14 @@ class MatpowerDeploymentProviders:
             "parameter_ranking_dominant": ranking_dominant,
             "parameter_ranking_ambiguous": ranking_ambiguous,
             "parameter_ranking_candidate_lines": candidate_lines,
-            "parameter_flow_at_noise_lines": self._flow_at_noise_lines(
-                solved, [int(item["line_index1"]) - 1 for item in ranked_lines]
+            # The open-terminal cue among the ranked lines, only when a run
+            # reads the cue (``flow_at_noise_cue``).
+            **(
+                {"parameter_flow_at_noise_lines": self._flow_at_noise_lines(
+                    solved, [int(item["line_index1"]) - 1 for item in ranked_lines]
+                )}
+                if self.flow_at_noise_cue
+                else {}
             ),
             "supported_corrections": supported,
             "route_status": route_status,
@@ -3716,7 +3788,10 @@ class MatpowerDeploymentProviders:
             telemetry = self._synchronized_telemetry(state, binding)
             estimated = self._node_breaker_estimate(state, binding, telemetry)
         except Exception as exc:
-            return {"status": f"{type(exc).__name__}: {exc}", "available": False, "cb_names": [], "solves": 0, "cached": False}
+            # A fixed status: the exception text (which can name a derived
+            # case path and its digest) stays in ``clean_flip_cost``.
+            return {"status": "screen_error", "available": False, "cb_names": [], "solves": 0, "cached": False,
+                    "error_detail": f"{type(exc).__name__}: {exc}"}
         estimate = estimated["estimate"]
         if not estimate.get("success"):
             return {"status": "estimate_failed", "available": False, "cb_names": [], "solves": int(estimated["solves"]),

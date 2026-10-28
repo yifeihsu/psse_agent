@@ -328,3 +328,90 @@ Optional: M2, L2-L7.
 **Sibling branches.** `claude/agitated-sammet-93f94e` and `claude/pensive-darwin-33a0d8` fork inside the reviewed range at a52a7e5, before items 6 and the default switch. Any merge order should account for them.
 
 **If the fixes are not wanted now**, keep this as a research branch and do not merge it into the line the paper and the earlier cells were built on.
+
+## 5. Fixes applied (2026-10-28, after the review)
+
+Required fixes 1-4 were applied on this branch, `claude/upbeat-driscoll-ff493f`, on top of this note:
+- the merge 767e606 (`claude/five-test-fixes-20261022`);
+- one fix commit after it.
+
+The reviewed branch `claude/nostalgic-kalam-be5f7a` is unchanged.
+
+**H1 and M1: pipeline variant list and the two override files.**
+- `pipeline.env`'s `pipeline_environment` now accepts the eight names of `EXPERT_VARIANTS`.
+- Both override files that named no teacher now pin `EXPERT_VARIANT=baseline`, with a comment.
+- A new test, `test_every_shell_variant_check_accepts_exactly_the_registered_teachers` in `research/test_hpc_full_pipeline.py`, checks three things:
+  - the case lists in `pipeline.env` and `deploy_remote.sh` both equal `EXPERT_VARIANTS`;
+  - the default in `pipeline.env` is `DEFAULT_EXPERT_VARIANT`;
+  - every overrides file names its teacher.
+- Simulated with `PIPE` in a scratch directory:
+  - unset, `baseline` and the guarded variant return 0;
+  - a bogus name returns 2;
+  - the IEEE 57 override resolves to `baseline`.
+
+**H3: the open-terminal cue is reported only when a run reads it.**
+- New provider option `flow_at_noise_cue`, off by default.
+  - The guarded teacher gets it through `VARIANT_PROVIDER_OPTIONS`.
+  - `target_first_partial` implies it, because the cue closes that route.
+  - The research factory takes it as an environment option.
+- Without it, `run_wls` reports no `flow_at_noise_lines`, `flow_noise_sigma` or `flow_noise_residual`, and the parameter context reports no `parameter_flow_at_noise_lines`.
+- `production_environment_factory` now passes every variant provider option, still only when it is on.
+- Verified by recording the model-visible observation (export view) at every policy step of the expert on 14 conventional roots, two per family:
+  - fixed head against d6e6acc: 0 of 138 steps differ under `baseline_compare`, and 0 of 136 under `baseline`;
+  - 6e5c478 against d6e6acc: 124 of 138 steps differed, all through `fresh_context_evidence.wls.flow_at_noise_lines`.
+- The full conventional check is also unchanged; section 5's runs below give the counts.
+
+**H2: the clean-flip screen refuses mixed suites.**
+- New `MatpowerDeploymentProviders.require_node_breaker_channel`.
+  - It reaches `TransactionalPSSEEnv` as a new optional `scenario_guard`, called first in `reset`.
+  - It is passed only with the screen on, so every other environment is built as before.
+- What it does: it refuses a root of a node/breaker system that lacks `substation_telemetry` or `reported_breaker_status`. A node/breaker system here means a case with the model's 14 planning buses.
+- A system without a node/breaker model, such as case57 or case118, passes.
+- Provider option `clean_flip_allow_partial_channel` (a research environment option of the same name) waives the guard. It is for expert-only checks on older suites, never for data a student sees.
+- Verified with `expert_e2e.py` on the conventional suite under the default teacher:
+  - without the waiver, it refuses at the first root, a measurement root;
+  - with `--env-option clean_flip_allow_partial_channel=1`, it runs, 3 of 3.
+
+**Consequence, stated plainly.** The default teacher now refuses every suite that mixes IEEE 14 roots with and without the node/breaker channel.
+- That covers everything today's generator builds outside the compound family: only topology roots carry the channel. The compound suite carries it on all 1,275 roots and is unaffected.
+- New work on a conventional or waveform suite must therefore name a teacher, for example `EXPERT_VARIANT=baseline_compare`, until the generator implements the uniform-metadata convention for every family.
+- **A weaker alternative**, not built: report `clean_flip` only when a clean flip exists. This drops the `available: false` record that marks a channel root without a finding, and the default would run everywhere.
+  - Its cost: on a mixed suite the cue's presence would still be a certain topology tell, because no non-channel root can ever show it.
+  - That is the user's call.
+
+**Tests pinned to the teacher they were written for.** Six test groups ran real environments under the implicit default. They were written when the default was `baseline`, and the default switch had silently moved them onto the clean-flip teacher. Each now pins `PSSE_EXPERT_VARIANT=baseline`:
+- `RealProductionExpertRecoveryTests` in `test_release_factories.py`;
+- `ParallelEvaluationTests`;
+- `test_scada_only_routing.py`;
+- `test_physical_hif_profile_integration.py`;
+- `test_reviewed_expert_admission.py`;
+- `test_suspicion_gated_contract.py`.
+
+**L1: the ledger copy of `clean_flip` is trimmed.**
+- `clean_flip` now carries only `CLEAN_FLIP_ROUTING_FIELDS`: status, available, cb_names, screened and reported_chi_square.
+- `solves`, `cached` and any error detail go to `clean_flip_cost`, which no ledger copies.
+- A screen exception now reports the fixed status `screen_error`.
+- `research/rl/decision_audit.node_breaker_cost` reads `clean_flip_cost` and falls back to the old record for older episodes. A new test covers both formats.
+- `test_compound_scenarios.py` checks that a cached screen reads exactly as the first one did.
+
+**Behaviour of the stage-2 teachers is unchanged.** Compound rollouts, two roots per class (28 roots), under scada_only, comparing 6e5c478 with the fixed head:
+
+| Teacher | Successes (6e5c478 / fixed) | Per-root tools, corrections, outcomes | False commits | Screens / node/breaker solves |
+|---|---|---|---|---|
+| Clean-flip | 13 / 13 of 28 | identical | 0 | 121 screens, 864 solves, both runs |
+| Guarded | 15 / 15 of 28 | identical | 0 | none (the guarded teacher runs no screen) |
+
+**Runs after the fixes:**
+- **Full suite** (`python -m pytest psse_env research tests`): 2,534 passed, 1 failed, 20 skipped, 544 subtests passed, in 13.7 minutes.
+  - The one failure is `tests/test_hif_operating_point_regulation.py::test_injected_hif_candidate_keeps_regulation`, the OpenDSS non-convergence that appears only in full-suite order (section 2.6).
+  - Its file passes 7 of 7 alone at the fixed head.
+  - The six failures at 6e5c478 are gone: four through the merged five-test-fixes branch, one stale test through the same branch, and the flaky one remains as described.
+- **Conventional 192-root check:** `baseline_compare` at the fixed head against d6e6acc is 192 of 192 both, and per-root identical in tool sequences and corrections, with 0 false commits.
+
+**Recommendation after the fixes.** Merge `claude/upbeat-driscoll-ff493f` instead of the reviewed branch. It contains the reviewed branch, the five-test-fixes branch and these fixes.
+
+Only one point is left for the user, the H2 consequence above:
+- keep the guard, which refuses mixed suites;
+- or take the weaker report-only-a-finding alternative.
+
+M2 and L2-L7 stay optional.

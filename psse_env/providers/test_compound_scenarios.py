@@ -9,7 +9,12 @@ import numpy as np
 
 from psse_env.actions import normalize_action
 from psse_env.dagger.suite_builder import partition_release_scenario_v1
-from psse_env.providers.matpower import MatpowerDeploymentProviders, _load_python_case, measurement_index_map
+from psse_env.providers.matpower import (
+    CLEAN_FLIP_ROUTING_FIELDS,
+    MatpowerDeploymentProviders,
+    _load_python_case,
+    measurement_index_map,
+)
 from psse_env.providers.scenario_generator import (
     COMPOUND_FAMILY,
     COMPOUND_SCAN_COUNT,
@@ -385,11 +390,15 @@ class CompoundScenarioTests(unittest.TestCase):
         screened = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only", clean_flip_screen=True)
         first = screened.run_wls(_state(root))
         record = first.get("tool_metrics", first)["clean_flip"]
+        cost = first.get("tool_metrics", first)["clean_flip_cost"]
         self.assertEqual(record["status"], "screened", record)
         self.assertTrue(record["available"], record)
         self.assertIn(breaker["cb_name"], record["cb_names"])
-        self.assertGreaterEqual(record["solves"], 2)
-        self.assertFalse(record["cached"])
+        # The record the ledger carries holds the routing fields only; what the
+        # screen spent is controller bookkeeping (the stage-2 review).
+        self.assertLessEqual(set(record), set(CLEAN_FLIP_ROUTING_FIELDS))
+        self.assertGreaterEqual(cost["solves"], 2)
+        self.assertFalse(cost["cached"])
         # The topology context on the same state reuses the estimate: no new solves.
         context = screened.get_topology_context(_state(root))
         self.assertEqual(context.get("execution_status", "success"), "success", context)
@@ -397,13 +406,15 @@ class CompoundScenarioTests(unittest.TestCase):
         self.assertTrue(context["node_breaker_estimate_cached"])
         # Without a screen the context spends the same solves itself.
         fresh = quiet.get_topology_context(_state(root))
-        self.assertEqual(fresh["node_breaker_solves"], record["solves"])
+        self.assertEqual(fresh["node_breaker_solves"], cost["solves"])
         self.assertFalse(fresh["node_breaker_estimate_cached"])
         again = screened.run_wls(_state(root))
+        again_cost = again.get("tool_metrics", again)["clean_flip_cost"]
         again = again.get("tool_metrics", again)["clean_flip"]
-        self.assertTrue(again["cached"])
-        self.assertEqual(again["solves"], 0)
-        self.assertEqual(again["cb_names"], record["cb_names"])
+        self.assertTrue(again_cost["cached"])
+        self.assertEqual(again_cost["solves"], 0)
+        # A cached screen reads exactly as the first one did.
+        self.assertEqual(again, record)
         # A root without a breaker atom reports no clean flip.
         healthy = screened.run_wls(_state(self.roots["rx2_adjacent"]))
         healthy = healthy.get("tool_metrics", healthy)["clean_flip"]
@@ -412,7 +423,7 @@ class CompoundScenarioTests(unittest.TestCase):
 
     def test_run_wls_reports_the_open_terminal_cue_on_dangling_lines_only(self) -> None:
         """Stage 2 (2026-10-28): ``flow_at_noise_lines`` names dangling lines and nothing else."""
-        providers = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only")
+        providers = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only", flow_at_noise_cue=True)
         fired: list[int] = []
         for name in ("rx_cb_same_line", "cb2_mixed"):
             root = self.roots[name]
@@ -444,6 +455,51 @@ class CompoundScenarioTests(unittest.TestCase):
         for name in ("rx2_adjacent", "meter_on_rx", "control_meter"):
             quiet = providers.run_wls(_state(self.roots[name]))
             self.assertEqual(quiet.get("tool_metrics", quiet)["flow_at_noise_lines"], [], name)
+
+    def test_the_open_terminal_cue_is_reported_only_when_a_run_reads_it(self) -> None:
+        """The stage-2 review (2026-10-28): without the guarded teacher or the
+        target-first verifier the WLS metrics and the parameter context carry
+        no cue, so every other teacher's student sees the observation it saw
+        before stage 2; the target-first verifier turns the cue on, since the
+        cue closes its route."""
+        root = self.roots["rx_cb_same_line"]
+        default = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only")
+        metrics = default.run_wls(_state(root))
+        metrics = metrics.get("tool_metrics", metrics)
+        for key in ("flow_at_noise_lines", "flow_noise_sigma", "flow_noise_residual"):
+            self.assertNotIn(key, metrics)
+        self.assertNotIn("parameter_flow_at_noise_lines", default.get_parameter_context(_state(root)))
+        verifier = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only", target_first_partial=True)
+        self.assertTrue(verifier.flow_at_noise_cue)
+        cued = verifier.run_wls(_state(root))
+        self.assertIn("flow_at_noise_lines", cued.get("tool_metrics", cued))
+
+    def test_the_clean_flip_screen_refuses_a_root_without_the_node_breaker_channel(self) -> None:
+        """The stage-2 review (2026-10-28): under the screen the report rides on
+        the policy's WLS ledger of every root that carries the channel, so an
+        environment with the screen refuses an IEEE 14 root that carries
+        none; a system without a node/breaker model passes, and the waiver
+        (expert-only checks on older suites) drops the guard."""
+        from psse_env.transactional_env import TransactionalPSSEEnv
+
+        root = self.roots["control_cb"]
+        bare = copy.deepcopy(root)
+        for key in ("substation_telemetry", "reported_breaker_status"):
+            bare["metadata"].pop(key, None)
+        screened = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only", clean_flip_screen=True)
+        env = TransactionalPSSEEnv(**screened.env_kwargs())
+        env.reset(copy.deepcopy(root))
+        with self.assertRaisesRegex(ValueError, "carries no node/breaker channel"):
+            env.reset(copy.deepcopy(bare))
+        screened.require_node_breaker_channel({"scenario_id": "ieee57", "case": "case57", "metadata": {}})
+        waived = MatpowerDeploymentProviders(
+            chi2_alpha=0.01, evidence_profile="scada_only", clean_flip_screen=True,
+            clean_flip_allow_partial_channel=True,
+        )
+        self.assertNotIn("scenario_guard", waived.env_kwargs())
+        TransactionalPSSEEnv(**waived.env_kwargs()).reset(copy.deepcopy(bare))
+        # Without the screen no guard is built at all.
+        self.assertNotIn("scenario_guard", MatpowerDeploymentProviders(chi2_alpha=0.01).env_kwargs())
 
 
 if __name__ == "__main__":
