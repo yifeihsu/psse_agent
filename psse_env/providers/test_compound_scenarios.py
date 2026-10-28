@@ -9,7 +9,7 @@ import numpy as np
 
 from psse_env.actions import normalize_action
 from psse_env.dagger.suite_builder import partition_release_scenario_v1
-from psse_env.providers.matpower import MatpowerDeploymentProviders, measurement_index_map
+from psse_env.providers.matpower import MatpowerDeploymentProviders, _load_python_case, measurement_index_map
 from psse_env.providers.scenario_generator import (
     COMPOUND_FAMILY,
     COMPOUND_SCAN_COUNT,
@@ -279,6 +279,41 @@ class CompoundScenarioTests(unittest.TestCase):
         self.assertEqual(context.get("execution_status", "success"), "success", context)
         self.assertTrue(context["parameter_scans_available"])
         self.assertEqual(context["parameter_scan_count"], COMPOUND_SCAN_COUNT)
+
+    def test_run_wls_reports_the_open_terminal_cue_on_dangling_lines_only(self) -> None:
+        """Stage 2 (2026-10-28): ``flow_at_noise_lines`` names dangling lines and nothing else."""
+        providers = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only")
+        fired: list[int] = []
+        for name in ("rx_cb_same_line", "cb2_mixed"):
+            root = self.roots[name]
+            # Lines a breaker atom de-energises: a dangling terminal's own
+            # line, or a line whose terminal lands on the empty section of a
+            # split bus.
+            branches = _load_python_case(root["case"])["branch"]
+            affected: set[int] = set()
+            for row in root["true_topology_errors"]:
+                if row.get("branch_row0") is not None:
+                    affected.add(int(row["branch_row0"]) + 1)
+                for bus in row.get("affected_planning_buses") or []:
+                    affected.update(
+                        index + 1 for index, branch in enumerate(branches) if int(bus) in (int(branch[0]), int(branch[1]))
+                    )
+            self.assertTrue(affected, name)
+            output = providers.run_wls(_state(root))
+            self.assertEqual(output.get("execution_status", "success"), "success", output)
+            metrics = output.get("tool_metrics", output)
+            self.assertEqual(metrics["flow_noise_sigma"], 3.0)
+            self.assertEqual(metrics["flow_noise_residual"], 8.0)
+            self.assertTrue(set(metrics["flow_at_noise_lines"]) <= affected, (name, metrics["flow_at_noise_lines"], affected))
+            context = providers.get_parameter_context(_state(root))
+            self.assertTrue(set(context["parameter_flow_at_noise_lines"]) <= affected, (name, context["parameter_flow_at_noise_lines"]))
+            fired.extend(metrics["flow_at_noise_lines"])
+        # The cue fires on most dangling roots (573 of 706 breaker roots of the
+        # study suite), so the two fixtures together show it at least once.
+        self.assertTrue(fired)
+        for name in ("rx2_adjacent", "meter_on_rx", "control_meter"):
+            quiet = providers.run_wls(_state(self.roots[name]))
+            self.assertEqual(quiet.get("tool_metrics", quiet)["flow_at_noise_lines"], [], name)
 
 
 if __name__ == "__main__":

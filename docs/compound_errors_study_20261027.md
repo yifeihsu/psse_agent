@@ -797,4 +797,228 @@ scans and the node/breaker channel on every root, as this one does, so the
 parameter route is actionable on every class and the ordering question of
 section 3.1 stays in view; the conventional suites behind the PES GM
 manuscript keep their existing metadata (no scans on topology roots).
-Stage 2 beyond decision (b) has not been requested.
+
+Stage 2 was then requested, in the user's words: "Yes, start stage 2 in the
+compound session: the tool repairs in the note's section 6.3 order, re-run
+on the same suite, no DAgger round yet."  Section 7 records it item by
+item.
+
+## 7. Stage 2: the tool repairs, one at a time (2026-10-28)
+
+The ground rules, from the request: the items of section 6.3 in order, one
+commit each, every item re-run on the same 1,275 roots under both the
+baseline teacher and the flagged topology-first variant before the next
+item is started; CPU only, no training, no DAgger round, nothing under
+`docs/papers/pesgm2027/`.  Standing constraints: the topology-first order
+stays flagged, and its conditioned version has to be validated on the
+conventional 192-scenario test suite of the manuscript's cell (the cell's
+`development.json`, copied to `output/conventional_reference/`) with the
+expert still at 192 of 192 and every conventional family unchanged before
+anyone proposes adopting it; `baseline_compare` keeps its default
+behaviour; the isolated-line audit rule of section 3.2 is in; every suite
+drawn carries the uniform metadata.  Per item the record below gives what
+changed and where (flag or shared path, with the tests that pin the seven
+conventional families), the per-class before and after under both
+teachers, the overall ceilings, what broke, and the commit.
+
+### 7.1 Item 1: the topology-first order conditioned on an open-terminal cue
+
+**The cue.**  A dangling terminal leaves its line carrying no current: both
+terminal P-flow meters read noise, the Q-flow meter at the open end reads
+noise (the energised end still shows charging), while the operator's model,
+which has the breaker closed, routes the pre-fault flow through the line,
+so the WLS solve leaves a large P-flow residual on it.  The provider now
+computes, for the branch candidates it ranks (the top-k Lagrangian
+multipliers of `run_wls`, and the ranked lines of `get_parameter_context`),
+whether a line reads like that: both |P| flow readings below
+`flow_noise_sigma` (3) standard deviations, the smaller |Q| flow reading
+below it, and the larger normalized P-flow residual above
+`flow_noise_residual` (8).  The lines that do are reported, 1-based, as
+`flow_at_noise_lines` in the WLS tool metrics (durable in the observation's
+`fresh_context_evidence["wls"]` beside the alarm fields) and as
+`parameter_flow_at_noise_lines` in the parameter context.  Everything is
+derived from the measurement vector, the declared sigma and the solve, so
+nothing privileged enters the observation; the fields are additive, so no
+default route decision changes (`psse_env/providers/test_flow_at_noise.py`,
+and the cue on the compound fixtures in
+`psse_env/providers/test_compound_scenarios.py`).
+
+**The order.**  `ExpertPolicyOracle(topology_first=...)` now takes three
+modes: off (every existing variant), on everywhere
+(`baseline_compare_topology_first`, section 3.1), and `"flow_at_noise"`
+(the new variant `baseline_compare_topology_guarded`), in which the breaker
+route leads the structural tier only in a state whose latest bound WLS
+solve reports at least one flow-at-noise line; without the cue the order is
+the baseline's, so a root without the cue is handled exactly as
+`baseline_compare` handles it.  Nothing is excluded: if the topology route
+finds no supported flip, the parameter route follows as before.
+`baseline_compare` is untouched (`psse_env/oracle/test_topology_first_order.py`
+pins its options and its order).
+
+**Setting the residual floor.**  The cue was measured on the first solve of
+every root of both suites (scope: any of the top-k ranked lines), against
+whether the root carries a breaker atom (the topology-first order is right)
+or not (the parameter-first order is right):
+
+| residual floor (sigma) | compound breaker roots that fire (of 650) | compound roots without a breaker atom that fire (of 625) | conventional topology and measurement+topology roots that fire (of 56) | other conventional roots that fire (of 136) |
+| --- | --- | --- | --- | --- |
+| 3 | 551 | 62 | 52 | 3 |
+| 5 | 525 | 24 | 52 | 2 |
+| 8 | 504 | 5 | 51 | 0 |
+
+The floor of 8 was set on the compound suite's roots without a breaker atom
+(5 false fires, 4 of them on adjacent-pair roots and 1 on a meter plus two
+lines, against 24 and 62 at the lower floors), at the cost of 47 of the 551
+breaker roots the loosest floor catches.  The conventional suite was then
+read as a check: at 8 no conventional root without a breaker fires (the two
+that fire at 5 are a parameter root and a measurement+parameter root whose
+true line carries almost no flow, residuals 5.5 and 7.7 sigma), and the
+dangling-terminal roots of the topology and mixed families fire on 51 of
+56.  The conventional suite would have given the same floor, but the
+reader should know it was looked at before the validation run below, so
+that run is a check of the chosen floor, not an independent test of the
+rule.  Per class at the floor of 8 the cue fires on 58 of 60 two-dangling
+roots, 31 of 45 mixed pairs, 13 of 45 two-split roots (a bus split only
+reads as an open terminal when a line's end lands on an empty section), 33
+of 50 single-breaker controls, 128 of 150 and 114 of 150 of the two
+distant R/X plus breaker classes, 58 of 75 same-line and 69 of 75
+shared-bus roots; on the conventional topology family 27 of 32 and on
+measurement+topology 24 of 24.  The cue is re-evaluated on every solve, so
+a root that does not show it at the first state can show it after a meter
+or parameter correction changes the solve.  (The counts in this paragraph
+are for the cue on the five top-ranked branch candidates, the scope of the
+first run; the committed version examines every line, see "Scope of the
+cue" below.)
+
+**Validation on the conventional suite.**  The manuscript's 192-root test
+suite (`output/conventional_reference/development.json`, the cell's
+`development.json`) was rolled out with the standard end-to-end runner
+(`research/classifier_triage/expert_e2e.py --profile scada_only`, the
+40-action budget and the paired evaluation contract) under the unchanged
+`baseline_compare` and under `baseline_compare_topology_guarded`, on the
+same code:
+
+| family (roots) | baseline_compare | guarded | identical trajectories | roots with the cue at the first solve | mean actions: baseline, guarded |
+| --- | --- | --- | --- | --- | --- |
+| measurement (32) | 32 | 32 | 32 | 0 | 7.00, 7.00 |
+| measurement+parameter (32) | 32 | 32 | 32 | 0 | 11.22, 11.22 |
+| measurement+topology (24) | 24 | 24 | 0 | 24 | 12.00, 11.00 |
+| multi_measurement (24) | 24 | 24 | 24 | 0 | 20.58, 20.58 |
+| no_error (16) | 16 | 16 | 16 | 0 | 2.00, 2.00 |
+| parameter (32) | 32 | 32 | 32 | 0 | 7.56, 7.56 |
+| topology (32) | 32 | 32 | 5 | 27 | 8.00, 7.16 |
+| all (192) | 192 | 192 | 141 | 51 | 9.87, 9.60 |
+
+Both teachers solve 192 of 192 with no false commit; the baseline's
+per-family means reproduce the cell's.  Of the 51 trajectories that
+differ, every one is a topology or measurement+topology root on which the
+cue fired, and every one is the baseline's trajectory with the
+parameter-context fetch removed (51 of 51 are exactly one
+action shorter; the breaker fix, the meter fix and the handoff are the
+same actions).  No parameter, measurement, mixed measurement+parameter,
+multi-measurement or no-error root changed at all.  The topology roots
+without the cue keep the baseline's trajectory.  So the guarded order
+meets the standing condition (expert 192 of 192, every family unchanged)
+and the only effect on the conventional families is one fewer action on
+51 of the 56 breaker roots.  This is a check of the chosen floor, as
+said above, not an independent test of the rule.
+
+**The compound suite.**  The same 1,275 roots under the three teachers
+(the baseline and the always-on variant re-run on this code reproduce
+their stage-1 trajectories on 1,275 of 1,275 roots, so the before columns
+are the stage-1 results under the isolated-line rule of section 3.2):
+
+| class (roots) | baseline_compare | topology first, always | topology first, guarded | guarded vs baseline, won / lost | roots with the cue at the first solve | mean actions: baseline, always, guarded |
+| --- | --- | --- | --- | --- | --- | --- |
+| two R/X, adjacent (150) | 50 | 42 | 50 | +0 / -0 | 6 | 16.7, 18.9, 16.7 |
+| two R/X, distant (150) | 72 | 63 | 72 | +0 / -0 | 0 | 10.5, 14.2, 10.5 |
+| R/X + breaker, same line (75) | 47 | 75 | 71 | +24 / -0 | 58 | 16.6, 7.0, 8.6 |
+| R/X + breaker, shared bus (75) | 32 | 43 | 46 | +14 / -0 | 70 | 21.0, 13.5, 13.0 |
+| R/X + breaker, distant (150) | 73 | 109 | 109 | +37 / -1 | 129 | 18.1, 12.2, 12.0 |
+| meter + two R/X (150) | 61 | 51 | 61 | +0 / -0 | 1 | 16.7, 19.8, 16.7 |
+| meter on the R/X line (75) | 14 | 14 | 14 | +0 / -0 | 0 | 14.8, 15.0, 14.8 |
+| R/X + breaker + meter (150) | 59 | 97 | 97 | +38 / -0 | 116 | 23.0, 16.3, 16.7 |
+| two breakers, dangling (60) | 16 | 53 | 46 | +30 / -0 | 58 | 25.7, 11.0, 12.8 |
+| two breakers, mixed (45) | 1 | 11 | 2 | +1 / -0 | 37 | 27.2, 14.0, 18.6 |
+| two breakers, bus splits (45) | 0 | 0 | 0 | +0 / -0 | 21 | 26.8, 15.4, 23.1 |
+| control: one R/X (50) | 43 | 37 | 43 | +0 / -0 | 0 | 7.5, 10.0, 7.5 |
+| control: one breaker (50) | 31 | 50 | 44 | +13 / -0 | 33 | 14.8, 7.0, 10.5 |
+| control: one meter (50) | 47 | 47 | 47 | +0 / -0 | 0 | 21.3, 21.4, 21.3 |
+| all (1275) | 546 (43%) | 692 (54%) | 702 (55%) | +157 / -1 | 529 | 17.9, 14.7, 14.3 |
+
+The guarded order reaches 702 of 1,275 (55%) against 546 for the
+baseline and 692 for the always-on flag: 157 roots won and 1 lost against the
+baseline.  On the 625 roots without a breaker atom the guarded teacher
+is the baseline (618 of 625 identical trajectories; the cue fired on
+7 of them, 2 solved either way), so the always-on flag's 33 losses on
+the parameter and meter classes are recovered in full.  On the breaker
+classes it tracks the always-on flag where the cue fires and the baseline
+where it does not:
+
+| breaker class | cue at the first solve: roots | always | guarded | no cue: roots | baseline | always | guarded |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| R/X + breaker, same line | 58 | 58 | 58 | 17 | 13 | 17 | 13 |
+| R/X + breaker, shared bus | 70 | 42 | 43 | 5 | 1 | 1 | 3 |
+| R/X + breaker, distant | 129 | 96 | 99 | 21 | 10 | 13 | 10 |
+| R/X + breaker + meter | 116 | 84 | 85 | 34 | 12 | 13 | 12 |
+| two breakers, dangling | 58 | 52 | 46 | 2 | 0 | 1 | 0 |
+| two breakers, mixed | 37 | 11 | 2 | 8 | 0 | 0 | 0 |
+| two breakers, bus splits | 21 | 0 | 0 | 24 | 0 | 0 | 0 |
+| control: one breaker | 33 | 33 | 33 | 17 | 11 | 17 | 11 |
+
+Where the cue fires at the first solve the guarded teacher solves as many
+roots as the always-on flag or more, except on the two-breaker classes:
+after the first breaker is fixed the second atom has to show the cue on
+its own, and a bus split rarely does (a split reads as an open terminal
+only when a line's end lands on an empty section), nor does a lightly
+loaded dangling line.  The replay of one missed two-dangling root
+(`r0_f337fe6e3610`) shows the second: its two open lines read 1.3 and
+0.9 sigma of P flow with 33.3 and 2.1 sigma of P residual at the first
+solve, so the first is flagged and fixed; at the second solve the
+remaining line's residual is 3.7 sigma, below the floor, the parameter
+route leads, the estimator inflates that line's reactance and the
+verifier accepts the edit as final (section 5.4's masking), and the
+breaker is never fixed.  Lowering the floor to 3 would catch it at the
+price of 65 false fires on the compound suite's parameter and meter roots
+(the table of floors above).  The one root lost against the baseline
+(`r0_522d8a1342a4`, R/X + breaker, distant) is a breaker root on which the cue fired
+correctly but the topology context's first supported flip was a wrong
+breaker that verified as partial progress; the baseline reached the same
+breaker only after its parameter correction, when the wrong flip was no
+longer offered.  That is the always-on flag's loss mechanism of section
+3.1 (38 roots there), reduced to one here because the parameter roots no
+longer take the topology route.
+
+**Scope of the cue.**  The first run of the guarded teacher evaluated the
+cue on the top five ranked branch candidates only
+(`expert_baseline_compare_topology_guarded_top5/`: 702 of 1,275, the
+same one root lost).  Evaluating it on every line (the committed version)
+adds 18 breaker roots that show the cue at the first solve (504 to 522 of
+650; two-breaker mixed pairs 31 to 37, two bus splits 13 to 21) for two
+more false fires on adjacent-pair roots (5 to 7 of 625), because the line
+a bus split leaves on an empty section and the second terminal of a pair
+need not carry a top multiplier; 20 trajectories differ between the two
+scopes and no root changes outcome.  The cue is still absent at the first
+solve on 128 of the 650 breaker roots: of the suite's 650 dangling
+terminals 115 do not show it, 104 because the P residual is below the
+floor (lightly loaded lines) and 11 because the P flow is not at noise,
+and the other roots without it are bus splits that leave no line on an
+empty section.
+
+**What broke.**  The first version of the provider change bound the cue
+only on the branch-ranking path, so a resolved or waveform-dominated
+solve raised an `UnboundLocalError` inside `run_wls`; the oracle
+regression suite caught it (`test_expert_recovery`) before any run was
+kept, and every result above is from the fixed code (471 tests pass).
+The compound rollout harness cannot roll out the conventional suite,
+whose roots name the tracked `case14` rather than a case file (every
+re-solve after a correction fails with `dispatch_error`), which is why
+the conventional validation uses the end-to-end runner; the harness is
+unchanged.
+
+**Commit.**  The commit that adds this section (branch
+`claude/nostalgic-kalam-be5f7a`, 2026-10-28).  `baseline_compare` is
+untouched and stays the teacher; `baseline_compare_topology_guarded` is a
+named variant of the compound work, and adopting it elsewhere is the
+user's decision.
+

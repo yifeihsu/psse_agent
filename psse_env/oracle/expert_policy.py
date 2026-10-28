@@ -112,6 +112,12 @@ def _process_rejection(output: Mapping[str, Any]) -> bool:
 
 
 TOPOLOGY_PATH_TOOLS = frozenset({CORRECT_TOPOLOGY, GET_TOPOLOGY_CONTEXT})
+# ``topology_first`` modes: off, always, or only in a state whose latest bound
+# WLS solve reports the open-terminal cue (``flow_at_noise_lines``: a top
+# branch candidate whose terminal flows read at noise while the stale model
+# still routes flow through it; compound-error study, stage 2, 2026-10-28).
+FLOW_AT_NOISE_GUARD = "flow_at_noise"
+TOPOLOGY_FIRST_MODES = (False, True, FLOW_AT_NOISE_GUARD)
 
 
 def _structural_first_order(
@@ -196,12 +202,20 @@ class ExpertPolicyOracle:
         learned_ranker: LearnedRanker | str | None = None,
         candidate_comparison: bool = False,
         comparison_dominance_band: float = DEFAULT_COMPARISON_DOMINANCE_BAND,
-        topology_first: bool = False,
+        topology_first: bool | str = False,
     ) -> None:
         # Compound-error study (2026-10-27): the breaker route ahead of the
-        # parameter route inside the structural tier.  Off by default; only
-        # the ``baseline_compare_topology_first`` variant turns it on.
-        self.topology_first = bool(topology_first)
+        # parameter route inside the structural tier.  Off by default; the
+        # ``baseline_compare_topology_first`` variant turns it on everywhere,
+        # the ``baseline_compare_topology_guarded`` variant only where the
+        # solve shows the open-terminal cue (``FLOW_AT_NOISE_GUARD``).
+        self.topology_first: bool | str
+        if isinstance(topology_first, str):
+            if topology_first != FLOW_AT_NOISE_GUARD:
+                raise ValueError(f"topology_first must be one of {TOPOLOGY_FIRST_MODES}, got {topology_first!r}")
+            self.topology_first = FLOW_AT_NOISE_GUARD
+        else:
+            self.topology_first = bool(topology_first)
         # Step 3 (2026-10-01): order the balanced families and their targets by
         # the screen's accepted sequence and cap verified candidates per family
         # and per state (psse_env.oracle.hypothesis_ledger).  Off by default so
@@ -565,7 +579,7 @@ class ExpertPolicyOracle:
             if is_classifier_gated(policy):
                 state_view = policy if isinstance(policy, Mapping) else policy.as_dict()
                 return _triage_first_order(ranked, triage_first_family(current_triage_report(state_view)))
-            return _structural_first_order(ranked, topology_first=self.topology_first)
+            return _structural_first_order(ranked, topology_first=self._topology_first_for(policy))
         escalation = self._recovery_exhaustion_proposals(policy, context.history)
         return self._rank_and_filter(
             escalation,
@@ -574,6 +588,31 @@ class ExpertPolicyOracle:
             blocked_correction_tools=blocked_correction_tools,
             mandatory=False,
         )
+
+    def _flow_at_noise_lines(self, policy: PolicyObservation | Mapping[str, Any]) -> list[int]:
+        """Lines the latest bound WLS solve flagged with the open-terminal cue (empty without one).
+
+        The durable WLS ledger of the active state is the source; the solve's
+        own output serves when the observation carries no ledger yet.
+        """
+        contexts = self._get(policy, "fresh_context_evidence", {}) or {}
+        wls = contexts.get("wls") if isinstance(contexts, Mapping) else None
+        if isinstance(wls, Mapping) and wls.get("successful"):
+            return [int(line) for line in wls.get("flow_at_noise_lines") or []]
+        if self._get(policy, "last_tool") == RUN_WLS:
+            output = self._get(policy, "last_tool_output", {}) or {}
+            metrics = output.get("tool_metrics") if isinstance(output, Mapping) else None
+            if isinstance(metrics, Mapping):
+                return [int(line) for line in metrics.get("flow_at_noise_lines") or []]
+        return []
+
+    def _topology_first_for(self, policy: PolicyObservation | Mapping[str, Any]) -> bool:
+        """Whether the breaker route leads the structural tier in this state (``topology_first`` mode)."""
+        if self.topology_first is True:
+            return True
+        if self.topology_first == FLOW_AT_NOISE_GUARD:
+            return bool(self._flow_at_noise_lines(policy))
+        return False
 
     def _cross_family_diversification_proposals(
         self,

@@ -853,6 +853,9 @@ class TransactionalPSSEEnv:
                 "triage",
                 # Lets the process gate tell a voltage channel from a power one.
                 "bus_count",
+                # Open-terminal cue among the top branch candidates (compound
+                # study, stage 2); the guarded topology-first order reads it.
+                "flow_at_noise_lines",
             ):
                 if key in wls:
                     contexts["wls"][key] = wls[key]
@@ -4265,6 +4268,7 @@ class TransactionalPSSEEnv:
             "parameter_ranking_dominance_threshold",
             "parameter_ranking_singleton",
             "parameter_ranking_dominant",
+            "parameter_flow_at_noise_lines",
             "topology_findings",
             "topology_candidate_screening",
             "route_status",

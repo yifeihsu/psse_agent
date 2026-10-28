@@ -474,6 +474,8 @@ class MatpowerDeploymentProviders:
         top_k: int = 5,
         residual_threshold: float = 3.0,
         lambda_threshold: float = 3.0,
+        flow_noise_sigma: float = 3.0,
+        flow_noise_residual: float = 8.0,
         chi2_alpha: float = 0.05,
         normalized_residual_threshold: float | None = None,
         breaker_candidate_count: int = 8,
@@ -545,6 +547,18 @@ class MatpowerDeploymentProviders:
         # branch target itself is resolved (see CandidateQualityOracle).
         self.branch_first_partial = bool(branch_first_partial)
         self.residual_threshold = float(residual_threshold)
+        # Open-terminal cue (compound-error study, stage 2, 2026-10-28): a
+        # top-ranked branch candidate whose terminal P flows both read at
+        # noise level, whose Q flow reads at noise level at one end, and whose
+        # P residuals are large (the stale model still routes flow through it)
+        # is reported as ``flow_at_noise``.  Observable, additive fields; no
+        # default route decision changes.  The residual floor of 8 sigma was
+        # set on the compound suite's 625 roots without a breaker atom (the
+        # cue fires on 5 at 8, on 24 at 5, on 62 at 3) and holds on the
+        # conventional suite (0 of 136 at 8, 2 at 5); at the first solve it
+        # shows on 522 of the suite's 650 breaker roots.
+        self.flow_noise_sigma = float(flow_noise_sigma)
+        self.flow_noise_residual = float(flow_noise_residual)
         self.lambda_threshold = float(lambda_threshold)
         self.chi2_alpha = float(chi2_alpha)
         if not math.isfinite(self.chi2_alpha) or not 0.0 < self.chi2_alpha < 1.0:
@@ -1134,6 +1148,7 @@ class MatpowerDeploymentProviders:
             "hif_prediction": prediction,
             "hif_meter_diagnosis": conditional,
             "wls_measurements": wls_z,
+            "noise_options": noise_options,
         }
 
     @staticmethod
@@ -1893,6 +1908,9 @@ class MatpowerDeploymentProviders:
             if not str(signature).startswith("wls_")
         ]
         signatures = list(preserved)
+        # The open-terminal cue is computed only where branch candidates are
+        # ranked below; every other path reports none.
+        flow_at_noise_lines: list[int] = []
         # While a waveform-level anomaly (harmonic distortion, three-phase
         # unbalance, or a suspected HIF) stands, the fundamental-frequency
         # solve's bad-data attributions are physically unreliable: the
@@ -1939,6 +1957,11 @@ class MatpowerDeploymentProviders:
             ):
                 if item.get("line_row0") is not None:
                     signatures.append(f"{branch_tag} line={int(item['line_row0']) + 1}")
+            # The cue is a per-line physical test, so every line is examined,
+            # not only the ranked candidates: the line a bus split leaves on an
+            # empty section, or the second open terminal of a pair, need not
+            # carry a top multiplier.
+            flow_at_noise_lines = self._flow_at_noise_lines(solved, range(int(solved["nl"])))
         metrics: dict[str, Any] = {
             **self._binding(state),
             "evidence_source": "deployment_wls:lagrangian_port",
@@ -1962,6 +1985,11 @@ class MatpowerDeploymentProviders:
             ),
             "unresolved_signatures": _dedupe(signatures),
             "wls_summary": summary,
+            # Open-terminal cue over every line (empty when the solve is
+            # resolved or a waveform signature stands).
+            "flow_at_noise_lines": list(flow_at_noise_lines),
+            "flow_noise_sigma": self.flow_noise_sigma,
+            "flow_noise_residual": self.flow_noise_residual,
         }
         if conditional:
             metrics["hif_conditioning"] = conditional["conditioning"]
@@ -2750,6 +2778,44 @@ class MatpowerDeploymentProviders:
             min_abs=self.lambda_threshold,
         )
 
+    def _flow_at_noise_lines(self, solved: Mapping[str, Any], rows0: Sequence[int]) -> list[int]:
+        """Lines (1-based) among ``rows0`` whose terminal flows read like an open terminal.
+
+        Both P flow readings below ``flow_noise_sigma`` sigmas, the smaller Q
+        flow reading below it too (the connected end of an open line still
+        carries charging), and the larger normalized P residual above
+        ``flow_noise_residual``: the meters see no current where the stale
+        model still routes some.  Sigma is the state's declared sigma, else the
+        solver's nominal one.
+        """
+        payload = solved["payload"]
+        residuals = [float(value) for value in payload.get("r") or []]
+        z = [float(value) for value in solved["z"]]
+        index_map = solved["index_map"]
+        sigma = self._declared_scada_sigma(solved.get("noise_options") or {}, int(solved["nb"]), len(z))
+        out: list[int] = []
+        for row0 in rows0:
+            try:
+                row = int(row0)
+                reading = {}
+                residual = {}
+                for channel in ("Pf", "Qf", "Pt", "Qt"):
+                    index = index_map[channel].start + row
+                    channel_sigma = float(sigma[index])
+                    if not channel_sigma > 0.0:
+                        raise ValueError("flow sigma must be positive")
+                    reading[channel] = abs(z[index]) / channel_sigma
+                    residual[channel] = abs(residuals[index]) if index < len(residuals) else 0.0
+            except (IndexError, KeyError, TypeError, ValueError):
+                continue
+            if (
+                max(reading["Pf"], reading["Pt"]) < self.flow_noise_sigma
+                and min(reading["Qf"], reading["Qt"]) < self.flow_noise_sigma
+                and max(residual["Pf"], residual["Pt"]) > self.flow_noise_residual
+            ):
+                out.append(row + 1)
+        return out
+
     def get_parameter_context(self, state: Mapping[str, Any]) -> dict[str, Any]:
         state = self._evidence_state(state)
         try:
@@ -2915,6 +2981,9 @@ class MatpowerDeploymentProviders:
             "parameter_ranking_dominant": ranking_dominant,
             "parameter_ranking_ambiguous": ranking_ambiguous,
             "parameter_ranking_candidate_lines": candidate_lines,
+            "parameter_flow_at_noise_lines": self._flow_at_noise_lines(
+                solved, [int(item["line_index1"]) - 1 for item in ranked_lines]
+            ),
             "supported_corrections": supported,
             "route_status": route_status,
             "route_status_reason": (

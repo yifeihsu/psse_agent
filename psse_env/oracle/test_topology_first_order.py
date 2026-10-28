@@ -13,7 +13,7 @@ from psse_env.actions import (
     GET_TOPOLOGY_CONTEXT,
     RUN_WLS,
 )
-from psse_env.oracle.expert_policy import ExpertPolicyOracle, _structural_first_order
+from psse_env.oracle.expert_policy import FLOW_AT_NOISE_GUARD, ExpertPolicyOracle, _structural_first_order
 from psse_env.oracle.expert_types import ExpertActionProposal
 from psse_env.oracle.expert_variants import EXPERT_VARIANTS, expert_variant_options
 
@@ -73,6 +73,64 @@ class TopologyFirstOrderTests(unittest.TestCase):
         self.assertFalse(ExpertPolicyOracle().topology_first)
         self.assertFalse(ExpertPolicyOracle(**expert_variant_options("baseline_compare")).topology_first)
         self.assertTrue(ExpertPolicyOracle(**expert_variant_options("baseline_compare_topology_first")).topology_first)
+
+
+def _policy(**fields) -> dict:
+    return {"active_state_id": "s0", **fields}
+
+
+def _fired(lines=(7,), successful=True) -> dict:
+    return _policy(fresh_context_evidence={"wls": {"successful": successful, "flow_at_noise_lines": list(lines)}})
+
+
+class GuardedTopologyFirstTests(unittest.TestCase):
+    """Stage 2 (2026-10-28): the breaker route leads only where the solve shows the open-terminal cue."""
+
+    def test_guard_follows_the_bound_wls_cue(self) -> None:
+        expert = ExpertPolicyOracle(**expert_variant_options("baseline_compare_topology_guarded"))
+        self.assertEqual(expert.topology_first, FLOW_AT_NOISE_GUARD)
+        self.assertTrue(expert._topology_first_for(_fired()))
+        self.assertFalse(expert._topology_first_for(_fired(lines=())))
+        self.assertFalse(expert._topology_first_for(_fired(successful=False)))
+        self.assertFalse(expert._topology_first_for(_policy()))
+        self.assertFalse(expert._topology_first_for(_policy(fresh_context_evidence={"wls": {"successful": True}})))
+        # The solve's own output serves before the durable ledger exists, and
+        # only the solve's: another tool's metrics are not read.
+        direct = _policy(last_tool=RUN_WLS, last_tool_output={"tool_metrics": {"flow_at_noise_lines": [3]}})
+        self.assertTrue(expert._topology_first_for(direct))
+        other = _policy(last_tool=GET_PARAMETER_CONTEXT, last_tool_output={"tool_metrics": {"flow_at_noise_lines": [3]}})
+        self.assertFalse(expert._topology_first_for(other))
+
+    def test_the_cue_reorders_the_structural_tier_only_when_it_fires(self) -> None:
+        expert = ExpertPolicyOracle(**expert_variant_options("baseline_compare_topology_guarded"))
+        ranked = [
+            _proposal(CORRECT_PARAMETERS, line_index=3),
+            _proposal(CORRECT_TOPOLOGY, cb_name="CB_4_N1_N2", status=0),
+            _proposal(GET_PARAMETER_CONTEXT),
+            _proposal(GET_TOPOLOGY_CONTEXT),
+            _proposal(CORRECT_MEASUREMENTS, suspect_group=[4]),
+        ]
+        self.assertEqual(
+            _tools(_structural_first_order(ranked, topology_first=expert._topology_first_for(_fired()))),
+            [CORRECT_TOPOLOGY, GET_TOPOLOGY_CONTEXT, CORRECT_PARAMETERS, GET_PARAMETER_CONTEXT, CORRECT_MEASUREMENTS],
+        )
+        self.assertEqual(
+            _tools(_structural_first_order(ranked, topology_first=expert._topology_first_for(_fired(lines=())))),
+            _tools(_structural_first_order(ranked)),
+        )
+
+    def test_other_modes_ignore_the_cue(self) -> None:
+        self.assertFalse(ExpertPolicyOracle(**expert_variant_options("baseline_compare"))._topology_first_for(_fired()))
+        self.assertFalse(ExpertPolicyOracle()._topology_first_for(_fired()))
+        self.assertTrue(ExpertPolicyOracle(topology_first=True)._topology_first_for(_policy()))
+        with self.assertRaises(ValueError):
+            ExpertPolicyOracle(topology_first="sometimes")
+
+    def test_variant_registry(self) -> None:
+        self.assertIn("baseline_compare_topology_guarded", EXPERT_VARIANTS)
+        self.assertEqual(expert_variant_options("baseline_compare_topology_guarded"),
+                         {"candidate_comparison": True, "topology_first": "flow_at_noise"})
+        self.assertEqual(expert_variant_options("baseline_compare"), {"candidate_comparison": True})
 
 
 if __name__ == "__main__":
