@@ -365,6 +365,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     summary = summarize(records)
     summary.update(contract=ROLLOUT_CONTRACT, suite=str(args.suite), profile=args.profile, expert=args.expert,
                    progress_basis=args.progress_basis, max_steps=args.max_steps, seed=args.seed, roots=len(roots),
+                   env_options=settings["env_options"], expert_options=settings["expert_options"],
                    workers=args.workers, total_seconds=round(time.perf_counter() - started, 1))
     (out / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     text = markdown(summary, title=f"Expert {args.expert} under {args.profile} on {len(roots)} compound roots")

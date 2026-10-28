@@ -1317,3 +1317,72 @@ the default; the research runs name it with `--env-option
 pair_refit_adjacent=1`).  Tests: the pass on the adjacent fixture and the
 partner rule (`psse_env/providers/test_compound_scenarios.py`).
 
+**What the first run broke.**  The candidate-quality oracle's collateral
+check held every parameter correction to exactly one changed branch row,
+the declared target, so the pair-refit candidate (two rows changed) was
+labelled a healthy-component corruption; and because that verdict carried
+none of the rejection evidence the environment requires of a verified
+candidate (`rejection_evidence_missing`), the verification solve itself
+was refused as insufficient evidence and the expert looped on it until
+the budget ran out (a six-root smoke: a solved root lost, 29 actions a
+root).  The oracle now reads the executor's declaration, the partner line
+recorded in the candidate's `last_parameter_correction`, and accepts a
+change of that row's impedance as the correction's own work; an
+undeclared second row, a partner that only the declaration names, a
+status change on the partner, or an unchanged target are collateral as
+before (`psse_env/oracle/test_pair_refit_collateral.py`).  The gap this
+exposed, a collateral rejection that the evidence check cannot see, is
+pre-existing and left as it is.
+
+**Results.**  The same 1,275 roots under the three teachers, before (the
+item-5 runs, which equal the item-2 outcomes) and with the pair refit on:
+
+| class (roots) | baseline_compare: before, after | topology first, always: before, after | topology first, guarded: before, after | mean actions after: baseline, always, guarded |
+| --- | --- | --- | --- | --- |
+| two R/X, adjacent (150) | 50, 76 (+27 / -1) | 42, 65 (+24 / -1) | 50, 76 (+27 / -1) | 14.1, 16.2, 14.2 |
+| two R/X, distant (150) | 72, 72 | 63, 63 | 72, 72 | 10.5, 14.2, 10.5 |
+| R/X + breaker, same line (75) | 47, 47 | 75, 75 | 71, 71 | 15.8, 7.0, 8.6 |
+| R/X + breaker, shared bus (75) | 32, 31 (-1) | 43, 43 | 46, 45 (-1) | 20.4, 13.7, 13.1 |
+| R/X + breaker, distant (150) | 73, 73 | 109, 109 | 109, 109 | 17.9, 12.2, 12.0 |
+| meter + two R/X (150) | 61, 66 (+5) | 51, 54 (+3) | 61, 66 (+5) | 16.1, 19.1, 16.1 |
+| meter on the R/X line (75) | 14, 14 | 14, 14 | 14, 14 | 14.7, 14.9, 14.7 |
+| R/X + breaker + meter (150) | 59, 59 | 97, 97 | 97, 97 | 22.9, 16.3, 16.7 |
+| two breakers, dangling (60) | 16, 16 | 53, 53 | 46, 46 | 25.9, 10.9, 12.7 |
+| two breakers, mixed (45) | 20, 20 | 43, 43 | 30, 30 | 25.7, 11.0, 16.0 |
+| two breakers, bus splits (45) | 22, 22 | 39, 39 | 28, 28 | 25.0, 11.3, 20.6 |
+| control: one R/X (50) | 43, 43 | 37, 37 | 43, 43 | 7.5, 10.0, 7.5 |
+| control: one breaker (50) | 31, 31 | 50, 50 | 44, 44 | 14.6, 7.0, 10.3 |
+| control: one meter (50) | 47, 47 | 47, 47 | 47, 47 | 21.3, 21.4, 21.3 |
+| all (1,275) | 587 (46%), 617 (48%) (+32 / -2) | 763 (60%), 789 (62%) (+27 / -1) | 758 (59%), 788 (62%) (+32 / -2) | 17.3, 14.1, 13.7 |
+
+The pass moves the adjacent-pair class from a third to a half (50 to 76
+of 150 under the baseline and guarded teachers, 42 to 65 under the
+always-on flag) and picks up 5, 3 and 5 roots of the meter plus two
+lines class whose two lines happen to share a bus; every other class is
+unchanged (identical trajectories on 1,130, 1,205 and 1,186 roots, the
+rest being roots where a pass ran without changing the outcome).  Two
+roots are lost.  One adjacent pair (`r0_f9fefc01d3f2`, under all three
+teachers): the first line is accepted, the second true line's correction,
+now carrying the pass, is rejected, and the three wrong lines tried
+afterwards are rejected too, so the episode ends with one line
+uncorrected.  One shared-bus root under the baseline and another under
+the guarded teacher: the breaker-affected line and a healthy neighbour of
+the last committed line form the pair, and the pass hands the verifier a
+wrong edit it accepts.  The conventional suite with the option on,
+baseline teacher: 192 of 192, all 192 tool sequences identical (no
+conventional root carries two line errors, so the pass never runs).
+
+What still fails on the adjacent class (74 of 150 under the baseline and
+guarded teachers): on 73 the final case is outside tolerance, and on 56
+of those one true line is never corrected, which is the pattern of the
+stage-1 probe where the first estimate lands too far from the truth for
+one pass to recover (median reactance error 26% before the pass), or the
+second line's correction is rejected on the first line's biased model.  A
+second sweep, or a joint fit of both lines' R and X in one multi-scan
+problem, is the next step on this class; the executor and the oracle now
+carry the declaration such a candidate needs.
+
+**Commit.**  The commit that adds this section (branch
+`claude/nostalgic-kalam-be5f7a`, 2026-10-28); provider option, off by
+default; 521 tests pass.
+

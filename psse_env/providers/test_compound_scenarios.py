@@ -317,6 +317,64 @@ class CompoundScenarioTests(unittest.TestCase):
         self.assertEqual(binding["reference"]["bus"].shape[0], 14)
         self.assertEqual(binding["planning_reference_case"], planning_case)
 
+    def test_pair_refit_is_off_by_default_and_refits_the_adjacent_partner_when_on(self) -> None:
+        """Stage 2 item 3 (2026-10-28): the second correction of an adjacent pair reruns the first line once."""
+        root = self.roots["rx2_adjacent"]
+        truths = {int(row["branch_row0"]): row for row in root["true_parameter_errors"]}
+        first, second = sorted(truths)
+
+        def run(providers):
+            state = _state(root)
+            out_first = providers.correct_parameters(state, normalize_action({"tool": "correct_parameters", "arguments": {"state_id": state["state_id"], "line_index": first + 1}}))
+            self.assertEqual(out_first.get("execution_status", "success"), "success", out_first)
+            self.assertNotIn("pair_refit", out_first)
+            next_state = copy.deepcopy(state)
+            next_state["state_id"] = "episode:s1"
+            next_state["case"] = out_first["modification"]["case"]
+            next_state["metadata"].update(copy.deepcopy(out_first["modification"]["metadata_updates"]))
+            out_second = providers.correct_parameters(next_state, normalize_action({"tool": "correct_parameters", "arguments": {"state_id": next_state["state_id"], "line_index": second + 1}}))
+            self.assertEqual(out_second.get("execution_status", "success"), "success", out_second)
+            case = _load_python_case(out_second["modification"]["case"])
+            return out_second, case
+
+        default = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only")
+        self.assertFalse(default.pair_refit_adjacent)
+        out_default, case_default = run(default)
+        self.assertNotIn("pair_refit", out_default)
+        self.assertEqual(out_default["modification"]["metadata_updates"]["last_parameter_correction"], {"line_index": second + 1})
+
+        paired = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only", pair_refit_adjacent=True)
+        out_paired, case_paired = run(paired)
+        refit = out_paired["pair_refit"]
+        self.assertEqual(refit["status"], "refit", refit)
+        self.assertEqual(refit["partner_line_index"], first + 1)
+        self.assertEqual([step["line_index"] for step in refit["steps"]], [first + 1, second + 1])
+        self.assertEqual(out_paired["modification"]["metadata_updates"]["last_parameter_correction"],
+                         {"line_index": second + 1, "pair_refit_line_index": first + 1})
+        # The partner line was re-estimated on the model that carries the
+        # second line's estimate, and the reported values are the final ones.
+        self.assertNotEqual(float(case_paired["branch"][first][3]), float(case_default["branch"][first][3]))
+        self.assertEqual(out_paired["corrected_x"], float(case_paired["branch"][second][3]))
+
+        def error(case, row):
+            truth = truths[row]
+            return abs(float(case["branch"][row][2]) - float(truth["clean_r"])) + abs(float(case["branch"][row][3]) - float(truth["clean_x"]))
+
+        self.assertLessEqual(error(case_paired, first), error(case_default, first) + 1e-9)
+
+    def test_pair_refit_partner_requires_a_shared_bus(self) -> None:
+        providers = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only", pair_refit_adjacent=True)
+        root = self.roots["rx2_adjacent"]
+        ppc = _load_python_case(root["case"])
+        first, second = sorted(int(row["branch_row0"]) for row in root["true_parameter_errors"])
+        self.assertEqual(providers._pair_refit_partner({"last_parameter_correction": {"line_index": first + 1}}, ppc, second), first)
+        ends = {int(ppc["branch"][first][0]), int(ppc["branch"][first][1])}
+        distant = next(row for row in range(ppc["branch"].shape[0]) if not ends & {int(ppc["branch"][row][0]), int(ppc["branch"][row][1])})
+        self.assertIsNone(providers._pair_refit_partner({"last_parameter_correction": {"line_index": first + 1}}, ppc, distant))
+        self.assertIsNone(providers._pair_refit_partner({"last_parameter_correction": {"line_index": first + 1}}, ppc, first))
+        self.assertIsNone(providers._pair_refit_partner({}, ppc, second))
+        self.assertIsNone(providers._pair_refit_partner({"last_parameter_correction": {"line_index": "x"}}, ppc, second))
+
     def test_run_wls_reports_the_open_terminal_cue_on_dangling_lines_only(self) -> None:
         """Stage 2 (2026-10-28): ``flow_at_noise_lines`` names dangling lines and nothing else."""
         providers = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only")

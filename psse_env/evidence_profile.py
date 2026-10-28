@@ -166,8 +166,11 @@ SCADA_NODE_BREAKER_FIELDS = frozenset({
     "operator_voltage_meter_nodes", "topology_model_id", "topology_model_fingerprint",
     "last_topology_correction", "planning_reference_case",
 })
+#: The record a parameter correction leaves (its line, and the partner line of
+#: an alternating pair refit): the operator's own bookkeeping, read by the
+#: parameter executor (compound-error study, stage 2 item 3, 2026-10-28).
 _SCADA_METADATA_FIELDS = frozenset({
-    "sigma_z", "measurement_covariance", "structural_zero_indices",
+    "sigma_z", "measurement_covariance", "structural_zero_indices", "last_parameter_correction",
 }) | SCADA_NODE_BREAKER_FIELDS
 _EXECUTION_FIELDS = frozenset({
     "scenario_id", "id", "episode_id", "case", "case_path", "measurements", "z_obs",
@@ -198,7 +201,8 @@ _GATED_METADATA_FIELDS = frozenset({
     "branch_current_sigma_pu", "harmonic_measurements", "harmonic_orders",
     "substation_telemetry", "reported_breaker_status", "operator_layout",
     "operator_voltage_meter_nodes", "topology_model_id", "topology_model_fingerprint",
-    "last_topology_correction", "planning_reference_case", "pristine_model_dir",
+    "last_topology_correction", "planning_reference_case", "last_parameter_correction",
+    "pristine_model_dir",
 })
 _GATED_STRUCTURED_METADATA_FIELDS = frozenset({
     "parameter_scans", "operator_noise", "noise_contract", "measurement_convention",

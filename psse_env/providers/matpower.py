@@ -476,6 +476,7 @@ class MatpowerDeploymentProviders:
         lambda_threshold: float = 3.0,
         flow_noise_sigma: float = 3.0,
         flow_noise_residual: float = 8.0,
+        pair_refit_adjacent: bool = False,
         chi2_alpha: float = 0.05,
         normalized_residual_threshold: float | None = None,
         breaker_candidate_count: int = 8,
@@ -559,6 +560,16 @@ class MatpowerDeploymentProviders:
         # shows on 522 of the suite's 650 breaker roots.
         self.flow_noise_sigma = float(flow_noise_sigma)
         self.flow_noise_residual = float(flow_noise_residual)
+        # Compound-error study, stage 2 item 3 (2026-10-28): when a parameter
+        # correction lands on a line adjacent to the line of the last committed
+        # parameter correction, the one-shot single-line estimate of each
+        # line is biased by the other's error (adjacent pairs: the first line
+        # within tolerance on 73 of 126, one alternating pass 112 of 131).
+        # With this option the executor runs one alternating pass inside the
+        # correction: the earlier line is refit on the model that carries this
+        # line's estimate, then this line again.  Off by default: the single
+        # line fit is the one every existing result rests on.
+        self.pair_refit_adjacent = bool(pair_refit_adjacent)
         self.lambda_threshold = float(lambda_threshold)
         self.chi2_alpha = float(chi2_alpha)
         if not math.isfinite(self.chi2_alpha) or not 0.0 < self.chi2_alpha < 1.0:
@@ -4142,18 +4153,88 @@ class MatpowerDeploymentProviders:
         updated = copy.deepcopy(ppc)
         updated["branch"][row0][2] = float(corrected[0])
         updated["branch"][row0][3] = float(corrected[1])
-        derived_path = self._derived_case(updated, f"param_l{row0 + 1}")
-        return {
+        pair_refit: dict[str, Any] | None = None
+        partner_row0 = self._pair_refit_partner(metadata, ppc, row0) if self.pair_refit_adjacent else None
+        if partner_row0 is not None:
+            try:
+                pair_refit, updated = self._alternating_pair_refit(state, scans, z_scans, updated, row0, partner_row0)
+            except Exception as exc:
+                # The single-line estimate stands; the pass is reported as skipped.
+                pair_refit = {
+                    "status": "skipped",
+                    "partner_line_index": partner_row0 + 1,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        refit_done = bool(pair_refit and pair_refit.get("status") == "refit")
+        tag = f"param_l{row0 + 1}" + (f"_pair{partner_row0 + 1}" if refit_done else "")
+        derived_path = self._derived_case(updated, tag)
+        last_correction: dict[str, Any] = {"line_index": row0 + 1}
+        if refit_done:
+            last_correction["pair_refit_line_index"] = partner_row0 + 1
+        output: dict[str, Any] = {
             "modification": {
                 "case": derived_path,
-                "metadata_updates": {"last_parameter_correction": {"line_index": row0 + 1}},
+                "metadata_updates": {"last_parameter_correction": last_correction},
             },
             "evidence_source": "deployment_correction:multi_scan_parameter_port",
             "correction_summary": summarize_parameter_correction_payload(payload),
             "line_index": row0 + 1,
-            "corrected_r": float(corrected[0]),
-            "corrected_x": float(corrected[1]),
+            "corrected_r": float(updated["branch"][row0][2]),
+            "corrected_x": float(updated["branch"][row0][3]),
         }
+        if pair_refit is not None:
+            output["pair_refit"] = pair_refit
+        return output
+
+    @staticmethod
+    def _pair_refit_partner(metadata: Mapping[str, Any], ppc: Mapping[str, Any], row0: int) -> int | None:
+        """The line of the last committed parameter correction when it shares a bus with ``row0``, else None."""
+        last = metadata.get("last_parameter_correction") if isinstance(metadata, Mapping) else None
+        if not isinstance(last, Mapping):
+            return None
+        try:
+            previous = int(last.get("line_index")) - 1
+        except (TypeError, ValueError):
+            return None
+        branch = ppc["branch"]
+        if previous == int(row0) or not 0 <= previous < int(branch.shape[0]):
+            return None
+        this_ends = {int(branch[row0][0]), int(branch[row0][1])}
+        previous_ends = {int(branch[previous][0]), int(branch[previous][1])}
+        return previous if this_ends & previous_ends else None
+
+    def _alternating_pair_refit(
+        self,
+        state: Mapping[str, Any],
+        scans: Mapping[str, Any],
+        z_scans: Sequence[Sequence[float]],
+        case: Mapping[str, Any],
+        row0: int,
+        partner_row0: int,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """One alternating pass: the partner line on the model carrying this line's estimate, then this line again."""
+        current = case
+        steps: list[dict[str, Any]] = []
+        for row in (int(partner_row0), int(row0)):
+            case_path = self._derived_case(current, f"param_pass_l{row + 1}")
+            initial_states = observable_parameter_initial_states(current, z_scans)
+            payload = _param_correction_json(
+                case_path, row + 1, z_scans, initial_states,
+                **self._parameter_noise_options(state, scans, z_scans),
+            )
+            corrected = payload.get("corrected_params") or []
+            if not payload.get("success") or len(corrected) < 2:
+                raise ValueError(str(payload.get("error") or "refit returned no corrected [r, x] pair"))
+            current = copy.deepcopy(current)
+            current["branch"][row][2] = float(corrected[0])
+            current["branch"][row][3] = float(corrected[1])
+            steps.append({
+                "line_index": row + 1,
+                "corrected_r": float(corrected[0]),
+                "corrected_x": float(corrected[1]),
+                "correction_summary": summarize_parameter_correction_payload(payload),
+            })
+        return {"status": "refit", "partner_line_index": int(partner_row0) + 1, "steps": steps}, current
 
     def correct_topology(
         self, state: Mapping[str, Any], action: Mapping[str, Any]

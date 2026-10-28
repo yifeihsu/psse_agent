@@ -834,14 +834,38 @@ class CandidateQualityOracle:
         derived = record.get("derived_case")
         return derived is not None and str(candidate_state.get("case")) == str(derived)
 
+    @staticmethod
+    def _pair_refit_partner_row0(candidate_state: Mapping[str, Any]) -> int | None:
+        """The partner line an alternating pair refit re-estimated (compound study, stage 2 item 3), as a branch row.
+
+        The executor records it beside the corrected line in the candidate's
+        ``last_parameter_correction``; that record is the declaration the
+        collateral check reads, so the partner's change is the correction's
+        own work and any other row is still collateral.
+        """
+        metadata = candidate_state.get("metadata")
+        record = metadata.get("last_parameter_correction") if isinstance(metadata, Mapping) else None
+        if not isinstance(record, Mapping) or record.get("pair_refit_line_index") is None:
+            return None
+        try:
+            return int(record["pair_refit_line_index"]) - 1
+        except (TypeError, ValueError):
+            return None
+
     def _path_case_collateral(
         self,
         action: Mapping[str, Any],
         family: str,
         parent_case: Any,
         candidate_case: Any,
+        *,
+        extra_rows: frozenset[int] = frozenset(),
     ) -> bool:
-        """Structurally audit a path-valued case correction via the differ."""
+        """Structurally audit a path-valued case correction via the differ.
+
+        ``extra_rows`` are branch rows the candidate declares as its own work
+        beside the target (the partner of an alternating pair refit).
+        """
         if not isinstance(parent_case, str) or not isinstance(candidate_case, str):
             return True
         if parent_case == candidate_case or self.case_differ is None:
@@ -855,7 +879,7 @@ class CandidateQualityOracle:
         if diff.get("bus_changed") or diff.get("gen_changed") or diff.get("base_mva_changed"):
             return True
         changed_rows = diff.get("changed_branch_rows")
-        if not isinstance(changed_rows, Mapping) or len(changed_rows) != 1:
+        if not isinstance(changed_rows, Mapping) or not changed_rows:
             return True
         args = action.get("arguments") if isinstance(action.get("arguments"), Mapping) else {}
         target_row0: int | None = None
@@ -865,11 +889,16 @@ class CandidateQualityOracle:
             target_row0 = int(args["line_index1"]) - 1
         elif args.get("line_index") is not None:
             target_row0 = int(args["line_index"]) - 1
-        ((changed_row, changed_columns),) = changed_rows.items()
-        if target_row0 is None or int(changed_row) != target_row0:
+        if target_row0 is None:
+            return True
+        try:
+            changed = {int(row): {int(column) for column in columns} for row, columns in changed_rows.items()}
+        except (TypeError, ValueError):
+            return True
+        if target_row0 not in changed or not set(changed).issubset({target_row0, *extra_rows}):
             return True
         allowed = self._PATH_CASE_FAMILY_COLUMNS.get(family, set())
-        return not {int(column) for column in changed_columns}.issubset(allowed)
+        return not all(columns.issubset(allowed) for columns in changed.values())
 
     def _structural_collateral(
         self,
@@ -935,8 +964,10 @@ class CandidateQualityOracle:
             return False
         if parent_measurements != candidate_measurements:
             return True
+        partner_row0 = self._pair_refit_partner_row0(candidate_state) if family == "parameter" else None
+        extra_rows = frozenset({partner_row0}) if partner_row0 is not None else frozenset()
         if isinstance(parent_case, str) or isinstance(candidate_case, str):
-            return self._path_case_collateral(action, family, parent_case, candidate_case)
+            return self._path_case_collateral(action, family, parent_case, candidate_case, extra_rows=extra_rows)
         if not isinstance(parent_case, Mapping) or not isinstance(candidate_case, Mapping):
             return True
         parent_nonbranch = {key: value for key, value in parent_case.items() if key != "branch"}
@@ -954,7 +985,7 @@ class CandidateQualityOracle:
             for index, (before, after) in enumerate(zip(parent_rows, candidate_rows))
             if before != after
         ]
-        if len(changed_rows) != 1:
+        if not changed_rows:
             return True
         if not all(
             isinstance(row, Mapping)
@@ -962,21 +993,30 @@ class CandidateQualityOracle:
             for row in (before, after)
         ):
             return True
-        changed_index, before, after = changed_rows[0]
-        changed_fields = {
-            str(key)
-            for key in set(before) | set(after)
-            if before.get(key) != after.get(key)
-        }
         args = action.get("arguments") if isinstance(action.get("arguments"), Mapping) else {}
         declared_index = self._branch_index(parent_case, args)
-        if declared_index is None or declared_index != changed_index:
+        changed_indices = {index for index, _, _ in changed_rows}
+        if declared_index is None or declared_index not in changed_indices:
             return True
-        if family == "parameter":
-            allowed_field = str(args.get("parameter") or args.get("field") or "x")
-        else:
-            allowed_field = self._topology_field(args, before)
-        return changed_fields != {allowed_field}
+        if not changed_indices.issubset({declared_index, *extra_rows}):
+            return True
+        for changed_index, before, after in changed_rows:
+            changed_fields = {
+                str(key)
+                for key in set(before) | set(after)
+                if before.get(key) != after.get(key)
+            }
+            if family == "parameter":
+                allowed_fields = (
+                    {str(args.get("parameter") or args.get("field") or "x")}
+                    if changed_index == declared_index
+                    else {"r", "x"}
+                )
+            else:
+                allowed_fields = {self._topology_field(args, before)}
+            if not changed_fields or not changed_fields.issubset(allowed_fields):
+                return True
+        return False
 
     def _hif_meter_only_voltage_nonregression(
         self,
