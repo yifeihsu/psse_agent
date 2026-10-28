@@ -332,6 +332,9 @@ def research_diagnostic_environment_factory(
         max_steps=RESEARCH_EPISODE_BUDGET,
         history_window=4,
         progress_basis=str(RESEARCH_ENVIRONMENT_OPTIONS.get("progress_basis") or DEFAULT_PROGRESS_BASIS),
+        # Item 7 step 6: the gated revert, off unless a run names the number
+        # of fruitless cycles that admits it.
+        revert_fruitless_cycles=int(RESEARCH_ENVIRONMENT_OPTIONS.get("revert_fruitless_cycles") or 0),
     )
     if env.production_dataset_mode is not True:
         raise RuntimeError("research environment did not enter production dataset mode")

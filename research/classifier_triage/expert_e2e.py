@@ -221,6 +221,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             compact["basis"] = _basis(episode)
             compact["first_triage"] = first_triage(episode)
             compact["abstentions"] = handoff_abstentions(episode)
+            compact["revert_accounting"] = dict(episode.get("revert_accounting") or {})
             compact["corrections"] = [
                 {"tool": str((step.get("action") or {}).get("tool")),
                  "arguments": {k: v for k, v in ((step.get("action") or {}).get("arguments") or {}).items() if k != "state_id"},

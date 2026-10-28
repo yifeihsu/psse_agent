@@ -296,6 +296,45 @@ STATE_MANAGEMENT_TOOLS = {
     FINALIZE_DIAGNOSIS,
 }
 
+#: Item 7 step 6 (the user's decision of 2026-10-28, "extend rollback"): a
+#: committed correction can be withdrawn by making an ancestor of the active
+#: state active again.  The process gate admits it only after the configured
+#: number of fruitless correction cycles since that ancestor's commit, with the
+#: alarm still standing, at most once per ancestor; it costs an action.  The
+#: tool exists only in an environment built with ``revert_fruitless_cycles``,
+#: so it is in none of the vocabularies below and every other environment
+#: refuses it as an unknown tool.
+REVERT_STATE = "revert_state"
+REVERT_CONTRACT = "gated_revert_v1"
+#: ``rejection_kind`` of the rejected-hypothesis record a revert leaves on the
+#: ancestor for the correction it withdrew there.
+REVERTED_REJECTION_KIND = "reverted_after_fruitless_cycles"
+_CORRECTION_HYPOTHESIS_FAMILY = {
+    CORRECT_MEASUREMENTS: "measurement",
+    CORRECT_PARAMETERS: "parameter",
+    CORRECT_TOPOLOGY: "topology",
+}
+
+
+def correction_hypothesis(action: Any) -> tuple[str, int | None] | None:
+    """The (family, line) a correction tests: the line for a branch correction, ``None`` for a meter edit."""
+    normalized = safe_normalize_action(action)
+    family = _CORRECTION_HYPOTHESIS_FAMILY.get(normalized["tool"])
+    if family is None:
+        return None
+    arguments = normalized["arguments"]
+    line = arguments.get("line_index", arguments.get("line_index1"))
+    if family == "measurement" or isinstance(line, bool) or not isinstance(line, int):
+        line = None
+    return family, line
+
+
+def revert_ledger_of(observation: Mapping[str, Any] | Any) -> Mapping[str, Any] | None:
+    """The revert ledger an environment with the gated revert reports, else ``None``."""
+    getter = getattr(observation, "get", None)
+    ledger = getter("revert_ledger") if callable(getter) else None
+    return ledger if isinstance(ledger, Mapping) and ledger.get("contract") == REVERT_CONTRACT else None
+
 # Read-only specialized diagnostics executed through configured evidence
 # providers.  They share the canonical deployment tool names so DAgger data
 # and the production corpus keep one model-visible surface.

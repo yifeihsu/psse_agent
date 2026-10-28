@@ -32,6 +32,7 @@ from psse_env.actions import (
     POST_CORRECTION_CONFIRMATION_SIGNATURE,
     POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+    REVERT_STATE,
     ROLLBACK_STATE,
     RUN_ALTERNATIVE_TEST,
     RUN_WLS,
@@ -182,6 +183,50 @@ def voltage_meter_edit_without_phasors(state: Any, arguments: Mapping[str, Any])
     return not _actions.phasors_examined_in_episode(state)
 
 
+def revert_refusal(state: Any, arguments: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Why the gate refuses ``revert_state`` with ``arguments`` in ``state``, else ``None`` (item 7 step 6).
+
+    The revert exists only where the environment reports a revert ledger.  It
+    needs no open candidate and names a committed ancestor of the active
+    state (``to_state_id``); a second revert to the same ancestor, or one with
+    fewer than the configured fruitless correction cycles since that
+    ancestor's commit, is a lifecycle violation; and the alarm must still
+    stand on the active state.  Shared by the gate and the teacher.
+    """
+    ledger = _actions.revert_ledger_of(state)
+    if ledger is None:
+        return "unknown_tool", REVERT_STATE
+    getter = getattr(state, "get", None)
+    if not callable(getter):
+        return "unknown_tool", REVERT_STATE
+    if getter("has_open_candidate") or getter("has_unverified_candidate") or getter("has_verified_candidate"):
+        return "candidate_lifecycle_violation", "revert_with_open_candidate"
+    active_id = getter("active_state_id")
+    requested = arguments.get("state_id")
+    if requested is not None and str(requested) != str(active_id):
+        return "state_reference_mismatch", "revert_state_not_active"
+    target = arguments.get("to_state_id")
+    entry = next(
+        (item for item in ledger.get("lineage") or []
+         if isinstance(item, Mapping) and target is not None and str(item.get("state_id")) == str(target)),
+        None,
+    )
+    if entry is None:
+        return "state_reference_mismatch", "revert_target_not_committed_ancestor"
+    if entry.get("reverted"):
+        return "candidate_lifecycle_violation", "revert_ancestor_already_reverted"
+    try:
+        threshold = max(int(ledger.get("fruitless_cycle_threshold") or 1), 1)
+        cycles = int(entry.get("fruitless_cycles_since") or 0)
+    except (TypeError, ValueError):
+        return "candidate_lifecycle_violation", "revert_without_fruitless_cycles"
+    if cycles < threshold:
+        return "candidate_lifecycle_violation", "revert_without_fruitless_cycles"
+    if not current_wls_alarm(state):
+        return "missing_precondition", "revert_requires_standing_alarm"
+    return None
+
+
 _SUSPICION_ERROR_CODES = frozenset(
     suspicion_error_code(family) for family in set(DIAGNOSTIC_SUSPICION_REQUIREMENTS.values())
 )
@@ -297,6 +342,10 @@ class ProcessValidityOracle:
         if tool == INVALID_ACTION:
             error_code = str(args.get("error_code") or "schema_error")
             error_detail = str(args.get("error_detail") or "malformed_policy_action")
+        elif tool == REVERT_STATE:
+            refusal = revert_refusal(state, args)
+            if refusal is not None:
+                error_code, error_detail = refusal
         elif tool not in MACRO_ACTIONS:
             error_code, error_detail = "unknown_tool", str(tool)
         elif tool in disabled or (

@@ -37,6 +37,7 @@ from psse_env.actions import (  # noqa: E402
     CORRECT_TOPOLOGY,
     GET_PARAMETER_CONTEXT,
     GET_TOPOLOGY_CONTEXT,
+    REVERT_STATE,
     RUN_WLS,
 )
 from research.rl import decision_audit as audit  # noqa: E402
@@ -126,8 +127,13 @@ def compact_episode(episode: Mapping[str, Any], root: Mapping[str, Any]) -> dict
     tools = [str((step.get("action") or {}).get("tool")) for step in steps]
     truth = truth_of(root)
     corrections = audit.correction_outcomes(steps)
+    reverted = reverted_state_ids(steps)
     for record in corrections:
         record["target_is_true"] = target_is_true(record, truth)
+        output = steps[record["step"]].get("policy_tool_output") if isinstance(steps[record["step"]].get("policy_tool_output"), Mapping) else {}
+        record["candidate_state_id"] = output.get("candidate_state_id")
+        # Item 7 step 6: a committed correction a later revert withdrew.
+        record["reverted"] = bool(record["candidate_state_id"] and str(record["candidate_state_id"]) in reverted)
     compound = (root.get("audit") or {}).get("compound") or {}
     return {
         "contract": ROLLOUT_CONTRACT,
@@ -152,11 +158,24 @@ def compact_episode(episode: Mapping[str, Any], root: Mapping[str, Any]) -> dict
                                     for s in reversed(steps) if str((s.get("action") or {}).get("tool")) == ASK_FOR_MORE_EVIDENCE
                                     and s.get("execution_status") == "success"), None),
         "abstentions": handoff_abstentions(steps),
+        "revert_accounting": dict(episode.get("revert_accounting") or {}),
         "tools": tools,
         "corrections": corrections,
         "trace": slim_trace(steps),
         "seconds": episode.get("seconds"),
     }
+
+
+def reverted_state_ids(steps: Sequence[Mapping[str, Any]]) -> set[str]:
+    """The committed states the episode's successful reverts withdrew (item 7 step 6)."""
+    out: set[str] = set()
+    for step in steps:
+        if str((step.get("action") or {}).get("tool")) != REVERT_STATE or step.get("execution_status") != "success":
+            continue
+        output = step.get("policy_tool_output") if isinstance(step.get("policy_tool_output"), Mapping) else {}
+        metrics = output.get("tool_metrics") if isinstance(output.get("tool_metrics"), Mapping) else {}
+        out |= {str(state_id) for state_id in metrics.get("reverted_state_ids") or []}
+    return out
 
 
 def handoff_abstentions(steps: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -221,6 +240,11 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             counter["abstention_episodes"] += int(bool(isolated))
             counter["abstentions_unsupported"] += sum(1 for item in isolated if item.get("supported") is False)
             counter["ambiguity_episodes"] += int(bool(ambiguous))
+            reverts = row.get("revert_accounting") or {}
+            counter["revert_episodes"] += int(bool(reverts.get("reverts")))
+            counter["reverts"] += int(reverts.get("reverts") or 0)
+            counter["revert_recoveries"] += int(reverts.get("recoveries") or 0)
+            counter["revert_loops"] += int(reverts.get("loops") or 0)
             outcomes[str(row.get("terminal_outcome") or ("nonterminal" if not row.get("terminal") else "terminal"))] += 1
             basis[str(row.get("basis"))] += 1
             if not row.get("success"):
@@ -249,7 +273,7 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     for entry in by_class.values():
         for key in ("n", "success", "errors", "steps", "wls_calls", "comparisons", "invalid_action_episodes",
                     "false_commit_episodes", "loop_episodes", "abstention_episodes", "abstentions_unsupported",
-                    "ambiguity_episodes"):
+                    "ambiguity_episodes", "revert_episodes", "reverts", "revert_recoveries", "revert_loops"):
             totals[key] += int(entry.get(key, 0) or 0)
     return {"by_class": by_class, "totals": dict(totals)}
 

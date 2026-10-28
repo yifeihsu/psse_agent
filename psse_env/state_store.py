@@ -181,9 +181,16 @@ class PolicyObservation:
     # as controller_default, wls_runner:<adapter>,
     # context_provider:<tool>, observable_input, or deployment_sensor.
     semantic_field_provenance: dict[str, str] = field(default_factory=dict)
+    # Item 7 step 6: the gated revert's ledger (the committed lineage with the
+    # fruitless cycles since each ancestor's commit, the reverted corrections
+    # and the reverts).  Only an environment built with the revert has one;
+    # everywhere else the field is absent from the serialized observation.
+    revert_ledger: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        if payload.get("revert_ledger") is None:
+            payload.pop("revert_ledger", None)
         forbidden = find_forbidden_policy_paths(payload)
         if forbidden:
             raise ValueError(f"PolicyObservation contains privileged fields: {', '.join(forbidden)}")
@@ -662,6 +669,38 @@ class PowerSystemStateStore:
         candidate.status = "rolled_back"
         candidate.active = False
         return candidate.parent_state_id
+
+    def revert(self, ancestor_state_id: str) -> list[str]:
+        """Make a committed ancestor of the active state active again (item 7 step 6).
+
+        The states after it on the active lineage are marked ``reverted`` and
+        kept, so the withdrawn corrections stay in the episode's record; the
+        ancestor's contents never changed, so its hash is the one it had.
+        Returns the reverted state ids, oldest first.
+        """
+        if self._active_state_id is None:
+            raise StateStoreError("No active state exists.")
+        if any(state.status == "candidate" for state in self._states.values()
+               if state.episode_id == self._current_episode_id):
+            raise StateStoreError("A revert requires no open candidate.")
+        lineage = self.lineage(self._active_state_id)
+        if ancestor_state_id not in lineage[:-1]:
+            raise StateStoreError(f"State {ancestor_state_id} is not a committed ancestor of the active state.")
+        reverted = lineage[lineage.index(ancestor_state_id) + 1:]
+        for state_id in reverted:
+            state = self._states[state_id]
+            state.status = "reverted"
+            state.active = False
+        ancestor = self._require_state(ancestor_state_id)
+        ancestor.status = "active"
+        ancestor.active = True
+        self._active_state_id = ancestor_state_id
+        return reverted
+
+    def source_action(self, state_id: str) -> dict[str, Any] | None:
+        """The correction that created ``state_id`` (``None`` for the root), without copying the state."""
+        source = self._require_state(state_id).source_action
+        return _json_clone(source) if source is not None else None
 
     def lineage(self, state_id: str) -> list[str]:
         lineage: list[str] = []

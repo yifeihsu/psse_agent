@@ -43,6 +43,9 @@ from .actions import (
     POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     UNEXPLAINED_DISCREPANCY_REQUEST,
+    REVERT_CONTRACT,
+    REVERT_STATE,
+    REVERTED_REJECTION_KIND,
     ROLLBACK_STATE,
     RUN_ALTERNATIVE_TEST,
     RUN_HSE_FROM_PATH,
@@ -484,8 +487,16 @@ class TransactionalPSSEEnv:
         history_window: int = 4,
         evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
         progress_basis: str = DEFAULT_PROGRESS_BASIS,
+        revert_fruitless_cycles: int = 0,
     ) -> None:
         self.evidence_profile = validate_evidence_profile(evidence_profile)
+        # Item 7 step 6: the gated revert of a committed correction, admitted
+        # after this many fruitless correction cycles since the ancestor's
+        # commit.  0 (the default) builds no revert: the tool is unknown and
+        # the observation carries no ledger, exactly as before.
+        if isinstance(revert_fruitless_cycles, bool) or int(revert_fruitless_cycles) < 0:
+            raise ValueError(f"revert_fruitless_cycles must be a non-negative int, got {revert_fruitless_cycles!r}")
+        self.revert_fruitless_cycles = int(revert_fruitless_cycles)
         if progress_basis not in PROGRESS_BASES:
             raise ValueError(f"progress_basis must be one of {PROGRESS_BASES}, got {progress_basis!r}")
         self.progress_basis = str(progress_basis)
@@ -517,8 +528,20 @@ class TransactionalPSSEEnv:
         self._episode_counter = 0
         self._oracle_payload: dict[str, Any] = {}
         self._audited_evaluation_setup_correction = False
+        self._clear_revert_ledger()
         if self.production_dataset_mode:
             self.validate_production_configuration()
+
+    def _clear_revert_ledger(self) -> None:
+        # Per committed ancestor: the controller flags and the private truth as
+        # they stood when the correction leaving it was committed.
+        self._revert_snapshots: dict[str, dict[str, Any]] = {}
+        # Correction attempts per state that ended without a commit: a
+        # rolled-back candidate or an executor failure.
+        self._fruitless_cycles: dict[str, int] = {}
+        self._reverted_ancestors: list[str] = []
+        self._reverted_corrections: list[dict[str, Any]] = []
+        self._reverts: list[dict[str, Any]] = []
 
     def validate_production_configuration(self) -> dict[str, Any]:
         """Fail closed unless every production data dependency is configured.
@@ -760,6 +783,7 @@ class TransactionalPSSEEnv:
         self._controller_initiated_count = 0
         self.terminal = False
         self.terminal_outcome = None
+        self._clear_revert_ledger()
         return self.current_state()
 
     def _rebind_telemetry_requests(self, active_id: str, active_hash: str) -> None:
@@ -862,7 +886,41 @@ class TransactionalPSSEEnv:
             ):
                 if key in wls:
                     contexts["wls"][key] = wls[key]
+        if self.revert_fruitless_cycles:
+            summary["revert_ledger"] = self._revert_ledger(active_id)
         return self._sanitize_observation(summary) if is_strict_boundary(self.evidence_profile) else summary
+
+    def _fruitless_cycles_since(self, lineage: list[str], index: int) -> int:
+        """Fruitless correction cycles on the lineage states after ``lineage[index]``."""
+        return sum(self._fruitless_cycles.get(state_id, 0) for state_id in lineage[index + 1:])
+
+    def _revert_ledger(self, active_id: str) -> dict[str, Any]:
+        """The policy-visible ledger of the gated revert (item 7 step 6).
+
+        One entry per correction committed on the active lineage, oldest
+        first: the ancestor it left, the committed state, its correction, the
+        fruitless cycles since its commit on the lineage, and whether the
+        ancestor was reverted to already.  The withdrawn corrections and the
+        reverts stay listed for the rest of the episode.
+        """
+        lineage = self.store.lineage(active_id)
+        entries = [
+            {
+                "state_id": lineage[index],
+                "committed_state_id": lineage[index + 1],
+                "source_action": policy_safe_copy(self.store.source_action(lineage[index + 1]) or {}),
+                "fruitless_cycles_since": self._fruitless_cycles_since(lineage, index),
+                "reverted": lineage[index] in self._reverted_ancestors,
+            }
+            for index in range(len(lineage) - 1)
+        ]
+        return {
+            "contract": REVERT_CONTRACT,
+            "fruitless_cycle_threshold": self.revert_fruitless_cycles,
+            "lineage": entries,
+            "reverted_corrections": policy_safe_copy(self._reverted_corrections),
+            "reverts": policy_safe_copy(self._reverts),
+        }
 
     def _sanitize_observation(self, value: Any) -> Any:
         """Apply the configured profile's observation sanitizer (identity when permissive)."""
@@ -1110,6 +1168,10 @@ class TransactionalPSSEEnv:
             available_evidence=self._observable_evidence_channels(),
             semantic_field_provenance=policy_safe_copy(
                 dict(summary.get("semantic_field_provenance") or {})
+            ),
+            revert_ledger=(
+                policy_safe_copy(dict(summary["revert_ledger"]))
+                if isinstance(summary.get("revert_ledger"), Mapping) else None
             ),
         )
 
@@ -1446,6 +1508,12 @@ class TransactionalPSSEEnv:
                         valid_next_actions=[],
                     )
             candidate_payload = self.store.get_state(candidate_id)
+            if self.revert_fruitless_cycles:
+                # What the controller knew on the ancestor, restored by a revert.
+                self._revert_snapshots[str(candidate_payload["parent_state_id"])] = {
+                    "context_flags": copy.deepcopy(self.context_flags),
+                    "oracle_payload": copy.deepcopy(self._oracle_payload),
+                }
             next_oracle_payload = self._truth_after_commit(candidate_payload)
             accepted_record = self._accepted_candidate_record(candidate_payload)
             assessment = copy.deepcopy(candidate_payload.get("candidate_assessment") or {})
@@ -1496,6 +1564,7 @@ class TransactionalPSSEEnv:
             if self.store.state_hash(parent_id) != parent_hash:
                 raise StateStoreError("Rollback did not restore the exact parent hash.")
             self._remember_rejected_hypothesis(candidate_payload)
+            self._fruitless_cycles[parent_id] = self._fruitless_cycles.get(parent_id, 0) + 1
             self.current_candidate_id = None
             return self._standard_output(
                 execution_status="success",
@@ -1503,6 +1572,8 @@ class TransactionalPSSEEnv:
                 active_state_id=parent_id,
                 tool_metrics={"rolled_back_state_id": candidate_id, "restored_parent_hash": parent_hash},
             )
+        if tool == REVERT_STATE and self.revert_fruitless_cycles:
+            return self._step_revert(action)
         if tool == FINALIZE_DIAGNOSIS:
             self.terminal = True
             self.terminal_outcome = "resolved"
@@ -3618,6 +3689,8 @@ class TransactionalPSSEEnv:
         branch._non_dispatched_action_count = self._non_dispatched_action_count
         branch._controller_initiated_count = self._controller_initiated_count
         branch._oracle_payload = copy.deepcopy(self._oracle_payload)
+        for name in ("_revert_snapshots", "_fruitless_cycles", "_reverted_ancestors", "_reverted_corrections", "_reverts"):
+            setattr(branch, name, copy.deepcopy(getattr(self, name)))
         # Counterfactual execution must not mutate stateful solver/oracle
         # collaborators owned by the live rollout environment.
         branch.wls_runner = _clone_collaborator(self.wls_runner, "wls_runner")
@@ -4648,6 +4721,89 @@ class TransactionalPSSEEnv:
         records = self.context_flags.setdefault("rejected_hypotheses", [])
         if record not in records:
             records.append(record)
+            self._fruitless_cycles[str(source_id)] = self._fruitless_cycles.get(str(source_id), 0) + 1
+
+    def _step_revert(self, action: dict[str, Any]) -> dict[str, Any]:
+        """Make a committed ancestor active again (item 7 step 6; the process gate admitted it).
+
+        The controller's flags and the private truth return to what they were
+        when the correction leaving the ancestor was committed: the accepted
+        corrections are those of the new active lineage, the contexts fetched
+        on the ancestor are current again, and so is its latest WLS.  The
+        correction withdrawn on the ancestor joins its rejected hypotheses
+        (kind ``reverted_after_fruitless_cycles``), so it is not tried again
+        there and counts as tested for a handoff; every withdrawn correction
+        stays listed in the revert ledger.
+        """
+        target = str(action["arguments"].get("to_state_id"))
+        from_id = str(self.store.active_state_id)
+        snapshot = self._revert_snapshots.get(target)
+        if snapshot is None:
+            return self.record_noop_failure(
+                action=action, error_code="state_reference_mismatch",
+                error_detail="revert_target_has_no_commit_record", valid_next_actions=[],
+            )
+        lineage = self.store.lineage(from_id)
+        cycles = self._fruitless_cycles_since(lineage, lineage.index(target)) if target in lineage else 0
+        target_hash = self.store.state_hash(target)
+        reverted_ids = self.store.revert(target)
+        if self.store.state_hash(target) != target_hash:
+            raise StateStoreError("Revert did not restore the exact ancestor hash.")
+        step = self._counted_action_total()
+        withdrawn = []
+        for state_id in reverted_ids:
+            withdrawn.append(policy_safe_copy({
+                "candidate_state_id": state_id,
+                "candidate_parent_id": self.store.get_state_for_audit(state_id).get("parent_state_id"),
+                "source_action": self.store.source_action(state_id),
+                "reverted_to_state_id": target,
+                "reverted_at_step": step,
+            }))
+        first = self.store.get_state_for_audit(reverted_ids[0])
+        verification = first.get("verification_output") if isinstance(first.get("verification_output"), Mapping) else {}
+        withdrawn_here = policy_safe_copy({
+            "candidate_state_id": first.get("state_id"),
+            "candidate_parent_id": target,
+            "source_action": first.get("source_action") or {},
+            "action_signature": action_signature(first["source_action"]) if first.get("source_action") else None,
+            "rejection_kind": REVERTED_REJECTION_KIND,
+            "fruitless_cycles_since": cycles,
+            "verification_summary": {
+                key: verification[key]
+                for key in ("state_id", "evidence_source", "target_metric_value", "target_metric_threshold",
+                            "target_progress", "global_progress", "globally_resolved")
+                if key in verification
+            },
+        })
+        restored = copy.deepcopy(snapshot["context_flags"])
+        for key in ("tried_action_signatures", "last_tool", "last_tool_status", "last_tool_output", "evidence_profile"):
+            if key in self.context_flags:
+                restored[key] = copy.deepcopy(self.context_flags[key])
+        restored.setdefault("rejected_hypotheses", []).append(withdrawn_here)
+        self.context_flags = restored
+        self._oracle_payload = copy.deepcopy(snapshot["oracle_payload"])
+        for state_id in reverted_ids:
+            self._revert_snapshots.pop(state_id, None)
+        self._reverted_ancestors.append(target)
+        self._reverted_corrections.extend(withdrawn)
+        self._reverts.append({
+            "from_state_id": from_id, "to_state_id": target, "reverted_state_ids": list(reverted_ids),
+            "fruitless_cycles_since": cycles, "step": step,
+        })
+        self.current_candidate_id = None
+        return self._standard_output(
+            execution_status="success",
+            state_mutated=True,
+            active_state_id=target,
+            tool_metrics={
+                "reverted_to_state_id": target,
+                "reverted_from_state_id": from_id,
+                "reverted_state_ids": list(reverted_ids),
+                "reverted_corrections": withdrawn,
+                "restored_state_hash": target_hash,
+                "fruitless_cycles_since": cycles,
+            },
+        )
 
     def _record_anomaly_explanation(
         self, tool: str, target_id: str, metrics: Mapping[str, Any]

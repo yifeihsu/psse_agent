@@ -47,10 +47,12 @@ from psse_env.actions import (
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
     POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+    REVERT_STATE,
     ROLLBACK_STATE,
     RUN_WLS,
     VERIFY_CANDIDATE,
     action_signature,
+    correction_hypothesis,
     invalid_action,
     safe_normalize_action,
 )
@@ -208,6 +210,10 @@ class EpisodeEvaluation:
     control_quarantine: dict[str, Any] = field(default_factory=dict)
     truth_audited_task_success: bool = False
     truth_audited_task_success_evidence_known: bool = False
+    # Item 7 step 6: the episode's gated reverts, each followed by a recovery
+    # (another hypothesis tested next), a loop (the withdrawn hypothesis on
+    # the same line again) or nothing; empty when the episode never reverted.
+    revert_accounting: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -2002,6 +2008,7 @@ class ClosedLoopRolloutEvaluator:
         nonadvancing_signatures: set[str] = set()
         deterministic_nonadvancing_failures: dict[str, dict[str, Any]] = {}
         loop_detected = False
+        revert_events: list[dict[str, Any]] = []
         invalid_indices: list[int] = []
         advancing_indices: list[int] = []
         false_commits = 0
@@ -2674,6 +2681,8 @@ class ClosedLoopRolloutEvaluator:
                     or assessment.get("healthy_component_modified") is True
                 ):
                     collateral_commit_seen = True
+            if update_revert_events(revert_events, step=step, action=action, status=status, output=output):
+                loop_detected = True
             invalid = tool == INVALID_ACTION or status != "success"
             if invalid:
                 invalid_indices.append(step)
@@ -3040,6 +3049,17 @@ class ClosedLoopRolloutEvaluator:
             truth_audited_task_success=truth_audited_task_success,
             truth_audited_task_success_evidence_known=(
                 truth_audited_task_success_evidence_known
+            ),
+            revert_accounting=(
+                {
+                    "reverts": len(revert_events),
+                    "recoveries": sum(event["outcome"] == "recovery" for event in revert_events),
+                    "loops": sum(event["outcome"] == "loop" for event in revert_events),
+                    "no_further_correction": sum(event["outcome"] == "no_further_correction" for event in revert_events),
+                    "events": copy.deepcopy(revert_events),
+                }
+                if revert_events
+                else {}
             ),
         )
 
@@ -3998,6 +4018,48 @@ def _active_physical_state(
     if _physical_state_available(final_state):
         return copy.deepcopy(dict(final_state))
     return None
+
+
+def update_revert_events(
+    events: list[dict[str, Any]],
+    *,
+    step: int,
+    action: Mapping[str, Any],
+    status: str,
+    output: Mapping[str, Any],
+) -> bool:
+    """Account one step against the episode's gated reverts (item 7 step 6); True when it closes a revert as a loop.
+
+    A successful ``revert_state`` opens an event with the hypothesis (family,
+    line) of the correction it withdrew on the ancestor.  The first correction
+    executed after it closes the event: another hypothesis is a recovery, the
+    withdrawn hypothesis on the same line again is a loop.  Refused
+    corrections tested nothing and do not close it.
+    """
+    tool = safe_normalize_action(action)["tool"]
+    if tool == REVERT_STATE and status == "success":
+        metrics = output.get("tool_metrics") if isinstance(output.get("tool_metrics"), Mapping) else {}
+        withdrawn = [item for item in metrics.get("reverted_corrections") or [] if isinstance(item, Mapping)]
+        hypothesis = correction_hypothesis(withdrawn[0].get("source_action") or {}) if withdrawn else None
+        events.append({
+            "step": int(step),
+            "to_state_id": metrics.get("reverted_to_state_id"),
+            "withdrawn_corrections": len(withdrawn),
+            "withdrawn_hypothesis": list(hypothesis) if hypothesis else None,
+            "next_hypothesis": None,
+            "outcome": "no_further_correction",
+        })
+        return False
+    executed = status == "success" or str(output.get("error_code") or "").endswith("_correction_failure")
+    if tool not in CORRECTION_TOOLS or not events or events[-1]["next_hypothesis"] is not None or not executed:
+        return False
+    hypothesis = correction_hypothesis(action)
+    events[-1]["next_hypothesis"] = list(hypothesis) if hypothesis else None
+    if hypothesis is not None and events[-1]["withdrawn_hypothesis"] == list(hypothesis):
+        events[-1]["outcome"] = "loop"
+        return True
+    events[-1]["outcome"] = "recovery"
+    return False
 
 
 def _successful_action_advanced(
