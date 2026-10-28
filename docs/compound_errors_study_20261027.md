@@ -851,6 +851,31 @@ the validation and hard suites under the same pass criterion and the same
 adoption rule), with the cost of the clean-flip test per episode (the
 extra node/breaker solves) reported beside the counts.
 
+The outcome (2026-10-28): the check passed (identical per-family success
+on the validation suite and the hard draw, the torch files, no false
+commit; section 7.7), so under the user's rule the clean-flip teacher is
+the default for new work.  It lives in two places: `DEFAULT_EXPERT_VARIANT`
+in `psse_env/oracle/expert_variants.py` (what `current_expert_variant`
+returns when `PSSE_EXPERT_VARIANT` is unset, so every research script and
+pipeline stage that names no teacher picks it up) and the
+`EXPERT_VARIANT=${EXPERT_VARIANT:-...}` default in
+`research/hpc/full_pipeline_20260907/pipeline.env` (a new cell whose
+override names no teacher); `deploy_remote.sh` accepts the new variant
+names.  The teacher's provider screen comes with it: the research
+environment factory, the release factory and the aggregate generator turn
+`clean_flip_screen` on exactly when the teacher variant reads it
+(`variant_provider_options`).  `baseline_compare` and `baseline` stay
+available by name; the tests that pin `baseline_compare` stay and one is
+added for the default; no recorded cell's env, the paper's evidence folder
+or `docs/papers` is touched.  Two recorded override envs name no teacher
+(`ieee57_transfer_20260914.env`, `ieee118_balanced_20260925.env`, both from
+before the teacher knob existed): a re-run of either now picks up the new
+default unless `EXPERT_VARIANT=baseline` is exported, which the pipeline
+default's comment says.  Two caveats for new compound work: on the
+compound suite the clean-flip teacher recovers fewer roots than the
+guarded or always-on order (700 against 788 and 789), and its screen costs
+about 23 node/breaker solves per compound episode.
+
 ## 7. Stage 2: the tool repairs, one at a time (2026-10-28)
 
 The ground rules, from the request: the items of section 6.3 in order, one

@@ -36,9 +36,16 @@ construct the same expert:
   ``baseline_compare`` and the seven conventional families are untouched by
   any of these variants.
 
-Research only.  The default is the baseline, so nothing changes unless a
-run names a variant; receipts record the variant beside the evidence
-profile.
+Research only.  The default for new work, what a pipeline env or a research
+script picks up when it names no variant, is
+``baseline_compare_topology_clean_flip`` (the user's decision of 2026-10-28,
+after an independent check on the conventional cell's validation suite and
+hard draw showed identical success counts per family against
+``baseline_compare`` on the same code and no false commit; the compound-error
+study, section 7.7).  Its provider screen comes with it
+(``variant_provider_options``).  Every recorded cell that names its teacher
+keeps it; ``baseline`` and ``baseline_compare`` stay available by name, and
+receipts record the variant beside the evidence profile.
 """
 from __future__ import annotations
 
@@ -48,7 +55,9 @@ from typing import Any
 from psse_env.oracle.learned_ranker import DEFAULT_RANKER_MODEL
 
 EXPERT_VARIANT_ENV = "PSSE_EXPERT_VARIANT"
-DEFAULT_EXPERT_VARIANT = "baseline"
+#: The teacher of new work when none is named (2026-10-28); recorded cells
+#: name theirs.  Until then the default was ``baseline``.
+DEFAULT_EXPERT_VARIANT = "baseline_compare_topology_clean_flip"
 EXPERT_VARIANTS = ("baseline", "ledger", "ledger_ranked", "ledger_ranked_compare", "baseline_compare",
                    "baseline_compare_topology_first", "baseline_compare_topology_guarded",
                    "baseline_compare_topology_clean_flip")

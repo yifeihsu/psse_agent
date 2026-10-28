@@ -155,6 +155,28 @@ class GuardedTopologyFirstTests(unittest.TestCase):
         for name in ("baseline", "baseline_compare", "baseline_compare_topology_first", "baseline_compare_topology_guarded"):
             self.assertEqual(variant_provider_options(name), {}, name)
 
+    def test_the_default_teacher_for_new_work_is_the_clean_flip_variant(self) -> None:
+        """The user's decision of 2026-10-28 after the independent check; recorded cells name their own teacher."""
+        import os
+        from unittest import mock
+
+        from psse_env.oracle.expert_variants import DEFAULT_EXPERT_VARIANT, current_expert_variant, variant_provider_options
+
+        self.assertEqual(DEFAULT_EXPERT_VARIANT, "baseline_compare_topology_clean_flip")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PSSE_EXPERT_VARIANT", None)
+            self.assertEqual(current_expert_variant(), "baseline_compare_topology_clean_flip")
+            self.assertEqual(expert_variant_options(), {"candidate_comparison": True, "topology_first": "clean_flip"})
+            # The default teacher's environment computes the screen it reads.
+            self.assertEqual(variant_provider_options(), {"clean_flip_screen": True})
+            # Named teachers are untouched: the manuscript's cell keeps baseline_compare.
+            self.assertEqual(current_expert_variant("baseline_compare"), "baseline_compare")
+            self.assertEqual(expert_variant_options("baseline_compare"), {"candidate_comparison": True})
+            self.assertEqual(variant_provider_options("baseline_compare"), {})
+            os.environ["PSSE_EXPERT_VARIANT"] = "baseline_compare"
+            self.assertEqual(current_expert_variant(), "baseline_compare")
+            self.assertEqual(variant_provider_options(), {})
+
     def test_variant_registry(self) -> None:
         self.assertIn("baseline_compare_topology_guarded", EXPERT_VARIANTS)
         self.assertIn("baseline_compare_topology_clean_flip", EXPERT_VARIANTS)

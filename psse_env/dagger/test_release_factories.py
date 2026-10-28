@@ -5,6 +5,7 @@ import json
 import tempfile
 import types
 import unittest
+import os
 from pathlib import Path
 from typing import Any, Mapping
 from unittest import mock
@@ -50,6 +51,7 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 normalized_residual_threshold: float | None = None,
                 screen_checkpoint: str | None = None,
                 screen_calibration: str | None = None,
+                clean_flip_screen: bool = False,
             ) -> None:
                 self.chi2_alpha = chi2_alpha
                 self.parameter_ranking_dominance_threshold = (
@@ -60,10 +62,12 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 self.hif_max_scans = hif_max_scans
                 self.hif_resistance_search = hif_resistance_search
                 self.evidence_profile = evidence_profile
+                self.clean_flip_screen = clean_flip_screen
 
             def env_kwargs(self) -> dict[str, Any]:
                 return {
                     "provider_marker": "deployment",
+                    "clean_flip_screen": self.clean_flip_screen,
                     "evidence_profile": self.evidence_profile,
                     "chi2_alpha": self.chi2_alpha,
                     "parameter_ranking_dominance_threshold": (
@@ -91,9 +95,19 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
         with (
             mock.patch.object(factories, "MatpowerDeploymentProviders", Providers),
             mock.patch.object(factories, "TransactionalPSSEEnv", Environment),
+            mock.patch.dict(os.environ, {}, clear=False),
         ):
+            os.environ.pop("PSSE_EXPERT_VARIANT", None)
             env = factories.production_environment_factory(seed=7, rng=object())
+            # A recorded cell names its teacher; baseline_compare reads no screen.
+            os.environ["PSSE_EXPERT_VARIANT"] = "baseline_compare"
+            named = factories.production_environment_factory(seed=7, rng=object())
 
+        # Stage 2 item 6 and the default switch of 2026-10-28: the environment
+        # computes the clean-flip screen exactly when the teacher reads it, so
+        # the default teacher for new work gets it and baseline_compare does not.
+        self.assertIs(env.kwargs["clean_flip_screen"], True)
+        self.assertIs(named.kwargs["clean_flip_screen"], False)
         self.assertIs(env.production_dataset_mode, True)
         self.assertEqual(env.candidate_quality_oracle.mode, "deployment")
         self.assertEqual(env.kwargs["provider_marker"], "deployment")
@@ -143,6 +157,7 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 normalized_residual_threshold: float | None = None,
                 screen_checkpoint: str | None = None,
                 screen_calibration: str | None = None,
+                clean_flip_screen: bool = False,
             ) -> None:
                 self.chi2_alpha = chi2_alpha
                 self.parameter_ranking_dominance_threshold = (
