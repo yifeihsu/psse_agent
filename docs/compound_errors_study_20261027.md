@@ -1701,3 +1701,91 @@ joint two-line fit; the meter on the faulted line stays a verifier
 limit; and nothing in stage 2 changes the identifiability limits of
 section 5.  No DAgger round has been drawn on compound classes.
 
+## 8. Item 7: hypothesis confidence, ambiguity and recovery (2026-10-28)
+
+After the clean-flip screen was removed as brute-force screening (sections
+6.4 and 7.7), the user set the rules for what follows, in their words:
+"On lightly loaded lines, the power flow itself is small, making it
+difficult to distinguish between parameter errors and topology errors.
+However, if correcting for a topology error successfully lowers the
+objective function value, we should still treat it as a viable option
+rather than strictly requiring it to drop below the threshold... If, after
+several correction cycles, the agent ultimately finds that it cannot
+resolve the issue, it should proactively roll back its changes and explore
+other error types... An alternative approach is to have the agent assign
+confidence scores to different error types during classification. If it
+cannot clearly distinguish between a parameter error and a topology
+error, it could either hand off and report the case directly, or attempt
+one hypothesis first and switch to the other upon failure... you cannot
+try to fix every failure scenario. If that scenario is impossible to
+succeed under our research goal, just report it as a failure."  So no
+tightened flip acceptance, no rule whose purpose is to rescue a named
+scenario, and the always-on order stays a labelled always-look reference,
+never a candidate.  Item 7 has five steps, one commit each: a cue floor
+scaled by the modelled flow (8.1), a parameter-versus-topology confidence
+computed from what the solve already produced (8.2), an ambiguity
+statement at handoff (8.3), the two recovery contracts, designed and not
+built (8.4), and the measurement (8.5).
+
+### 8.1 Step 1: a cue floor scaled by the modelled flow (a negative result; the fixed floor stays)
+
+The request: replace the open-terminal cue's fixed 8-sigma residual floor
+by one that scales with the line's modelled flow, keep the 3-sigma
+flow-at-noise part, set it on the IEEE 14 compound suite's 625 roots
+without a breaker fault as before, and check it on the IEEE 118 compound
+suite (the pensive-darwin session's 625 roots, none with a breaker fault,
+where the fixed floor fires on 54).
+
+The modelled flow costs nothing: a line's P flow in the operator's model
+at the estimate is the measurement minus the raw residual the solve
+already returns.  `research/compound_errors/cue_floor.py` records, at
+every root's first solve and for every line whose flows read at noise, the
+normalized residual, the modelled flow, the line's branch multiplier and
+its rank, and scores the floors (output in
+`output/compound_errors_20261027/cue_floor/`):
+
+| floor on the larger normalized P residual | IEEE 14: false fires (of 625) | IEEE 14: open lines caught (of 639 at noise) | IEEE 118: false fires (of 625) |
+| --- | --- | --- | --- |
+| fixed 3 | 108 | 612 | 161 |
+| fixed 5 | 30 | 570 | 99 |
+| fixed 8 (the cue today) | 7 | 535 | 54 |
+| fixed 10 | 5 | 471 | 34 |
+| max(8, 0.9 x modelled flow) | 7 | 535 | 53 |
+| max(8, 1.0 x modelled flow) | 7 | 524 | 47 |
+| max(8, 1.05 x modelled flow) | 5 | 442 | 41 |
+| max(8, 1.1 x modelled flow) | 4 | 323 | 35 |
+| max(8, 1.2 x modelled flow) | 3 | 66 | 22 |
+| max(6, 1.0 x modelled flow) | 12 | 545 | 63 |
+| max(10, 1.0 x modelled flow) | 5 | 462 | 31 |
+
+On a line whose meters read at noise, the normalized residual is the
+modelled flow divided by the square root of one minus the meter's
+leverage: 1.02 to 1.25 times the modelled flow for the open lines that
+fire (5th to 95th percentile), and 0.94 to 1.45 times for the IEEE 118
+false fires.  A healthy, lightly loaded line that the model assigns a
+neighbour's flow (the hard draw's `r0_344bb11720e7`, section 7.3) and an
+open terminal both read "no current where the model routes some", in
+proportion to the modelled flow.  So a floor that scales with the
+modelled flow tests the meter's leverage, not the line's state: a factor
+below 1 changes nothing (0.9 is the fixed floor within one root on both
+systems), and any factor that removes false fires removes open lines at a
+similar or higher rate (1.1: IEEE 14 false fires 7 to 4, open lines 535 to
+323; IEEE 118 54 to 35).  Set on IEEE 14 as before, no scaled floor has
+fewer false fires there without losing open lines, so the fixed 8-sigma
+floor stays and the code is not changed: the cue false-fires on 7 of 625
+IEEE 14 roots (1.1%) and on 54 of 625 IEEE 118 roots (8.6%).
+
+What does separate the two is the cued line's standing among the branch
+candidates, which the solve also produced already.  The open lines that
+fire carry a branch multiplier at a median 1.0 of the strongest
+candidate's (rank 1 on 387 of 535); the IEEE 118 false fires sit at a
+median 0.36 (rank 1 on 1 of 67), the IEEE 14 ones at 0.47 to 0.89.
+Requiring the cued line to carry at least half the top multiplier would
+leave 6 false fires of 625 on IEEE 14 and 19 on IEEE 118 (496 open lines
+caught); at 0.8 of the top, 2 and 11 (438).  That is evidence for the
+confidence of step 2 rather than a floor, and step 2 uses it.
+
+**Commit.**  The commit that adds this section (branch
+`claude/nostalgic-kalam-be5f7a`, 2026-10-28): the analysis script and
+this section; no provider or teacher code changes.
+
