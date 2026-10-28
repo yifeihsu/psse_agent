@@ -28,6 +28,7 @@ original seeding.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import subprocess
@@ -247,6 +248,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--effect-floor", default=None,
                         help="per-atom effect-ratio floor of a bus-branch suite (default 1.5; 'none' admits physically only)")
     parser.add_argument("--shards", type=int, default=1, help="generators per class (one keeps the original class seeds)")
+    parser.add_argument("--distant-hops", type=int, default=None,
+                        help="hops of a distant pair, replacing the classes' own (e.g. 2 for an IEEE 14 bus-branch control)")
     args = parser.parse_args(argv)
 
     from psse_env.providers.scenario_generator import BUS_BRANCH_COMPOUND_CLASSES, DEFAULT_COMPOUND_CLASSES
@@ -257,6 +260,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     physics = resolve_physics(case_id, args.physics)
     bus_branch = physics == "bus_branch"
     classes = BUS_BRANCH_COMPOUND_CLASSES if bus_branch else DEFAULT_COMPOUND_CLASSES
+    if args.distant_hops is not None:
+        classes = tuple(
+            dataclasses.replace(spec, distant_hops=int(args.distant_hops)) if spec.parameter_placement == "distant" else spec
+            for spec in classes
+        )
     if args.effect_floor is None:
         effect_floor = float(DEFAULT_BAND[0]) if bus_branch else None
     else:
@@ -267,6 +275,8 @@ def main(argv: Sequence[str] | None = None) -> int:
          "compound_only": case_id != "case14"}
         if (case_id != "case14" or bus_branch) else {}
     )
+    if args.distant_hops is not None:
+        system_options["compound_classes"] = [spec.as_dict() for spec in classes]
     default_plan = BUS_BRANCH_PLAN if bus_branch else DEFAULT_PLAN
     plan = dict(default_plan) if not args.plan else {str(k): int(v) for k, v in json.loads(args.plan).items()}
     if args.classes:

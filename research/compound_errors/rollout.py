@@ -78,6 +78,15 @@ def suite_system(roots: Sequence[Mapping[str, Any]], system: str | None = None) 
     return next(iter(cases)) if cases else "case14"
 
 
+def multi_scan_rcond() -> str:
+    """How the multi-scan corrector's conditioning guard was computed (``tools.correct_parameter_group_multi_scan_port``)."""
+    import os
+
+    from tools.correct_parameter_group_multi_scan_port import RCOND_METHOD_ENV
+
+    return os.environ.get(RCOND_METHOD_ENV, "dense_svd")
+
+
 def system_progress_basis(system: str, progress_basis: str | None) -> str | None:
     """The named basis, else the system's (None keeps the environment's default)."""
     if progress_basis:
@@ -403,7 +412,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         stream.close()
     summary = summarize(records)
-    summary.update(contract=ROLLOUT_CONTRACT, suite=str(args.suite), system=system, profile=args.profile, expert=args.expert,
+    summary.update(contract=ROLLOUT_CONTRACT, suite=str(args.suite), system=system, multi_scan_rcond=multi_scan_rcond(),
+                   profile=args.profile, expert=args.expert,
                    progress_basis=args.progress_basis, max_steps=args.max_steps, seed=args.seed, roots=len(roots),
                    env_options=settings["env_options"], expert_options=settings["expert_options"],
                    workers=args.workers, total_seconds=round(time.perf_counter() - started, 1))

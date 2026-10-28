@@ -805,7 +805,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--progress-basis", default=None)
     args = parser.parse_args(argv)
 
-    from research.compound_errors.rollout import suite_system, system_progress_basis
+    from research.compound_errors.rollout import multi_scan_rcond, suite_system, system_progress_basis
 
     suite = json.loads(args.suite.read_text(encoding="utf-8"))
     if isinstance(suite, Mapping):
@@ -852,7 +852,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         for stream in streams.values():
             stream.close()
     summary = {experiment: SUMMARIZERS[experiment](records[experiment]) for experiment in args.experiments}
-    summary.update(contract=CONTRACT, suite=str(args.suite), system=system, progress_basis=progress_basis, profile=args.profile,
+    summary.update(contract=CONTRACT, suite=str(args.suite), system=system, progress_basis=progress_basis,
+                   multi_scan_rcond=multi_scan_rcond(), profile=args.profile,
                    errors={experiment: sum(1 for r in records[experiment] if r.get("error")) for experiment in args.experiments},
                    total_seconds=round(time.perf_counter() - started, 1))
     (out / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")

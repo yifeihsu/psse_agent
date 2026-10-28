@@ -123,7 +123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="research environment option of the rollout, e.g. pair_refit_adjacent=1")
     args = parser.parse_args(argv)
 
-    from research.compound_errors.rollout import suite_system, system_progress_basis
+    from research.compound_errors.rollout import multi_scan_rcond, suite_system, system_progress_basis
 
     suite = json.loads(args.suite.read_text(encoding="utf-8"))
     if isinstance(suite, Mapping):
@@ -173,6 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         stream.close()
     summary = audit.summarize(results)
     summary.update(contract=AUDIT_CONTRACT, suite=str(args.suite), episodes=str(args.episodes), system=system,
+                   multi_scan_rcond=multi_scan_rcond(),
                    progress_basis=args.progress_basis, env_options=settings["env_options"], profile=args.profile,
                    expert=args.expert, max_states=args.max_states, max_alternatives=args.max_alternatives,
                    max_steps=args.max_steps, seed=args.seed, selection=selection,
