@@ -857,6 +857,8 @@ class TransactionalPSSEEnv:
                 # Open-terminal cue among the top branch candidates (compound
                 # study, stage 2); the guarded topology-first order reads it.
                 "flow_at_noise_lines",
+                # Item 7 step 2: the parameter-versus-open-terminal confidence.
+                "route_confidence",
             ):
                 if key in wls:
                     contexts["wls"][key] = wls[key]
@@ -4279,6 +4281,7 @@ class TransactionalPSSEEnv:
             "parameter_flow_at_noise_lines",
             "topology_findings",
             "topology_candidate_screening",
+            "route_confidence",
             "route_status",
             "route_status_reason",
         ):

@@ -1932,8 +1932,10 @@ class MatpowerDeploymentProviders:
         ]
         signatures = list(preserved)
         # The open-terminal cue is computed only where branch candidates are
-        # ranked below; every other path reports none.
+        # ranked below; every other path reports none.  So is the route
+        # confidence of item 7 step 2.
         flow_at_noise_lines: list[int] = []
+        route_confidence: dict[str, Any] | None = None
         # While a waveform-level anomaly (harmonic distortion, three-phase
         # unbalance, or a suspected HIF) stands, the fundamental-frequency
         # solve's bad-data attributions are physically unreliable: the
@@ -1986,6 +1988,7 @@ class MatpowerDeploymentProviders:
             # carry a top multiplier.
             if self.flow_at_noise_cue:
                 flow_at_noise_lines = self._flow_at_noise_lines(solved, range(int(solved["nl"])))
+                route_confidence = self._route_confidence(solved)
         metrics: dict[str, Any] = {
             **self._binding(state),
             "evidence_source": "deployment_wls:lagrangian_port",
@@ -2016,6 +2019,9 @@ class MatpowerDeploymentProviders:
             metrics["flow_at_noise_lines"] = list(flow_at_noise_lines)
             metrics["flow_noise_sigma"] = self.flow_noise_sigma
             metrics["flow_noise_residual"] = self.flow_noise_residual
+            # Parameter-versus-open-terminal confidence for the leading line
+            # (item 7 step 2): from this solve's own quantities, no extra solve.
+            metrics["route_confidence"] = route_confidence
         if conditional:
             metrics["hif_conditioning"] = conditional["conditioning"]
             metrics["conditional_meter_scores"] = conditional["conditional_scores"]
@@ -2802,6 +2808,125 @@ class MatpowerDeploymentProviders:
             k=self.top_k,
             min_abs=self.lambda_threshold,
         )
+
+    def _line_flow_reading(self, solved: Mapping[str, Any], row0: int) -> dict[str, float] | None:
+        """A line's terminal flow readings and P residual in sigma units, from one solve (None when unreadable)."""
+        payload = solved["payload"]
+        residuals = [float(value) for value in payload.get("r") or []]
+        z = [float(value) for value in solved["z"]]
+        index_map = solved["index_map"]
+        sigma = self._declared_scada_sigma(solved.get("noise_options") or {}, int(solved["nb"]), len(z))
+        try:
+            row = int(row0)
+            reading: dict[str, float] = {}
+            residual: dict[str, float] = {}
+            for channel in ("Pf", "Qf", "Pt", "Qt"):
+                index = index_map[channel].start + row
+                channel_sigma = float(sigma[index])
+                if not channel_sigma > 0.0:
+                    raise ValueError("flow sigma must be positive")
+                reading[channel] = abs(z[index]) / channel_sigma
+                residual[channel] = abs(residuals[index]) if index < len(residuals) else 0.0
+        except (IndexError, KeyError, TypeError, ValueError):
+            return None
+        return {
+            "p_meas": max(reading["Pf"], reading["Pt"]),
+            "q_min": min(reading["Qf"], reading["Qt"]),
+            "p_resid": max(residual["Pf"], residual["Pt"]),
+        }
+
+    def _route_confidence(self, solved: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Parameter-versus-open-terminal confidence for the leading branch line (item 7 step 2).
+
+        Read only from quantities the solve already produced, no extra solve.
+        For each of the top-ranked branch candidates and every line showing
+        the open-terminal cue: a line that carries measurable P flow cannot be
+        open (topology 0); a line whose flows read at noise with the cue's
+        residual gets its branch multiplier relative to the strongest
+        candidate's as the topology confidence (section 8.1: open lines sit at
+        a median 1.0, false fires at 0.36 on IEEE 118); a line whose flows
+        read at noise without the residual (lightly loaded) gets half of it,
+        since the solve cannot tell an open terminal from an impedance error
+        there.  The line with the highest topology confidence is reported,
+        else the strongest candidate with 0; parameter is the complement.
+        """
+        payload = solved["payload"]
+        lambda_values = [float(value) for value in payload.get("lambdaN") or []]
+        nl = int(solved["nl"])
+        multiplier: dict[int, float] = {}
+        for index0, value in enumerate(lambda_values):
+            row = index0 // 2
+            if 0 <= row < nl:
+                multiplier[row] = max(multiplier.get(row, 0.0), abs(value))
+        top = max(multiplier.values(), default=0.0)
+        if not top > 0.0:
+            return None
+        ranked = sorted(multiplier, key=lambda row: (-multiplier[row], row))
+        candidates = list(dict.fromkeys(ranked[: self.top_k] + [line - 1 for line in self._flow_at_noise_lines(solved, range(nl))]))
+        residuals = [abs(float(value)) for value in payload.get("r") or []]
+        branch_dominant = top > 1.2 * max(residuals, default=0.0)
+        best: dict[str, Any] | None = None
+        for row in candidates:
+            reading = self._line_flow_reading(solved, row)
+            if reading is None:
+                continue
+            ratio = multiplier.get(row, 0.0) / top
+            at_noise = reading["p_meas"] < self.flow_noise_sigma and reading["q_min"] < self.flow_noise_sigma
+            if not at_noise:
+                topology, basis = 0.0, "measurable_flow"
+            elif reading["p_resid"] > self.flow_noise_residual:
+                topology, basis = ratio, "open_terminal_cue"
+            else:
+                topology, basis = 0.5 * ratio, "flow_at_noise_without_cue"
+            item = {
+                "line_index": row + 1,
+                "topology": round(topology, 3),
+                "parameter": round(1.0 - topology, 3),
+                "basis": basis,
+                "multiplier_ratio": round(ratio, 3),
+                "flow_sigma": round(reading["p_meas"], 2),
+                "residual_sigma": round(reading["p_resid"], 2),
+                "branch_dominant": bool(branch_dominant),
+            }
+            if best is None or (item["topology"], item["multiplier_ratio"]) > (best["topology"], best["multiplier_ratio"]):
+                best = item
+        return best
+
+    def _breaker_refined_confidence(
+        self, solved: Mapping[str, Any], breaker_findings: Sequence[Mapping[str, Any]]
+    ) -> dict[str, Any] | None:
+        """The route confidence with the node/breaker context's own multipliers (item 7 step 2), no extra solve.
+
+        A screened flip of a breaker on the reported line that lowers the
+        substation objective (the user's rule: lowering it is a viable step)
+        supports the open-terminal hypothesis with that breaker's multiplier
+        relative to the strongest breaker's; a flip that does not lower it,
+        or no breaker of that line among the screened ones, leaves the solve's
+        confidence as it is and is reported as evidence.
+        """
+        base = self._route_confidence(solved)
+        if base is None:
+            return None
+        refined = dict(base)
+        scores = [float(item.get("score") or 0.0) for item in breaker_findings]
+        top = max(scores, default=0.0)
+        on_line = sorted(
+            (item for item in breaker_findings if item.get("line_index") == base["line_index"]),
+            key=lambda item: -float(item.get("score") or 0.0),
+        )
+        evidence = None
+        if on_line:
+            finding = on_line[0]
+            progress = finding.get("gse_progress_after_flip")
+            lowers = progress is not None and float(progress) > 0.0
+            ratio = float(finding.get("score") or 0.0) / top if top > 0.0 else 0.0
+            evidence = {"cb_name": str(finding["cb_name"]), "score_ratio": round(ratio, 3), "flip_lowers_objective": bool(lowers)}
+            if lowers:
+                refined["topology"] = round(max(base["topology"], ratio), 3)
+                refined["parameter"] = round(1.0 - refined["topology"], 3)
+        refined["breaker_evidence"] = evidence
+        refined["source"] = "node_breaker_context"
+        return refined
 
     def _flow_at_noise_lines(self, solved: Mapping[str, Any], rows0: Sequence[int]) -> list[int]:
         """Lines (1-based) among ``rows0`` whose terminal flows read like an open terminal.
@@ -3831,6 +3956,13 @@ class MatpowerDeploymentProviders:
             },
             "breaker_findings": breaker_findings,
             "breaker_candidate_count": int(self.breaker_candidate_count),
+            # Item 7 step 2: the route confidence refined by this context's
+            # own breaker multipliers, only when a run reads the cue.
+            **(
+                {"route_confidence": self._breaker_refined_confidence(solved, breaker_findings)}
+                if self.flow_at_noise_cue
+                else {}
+            ),
             "finding_count": len(findings),
             "topology_findings": findings,
             "supported_corrections": supported,

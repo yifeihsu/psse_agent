@@ -619,11 +619,37 @@ class ExpertPolicyOracle:
                 return [int(line) for line in metrics.get("flow_at_noise_lines") or []]
         return []
 
+    def _route_confidence(self, policy: PolicyObservation | Mapping[str, Any]) -> Mapping[str, Any] | None:
+        """The latest bound WLS solve's parameter-versus-open-terminal confidence (item 7 step 2), else None."""
+        contexts = self._get(policy, "fresh_context_evidence", {}) or {}
+        wls = contexts.get("wls") if isinstance(contexts, Mapping) else None
+        if isinstance(wls, Mapping) and wls.get("successful"):
+            record = wls.get("route_confidence")
+            return record if isinstance(record, Mapping) else None
+        if self._get(policy, "last_tool") == RUN_WLS:
+            output = self._get(policy, "last_tool_output", {}) or {}
+            metrics = output.get("tool_metrics") if isinstance(output, Mapping) else None
+            record = metrics.get("route_confidence") if isinstance(metrics, Mapping) else None
+            return record if isinstance(record, Mapping) else None
+        return None
+
     def _topology_first_for(self, policy: PolicyObservation | Mapping[str, Any]) -> bool:
-        """Whether the breaker route leads the structural tier in this state (``topology_first`` mode)."""
+        """Whether the breaker route leads the structural tier in this state (``topology_first`` mode).
+
+        The guarded mode follows the route confidence when the solve reports
+        one (item 7 step 2: the breaker route first only when the open
+        terminal is the more likely hypothesis, topology above 0.5), and the
+        bare cue otherwise.
+        """
         if self.topology_first is True:
             return True
         if self.topology_first == FLOW_AT_NOISE_GUARD:
+            confidence = self._route_confidence(policy)
+            if confidence is not None and confidence.get("topology") is not None:
+                try:
+                    return float(confidence["topology"]) > 0.5
+                except (TypeError, ValueError):
+                    return False
             return bool(self._flow_at_noise_lines(policy))
         return False
 

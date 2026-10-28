@@ -420,13 +420,26 @@ class CompoundScenarioTests(unittest.TestCase):
         default = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only")
         metrics = default.run_wls(_state(root))
         metrics = metrics.get("tool_metrics", metrics)
-        for key in ("flow_at_noise_lines", "flow_noise_sigma", "flow_noise_residual"):
+        for key in ("flow_at_noise_lines", "flow_noise_sigma", "flow_noise_residual", "route_confidence"):
             self.assertNotIn(key, metrics)
         self.assertNotIn("parameter_flow_at_noise_lines", default.get_parameter_context(_state(root)))
         verifier = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only", target_first_partial=True)
         self.assertTrue(verifier.flow_at_noise_cue)
         cued = verifier.run_wls(_state(root))
         self.assertIn("flow_at_noise_lines", cued.get("tool_metrics", cued))
+        # Item 7 step 2: the route confidence rides with the cue, read from the
+        # same solve; the topology context refines it with its own breaker
+        # multipliers.
+        confidence = cued.get("tool_metrics", cued)["route_confidence"]
+        self.assertEqual(set(confidence) >= {"line_index", "topology", "parameter", "basis", "multiplier_ratio"}, True)
+        self.assertAlmostEqual(confidence["topology"] + confidence["parameter"], 1.0, places=3)
+        context = verifier.get_topology_context(_state(root))
+        self.assertEqual(context.get("execution_status", "success"), "success", context)
+        refined = context["route_confidence"]
+        self.assertEqual(refined["line_index"], confidence["line_index"])
+        self.assertGreaterEqual(refined["topology"], confidence["topology"])
+        self.assertEqual(refined["source"], "node_breaker_context")
+        self.assertNotIn("route_confidence", default.get_topology_context(_state(root)))
 
 
 if __name__ == "__main__":

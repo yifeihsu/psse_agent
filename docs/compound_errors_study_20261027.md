@@ -1789,3 +1789,68 @@ confidence of step 2 rather than a floor, and step 2 uses it.
 `claude/nostalgic-kalam-be5f7a`, 2026-10-28): the analysis script and
 this section; no provider or teacher code changes.
 
+### 8.2 Step 2: a parameter-versus-open-terminal confidence from the solve
+
+**The confidence.**  Computed by the provider on every alarming WLS solve
+(`route_confidence` in the WLS metrics, kept in the durable WLS ledger),
+only when a run reads the cue (`flow_at_noise_cue`, which only the guarded
+teacher turns on, so every other teacher's student observation stays as
+it was), and only from quantities the solve already produced: no extra
+solve.  For each of the five top-ranked branch candidates and every line
+showing the open-terminal cue:
+
+- a line whose measured P flow is above the noise (3 sigma) carries
+  current and cannot be open: topology 0 (`measurable_flow`);
+- a line whose flows read at noise with the cue's residual (above the
+  8-sigma floor of 8.1) gets, as its topology confidence, its branch
+  multiplier relative to the strongest candidate's (`open_terminal_cue`),
+  the quantity 8.1 found to separate open terminals from false fires;
+- a line whose flows read at noise without that residual, a lightly
+  loaded line, gets half of it (`flow_at_noise_without_cue`): the solve
+  cannot tell an open terminal from an impedance error there, which is
+  the user's lightly loaded case.
+
+The line with the highest topology confidence is reported (else the
+strongest candidate with 0), with parameter as the complement, the
+multiplier ratio, the line's flow and residual in sigmas and whether the
+solve is branch-dominant.  When the agent asks for the topology context
+on a state with the node/breaker channel, the context reports the same
+confidence refined by its own breaker multipliers: a screened flip of a
+breaker on that line that lowers the substation objective (the user's
+rule: lowering it is a viable step, no threshold) raises the topology
+confidence to that breaker's multiplier relative to the strongest
+breaker's; a flip that does not, or no breaker of that line among the
+screened ones, leaves it and is reported as evidence.  Tests:
+`psse_env/providers/test_route_confidence.py`, the gating and the
+refinement on the compound fixtures in
+`psse_env/providers/test_compound_scenarios.py`.
+
+**The guarded teacher uses it.**  `baseline_compare_topology_guarded` now
+puts the breaker route first when the confidence names the open terminal
+as the more likely hypothesis (topology above 0.5), and the bare cue only
+on an observation without a confidence
+(`psse_env/oracle/test_topology_first_order.py`).  The 0.5 is the
+decision boundary between the two hypotheses, not a tuned threshold.
+
+**What it changes at the first solve** (the 1,900 roots of 8.1; the
+measurement in closed loop is step 5):
+
+| roots | the bare cue turns the order | confidence above 0.5 | confidence between 0.25 and 0.75 |
+| --- | --- | --- | --- |
+| IEEE 14 compound, without a breaker fault (625) | 7 | 6 | 75 |
+| IEEE 14 compound, with a breaker fault (650) | 522 | 489 | 125 |
+| IEEE 118 compound, none with a breaker fault (625) | 54 | 19 | 42 |
+
+So the confidence cuts the IEEE 118 false topology-first routes by about
+two thirds (54 to 19), at the price of 33 IEEE 14 breaker roots on which
+the cue fired on a line that is not the leading candidate (two bus splits
+21 to 14, mixed pairs 37 to 32, R/X + breaker distant 129 to 119,
+R/X + breaker + meter 116 to 108; the same-line, shared-bus, two-dangling
+and single-breaker classes stay within two roots).  Those are cases where
+the solve's evidence for the open terminal is weaker than for an impedance
+error elsewhere; whether the episode recovers is step 5's measurement, not
+something this step tunes.
+
+**Commit.**  The commit that adds this section (branch
+`claude/nostalgic-kalam-be5f7a`, 2026-10-28).
+

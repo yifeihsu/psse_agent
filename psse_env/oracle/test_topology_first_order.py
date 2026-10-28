@@ -153,6 +153,25 @@ class GuardedTopologyFirstTests(unittest.TestCase):
             self.assertEqual(current_expert_variant(), "baseline_compare_topology_guarded")
             self.assertEqual(variant_provider_options(), {"flow_at_noise_cue": True})
 
+    def test_the_guarded_teacher_follows_the_route_confidence(self) -> None:
+        """Item 7 step 2: the breaker route leads only when the open terminal is the more likely hypothesis."""
+        expert = ExpertPolicyOracle(**expert_variant_options("baseline_compare_topology_guarded"))
+
+        def wls(confidence, lines=(7,)):
+            return _policy(fresh_context_evidence={"wls": {
+                "successful": True, "flow_at_noise_lines": list(lines), "route_confidence": confidence}})
+
+        self.assertTrue(expert._topology_first_for(wls({"line_index": 7, "topology": 0.9, "parameter": 0.1})))
+        # A cue on a line behind a stronger candidate no longer turns the order.
+        self.assertFalse(expert._topology_first_for(wls({"line_index": 6, "topology": 0.355, "parameter": 0.645})))
+        self.assertFalse(expert._topology_first_for(wls({"line_index": 6, "topology": 0.5, "parameter": 0.5})))
+        # Without a confidence (an observation from before step 2) the bare cue serves.
+        self.assertTrue(expert._topology_first_for(wls(None)))
+        self.assertFalse(expert._topology_first_for(wls(None, lines=())))
+        # The other modes ignore it.
+        self.assertFalse(ExpertPolicyOracle(**expert_variant_options("baseline_compare"))._topology_first_for(
+            wls({"line_index": 7, "topology": 0.9, "parameter": 0.1})))
+
     def test_variant_registry(self) -> None:
         self.assertIn("baseline_compare_topology_guarded", EXPERT_VARIANTS)
         # Removed on 2026-10-28 as brute-force screening (study section 7.8).
