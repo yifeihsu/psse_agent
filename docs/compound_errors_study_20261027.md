@@ -1637,3 +1637,35 @@ other jobs, so the time ratio is an upper bound).
 `claude/nostalgic-kalam-be5f7a`, 2026-10-28); the default switch that
 follows the check is a separate commit (section 6.4).
 
+### 7.8 Stage 2 in sum
+
+Roots solved of the 1,275, under the teachers as they stood after each
+item (items in the order they were done; every run on the same suite and
+seed, scada_only, 40 actions):
+
+| after | baseline_compare | topology first, always | topology first, guarded | topology first, clean flip |
+| --- | --- | --- | --- | --- |
+| stage 1 (with the isolated-line rule, section 3.2) | 546 (43%) | 692 (54%) | | |
+| item 1: the open-terminal cue, guarded variant | 546 | 692 | 702 (55%) | |
+| item 2: the node/breaker binding after a re-render | 587 (46%) | 763 (60%) | 758 (59%) | |
+| item 5: the abstention statement (outcomes unchanged) | 587 | 763 | 758 | |
+| item 3: one alternating pair refit (option) | 617 (48%) | 789 (62%) | 788 (62%) | |
+| item 4: target-first acceptance (negative, left off) | 470 or 549 | 783 | 748 | |
+| item 6: the clean-flip condition | 617 | 789 | 788 | 700 (55%) |
+
+So the stage moved the baseline teacher's ceiling from 546 to 617 with
+two shared or optional tool repairs (the binding repair, 41 roots; the
+pair refit, 30) and the topology-first orders from 692 to 788 and 789;
+the always-on order is still the strongest on this suite, the guarded
+order matches it within one root and loses none against the baseline
+here, and the clean-flip order is the only one that passed the
+independent check on the conventional suites, so it became the default
+teacher for new work (section 6.4).  Every item kept the conventional
+192-root suite at 192 of 192 under the baseline teacher.  What is left,
+by class: two bus splits and mixed pairs depend on the second structural
+atom being routed first (the cue is blind to a split, the clean flip to a
+contaminated substation); the adjacent pairs need a second sweep or a
+joint two-line fit; the meter on the faulted line stays a verifier
+limit; and nothing in stage 2 changes the identifiability limits of
+section 5.  No DAgger round has been drawn on compound classes.
+
