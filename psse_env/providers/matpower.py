@@ -3752,15 +3752,17 @@ class MatpowerDeploymentProviders:
         # A flip that leaves the substation estimate clean explains everything
         # and outranks any partial explanation.  Without one (another fault
         # remains), offer the flips that remove most of the anomaly, best first;
-        # the operator-model screening decides between partial and final.
-        clean_flips = [pair for pair in admissible if pair[0]["flip_explains_substation_measurements"]]
+        # the operator-model screening decides between partial and final.  This
+        # ranks the flips of a context the agent asked for (2026-09-12); it is
+        # not the removed stage-2 screen that ran on every solve.
+        explaining_flips = [pair for pair in admissible if pair[0]["flip_explains_substation_measurements"]]
 
         def flip_chi_square_key(pair: tuple[dict[str, Any], dict[str, Any]]) -> float:
             value = pair[0]["gse_chi_square_after_flip"]
             return float(value) if value is not None else math.inf
 
-        if clean_flips:
-            chosen = sorted(clean_flips, key=flip_chi_square_key)
+        if explaining_flips:
+            chosen = sorted(explaining_flips, key=flip_chi_square_key)
         else:
             chosen = sorted(admissible, key=flip_chi_square_key)
         proposed = [action for _, action in chosen]
