@@ -14,6 +14,7 @@ summary bins the roots as the plan defines (rule_best, legal_alternative,
 interface_limit, evidence_limit) per class and keeps, for every truth probe,
 the audit reasons and the verdicts of the applied corrections, which is what
 separates an interface limit from an evidence limit in the study note.
+``--system`` and the progress basis follow ``research.compound_errors.rollout``.
 """
 from __future__ import annotations
 
@@ -117,11 +118,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=20261019)
     parser.add_argument("--sample-seed", type=int, default=20261027)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--system", default=None, help="the suite's registered system (default: read from the roots)")
+    parser.add_argument("--env-option", action="append", default=None, metavar="KEY=VALUE",
+                        help="research environment option of the rollout, e.g. pair_refit_adjacent=1")
     args = parser.parse_args(argv)
+
+    from research.compound_errors.rollout import suite_system, system_progress_basis
 
     suite = json.loads(args.suite.read_text(encoding="utf-8"))
     if isinstance(suite, Mapping):
         suite = suite.get("scenarios") or suite.get("roots") or []
+    system = suite_system(suite, args.system)
+    args.progress_basis = system_progress_basis(system, args.progress_basis)
     episodes = {}
     for line in args.episodes.read_text(encoding="utf-8").splitlines():
         if line.strip():
@@ -130,7 +138,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     roots, selection = select_roots(suite, episodes, solved_per_class=args.solved_per_class, failed_per_class=args.failed_per_class,
                                     seed=args.sample_seed, classes=args.classes)
     settings = dict(profile=args.profile, expert_variant=args.expert, triage_model=None, progress_basis=args.progress_basis,
-                    max_steps=args.max_steps, seed=args.seed, reward=None)
+                    max_steps=args.max_steps, seed=args.seed, reward=None,
+                    env_options=audit.parse_run_options(args.env_option))
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
     print(f"[audit] {len(roots)} roots ({sum(v['audited_failed'] for v in selection.values())} failed, "
@@ -163,7 +172,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         stream.close()
     summary = audit.summarize(results)
-    summary.update(contract=AUDIT_CONTRACT, suite=str(args.suite), episodes=str(args.episodes), profile=args.profile,
+    summary.update(contract=AUDIT_CONTRACT, suite=str(args.suite), episodes=str(args.episodes), system=system,
+                   progress_basis=args.progress_basis, env_options=settings["env_options"], profile=args.profile,
                    expert=args.expert, max_states=args.max_states, max_alternatives=args.max_alternatives,
                    max_steps=args.max_steps, seed=args.seed, selection=selection,
                    truth_probe=truth_probe_summary(results), total_seconds=round(time.perf_counter() - started, 1))

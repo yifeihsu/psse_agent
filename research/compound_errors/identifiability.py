@@ -29,6 +29,12 @@ candidate oracle, no expert):
 
 Every probe is the deployed executor and verifier the policy uses; the truth
 is read only to name the targets and to score the estimates.
+
+``--system`` (2026-10-28) follows ``research.compound_errors.rollout``: the
+suite's system is read from the roots and a system other than IEEE 14 runs
+with the ``chi_square_excess`` progress basis, on the gated environment and in
+the ungated provider path's own progress, unless ``--progress-basis`` names
+one.
 """
 from __future__ import annotations
 
@@ -78,24 +84,37 @@ _WLS_KEYS = ("chi_square_statistic", "chi_square_threshold", "chi_square_ratio",
              "target_progress", "remaining_suspect_count", "max_normalized_residual", "target_metric_value", "target_metric_threshold")
 
 _FACTORY: Callable[[], Any] | None = None
+#: The progress basis of the run (None: the environment's default, the whole statistic).
+_PROGRESS_BASIS: str | None = None
 
 
 # --------------------------------------------------------------------------- environment helpers
 
 
-def make_factory(profile: str) -> Callable[[], Any]:
+def make_factory(profile: str, progress_basis: str | None = None) -> Callable[[], Any]:
     import scripts.run_dagger_research as research
 
     research.RESEARCH_ENVIRONMENT_OPTIONS["evidence_profile"] = profile
     research.RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"] = 4.0
     research.RESEARCH_ENVIRONMENT_OPTIONS["triage_classifier"] = None
+    if progress_basis:
+        research.RESEARCH_ENVIRONMENT_OPTIONS["progress_basis"] = progress_basis
     factory = research.resolve_environment_factory("research", profile)
     return lambda: factory()
 
 
-def _init_worker(profile: str) -> None:
-    global _FACTORY
-    _FACTORY = make_factory(profile)
+def _init_worker(profile: str, progress_basis: str | None = None) -> None:
+    global _FACTORY, _PROGRESS_BASIS
+    _FACTORY = make_factory(profile, progress_basis)
+    _PROGRESS_BASIS = progress_basis
+
+
+def system_size(root: Mapping[str, Any]) -> tuple[int, int]:
+    """(buses, branches) of the root's registered system."""
+    from psse_env.systems import resolve_system
+
+    spec = resolve_system(str((root.get("grouping") or {}).get("case_id") or "case14"))
+    return spec.nb, spec.nl
 
 
 def active_id(env: Any) -> str:
@@ -314,6 +333,15 @@ class ProviderProbe:
                 denominator = max(abs(float(parent_score)), 1e-12)
                 verification["global_progress"] = (float(parent_score) - float(candidate_score)) / denominator
                 verification["parent_anomaly_score"] = float(parent_score)
+            # The run's progress basis, as the gated environment measures it:
+            # the excess of the statistic over the parent's degrees of freedom.
+            parent_j, candidate_j = self.parent_solve.get("chi_square_statistic"), verification.get("chi_square_statistic")
+            dof = self.parent_solve.get("chi_square_dof")
+            if (_PROGRESS_BASIS == "chi_square_excess" and parent_j is not None and candidate_j is not None
+                    and dof is not None and float(parent_j) - float(dof) > 0.0):
+                excess = float(parent_j) - float(dof)
+                verification["global_progress"] = (excess - (float(candidate_j) - float(dof))) / excess
+                verification["global_progress_basis"] = "chi_square_excess"
         except (TypeError, ValueError, OverflowError):
             pass
         assessment = self.providers._deployment_candidate_quality_oracle().label_candidate(
@@ -455,8 +483,7 @@ def twin_root(root: Mapping[str, Any], *, seed: int) -> dict[str, Any] | None:
     error = meters[0]
     i = int(error["index"])
     offset = measurements[i] - clean[i]
-    nb = 14
-    nl = (len(clean) - 3 * nb) // 4
+    nb, nl = system_size(root)
     index_map = measurement_index_map(nb, nl)
     structural = set(int(v) for v in (root["execution"].get("metadata") or {}).get("structural_zero_indices") or [])
     blocked = set(structural) | {i}
@@ -514,9 +541,8 @@ def same_terminal_breaker(root: Mapping[str, Any]) -> dict[str, Any]:
     breaker = dict((truth_of(root).get("true_topology_errors") or [])[0])
     row0 = int(line["branch_row0"])
     tolerance = tolerance_of(root)
-    nb = 14
+    nb, nl = system_size(root)
     measurements = [float(v) for v in root["execution"]["measurements"]]
-    nl = (len(measurements) - 3 * nb) // 4
     index_map = measurement_index_map(nb, nl)
     sigma = [float(v) for v in (root["execution"].get("metadata") or {}).get("sigma_z") or []]
     flows = {channel: measurements[index_map[channel].start + row0] for channel in ("Pf", "Qf", "Pt", "Qt")}
@@ -775,11 +801,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--experiments", nargs="*", default=list(EXPERIMENTS), choices=EXPERIMENTS)
     parser.add_argument("--per-class", type=int, default=None)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--system", default=None, help="the suite's registered system (default: read from the roots)")
+    parser.add_argument("--progress-basis", default=None)
     args = parser.parse_args(argv)
+
+    from research.compound_errors.rollout import suite_system, system_progress_basis
 
     suite = json.loads(args.suite.read_text(encoding="utf-8"))
     if isinstance(suite, Mapping):
         suite = suite.get("scenarios") or suite.get("roots") or []
+    system = suite_system(suite, args.system)
+    progress_basis = system_progress_basis(system, args.progress_basis)
     payloads = []
     for experiment in args.experiments:
         taken: Counter = Counter()
@@ -793,7 +825,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             payloads.append({"experiment": experiment, "root": root})
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
-    print(f"[identifiability] {len(payloads)} probes over {args.experiments} under {args.profile}, workers {args.workers}", flush=True)
+    print(f"[identifiability] {len(payloads)} {system} probes over {args.experiments} under {args.profile}, "
+          f"progress basis {progress_basis or 'default'}, workers {args.workers}", flush=True)
     started = time.perf_counter()
     records: dict[str, list[dict[str, Any]]] = defaultdict(list)
     streams = {experiment: (out / f"{experiment}.jsonl").open("w", encoding="utf-8") for experiment in args.experiments}
@@ -808,18 +841,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                                   "errors": sum(1 for v in records.values() for r in v if r.get("error"))}), flush=True)
 
         if args.workers > 1:
-            with ProcessPoolExecutor(max_workers=args.workers, initializer=_init_worker, initargs=(args.profile,)) as pool:
+            with ProcessPoolExecutor(max_workers=args.workers, initializer=_init_worker, initargs=(args.profile, progress_basis)) as pool:
                 for record in pool.map(_run, payloads, chunksize=1):
                     emit(record)
         else:
-            _init_worker(args.profile)
+            _init_worker(args.profile, progress_basis)
             for payload in payloads:
                 emit(_run(payload))
     finally:
         for stream in streams.values():
             stream.close()
     summary = {experiment: SUMMARIZERS[experiment](records[experiment]) for experiment in args.experiments}
-    summary.update(contract=CONTRACT, suite=str(args.suite), profile=args.profile,
+    summary.update(contract=CONTRACT, suite=str(args.suite), system=system, progress_basis=progress_basis, profile=args.profile,
                    errors={experiment: sum(1 for r in records[experiment] if r.get("error")) for experiment in args.experiments},
                    total_seconds=round(time.perf_counter() - started, 1))
     (out / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")

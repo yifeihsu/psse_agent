@@ -339,7 +339,13 @@ COMPOUND_PARAMETER_PLACEMENTS = ("any", "adjacent", "distant")
 COMPOUND_BREAKER_PLACEMENTS = ("any", "same_line", "shared_bus", "corridor", "distant")
 COMPOUND_BREAKER_PAIRS = ("any", "mixed")
 COMPOUND_METER_PLACEMENTS = ("random", "on_fault")
+COMPOUND_DISTANT_HOPS = 2
 COMPOUND_OVERLAY_MAGNITUDE_RANGE = (0.10, 0.30)
+#: How a compound root's truth is solved: on the 65-node node/breaker model
+#: (IEEE 14, every class) or on the bus-branch model (any registered system,
+#: no breaker atoms): the true network's AC OPF at the drawn load, its
+#: measurement function, and the deployed WLS noise model of the registry.
+COMPOUND_PHYSICS = ("auto", "node_breaker", "bus_branch")
 #: Structural-zero rows of the operator vector (sections without an injection
 #: meter) are exact constraints of the WLS; the multi-scan parameter corrector
 #: takes a strictly positive variance vector, so the scans declare the nominal
@@ -361,6 +367,9 @@ class CompoundSpec:
     away).  ``breaker_pair`` ``mixed`` asks two breakers of different effects.
     ``meter_placement`` ``on_fault`` puts the first meter on a flow channel of
     a faulted line (or the injection of a split bus when no line is faulted).
+    ``distant_hops`` is the smallest bus-graph distance between the closest
+    endpoints of a ``distant`` pair: 2 on IEEE 14, whose lines are never more
+    than three hops apart, 3 on IEEE 118 (2026-10-28).
     """
 
     name: str
@@ -372,6 +381,7 @@ class CompoundSpec:
     breaker_effects: tuple[str, ...] = COMPOUND_BREAKER_EFFECTS
     breaker_pair: str = "any"
     meter_placement: str = "random"
+    distant_hops: int = COMPOUND_DISTANT_HOPS
 
     def __post_init__(self) -> None:
         if not str(self.name).strip():
@@ -416,6 +426,11 @@ class CompoundSpec:
             raise ValueError(f"meter_placement must be one of {COMPOUND_METER_PLACEMENTS}")
         if self.meter_placement == "on_fault" and (low == 0 or self.parameters + self.breakers == 0):
             raise ValueError("on_fault meter placement needs a meter and a structural atom")
+        hops = self.distant_hops
+        if isinstance(hops, bool) or not isinstance(hops, int) or hops < 2:
+            raise ValueError("distant_hops must be an integer of at least 2")
+        if hops != COMPOUND_DISTANT_HOPS and self.parameter_placement != "distant":
+            raise ValueError("distant_hops constrains a distant pair of R/X lines")
 
     @property
     def meter_range(self) -> tuple[int, int]:
@@ -450,7 +465,13 @@ class CompoundSpec:
             "breaker_effects": list(self.breaker_effects),
             "breaker_pair": self.breaker_pair,
             "meter_placement": self.meter_placement,
+            # the IEEE 14 classes' record is unchanged
+            **({"distant_hops": int(self.distant_hops)} if self.distant_hops != COMPOUND_DISTANT_HOPS else {}),
         }
+
+    @property
+    def has_breakers(self) -> bool:
+        return self.breakers > 0
 
 
 #: The stage-1 study classes (docs/compound_errors_study_20261027.md): the
@@ -473,6 +494,18 @@ DEFAULT_COMPOUND_CLASSES: tuple[CompoundSpec, ...] = (
     CompoundSpec("cb2_split", breakers=2, breaker_effects=("bus_split",)),
     CompoundSpec("control_rx", parameters=1),
     CompoundSpec("control_cb", breakers=1),
+    CompoundSpec("control_meter", meters=(1, 3)),
+)
+
+#: The classes that need no breaker, on a system without a node/breaker model
+#: (IEEE 118, 2026-10-28, docs/compound_errors_ieee118_20261028.md): the same
+#: names as the IEEE 14 study, ``distant`` at three hops or more.
+BUS_BRANCH_COMPOUND_CLASSES: tuple[CompoundSpec, ...] = (
+    CompoundSpec("rx2_adjacent", parameters=2, parameter_placement="adjacent"),
+    CompoundSpec("rx2_distant", parameters=2, parameter_placement="distant", distant_hops=3),
+    CompoundSpec("meter_rx2", meters=1, parameters=2),
+    CompoundSpec("meter_on_rx", meters=1, parameters=1, meter_placement="on_fault"),
+    CompoundSpec("control_rx", parameters=1),
     CompoundSpec("control_meter", meters=(1, 3)),
 )
 
@@ -678,6 +711,9 @@ class Round0ScenarioGenerator:
         effect_band: tuple[float, float] | str | None = None,
         compound_classes: Sequence[CompoundSpec | Mapping[str, Any]] | None = None,
         compound_solo_effects: bool = True,
+        compound_physics: str = "auto",
+        compound_effect_floor: float | None = None,
+        compound_only: bool = False,
     ) -> None:
         self.evidence_profile = validate_evidence_profile(evidence_profile)
         # Effect-targeted magnitudes (research.classifier_triage.effect_sampler, 2026-10-12):
@@ -693,8 +729,11 @@ class Round0ScenarioGenerator:
         if admission_mode not in {"recoverable", "physical"}:
             raise ValueError("admission_mode must be 'recoverable' or 'physical'")
         self.admission_mode = admission_mode
+        # A compound-only generator synthesizes every root from the system's
+        # own case and reads no corpus; every other family needs one.
+        self.compound_only = bool(compound_only)
         if self.system.case_id != "case14":
-            if corpus_path is None or balanced_artifact_dir is None:
+            if (corpus_path is None or balanced_artifact_dir is None) and not self.compound_only:
                 raise ValueError("non-IEEE14 systems require an explicit fresh corpus and artifact directory")
             # Waveform roots need corpora generated on the system's own
             # three-phase model (the registry lists the families it has);
@@ -795,14 +834,36 @@ class Round0ScenarioGenerator:
         self.hif_max_scans = int(hif_max_scans)
         # Compound-error classes (``build_compound`` and the ``compound`` plan
         # entry); the solo-effect probes cost one physical solve per
-        # structural atom and change no draw.
+        # structural atom and change no draw.  The node/breaker physics exists
+        # for IEEE 14 only; every other system solves its compound roots on
+        # the bus-branch model, which carries no breaker atom.
+        if compound_physics not in COMPOUND_PHYSICS:
+            raise ValueError(f"compound_physics must be one of {COMPOUND_PHYSICS}")
+        if compound_physics == "auto":
+            compound_physics = "node_breaker" if self.system.case_id == "case14" else "bus_branch"
+        if compound_physics == "node_breaker" and self.system.case_id != "case14":
+            raise ValueError(f"{self.system.case_id} has no node/breaker model; its compound roots are bus_branch")
+        self.compound_physics = str(compound_physics)
+        default_classes = DEFAULT_COMPOUND_CLASSES if self.compound_physics == "node_breaker" else BUS_BRANCH_COMPOUND_CLASSES
         self.compound_classes: tuple[CompoundSpec, ...] = tuple(
             CompoundSpec.from_mapping(spec)
-            for spec in (DEFAULT_COMPOUND_CLASSES if compound_classes is None else compound_classes)
+            for spec in (default_classes if compound_classes is None else compound_classes)
         )
         if len({spec.name for spec in self.compound_classes}) != len(self.compound_classes):
             raise ValueError("compound class names must be unique")
+        if self.compound_physics == "bus_branch" and any(spec.has_breakers for spec in self.compound_classes):
+            raise ValueError("breaker atoms need the node/breaker model (IEEE 14)")
         self.compound_solo_effects = bool(compound_solo_effects)
+        # Each atom admitted only at this effect ratio on its own (its
+        # noiseless chi-square excess over the alarm threshold's excess,
+        # research.classifier_triage.effect_sampler), so a silent atom is
+        # excluded by design; None admits physically as the IEEE 14 study did.
+        if compound_effect_floor is not None:
+            if self.compound_physics != "bus_branch":
+                raise ValueError("the per-atom effect floor is a bus_branch admission")
+            if isinstance(compound_effect_floor, bool) or not float(compound_effect_floor) > 0.0:
+                raise ValueError("compound_effect_floor must be positive")
+        self.compound_effect_floor = None if compound_effect_floor is None else float(compound_effect_floor)
         self.noise_profile_rows = int(noise_profile_rows)
         self.source_partition = source_partition
         if not (0.0 < float(unbalance_vuf_threshold) < 1.0):
@@ -1020,6 +1081,8 @@ class Round0ScenarioGenerator:
                 raise ValueError("parameter scan layout does not match the selected system")
 
     def _corpus(self) -> dict[str, list[dict[str, Any]]]:
+        if self.compound_only:
+            raise ValueError("a compound-only generator reads no corpus")
         if self._corpus_by_class is None:
             grouped: dict[str, list[dict[str, Any]]] = {}
             total_rows: dict[str, int] = {}
@@ -4206,7 +4269,10 @@ class Round0ScenarioGenerator:
         """Draw the structural atoms of one root uniformly among the admissible placements."""
         rng = self._rng
         lines = self._compound_lines()
-        catalogue = [entry for entry in self._compound_breaker_catalogue() if entry["effect"] in spec.breaker_effects]
+        catalogue = (
+            [entry for entry in self._compound_breaker_catalogue() if entry["effect"] in spec.breaker_effects]
+            if spec.breakers else []
+        )
         if spec.breakers and not catalogue:
             raise ScenarioRejected("compound_breaker_effects_unavailable", str(spec.breaker_effects))
 
@@ -4215,7 +4281,7 @@ class Round0ScenarioGenerator:
             if spec.parameter_placement == "adjacent":
                 return relation == "adjacent"
             if spec.parameter_placement == "distant":
-                return distance >= 2
+                return distance >= spec.distant_hops
             return True
 
         def breaker_ok(row0: int, entry: Mapping[str, Any]) -> bool:
@@ -4443,8 +4509,93 @@ class Round0ScenarioGenerator:
             },
         }
 
+    def _compound_meter_overlay(
+        self,
+        spec: CompoundSpec,
+        meter_count: int,
+        parameter_atoms: Sequence[Mapping[str, Any]],
+        breaker_atoms: Sequence[Mapping[str, Any]],
+        z_clean: Sequence[float],
+        sigma: Sequence[float],
+        structural_zero: Sequence[int],
+        tag: str,
+    ) -> tuple[list[float], list[int], list[dict[str, Any]], list[dict[str, Any]]]:
+        """Meter atoms: the additive overlay with the sigma floor, on P/Q channels.
+
+        ``on_fault`` puts the first one on a faulted element.  Returns the
+        observed vector, the chosen indices, the meter atoms and the truth rows.
+        """
+        rng = self._rng
+        index_map = measurement_index_map(self.nb, self.nl)
+        channel_of = {
+            i: channel
+            for channel in ("Vm", "Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt")
+            for i in range(index_map[channel].start, index_map[channel].stop)
+        }
+        eligible = [
+            i for channel in ("Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt")
+            for i in range(index_map[channel].start, index_map[channel].stop)
+            if i not in structural_zero
+        ]
+        faulted_channels: dict[int, str] = {}
+        for atom in parameter_atoms:
+            for channel in ("Pf", "Qf", "Pt", "Qt"):
+                faulted_channels[index_map[channel].start + int(atom["branch_row0"])] = "parameter_line"
+        for atom in breaker_atoms:
+            if atom["physical_effect"] == "dangling_line_terminal":
+                for channel in ("Pf", "Qf", "Pt", "Qt"):
+                    faulted_channels.setdefault(index_map[channel].start + int(atom["branch_row0"]), "dangling_line")
+            else:
+                for bus in atom["affected_planning_buses"]:
+                    for channel in ("Pinj", "Qinj"):
+                        faulted_channels.setdefault(index_map[channel].start + int(bus) - 1, "split_bus")
+        chosen: list[int] = []
+        if meter_count and spec.meter_placement == "on_fault":
+            preferred = [i for i, kind in faulted_channels.items() if kind == "parameter_line" and i in eligible]
+            pool = preferred or [i for i in faulted_channels if i in eligible]
+            if not pool:
+                raise ScenarioRejected("compound_no_faulted_meter_channel", tag)
+            chosen.append(int(sorted(pool)[int(rng.integers(len(pool)))]))
+        while len(chosen) < meter_count:
+            pool = [i for i in eligible if i not in chosen]
+            chosen.append(int(pool[int(rng.integers(len(pool)))]))
+        chosen.sort()
+        z_obs = list(z_clean)
+        meter_atoms: list[dict[str, Any]] = []
+        measurement_errors: list[dict[str, Any]] = []
+        for i in chosen:
+            magnitude = float(rng.uniform(*COMPOUND_OVERLAY_MAGNITUDE_RANGE))
+            if self.min_measurement_error_sigma is not None:
+                floor = self.min_measurement_error_sigma * float(sigma[i])
+                magnitude = max(magnitude, floor * float(rng.uniform(1.0, 1.5)))
+            sign = 1.0 if rng.random() < 0.5 else -1.0
+            clean_value = float(z_obs[i])
+            z_obs[i] = clean_value + sign * magnitude
+            channel = channel_of[i]
+            element = (
+                {"bus": i - index_map[channel].start + 1}
+                if channel in {"Vm", "Pinj", "Qinj"}
+                else {"branch_row0": i - index_map[channel].start, "line_index1": i - index_map[channel].start + 1}
+            )
+            measurement_errors.append({"index": int(i), "channel": channel, "observed": float(z_obs[i]), "clean": clean_value})
+            meter_atoms.append(
+                {
+                    "kind": "meter",
+                    "index": int(i),
+                    "channel": channel,
+                    **element,
+                    "offset": float(sign * magnitude),
+                    "sigma_multiple": float(magnitude / sigma[i]) if sigma[i] > 0 else None,
+                    "on_faulted_element": i in faulted_channels,
+                    "faulted_element_kind": faulted_channels.get(i),
+                }
+            )
+        return z_obs, chosen, meter_atoms, measurement_errors
+
     def _compound_scenario(self, spec: CompoundSpec, index: int) -> dict[str, Any]:
         """One compound root of ``spec``: structural atoms re-solved, meter atoms overlaid, physically admitted."""
+        if self.compound_physics == "bus_branch":
+            return self._compound_scenario_bus_branch(spec, index)
         from Transmission.ieee14_full_measurements import MODEL_ID, main_section_nodes
         from Transmission.ieee14_full_substation import (
             TELEMETRY_SIGMA,
@@ -4524,72 +4675,9 @@ class Round0ScenarioGenerator:
             "exact_measurement_indices": [int(i) for i in corrected_noise["structural_zero_indices"]],
         }
 
-        # Meter atoms: the additive overlay with the sigma floor, on P/Q
-        # channels; ``on_fault`` puts the first one on a faulted element.
-        index_map = measurement_index_map(self.nb, self.nl)
-        channel_of = {
-            i: channel
-            for channel in ("Vm", "Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt")
-            for i in range(index_map[channel].start, index_map[channel].stop)
-        }
-        eligible = [
-            i for channel in ("Pinj", "Qinj", "Pf", "Qf", "Pt", "Qt")
-            for i in range(index_map[channel].start, index_map[channel].stop)
-            if i not in structural_zero
-        ]
-        faulted_channels: dict[int, str] = {}
-        for atom in parameter_atoms:
-            for channel in ("Pf", "Qf", "Pt", "Qt"):
-                faulted_channels[index_map[channel].start + int(atom["branch_row0"])] = "parameter_line"
-        for atom in breaker_atoms:
-            if atom["physical_effect"] == "dangling_line_terminal":
-                for channel in ("Pf", "Qf", "Pt", "Qt"):
-                    faulted_channels.setdefault(index_map[channel].start + int(atom["branch_row0"]), "dangling_line")
-            else:
-                for bus in atom["affected_planning_buses"]:
-                    for channel in ("Pinj", "Qinj"):
-                        faulted_channels.setdefault(index_map[channel].start + int(bus) - 1, "split_bus")
-        chosen: list[int] = []
-        if meter_count and spec.meter_placement == "on_fault":
-            preferred = [i for i, kind in faulted_channels.items() if kind == "parameter_line" and i in eligible]
-            pool = preferred or [i for i in faulted_channels if i in eligible]
-            if not pool:
-                raise ScenarioRejected("compound_no_faulted_meter_channel", tag)
-            chosen.append(int(sorted(pool)[int(rng.integers(len(pool)))]))
-        while len(chosen) < meter_count:
-            pool = [i for i in eligible if i not in chosen]
-            chosen.append(int(pool[int(rng.integers(len(pool)))]))
-        chosen.sort()
-        z_obs = list(z_clean)
-        meter_atoms: list[dict[str, Any]] = []
-        measurement_errors: list[dict[str, Any]] = []
-        for i in chosen:
-            magnitude = float(rng.uniform(*COMPOUND_OVERLAY_MAGNITUDE_RANGE))
-            if self.min_measurement_error_sigma is not None:
-                floor = self.min_measurement_error_sigma * float(sigma[i])
-                magnitude = max(magnitude, floor * float(rng.uniform(1.0, 1.5)))
-            sign = 1.0 if rng.random() < 0.5 else -1.0
-            clean_value = float(z_obs[i])
-            z_obs[i] = clean_value + sign * magnitude
-            channel = channel_of[i]
-            element = (
-                {"bus": i - index_map[channel].start + 1}
-                if channel in {"Vm", "Pinj", "Qinj"}
-                else {"branch_row0": i - index_map[channel].start, "line_index1": i - index_map[channel].start + 1}
-            )
-            measurement_errors.append({"index": int(i), "channel": channel, "observed": float(z_obs[i]), "clean": clean_value})
-            meter_atoms.append(
-                {
-                    "kind": "meter",
-                    "index": int(i),
-                    "channel": channel,
-                    **element,
-                    "offset": float(sign * magnitude),
-                    "sigma_multiple": float(magnitude / sigma[i]) if sigma[i] > 0 else None,
-                    "on_faulted_element": i in faulted_channels,
-                    "faulted_element_kind": faulted_channels.get(i),
-                }
-            )
+        z_obs, chosen, meter_atoms, measurement_errors = self._compound_meter_overlay(
+            spec, meter_count, parameter_atoms, breaker_atoms, z_clean, sigma, structural_zero, tag
+        )
 
         # Physical admission: the reported model alarms, the true model is clean.
         alarmed, reported_detail = self._compound_detection(self.case_path, z_obs, **noise_options)
@@ -4754,6 +4842,265 @@ class Round0ScenarioGenerator:
             }
         return scenario
 
+    # ------------------------------------------------- compound errors, bus-branch model
+
+    def _effect_detection(self, case: str, z: Sequence[float], **noise_options: Any) -> tuple[bool, dict[str, Any]]:
+        """``_compound_detection`` with the solve's degrees of freedom and its effect ratio ``(J - dof) / excess``."""
+        from research.classifier_triage.effect_sampler import effect_ratio
+
+        alarmed, detail = self._compound_detection(case, z, **noise_options)
+        dof = self._wls_dof(case, z, **noise_options)
+        detail.update(dof=int(dof), effect_ratio=float(effect_ratio(detail["chi_square"], dof, self.chi2_alpha)))
+        return alarmed, detail
+
+    def _compound_solo_effects_bus_branch(
+        self,
+        parameter_atoms: Sequence[Mapping[str, Any]],
+        meter_atoms: Sequence[Mapping[str, Any]],
+        reference: Mapping[str, Any],
+        z_healthy: np.ndarray,
+        noise: np.ndarray,
+        sigma: Sequence[float],
+    ) -> list[dict[str, Any]]:
+        """Each atom alone at the root's load, on the reported model (the admission floor and the offline record).
+
+        A line atom alone is the network with only that line's true impedance,
+        dispatched by its own AC OPF; a meter atom alone is its offset on the
+        healthy network's solution.  The record is the noiseless vector's solve
+        (``effect_ratio`` is its chi-square over the alarm threshold's excess,
+        the expected effect ratio of a noisy snapshot) and, under ``noisy``, the
+        same vector with the root's own sensor-noise draw, whose alarm says
+        whether that atom alone would alarm on this snapshot.
+        """
+        from research.classifier_triage.effect_sampler import threshold_excess
+
+        options = {"sigma_z": list(sigma)}
+        effects: list[dict[str, Any]] = []
+        for position, atom in enumerate([*parameter_atoms, *meter_atoms]):
+            record: dict[str, Any] = {"atom": position, "kind": atom["kind"]}
+            if atom["kind"] == "parameter":
+                solved = self._solve_ac_opf(self._with_impedances(reference, [atom]))
+                if solved is None:
+                    effects.append({**record, "error": "opf_diverged"})
+                    continue
+                z_solo = build_measurement_vector(solved)
+            else:
+                z_solo = np.array(z_healthy, dtype=float, copy=True)
+                z_solo[int(atom["index"])] += float(atom["offset"])
+            try:
+                _, detail = self._compound_detection(self.case_path, z_solo.tolist(), **options)
+                dof = self._wls_dof(self.case_path, z_solo.tolist(), **options)
+                noisy_alarmed, noisy = self._effect_detection(self.case_path, (z_solo + noise).tolist(), **options)
+            except ScenarioRejected as rejection:
+                effects.append({**record, "error": rejection.reason})
+                continue
+            record.update(detail, dof=int(dof), effect_ratio=float(detail["chi_square"] / threshold_excess(dof, self.chi2_alpha)))
+            record["noisy"] = {key: noisy[key] for key in ("chi_square", "effect_ratio", "max_normalized_residual")}
+            record["noisy"]["alarmed"] = bool(noisy_alarmed)
+            effects.append(record)
+        return effects
+
+    def _compound_scenario_bus_branch(self, spec: CompoundSpec, index: int) -> dict[str, Any]:
+        """One compound root on the bus-branch model of the configured system (no breaker atom).
+
+        The true network (the scaled case with the atoms' true impedances) is
+        dispatched by its own AC OPF and its measurement function read at the
+        solution, with the registry's deployed WLS noise model and one
+        sensor-noise draw; eight scans are drawn about the same noiseless
+        operating point, as the balanced corpus draws them; the meter atoms are
+        the IEEE 14 study's overlay.  Admission: the solution passes the
+        balanced corpus's physical checks, every atom's own effect ratio reaches
+        ``compound_effect_floor`` (when set), the reported model alarms and the
+        true model is clean.  The policy-visible metadata is the noise
+        declaration and the scans, on every class.
+        """
+        from psse_env.providers import compound_pairs
+        from psse_env.providers.balanced_corpus import PhysicalAdmissionError, validate_balanced_solution
+
+        rng = self._rng
+        load_scale = self._draw_load_scale()
+        meter_count = spec.draw_meter_count(rng)
+        parameter_atoms, _, relations = self._draw_compound_structure(spec)
+        for atom in parameter_atoms:
+            r_factor = float(rng.uniform(*COMPOUND_FACTOR_RANGES[int(rng.integers(len(COMPOUND_FACTOR_RANGES)))]))
+            x_factor = float(rng.uniform(*COMPOUND_FACTOR_RANGES[int(rng.integers(len(COMPOUND_FACTOR_RANGES)))]))
+            atom.update(
+                r_factor=r_factor,
+                x_factor=x_factor,
+                clean_r=max(1e-6, atom["nominal_r"] * r_factor),
+                clean_x=max(1e-6, atom["nominal_x"] * x_factor),
+            )
+        tag = f"{spec.name}:{index}"
+        reference = self._scaled_system_case(load_scale)
+        solved = self._solve_ac_opf(self._with_impedances(reference, parameter_atoms))
+        if solved is None:
+            raise ScenarioRejected("opf_diverged", tag)
+        z_true = build_measurement_vector(solved)
+        try:
+            validate_balanced_solution(solved, z_true)
+        except PhysicalAdmissionError as exc:
+            raise ScenarioRejected(f"compound_{exc.reason}", tag, metrics=exc.metrics) from exc
+        sigma = [float(value) for value in self.noise_profile()]
+        sigma_array = np.asarray(sigma, dtype=float)
+        noise = rng.normal(0.0, 1.0, size=z_true.shape[0]) * sigma_array
+        z_clean = _canonicalize_synthesized_measurement_vector((z_true + noise).tolist())
+        scans = [
+            _canonicalize_synthesized_measurement_vector(
+                (z_true + rng.normal(0.0, 1.0, size=z_true.shape[0]) * sigma_array).tolist()
+            )
+            for _ in range(COMPOUND_SCAN_COUNT)
+        ]
+        noise_options = {"sigma_z": sigma}
+        corrected_case = self._derived_case(self._with_impedances(self._clean_case(), parameter_atoms), "r0_compound")
+        z_obs, chosen, meter_atoms, measurement_errors = self._compound_meter_overlay(
+            spec, meter_count, parameter_atoms, [], z_clean, sigma, [], tag
+        )
+
+        solo_effects: list[dict[str, Any]] = []
+        if self.compound_solo_effects or self.compound_effect_floor is not None:
+            z_healthy = z_true
+            if meter_atoms and parameter_atoms:
+                healthy = self._solve_ac_opf(reference)
+                if healthy is None:
+                    raise ScenarioRejected("opf_diverged", f"{tag}: healthy network")
+                z_healthy = build_measurement_vector(healthy)
+            solo_effects = self._compound_solo_effects_bus_branch(parameter_atoms, meter_atoms, reference, z_healthy, noise, sigma)
+        alarmed, reported_detail = self._effect_detection(self.case_path, z_obs, **noise_options)
+        true_alarmed, true_detail = self._effect_detection(corrected_case, z_clean, **noise_options)
+        joint = {"joint_alarm": bool(alarmed), "true_model_clean": not true_alarmed,
+                 "chi_square_ratio": reported_detail["chi_square_ratio"], "effect_ratio": reported_detail["effect_ratio"]}
+        if self.compound_effect_floor is not None:
+            floor = self.compound_effect_floor
+            below = [effect["atom"] for effect in solo_effects if not float(effect.get("effect_ratio") or 0.0) >= floor]
+            if below:
+                raise ScenarioRejected(
+                    "compound_atom_below_effect_floor",
+                    f"{tag}: atoms {below} below {floor}",
+                    metrics={**joint, "effect_floor": floor, "atoms_below": below,
+                             "kinds": [effect["kind"] for effect in solo_effects],
+                             "solo_effect_ratios": [effect.get("effect_ratio") for effect in solo_effects]},
+                )
+        if not alarmed:
+            raise ScenarioRejected(
+                "compound_not_alarmed_on_reported_model",
+                f"{tag}: chi2 {reported_detail['chi_square']:.1f} vs {reported_detail['chi_square_threshold']:.1f}, "
+                f"max|r| {reported_detail['max_normalized_residual']:.2f}",
+                metrics=joint,
+            )
+        if true_alarmed:
+            raise ScenarioRejected(
+                "compound_true_model_not_clean",
+                f"{tag}: chi2 {true_detail['chi_square']:.1f} vs {true_detail['chi_square_threshold']:.1f}, "
+                f"max|r| {true_detail['max_normalized_residual']:.2f}",
+                metrics=joint,
+            )
+
+        # Offline: the pair's footprint overlap and the comparison band, from
+        # the deployed solve's multiplier covariance on the reported model.
+        branch = np.asarray(self._clean_case()["branch"], dtype=float)
+        degree = compound_pairs.bus_degree(branch)
+        view = compound_pairs.multiplier_view(self.case_path, z_obs, sigma=sigma) if parameter_atoms else None
+        multiplier_summary = None
+        if view is not None:
+            for relation in relations:
+                first, second = (parameter_atoms[i] for i in relation["atoms"])
+                relation.update(compound_pairs.pair_overlap(view["ea"], first["branch_row0"], second["branch_row0"]))
+            multiplier_summary = compound_pairs.band_view(
+                compound_pairs.line_scores(view["lambdaN"]), rows_of_interest=[atom["branch_row0"] for atom in parameter_atoms]
+            )
+        silent = [effect["atom"] for effect in solo_effects if not (effect.get("noisy") or {}).get("alarmed")]
+
+        atom_summary = [
+            *[("parameter", atom["line_index1"], round(atom["r_factor"], 6), round(atom["x_factor"], 6)) for atom in parameter_atoms],
+            *[("meter", atom["index"], round(atom["offset"], 9)) for atom in meter_atoms],
+        ]
+        scenario = self._base_scenario(
+            self._scenario_id(COMPOUND_FAMILY, spec.name, json.dumps(atom_summary), load_scale, index),
+            case=self.case_path,
+            measurements=z_obs,
+            family=COMPOUND_FAMILY,
+            sigma_z=sigma,
+        )
+        scenario["clean_case"] = corrected_case
+        scenario["clean_measurements"] = list(z_clean)
+        scenario["metadata"]["parameter_scans"] = {
+            "z_scans": scans,
+            "sigma_z": list(sigma),
+            "initial_state_strategy": "observed_vm_plus_configured_case_angles_v1",
+        }
+        scenario["true_measurement_errors"] = measurement_errors
+        scenario["true_parameter_errors"] = [
+            {
+                "branch_row0": atom["branch_row0"],
+                "line_index1": atom["line_index1"],
+                "parameter": "rx",
+                "clean_r": atom["clean_r"],
+                "clean_x": atom["clean_x"],
+                "r_factor": atom["r_factor"],
+                "x_factor": atom["x_factor"],
+                "from_bus": atom["from_bus"],
+                "to_bus": atom["to_bus"],
+            }
+            for atom in parameter_atoms
+        ]
+        scenario["true_topology_errors"] = []
+        if parameter_atoms:
+            scenario["release_audit"] = {
+                "tolerances": {
+                    "final_case_abs": max(
+                        max(0.02, 0.10 * max(abs(atom["clean_r"]), abs(atom["clean_x"]))) for atom in parameter_atoms
+                    ),
+                },
+                "tolerance_basis": "multi_scan_parameter_estimator_v2",
+            }
+        self._declare_measurement_recovery_tolerance(scenario, chosen)
+        parameter_ranking = (
+            self._compound_parameter_ranking(z_obs, scenario["metadata"], parameter_atoms) if parameter_atoms else None
+        )
+        scenario["compound"] = {
+            "contract": COMPOUND_CONTRACT,
+            "class": spec.name,
+            "spec": spec.as_dict(),
+            "system": self.system.case_id,
+            "physics": "bus_branch",
+            "load_scale": load_scale,
+            "operating_point": "ac_opf",
+            "atoms": [*parameter_atoms, *meter_atoms],
+            "relations": relations,
+            "meters_on_faulted_elements": sum(1 for atom in meter_atoms if atom["on_faulted_element"]),
+            "not_applicable_lines": [],
+            "detection": {"reported_model": reported_detail, "true_model": true_detail},
+            "effect_floor": self.compound_effect_floor,
+            "solo_effects": solo_effects,
+            # atoms that alone would not alarm on this snapshot (the root's
+            # own noise draw), and whether none of them would
+            "silent_atoms": silent,
+            "alarms_only_jointly": bool(solo_effects) and len(silent) == len(solo_effects),
+            "multiplier_view": multiplier_summary,
+            "line_degrees": {
+                str(atom["line_index1"]): compound_pairs.line_degree(branch, atom["branch_row0"], degree) for atom in parameter_atoms
+            },
+            "parameter_ranking": parameter_ranking,
+            "breaker_ranking": None,
+            "operator_bus_count_after_fix": self.nb,
+        }
+        if parameter_ranking is not None:
+            scenario["parameter_ranking"] = {
+                key: copy.deepcopy(parameter_ranking.get(key))
+                for key in (
+                    "parameter_ranking_dominance_ratio",
+                    "parameter_ranking_top_abs_lambda",
+                    "parameter_ranking_runner_up_abs_lambda",
+                    "parameter_ranking_singleton",
+                    "true_line_rank",
+                    "true_line_ranks",
+                    "generation_threshold",
+                    "enforced",
+                    "rank_allowance",
+                )
+            }
+        return scenario
+
     def _build_compound_class(self, spec: CompoundSpec, count: int) -> list[dict[str, Any]]:
         built: list[dict[str, Any]] = []
         attempts = 0
@@ -4789,9 +5136,11 @@ class Round0ScenarioGenerator:
         supported = set(self.system.supported_families)
         if self.admission_mode == "physical":
             supported &= {"no_error", "measurement", "multi_measurement", "parameter", "measurement+parameter"}
-        if self.system.case_id == "case14":
-            # Compound roots admit themselves physically on the node/breaker model.
-            supported.add(COMPOUND_FAMILY)
+        if self.compound_only:
+            supported = set()
+        # Compound roots admit themselves physically, on the node/breaker model
+        # (IEEE 14) or the bus-branch model (every other system).
+        supported.add(COMPOUND_FAMILY)
         unsupported = sorted(family for family, count in plan.items() if int(count) > 0 and family not in supported)
         if unsupported:
             raise ValueError(f"Unsupported families for {self.system.case_id}/{self.admission_mode}: {unsupported}")
@@ -5059,6 +5408,9 @@ class Round0ScenarioGenerator:
             "measurement_error_floor_sigma": self.min_measurement_error_sigma,
             "compound_classes": [spec.as_dict() for spec in self.compound_classes],
             "compound_solo_effects": self.compound_solo_effects,
+            "compound_physics": self.compound_physics,
+            "compound_effect_floor": self.compound_effect_floor,
+            "compound_only": self.compound_only,
             "synthesized_measurement_canonicalization": {
                 "contract": SYNTHESIZED_MEASUREMENT_CANONICALIZATION_CONTRACT,
                 "scope": "pypower_topology_z_obs",
@@ -5083,7 +5435,9 @@ __all__ = [
     "COMPOUND_SCAN_COUNT",
     "COMPOUND_FACTOR_RANGES",
     "COMPOUND_BREAKER_EFFECTS",
+    "COMPOUND_PHYSICS",
     "DEFAULT_COMPOUND_CLASSES",
+    "BUS_BRANCH_COMPOUND_CLASSES",
     "SCENARIO_FAMILIES",
     "BASE_FAMILIES",
     "COMPOSED_FAMILIES",

@@ -14,6 +14,16 @@ verification metrics, its verdict (the offline disposition the lifecycle step
 carried) and whether its target is a true one.  The summary gives per class
 the success, the mean actions and WLS calls, the verdict distribution of the
 corrections and the failure reasons.
+
+``--system`` (2026-10-28) names the suite's registered system; by default it
+is read from the roots, which must all belong to it.  A system other than
+IEEE 14 runs with the progress basis its research cells use,
+``chi_square_excess`` (the verifier's partial-progress floors were set on IEEE
+14's 95 degrees of freedom; on IEEE 118's 863 the whole-statistic basis makes
+them several times stricter), unless ``--progress-basis`` names one:
+
+    python -m research.compound_errors.rollout --suite output/compound_errors_ieee118_20261028/suite.json \\
+        --output-dir output/compound_errors_ieee118_20261028/expert_baseline_compare --system case118 --workers 28
 """
 from __future__ import annotations
 
@@ -46,7 +56,33 @@ ROLLOUT_CONTRACT = "compound_expert_rollout_v1"
 COMPARE_TOOL = "compare_parameter_candidates"
 VERDICTS = ("ACCEPT_FINAL", "ACCEPT_PARTIAL", "REJECT", "INCONCLUSIVE", "refused", "undisposed")
 _WLS_KEYS = ("chi_square_statistic", "chi_square_threshold", "chi_square_ratio", "globally_resolved", "global_progress",
-             "target_progress", "remaining_suspect_count", "max_normalized_residual")
+             "target_progress", "remaining_suspect_count", "max_normalized_residual", "chi_square_dof", "flow_at_noise_lines")
+#: The progress basis of a system's research cells: IEEE 14 keeps the environment's default.
+SYSTEM_PROGRESS_BASIS = {"case14": None}
+LARGE_SYSTEM_PROGRESS_BASIS = "chi_square_excess"
+
+
+def suite_system(roots: Sequence[Mapping[str, Any]], system: str | None = None) -> str:
+    """The registered system of every root (``grouping.case_id``); a named system must match all of them."""
+    from psse_env.systems import resolve_system
+
+    found = {str((root.get("grouping") or {}).get("case_id") or "case14") for root in roots}
+    cases = {resolve_system(case).case_id for case in found}
+    if system is not None:
+        named = resolve_system(system).case_id
+        if cases - {named}:
+            raise SystemExit(f"suite roots belong to {sorted(cases)}, not {named}")
+        return named
+    if len(cases) > 1:
+        raise SystemExit(f"suite mixes systems {sorted(cases)}; name one with --system")
+    return next(iter(cases)) if cases else "case14"
+
+
+def system_progress_basis(system: str, progress_basis: str | None) -> str | None:
+    """The named basis, else the system's (None keeps the environment's default)."""
+    if progress_basis:
+        return progress_basis
+    return SYSTEM_PROGRESS_BASIS.get(system, LARGE_SYSTEM_PROGRESS_BASIS)
 
 
 def truth_of(root: Mapping[str, Any]) -> dict[str, Any]:
@@ -310,9 +346,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="research environment option, e.g. pair_refit_adjacent=1 (stage 2 item 3)")
     parser.add_argument("--expert-option", action="append", default=None, metavar="KEY=VALUE",
                         help="expert option on top of the variant, e.g. abstain_isolated_lines=1 (stage 2 item 5)")
+    parser.add_argument("--system", default=None, help="the suite's registered system (default: read from the roots)")
     args = parser.parse_args(argv)
 
     roots = load_suite(args.suite)
+    system = suite_system(roots, args.system)
+    args.progress_basis = system_progress_basis(system, args.progress_basis)
     if args.classes:
         wanted = set(args.classes)
         roots = [r for r in roots if ((r.get("audit") or {}).get("compound") or {}).get("class") in wanted]
@@ -335,7 +374,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     env_options=parse_run_options(args.env_option), expert_options=parse_run_options(args.expert_option))
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
-    print(f"[rollout] {len(roots)} roots from {args.suite} under {args.profile} ({args.expert}), workers {args.workers}", flush=True)
+    print(f"[rollout] {len(roots)} {system} roots from {args.suite} under {args.profile} ({args.expert}), "
+          f"progress basis {args.progress_basis or 'default'}, workers {args.workers}", flush=True)
     started = time.perf_counter()
     payloads = [{"root": root} for root in roots]
     records: list[dict[str, Any]] = []
@@ -363,7 +403,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         stream.close()
     summary = summarize(records)
-    summary.update(contract=ROLLOUT_CONTRACT, suite=str(args.suite), profile=args.profile, expert=args.expert,
+    summary.update(contract=ROLLOUT_CONTRACT, suite=str(args.suite), system=system, profile=args.profile, expert=args.expert,
                    progress_basis=args.progress_basis, max_steps=args.max_steps, seed=args.seed, roots=len(roots),
                    env_options=settings["env_options"], expert_options=settings["expert_options"],
                    workers=args.workers, total_seconds=round(time.perf_counter() - started, 1))
