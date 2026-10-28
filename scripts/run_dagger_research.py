@@ -318,19 +318,11 @@ def research_diagnostic_environment_factory(
         # Compound-error study, stage 2 item 3: off unless a run names it.
         pair_refit_adjacent=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("pair_refit_adjacent", False)),
         target_first_partial=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("target_first_partial", False)),
-        # The teacher's own signals (items 1 and 6): on when the run names
-        # them, else whatever the run's teacher variant needs.
+        # The teacher's own signal (item 1): on when the run names it, else
+        # whatever the run's teacher variant needs.
         flow_at_noise_cue=bool(RESEARCH_ENVIRONMENT_OPTIONS.get(
             "flow_at_noise_cue", teacher_options.get("flow_at_noise_cue", False),
         )),
-        clean_flip_screen=bool(RESEARCH_ENVIRONMENT_OPTIONS.get(
-            "clean_flip_screen", teacher_options.get("clean_flip_screen", False),
-        )),
-        # Expert-only checks on suites older than the uniform-metadata
-        # convention; never for data a student sees.
-        clean_flip_allow_partial_channel=bool(
-            RESEARCH_ENVIRONMENT_OPTIONS.get("clean_flip_allow_partial_channel", False)
-        ),
         triage_classifier=RESEARCH_ENVIRONMENT_OPTIONS.get("triage_classifier"),
         **RESEARCH_HIF_SEARCH_BUDGET,
     )

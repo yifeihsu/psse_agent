@@ -204,10 +204,10 @@ def test_the_ranked_expert_tries_the_balanced_hypothesis_first_then_acquires():
 
 def test_expert_variants_and_the_tracked_model(monkeypatch):
     monkeypatch.delenv("PSSE_EXPERT_VARIANT", raising=False)
-    # The default for new work is the clean-flip teacher (2026-10-28); the
-    # baseline stays available by name.
-    assert current_expert_variant() == "baseline_compare_topology_clean_flip"
-    assert expert_variant_options() == {"candidate_comparison": True, "topology_first": "clean_flip"}
+    # The default for new work is baseline_compare (2026-10-28); the baseline
+    # stays available by name.
+    assert current_expert_variant() == "baseline_compare"
+    assert expert_variant_options() == {"candidate_comparison": True}
     assert expert_variant_options("baseline") == {}
     monkeypatch.setenv("PSSE_EXPERT_VARIANT", "ledger")
     assert expert_variant_options() == {"hypothesis_ledger": True}

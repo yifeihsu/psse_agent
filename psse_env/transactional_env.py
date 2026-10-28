@@ -484,13 +484,8 @@ class TransactionalPSSEEnv:
         history_window: int = 4,
         evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
         progress_basis: str = DEFAULT_PROGRESS_BASIS,
-        scenario_guard: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> None:
         self.evidence_profile = validate_evidence_profile(evidence_profile)
-        # Raises on a scenario the configured providers refuse to run (the
-        # clean-flip screen on a root without the node/breaker channel); None
-        # accepts every scenario.
-        self.scenario_guard = scenario_guard
         if progress_basis not in PROGRESS_BASES:
             raise ValueError(f"progress_basis must be one of {PROGRESS_BASES}, got {progress_basis!r}")
         self.progress_basis = str(progress_basis)
@@ -587,8 +582,6 @@ class TransactionalPSSEEnv:
         return {"production_dataset_mode": True, "providers": provider_status}
 
     def reset(self, scenario: Mapping[str, Any]) -> dict[str, Any]:
-        if self.scenario_guard is not None:
-            self.scenario_guard(scenario)
         scenario_id = str(scenario.get("scenario_id", scenario.get("id", "scenario")))
         base_episode_id = scenario.get("episode_id", scenario_id)
         episode_id = f"{base_episode_id}_episode{self._episode_counter}"
@@ -864,9 +857,6 @@ class TransactionalPSSEEnv:
                 # Open-terminal cue among the top branch candidates (compound
                 # study, stage 2); the guarded topology-first order reads it.
                 "flow_at_noise_lines",
-                # Clean-flip screen of the node/breaker estimate (item 6); the
-                # clean-flip topology-first order reads it.
-                "clean_flip",
             ):
                 if key in wls:
                     contexts["wls"][key] = wls[key]

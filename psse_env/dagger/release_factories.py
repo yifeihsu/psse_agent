@@ -93,15 +93,12 @@ def production_environment_factory(
     screen_calibration: str | None = None,
     hif_resistance_search: str = "physical_ohm",
     evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
-    clean_flip_screen: bool | None = None,
 ) -> TransactionalPSSEEnv:
     """Construct the real MATPOWER-backed deployment environment.
 
-    ``clean_flip_screen`` (stage 2 item 6 of the compound-error study): None
-    computes the provider's clean-flip screen exactly when the current teacher
-    variant reads it (``variant_provider_options``); the variant's other
-    provider options (the guarded teacher's open-terminal cue) come the same
-    way.
+    The provider options the current teacher variant reads come with it
+    (``variant_provider_options``: the guarded teacher's open-terminal cue,
+    stage 2 of the compound-error study).
 
     ``seed`` and ``rng`` are accepted only for the evaluator's uniform factory
     calling convention.  The provider stack is deterministic for a fixed
@@ -111,8 +108,6 @@ def production_environment_factory(
 
     del seed, rng
     provider_options = variant_provider_options()
-    if clean_flip_screen is not None:
-        provider_options["clean_flip_screen"] = bool(clean_flip_screen)
     # The frozen suite and round-0 aggregate are validated at the same
     # significance level.  Relying on the provider's general-purpose default
     # made healthy release roots anomalous only at evaluation time.
@@ -130,7 +125,7 @@ def production_environment_factory(
         hif_max_scans=BC0_HIF_MAX_SCANS,
         hif_resistance_search=hif_resistance_search,
         # Passed only when on, so every other teacher's environment is built
-        # by exactly the call it was built by before (stage 2 item 6).
+        # by exactly the call it was built by before (stage 2).
         **{name: True for name, value in provider_options.items() if value},
     )
     env = TransactionalPSSEEnv(

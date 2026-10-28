@@ -51,7 +51,7 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 normalized_residual_threshold: float | None = None,
                 screen_checkpoint: str | None = None,
                 screen_calibration: str | None = None,
-                clean_flip_screen: bool = False,
+                flow_at_noise_cue: bool = False,
             ) -> None:
                 self.chi2_alpha = chi2_alpha
                 self.parameter_ranking_dominance_threshold = (
@@ -62,12 +62,12 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 self.hif_max_scans = hif_max_scans
                 self.hif_resistance_search = hif_resistance_search
                 self.evidence_profile = evidence_profile
-                self.clean_flip_screen = clean_flip_screen
+                self.flow_at_noise_cue = flow_at_noise_cue
 
             def env_kwargs(self) -> dict[str, Any]:
                 return {
                     "provider_marker": "deployment",
-                    "clean_flip_screen": self.clean_flip_screen,
+                    "flow_at_noise_cue": self.flow_at_noise_cue,
                     "evidence_profile": self.evidence_profile,
                     "chi2_alpha": self.chi2_alpha,
                     "parameter_ranking_dominance_threshold": (
@@ -99,15 +99,14 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
         ):
             os.environ.pop("PSSE_EXPERT_VARIANT", None)
             env = factories.production_environment_factory(seed=7, rng=object())
-            # A recorded cell names its teacher; baseline_compare reads no screen.
-            os.environ["PSSE_EXPERT_VARIANT"] = "baseline_compare"
+            os.environ["PSSE_EXPERT_VARIANT"] = "baseline_compare_topology_guarded"
             named = factories.production_environment_factory(seed=7, rng=object())
 
-        # Stage 2 item 6 and the default switch of 2026-10-28: the environment
-        # computes the clean-flip screen exactly when the teacher reads it, so
-        # the default teacher for new work gets it and baseline_compare does not.
-        self.assertIs(env.kwargs["clean_flip_screen"], True)
-        self.assertIs(named.kwargs["clean_flip_screen"], False)
+        # Stage 2 and the review of 2026-10-28: the environment reports the
+        # open-terminal cue exactly when the teacher reads it, so the default
+        # teacher (baseline_compare) gets none and the guarded teacher gets it.
+        self.assertIs(env.kwargs["flow_at_noise_cue"], False)
+        self.assertIs(named.kwargs["flow_at_noise_cue"], True)
         self.assertIs(env.production_dataset_mode, True)
         self.assertEqual(env.candidate_quality_oracle.mode, "deployment")
         self.assertEqual(env.kwargs["provider_marker"], "deployment")
@@ -157,7 +156,7 @@ class ReleaseEnvironmentFactoryTests(unittest.TestCase):
                 normalized_residual_threshold: float | None = None,
                 screen_checkpoint: str | None = None,
                 screen_calibration: str | None = None,
-                clean_flip_screen: bool = False,
+                flow_at_noise_cue: bool = False,
             ) -> None:
                 self.chi2_alpha = chi2_alpha
                 self.parameter_ranking_dominance_threshold = (
@@ -525,15 +524,6 @@ class ObservableExpertFactoryTests(unittest.TestCase):
 
 
 class RealProductionExpertRecoveryTests(unittest.TestCase):
-    def setUp(self) -> None:
-        # Written against the release expert, the default teacher before
-        # 2026-10-28.  The frozen suites predate the uniform node/breaker
-        # metadata the clean-flip default needs (its environment refuses
-        # their roots), so the class names its teacher.
-        patcher = mock.patch.dict(os.environ, {"PSSE_EXPERT_VARIANT": "baseline"})
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
     @staticmethod
     def _evaluator(*, required_suite: str, evidence_profile: str = "scada_only") -> ClosedLoopRolloutEvaluator:
         from functools import partial

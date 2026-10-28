@@ -27,25 +27,20 @@ construct the same expert:
   route first only in a state whose WLS solve reports the open-terminal cue
   (``topology_first="flow_at_noise"``: a top branch candidate whose terminal
   flows read at noise while the stale model routes flow through it; stage 2
-  of the compound-error study, 2026-10-28);
-* ``baseline_compare_topology_clean_flip``: ``baseline_compare`` with the
-  breaker route first only in a state whose WLS solve reports that a
-  top-ranked breaker flip makes the node/breaker estimate clean
-  (``topology_first="clean_flip"``; the provider option ``clean_flip_screen``
-  computes the report; stage 2 item 6, the user's decision of 2026-10-28).
-  ``baseline_compare`` and the seven conventional families are untouched by
-  any of these variants.
+  of the compound-error study, 2026-10-28; the provider reports the cue only
+  to this teacher, ``variant_provider_options``).  ``baseline_compare`` and
+  the seven conventional families are untouched by either variant.
 
 Research only.  The default for new work, what a pipeline env or a research
-script picks up when it names no variant, is
-``baseline_compare_topology_clean_flip`` (the user's decision of 2026-10-28,
-after an independent check on the conventional cell's validation suite and
-hard draw showed identical success counts per family against
-``baseline_compare`` on the same code and no false commit; the compound-error
-study, section 7.7).  Its provider screen comes with it
-(``variant_provider_options``).  Every recorded cell that names its teacher
-keeps it; ``baseline`` and ``baseline_compare`` stay available by name, and
-receipts record the variant beside the evidence profile.
+script picks up when it names no variant, is ``baseline_compare`` (the user's
+decision of 2026-10-28; until then the default was ``baseline``).  A teacher
+decides when to look from observable evidence; exhaustive screening is never
+adopted to raise the success rate, so the always-on topology-first order
+stays a flagged research variant, never a default, and the clean-flip teacher
+of the same day, which screened the node/breaker estimate on every anomalous
+solve, was removed (the compound-error study, section 7.8).  Every recorded
+cell that names its teacher keeps it; receipts record the variant beside the
+evidence profile.
 """
 from __future__ import annotations
 
@@ -57,14 +52,13 @@ from psse_env.oracle.learned_ranker import DEFAULT_RANKER_MODEL
 EXPERT_VARIANT_ENV = "PSSE_EXPERT_VARIANT"
 #: The teacher of new work when none is named (2026-10-28); recorded cells
 #: name theirs.  Until then the default was ``baseline``.
-DEFAULT_EXPERT_VARIANT = "baseline_compare_topology_clean_flip"
+DEFAULT_EXPERT_VARIANT = "baseline_compare"
 EXPERT_VARIANTS = ("baseline", "ledger", "ledger_ranked", "ledger_ranked_compare", "baseline_compare",
-                   "baseline_compare_topology_first", "baseline_compare_topology_guarded",
-                   "baseline_compare_topology_clean_flip")
+                   "baseline_compare_topology_first", "baseline_compare_topology_guarded")
 
 
 def current_expert_variant(variant: str | None = None) -> str:
-    """The variant named explicitly, else by the environment, else the baseline."""
+    """The variant named explicitly, else by the environment, else the default."""
     name = str(variant if variant is not None else os.environ.get(EXPERT_VARIANT_ENV, "")).strip() or DEFAULT_EXPERT_VARIANT
     if name not in EXPERT_VARIANTS:
         raise ValueError(f"unknown expert variant {name!r}; expected one of {', '.join(EXPERT_VARIANTS)}")
@@ -86,8 +80,6 @@ def expert_variant_options(variant: str | None = None, *, learned_ranker: Any = 
         return {"candidate_comparison": True, "topology_first": True}
     if name == "baseline_compare_topology_guarded":
         return {"candidate_comparison": True, "topology_first": "flow_at_noise"}
-    if name == "baseline_compare_topology_clean_flip":
-        return {"candidate_comparison": True, "topology_first": "clean_flip"}
     if name == "ledger":
         return {"hypothesis_ledger": True}
     options: dict[str, Any] = {
@@ -100,14 +92,11 @@ def expert_variant_options(variant: str | None = None, *, learned_ranker: Any = 
 
 
 #: Provider options a teacher variant needs in order to see its own routing
-#: signal: the clean-flip teacher reads the provider's clean-flip screen, so
-#: an environment built for it computes the screen (stage 2 item 6), and the
-#: guarded teacher reads the open-terminal cue, which no other teacher's
-#: environment reports (the stage-2 review of 2026-10-28).  The environment
-#: factories merge these in unless a run sets the option itself.
+#: signal: the guarded teacher reads the open-terminal cue, which no other
+#: teacher's environment reports (the stage-2 review of 2026-10-28).  The
+#: environment factories merge these in unless a run sets the option itself.
 VARIANT_PROVIDER_OPTIONS: dict[str, dict[str, Any]] = {
     "baseline_compare_topology_guarded": {"flow_at_noise_cue": True},
-    "baseline_compare_topology_clean_flip": {"clean_flip_screen": True},
 }
 
 

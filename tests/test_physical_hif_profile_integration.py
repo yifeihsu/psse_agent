@@ -24,15 +24,6 @@ from three_phase_model.voltage_bases import (
 PROFILE = "ieee14_physical_hif_v1"
 
 
-@pytest.fixture(autouse=True, scope="module")
-def baseline_teacher():
-    """Written against the baseline teacher, the default before 2026-10-28; these
-    roots carry no node/breaker channel, which the clean-flip default refuses."""
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setenv("PSSE_EXPERT_VARIANT", "baseline")
-        yield
-
-
 @pytest.fixture(scope="module")
 def physical_corpus(tmp_path_factory):
     directory = tmp_path_factory.mktemp("physical_hif_integration")

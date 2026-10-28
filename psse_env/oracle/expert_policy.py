@@ -118,12 +118,7 @@ TOPOLOGY_PATH_TOOLS = frozenset({CORRECT_TOPOLOGY, GET_TOPOLOGY_CONTEXT})
 # branch candidate whose terminal flows read at noise while the stale model
 # still routes flow through it; compound-error study, stage 2, 2026-10-28).
 FLOW_AT_NOISE_GUARD = "flow_at_noise"
-# ``"clean_flip"``: the breaker route leads only in a state whose latest bound
-# solve reports that a top-ranked breaker flip makes the node/breaker estimate
-# clean (``clean_flip.available``; stage 2 item 6, the user's decision of
-# 2026-10-28).
-CLEAN_FLIP_GUARD = "clean_flip"
-TOPOLOGY_FIRST_MODES = (False, True, FLOW_AT_NOISE_GUARD, CLEAN_FLIP_GUARD)
+TOPOLOGY_FIRST_MODES = (False, True, FLOW_AT_NOISE_GUARD)
 
 
 def _structural_first_order(
@@ -225,9 +220,9 @@ class ExpertPolicyOracle:
         # solve shows the open-terminal cue (``FLOW_AT_NOISE_GUARD``).
         self.topology_first: bool | str
         if isinstance(topology_first, str):
-            if topology_first not in (FLOW_AT_NOISE_GUARD, CLEAN_FLIP_GUARD):
+            if topology_first != FLOW_AT_NOISE_GUARD:
                 raise ValueError(f"topology_first must be one of {TOPOLOGY_FIRST_MODES}, got {topology_first!r}")
-            self.topology_first = topology_first
+            self.topology_first = FLOW_AT_NOISE_GUARD
         else:
             self.topology_first = bool(topology_first)
         # Step 3 (2026-10-01): order the balanced families and their targets by
@@ -624,27 +619,12 @@ class ExpertPolicyOracle:
                 return [int(line) for line in metrics.get("flow_at_noise_lines") or []]
         return []
 
-    def _clean_flip_available(self, policy: PolicyObservation | Mapping[str, Any]) -> bool:
-        """Whether the latest bound WLS solve reports a breaker flip that makes the node/breaker estimate clean."""
-        contexts = self._get(policy, "fresh_context_evidence", {}) or {}
-        wls = contexts.get("wls") if isinstance(contexts, Mapping) else None
-        record = None
-        if isinstance(wls, Mapping) and wls.get("successful"):
-            record = wls.get("clean_flip")
-        elif self._get(policy, "last_tool") == RUN_WLS:
-            output = self._get(policy, "last_tool_output", {}) or {}
-            metrics = output.get("tool_metrics") if isinstance(output, Mapping) else None
-            record = metrics.get("clean_flip") if isinstance(metrics, Mapping) else None
-        return bool(isinstance(record, Mapping) and record.get("available") is True)
-
     def _topology_first_for(self, policy: PolicyObservation | Mapping[str, Any]) -> bool:
         """Whether the breaker route leads the structural tier in this state (``topology_first`` mode)."""
         if self.topology_first is True:
             return True
         if self.topology_first == FLOW_AT_NOISE_GUARD:
             return bool(self._flow_at_noise_lines(policy))
-        if self.topology_first == CLEAN_FLIP_GUARD:
-            return self._clean_flip_available(policy)
         return False
 
     def _cross_family_diversification_proposals(

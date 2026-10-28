@@ -337,8 +337,10 @@ Required fixes 1-4 were applied on this branch, `claude/upbeat-driscoll-ff493f`,
 
 The reviewed branch `claude/nostalgic-kalam-be5f7a` is unchanged.
 
+Later the same day the user removed the clean-flip screen and put the default back on `baseline_compare` (the last block of this section). The H2 guard, the L1 trimming and the six test pins below went with the screen, and the guard question is moot.
+
 **H1 and M1: pipeline variant list and the two override files.**
-- `pipeline.env`'s `pipeline_environment` now accepts the eight names of `EXPERT_VARIANTS`.
+- `pipeline.env`'s `pipeline_environment` now accepts the names of `EXPERT_VARIANTS` (eight at the fix, seven since the removal).
 - Both override files that named no teacher now pin `EXPERT_VARIANT=baseline`, with a comment.
 - A new test, `test_every_shell_variant_check_accepts_exactly_the_registered_teachers` in `research/test_hpc_full_pipeline.py`, checks three things:
   - the case lists in `pipeline.env` and `deploy_remote.sh` both equal `EXPERT_VARIANTS`;
@@ -361,7 +363,7 @@ The reviewed branch `claude/nostalgic-kalam-be5f7a` is unchanged.
   - 6e5c478 against d6e6acc: 124 of 138 steps differed, all through `fresh_context_evidence.wls.flow_at_noise_lines`.
 - The full conventional check is also unchanged; section 5's runs below give the counts.
 
-**H2: the clean-flip screen refuses mixed suites.**
+**H2: the clean-flip screen refuses mixed suites (removed with the screen).**
 - New `MatpowerDeploymentProviders.require_node_breaker_channel`.
   - It reaches `TransactionalPSSEEnv` as a new optional `scenario_guard`, called first in `reset`.
   - It is passed only with the screen on, so every other environment is built as before.
@@ -372,14 +374,14 @@ The reviewed branch `claude/nostalgic-kalam-be5f7a` is unchanged.
   - without the waiver, it refuses at the first root, a measurement root;
   - with `--env-option clean_flip_allow_partial_channel=1`, it runs, 3 of 3.
 
-**Consequence, stated plainly.** The default teacher now refuses every suite that mixes IEEE 14 roots with and without the node/breaker channel.
+**Consequence, as it stood before the removal.** The default teacher refused every suite that mixes IEEE 14 roots with and without the node/breaker channel.
 - That covers everything today's generator builds outside the compound family: only topology roots carry the channel. The compound suite carries it on all 1,275 roots and is unaffected.
 - New work on a conventional or waveform suite must therefore name a teacher, for example `EXPERT_VARIANT=baseline_compare`, until the generator implements the uniform-metadata convention for every family.
 - **A weaker alternative**, not built: report `clean_flip` only when a clean flip exists. This drops the `available: false` record that marks a channel root without a finding, and the default would run everywhere.
   - Its cost: on a mixed suite the cue's presence would still be a certain topology tell, because no non-channel root can ever show it.
   - That is the user's call.
 
-**Tests pinned to the teacher they were written for.** Six test groups ran real environments under the implicit default. They were written when the default was `baseline`, and the default switch had silently moved them onto the clean-flip teacher. Each now pins `PSSE_EXPERT_VARIANT=baseline`:
+**Tests pinned to the teacher they were written for (pins removed with the screen).** Six test groups ran real environments under the implicit default. They were written when the default was `baseline`, and the default switch had silently moved them onto the clean-flip teacher. Each pinned `PSSE_EXPERT_VARIANT=baseline` until the removal; under the `baseline_compare` default they pass unpinned:
 - `RealProductionExpertRecoveryTests` in `test_release_factories.py`;
 - `ParallelEvaluationTests`;
 - `test_scada_only_routing.py`;
@@ -387,7 +389,7 @@ The reviewed branch `claude/nostalgic-kalam-be5f7a` is unchanged.
 - `test_reviewed_expert_admission.py`;
 - `test_suspicion_gated_contract.py`.
 
-**L1: the ledger copy of `clean_flip` is trimmed.**
+**L1: the ledger copy of `clean_flip` is trimmed (removed with the screen).**
 - `clean_flip` now carries only `CLEAN_FLIP_ROUTING_FIELDS`: status, available, cb_names, screened and reported_chi_square.
 - `solves`, `cached` and any error detail go to `clean_flip_cost`, which no ledger copies.
 - A screen exception now reports the fixed status `screen_error`.
@@ -408,10 +410,39 @@ The reviewed branch `claude/nostalgic-kalam-be5f7a` is unchanged.
   - The six failures at 6e5c478 are gone: four through the merged five-test-fixes branch, one stale test through the same branch, and the flaky one remains as described.
 - **Conventional 192-root check:** `baseline_compare` at the fixed head against d6e6acc is 192 of 192 both, and per-root identical in tool sequences and corrections, with 0 false commits.
 
-**Recommendation after the fixes.** Merge `claude/upbeat-driscoll-ff493f` instead of the reviewed branch. It contains the reviewed branch, the five-test-fixes branch and these fixes.
+**Recommendation after the fixes** (superseded by the last block). Merge `claude/upbeat-driscoll-ff493f` instead of the reviewed branch. It contains the reviewed branch, the five-test-fixes branch and these fixes. The one open point, keeping the guard or the report-only-a-finding alternative, is moot since the screen is gone.
 
-Only one point is left for the user, the H2 consequence above:
-- keep the guard, which refuses mixed suites;
-- or take the weaker report-only-a-finding alternative.
+**The clean-flip screen removed (2026-10-28, the user's decision).** In the user's words: "Revert the default teacher to baseline_compare and remove the clean-flip screen entirely; then test the cue-guarded teacher with tightened flip acceptance and a flow-scaled cue floor under the same independent check."
+- The reasoning: the clean-flip screen is exhaustive screening moved to the node/breaker model, no different in kind from the WLS screen the triage classifier replaced. The agent decides when to look, on observable evidence, and brute force is never adopted to raise the success rate.
+- The always-on topology-first order, an always-look policy, stays a flagged research variant, never a default.
+- The study note records the decision in sections 6.4, 7.7 and 7.8. Item 6's numbers stay there in the text only, as a brute-force upper bound for the breaker ordering.
 
-M2 and L2-L7 stay optional.
+What changed, in one commit on this branch:
+- **Default.** `DEFAULT_EXPERT_VARIANT` and the `pipeline.env` default are `baseline_compare`. `EXPERT_VARIANTS`, the stage check and the deploy check list seven names.
+- **Removed:**
+  - the provider option `clean_flip_screen`, the `clean_flip` and `clean_flip_cost` metrics and their ledger field;
+  - the per-state node/breaker estimate cache, and the topology context's `node_breaker_solves` and `node_breaker_estimate_cached`, which existed only for the screen;
+  - the expert mode `topology_first="clean_flip"`, the variant `baseline_compare_topology_clean_flip` and its `VARIANT_PROVIDER_OPTIONS` entry;
+  - the runners' `node_breaker_cost`;
+  - the H2 guard and its waiver (`scenario_guard`, `require_node_breaker_channel`, `clean_flip_allow_partial_channel`).
+- **Kept:**
+  - item 1's cue behind `flow_at_noise_cue`, reaching the guarded teacher through `VARIANT_PROVIDER_OPTIONS` and implied by `target_first_partial`;
+  - items 2, 3 and 5, and item 4 off by default;
+  - the H1, M1 and H3 fixes.
+- **Code restored.** `transactional_env.py`, `expert_policy.py`, `research/rl/decision_audit.py`, `research/compound_errors/rollout.py` and `research/classifier_triage/expert_e2e.py` are byte for byte their state at `1eaa815`, the last commit before item 6. `matpower.py` matches it except for the H3 cue gate.
+- **Tests.** The screen's tests and the six `baseline` pins are gone. The default tests now expect `baseline_compare`. The release-factory test checks that the cue reaches the guarded teacher's environment and not the default's.
+
+Verified after the removal:
+- **Full suite** (`python -m pytest psse_env research tests`): 2,530 passed, 1 failed, 20 skipped, 544 subtests passed, in 11.2 minutes.
+  - The failure is the same order-dependent OpenDSS test as before, `test_injected_hif_candidate_keeps_regulation`; its file passes 7 of 7 alone.
+  - The four fewer passes are the four removed screen tests.
+- **Conventional 192 roots:** `baseline_compare` scores 192 of 192 and is per-root identical to d6e6acc in tool sequences, corrections and outcomes, with 0 false commits.
+- **Guarded teacher, 28 compound roots:** 15 of 28, per-root identical to both 6e5c478 and 2fb2844 in tools, corrections, outcomes and 439 actions, with 0 false commits.
+- **Student observation** (export view, 14 conventional roots): 0 of 138 steps differ from d6e6acc under `baseline_compare`, and 0 of 136 under `baseline`.
+- **`pipeline_environment`:**
+  - unset resolves to `baseline_compare`, rc 0;
+  - `baseline` and the guarded variant give rc 0;
+  - the clean-flip name and a bogus name give rc 2;
+  - the IEEE 57 override still resolves to `baseline`.
+
+**Recommendation now.** Merge `claude/upbeat-driscoll-ff493f`. It holds the reviewed branch without item 6, the five-test-fixes branch and the review's fixes. M2, L1 and L3 went with the screen; L2 and L4-L7 stay optional.

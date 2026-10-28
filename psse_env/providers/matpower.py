@@ -154,10 +154,6 @@ _ROUTE_COMPLETE_NEGATIVE = "complete_negative"
 _ROUTE_UNAVAILABLE = "unavailable_or_inconclusive"
 PARAMETER_RANKING_CONTRACT = "distinct_line_abs_lambda_dominance_v1"
 PARAMETER_RANKING_DOMINANCE_THRESHOLD = 1.2
-#: The fields of a clean-flip screen report that reach the WLS metrics as
-#: ``clean_flip`` (and so the durable ledger a policy reads); its cost and
-#: error text go to ``clean_flip_cost``.
-CLEAN_FLIP_ROUTING_FIELDS = ("status", "available", "cb_names", "screened", "reported_chi_square")
 
 
 def parameter_ranking_contract_is_dominant(
@@ -483,8 +479,6 @@ class MatpowerDeploymentProviders:
         flow_at_noise_cue: bool = False,
         pair_refit_adjacent: bool = False,
         target_first_partial: bool = False,
-        clean_flip_screen: bool = False,
-        clean_flip_allow_partial_channel: bool = False,
         chi2_alpha: float = 0.05,
         normalized_residual_threshold: float | None = None,
         breaker_candidate_count: int = 8,
@@ -587,25 +581,6 @@ class MatpowerDeploymentProviders:
         # non-negative global progress as partial progress whatever the
         # floor (CandidateQualityOracle.target_first_partial).  Off by default.
         self.target_first_partial = bool(target_first_partial)
-        # Compound-error study, stage 2 item 6 (the user's decision of
-        # 2026-10-28): on an anomalous solve of a state that carries the
-        # node/breaker channel, run the node/breaker estimate and screen the
-        # top-ranked breaker flips, and report whether any flip makes that
-        # estimate clean (its chi-square under its limit, not merely better)
-        # as ``clean_flip`` in the WLS metrics.  The topology context reuses
-        # the same estimate when it is fetched on the same state, so the
-        # screen's own cost is the solves it spends where no context follows.
-        # Off by default: nothing is computed or reported unless a run names it.
-        self.clean_flip_screen = bool(clean_flip_screen)
-        # The report rides on the policy's WLS ledger from the first anomalous
-        # solve, so on a suite where only some roots carry the node/breaker
-        # channel its presence names their family.  With the screen on, an
-        # environment therefore refuses a root of a node/breaker system that
-        # lacks the channel (``require_node_breaker_channel``; the
-        # uniform-metadata convention of 2026-10-28).  The waiver is for
-        # expert-only checks on older suites, never for data a student sees.
-        self.clean_flip_allow_partial_channel = bool(clean_flip_allow_partial_channel)
-        self._node_breaker_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
         self.lambda_threshold = float(lambda_threshold)
         self.chi2_alpha = float(chi2_alpha)
         if not math.isfinite(self.chi2_alpha) or not 0.0 < self.chi2_alpha < 1.0:
@@ -685,7 +660,7 @@ class MatpowerDeploymentProviders:
         """Keyword arguments wiring this bundle into ``TransactionalPSSEEnv``."""
         from psse_env.oracle import ProcessValidityOracle
 
-        kwargs: dict[str, Any] = {
+        return {
             "evidence_profile": self.evidence_profile,
             "process_oracle": ProcessValidityOracle(executor_hydrated_corrections=True),
             "candidate_quality_oracle": self._deployment_candidate_quality_oracle(),
@@ -710,42 +685,6 @@ class MatpowerDeploymentProviders:
                 ESTIMATE_HIF_MULTISCAN_FROM_PATH: self.estimate_hif_multiscan,
             },
         }
-        if self.clean_flip_screen and not self.clean_flip_allow_partial_channel:
-            # Passed only with the screen on, so every other environment is
-            # built by exactly the call it was built by before.
-            kwargs["scenario_guard"] = self.require_node_breaker_channel
-        return kwargs
-
-    def require_node_breaker_channel(self, scenario: Mapping[str, Any]) -> None:
-        """Refuse a root of a node/breaker system that carries no node/breaker channel (clean-flip screen on).
-
-        Under the screen the policy's WLS ledger carries ``clean_flip`` on
-        every anomalous solve of a root with the channel and on no other, so a
-        suite whose roots do not all carry it would name their family by the
-        report's presence.  A root of a system without a node/breaker model
-        (its case does not have the model's planning buses) never gets a
-        report and passes.
-        """
-        metadata = scenario.get("metadata") if isinstance(scenario.get("metadata"), Mapping) else {}
-        if isinstance(metadata.get("substation_telemetry"), Mapping) and isinstance(
-            metadata.get("reported_breaker_status"), Mapping
-        ):
-            return
-        try:
-            bus_count = int(_load_python_case(self._case_path(scenario))["bus"].shape[0])
-        except Exception:
-            # An unreadable case fails in the episode's own first solve.
-            return
-        planning_buses = len({node.planning_bus for node in self._node_breaker_model().nodes.values()})
-        if bus_count != planning_buses:
-            return
-        raise ValueError(
-            f"scenario {scenario.get('scenario_id', scenario.get('id'))!r} carries no node/breaker channel, but the "
-            "clean-flip screen reports the node/breaker estimate in the policy's WLS ledger on every root that "
-            "does, so a suite that mixes the two names the family by the report (uniform-metadata convention, "
-            "2026-10-28).  Use a suite whose roots all carry substation telemetry, or a teacher without the "
-            "screen (EXPERT_VARIANT=baseline_compare); an expert-only check may set clean_flip_allow_partial_channel."
-        )
 
     def _deployment_candidate_quality_oracle(self) -> Any:
         """Build the one deployment verdict policy used by screen and commit."""
@@ -1993,10 +1932,8 @@ class MatpowerDeploymentProviders:
         ]
         signatures = list(preserved)
         # The open-terminal cue is computed only where branch candidates are
-        # ranked below; every other path reports none.  The clean-flip screen
-        # (item 6) runs there too, when named.
+        # ranked below; every other path reports none.
         flow_at_noise_lines: list[int] = []
-        clean_flip: dict[str, Any] | None = None
         # While a waveform-level anomaly (harmonic distortion, three-phase
         # unbalance, or a suspected HIF) stands, the fundamental-frequency
         # solve's bad-data attributions are physically unreliable: the
@@ -2049,8 +1986,6 @@ class MatpowerDeploymentProviders:
             # carry a top multiplier.
             if self.flow_at_noise_cue:
                 flow_at_noise_lines = self._flow_at_noise_lines(solved, range(int(solved["nl"])))
-            if self.clean_flip_screen:
-                clean_flip = self._clean_flip_screen(state)
         metrics: dict[str, Any] = {
             **self._binding(state),
             "evidence_source": "deployment_wls:lagrangian_port",
@@ -2081,19 +2016,6 @@ class MatpowerDeploymentProviders:
             metrics["flow_at_noise_lines"] = list(flow_at_noise_lines)
             metrics["flow_noise_sigma"] = self.flow_noise_sigma
             metrics["flow_noise_residual"] = self.flow_noise_residual
-        if clean_flip is not None:
-            # Whether a top-ranked breaker flip makes the node/breaker
-            # estimate clean on this state (item 6).  Only the routing fields
-            # reach the durable ledger a policy reads; the solves the screen
-            # spent, whether they came from the cache and any error text are
-            # controller bookkeeping (``clean_flip_cost``), so one state reads
-            # the same whatever was fetched on it before.
-            metrics["clean_flip"] = {
-                key: clean_flip[key] for key in CLEAN_FLIP_ROUTING_FIELDS if key in clean_flip
-            }
-            metrics["clean_flip_cost"] = {
-                key: clean_flip[key] for key in ("solves", "cached", "error_detail") if key in clean_flip
-            }
         if conditional:
             metrics["hif_conditioning"] = conditional["conditioning"]
             metrics["conditional_meter_scores"] = conditional["conditional_scores"]
@@ -3727,94 +3649,6 @@ class MatpowerDeploymentProviders:
             "operator_bus_count": int(layout["bus_count"]),
         }
 
-    def _node_breaker_estimate(
-        self, state: Mapping[str, Any], binding: Mapping[str, Any], telemetry: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        """The node/breaker estimate of a state and the re-estimates of its top-ranked flips, computed once per state.
-
-        Keyed on the state's case, measurements and reported breaker map, so
-        the clean-flip screen of ``run_wls`` and the topology context fetched
-        on the same state share one set of solves; ``solves`` counts the
-        solves this call spent (zero when served from the cache).
-        """
-        from Transmission.ieee14_full_gse import gse_topology_nlm, screen_breaker_flips
-        from Transmission.ieee14_full_substation import status_map_from_labels
-
-        labels = binding["reported_labels"]
-        try:
-            measurements = tuple(float(value) for value in self._measurements(state))
-        except ValueError:
-            measurements = ()
-        # The estimator functions are part of the key, so a replaced one
-        # (a test's patch, a reloaded module) never reads another's result.
-        key = (
-            id(gse_topology_nlm),
-            id(screen_breaker_flips),
-            str(self._case_path(state)),
-            hashlib.sha1(repr(measurements).encode("utf-8")).hexdigest(),
-            tuple(sorted((str(name), str(value)) for name, value in labels.items())),
-        )
-        cached = self._node_breaker_cache.get(key)
-        if cached is not None:
-            return {**cached, "solves": 0, "cached": True}
-        reported_map = status_map_from_labels(labels)
-        estimate = gse_topology_nlm(binding["model"], binding["reference"], reported_map, telemetry)
-        top: list[dict[str, Any]] = []
-        flips: list[dict[str, Any]] = []
-        solves = 1
-        if estimate.get("success"):
-            top = list(estimate["ranking"][: self.breaker_candidate_count])
-            flips = list(
-                screen_breaker_flips(
-                    binding["model"], binding["reference"], reported_map, telemetry,
-                    [item["cb_name"] for item in top],
-                )
-            )
-            solves += len(flips)
-        record = {"estimate": estimate, "top": top, "flips": flips}
-        if len(self._node_breaker_cache) >= 64:
-            self._node_breaker_cache.pop(next(iter(self._node_breaker_cache)))
-        self._node_breaker_cache[key] = record
-        return {**record, "solves": solves, "cached": False}
-
-    def _clean_flip_screen(self, state: Mapping[str, Any]) -> dict[str, Any] | None:
-        """Whether a top-ranked breaker flip makes the node/breaker estimate clean (item 6); None without the channel."""
-        binding = self._topology_binding(state)
-        if binding is None:
-            return None
-        if binding.get("error_code"):
-            return {"status": str(binding["error_code"]), "available": False, "cb_names": [], "solves": 0, "cached": False}
-        try:
-            telemetry = self._synchronized_telemetry(state, binding)
-            estimated = self._node_breaker_estimate(state, binding, telemetry)
-        except Exception as exc:
-            # A fixed status: the exception text (which can name a derived
-            # case path and its digest) stays in ``clean_flip_cost``.
-            return {"status": "screen_error", "available": False, "cb_names": [], "solves": 0, "cached": False,
-                    "error_detail": f"{type(exc).__name__}: {exc}"}
-        estimate = estimated["estimate"]
-        if not estimate.get("success"):
-            return {"status": "estimate_failed", "available": False, "cb_names": [], "solves": int(estimated["solves"]),
-                    "cached": bool(estimated["cached"])}
-        clean: list[str] = []
-        for flip in estimated["flips"]:
-            try:
-                chi_square = float(flip["chi_square"])
-                threshold = float(chi2_threshold(max(1, int(flip["dof"])), self.chi2_alpha))
-            except (KeyError, TypeError, ValueError):
-                continue
-            if bool(flip.get("success")) and math.isfinite(chi_square) and chi_square < threshold:
-                clean.append(str(flip["cb_name"]))
-        return {
-            "status": "screened",
-            "available": bool(clean),
-            "cb_names": clean,
-            "screened": [str(item["cb_name"]) for item in estimated["top"]],
-            "reported_chi_square": float(estimate["chi_square"]),
-            "solves": int(estimated["solves"]),
-            "cached": bool(estimated["cached"]),
-        }
-
     def _node_breaker_topology_context(
         self,
         state: Mapping[str, Any],
@@ -3836,8 +3670,7 @@ class MatpowerDeploymentProviders:
         findings = self._lambda_findings(solved)
         telemetry = self._synchronized_telemetry(state, binding)
         reported_map = status_map_from_labels(labels)
-        estimated = self._node_breaker_estimate(state, binding, telemetry)
-        estimate = estimated["estimate"]
+        estimate = gse_topology_nlm(model, reference, reported_map, telemetry)
         if not estimate.get("success"):
             return self._failure(
                 "topology_context_gse_failure",
@@ -3845,8 +3678,13 @@ class MatpowerDeploymentProviders:
                 f"{estimate.get('iterations')} iterations",
             )
         gse_threshold = float(chi2_threshold(max(1, int(estimate["dof"])), self.chi2_alpha))
-        top = estimated["top"]
-        flips = {item["cb_name"]: item for item in estimated["flips"]}
+        top = estimate["ranking"][: self.breaker_candidate_count]
+        flips = {
+            item["cb_name"]: item
+            for item in screen_breaker_flips(
+                model, reference, reported_map, telemetry, [item["cb_name"] for item in top]
+            )
+        }
         breaker_findings: list[dict[str, Any]] = []
         admissible: list[tuple[dict[str, Any], dict[str, Any]]] = []
         reported_chi_square = float(estimate["chi_square"])
@@ -3993,11 +3831,6 @@ class MatpowerDeploymentProviders:
             },
             "breaker_findings": breaker_findings,
             "breaker_candidate_count": int(self.breaker_candidate_count),
-            # Node/breaker solves this call spent (the estimate and its flip
-            # re-estimates); zero when a clean-flip screen on the same state
-            # already computed them (item 6).
-            "node_breaker_solves": int(estimated["solves"]),
-            "node_breaker_estimate_cached": bool(estimated["cached"]),
             "finding_count": len(findings),
             "topology_findings": findings,
             "supported_corrections": supported,

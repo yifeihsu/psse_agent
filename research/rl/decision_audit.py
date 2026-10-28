@@ -466,39 +466,6 @@ def parse_run_options(items: Sequence[str] | None) -> dict[str, Any]:
     return options
 
 
-def node_breaker_cost(steps: Sequence[Mapping[str, Any]]) -> dict[str, int]:
-    """Node/breaker solves an episode spent (compound study, stage 2 item 6).
-
-    ``screen_solves``: the clean-flip screens of ``run_wls``; ``context_solves``:
-    the topology contexts (zero when the screen on the same state already
-    solved); ``available``: screens that reported a clean flip.
-    """
-    cost = {"screens": 0, "screen_solves": 0, "available": 0, "contexts": 0, "context_solves": 0}
-    for step in steps:
-        tool = str((step.get("action") or {}).get("tool"))
-        if tool not in {"run_wls", "get_topology_context"}:
-            continue
-        output = step.get("policy_tool_output") or step.get("tool_output") or step.get("outcome") or {}
-        metrics = output.get("tool_metrics") if isinstance(output, Mapping) else None
-        if not isinstance(metrics, Mapping):
-            continue
-        if tool == "run_wls":
-            record = metrics.get("clean_flip")
-            if isinstance(record, Mapping):
-                # The solves sit in ``clean_flip_cost`` since the stage-2
-                # review; episodes recorded before it carry them in the record.
-                spent = metrics.get("clean_flip_cost")
-                spent = spent if isinstance(spent, Mapping) else record
-                cost["screens"] += 1
-                cost["screen_solves"] += int(spent.get("solves") or 0)
-                cost["available"] += int(record.get("available") is True)
-        elif metrics.get("node_breaker_solves") is not None:
-            cost["contexts"] += 1
-            cost["context_solves"] += int(metrics.get("node_breaker_solves") or 0)
-    cost["total_solves"] = cost["screen_solves"] + cost["context_solves"]
-    return cost
-
-
 class _Harness:
     """Environment factory, expert and evaluator of one worker process."""
 

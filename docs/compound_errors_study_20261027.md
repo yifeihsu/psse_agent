@@ -853,28 +853,42 @@ extra node/breaker solves) reported beside the counts.
 
 The outcome (2026-10-28): the check passed (identical per-family success
 on the validation suite and the hard draw, the torch files, no false
-commit; section 7.7), so under the user's rule the clean-flip teacher is
-the default for new work.  It lives in two places: `DEFAULT_EXPERT_VARIANT`
-in `psse_env/oracle/expert_variants.py` (what `current_expert_variant`
-returns when `PSSE_EXPERT_VARIANT` is unset, so every research script and
-pipeline stage that names no teacher picks it up) and the
+commit; section 7.7), so under the user's rule the clean-flip teacher
+became the default for new work (commit `b546d2d`: `DEFAULT_EXPERT_VARIANT`
+in `psse_env/oracle/expert_variants.py` and the
 `EXPERT_VARIANT=${EXPERT_VARIANT:-...}` default in
-`research/hpc/full_pipeline_20260907/pipeline.env` (a new cell whose
-override names no teacher); `deploy_remote.sh` accepts the new variant
-names.  The teacher's provider screen comes with it: the research
-environment factory, the release factory and the aggregate generator turn
-`clean_flip_screen` on exactly when the teacher variant reads it
-(`variant_provider_options`).  `baseline_compare` and `baseline` stay
-available by name; the tests that pin `baseline_compare` stay and one is
-added for the default; no recorded cell's env, the paper's evidence folder
-or `docs/papers` is touched.  Two recorded override envs name no teacher
+`research/hpc/full_pipeline_20260907/pipeline.env`), with its provider
+screen turned on wherever that teacher was built.  On the compound suite it
+recovered fewer roots than the guarded or always-on order (700 against 788
+and 789), and its screen cost about 23 node/breaker solves per compound
+episode.
+
+The same day the user reversed it, in their words: "Revert the default
+teacher to baseline_compare and remove the clean-flip screen entirely; then
+test the cue-guarded teacher with tightened flip acceptance and a
+flow-scaled cue floor under the same independent check."  Their reasoning,
+which governs from now on: the clean-flip screen is exhaustive screening
+moved to the node/breaker model, no different in kind from the WLS screen
+the triage classifier replaced; the agent must decide when to look, on
+observable evidence, and brute force may never be adopted to raise the
+success rate.  The same judgement applies to the always-on topology-first
+order, an always-look policy: it stays a flagged research variant, never a
+default.  So item 6 was removed as brute-force screening (on
+`claude/upbeat-driscoll-ff493f`, the merge candidate of the stage-2 review):
+the default teacher for new work is `baseline_compare` again, in
+`DEFAULT_EXPERT_VARIANT` and in the pipeline default, and the provider
+option `clean_flip_screen`, the `clean_flip` report and its ledger field,
+the per-state estimate cache that served it, the expert mode and the
+variant `baseline_compare_topology_clean_flip`, the runners' node/breaker
+cost fields and the mixed-channel guard the stage-2 review had added for
+the screen are gone.  Its measured numbers stay in section 7.7, in the
+text only, as a brute-force upper bound for the breaker ordering.  Items 1
+(the open-terminal cue, reported only when the guarded teacher or the
+target-first verifier reads it), 2, 3 and 5 stay, and item 4 stays in the
+tree off by default.  The two recorded override envs that name no teacher
 (`ieee57_transfer_20260914.env`, `ieee118_balanced_20260925.env`, both from
-before the teacher knob existed): a re-run of either now picks up the new
-default unless `EXPERT_VARIANT=baseline` is exported, which the pipeline
-default's comment says.  Two caveats for new compound work: on the
-compound suite the clean-flip teacher recovers fewer roots than the
-guarded or always-on order (700 against 788 and 789), and its screen costs
-about 23 node/breaker solves per compound episode.
+before the teacher knob existed) pin `EXPERT_VARIANT=baseline` since the
+review, so they re-run as recorded under either default.
 
 ## 7. Stage 2: the tool repairs, one at a time (2026-10-28)
 
@@ -1531,29 +1545,39 @@ true corrections refused below the floor (43 at two open faults) is
 better addressed by fixing the structural atom first, which items 1, 2
 and 6 do.
 
-### 7.7 Item 6: the clean-flip condition (the user's decision after the failed check)
+### 7.7 Item 6: the clean-flip condition (removed as brute-force screening)
+
+**Removed (2026-10-28).**  The user removed this item the day it was
+adopted (section 6.4 gives the decision in their words): the screen ran the
+node/breaker estimate and its top-ranked flip re-estimates on every
+anomalous solve of every state that carries the channel, whatever the
+evidence, which is exhaustive screening moved to the node/breaker model,
+and brute force may never be adopted to raise the success rate.  The code
+is gone.  This section records the item as it was run, and its numbers
+stand only as a brute-force upper bound for the breaker ordering: what
+putting the breaker route first on a clean flip buys when the flip test is
+computed everywhere, not a teacher that may be adopted.
 
 **The condition.**  On an anomalous solve of a state that carries the
 node/breaker channel, the provider (option `clean_flip_screen`, off by
-default; the research runs name it with `--env-option
-clean_flip_screen=1`) runs the node/breaker estimate on the reported
-breaker map, re-estimates with each of the top-ranked breaker flips (the
-same `breaker_candidate_count` the topology context screens), and reports
+default; the research runs named it with `--env-option
+clean_flip_screen=1`) ran the node/breaker estimate on the reported
+breaker map, re-estimated with each of the top-ranked breaker flips (the
+same `breaker_candidate_count` the topology context screens), and reported
 in the WLS metrics (`clean_flip`, kept in the observation's durable WLS
-ledger) whether any flip brings the substation chi-square under its limit
-(`available`, the breakers that do, the solves spent).  The estimate and
-its flip screens are computed once per state (keyed on the case, the
+ledger) whether any flip brought the substation chi-square under its limit
+(`available`, the breakers that did, the solves spent).  The estimate and
+its flip screens were computed once per state (keyed on the case, the
 measurement vector and the reported map), so a topology context fetched on
-the same state reuses them: the screen's own cost is the solves it spends
-on states where no context follows.  The expert mode
+the same state reused them: the screen's own cost was the solves it spent
+on states where no context followed.  The expert mode
 `topology_first="clean_flip"` (variant `baseline_compare_topology_clean_flip`)
-puts the breaker route first only in a state whose latest bound solve
-reports such a flip; everything else is the baseline's order.  Tests: the
-screen on a single-breaker fixture and its reuse by the context
-(`psse_env/providers/test_compound_scenarios.py`), the mode and the
-variant (`psse_env/oracle/test_topology_first_order.py`).  The rollout
-records the screens, their solves and the topology-context fetches per
-episode, so the cost is read directly from the runs.
+put the breaker route first only in a state whose latest bound solve
+reported such a flip; everything else was the baseline's order.  Its tests
+(the screen on a single-breaker fixture and its reuse by the context, the
+mode and the variant) went with the code.  The rollout recorded the
+screens, their solves and the topology-context fetches per episode, so the
+cost below was read directly from the runs.
 
 **Results on the conventional suites (the independent check).**  Both
 teachers on the same code (items 1 to 6 in the tree), the end-to-end runner
@@ -1581,11 +1605,12 @@ parameter root of the hard draw that sank the guarded teacher
 smoke copies gave identical trajectories (96 of 96 and 193 of 193 for
 both teachers), as the root-by-root comparison of section 7.3 predicted.
 
-**Results on the compound suite.**  The clean-flip teacher with the item-3
-and item-5 options (pair refit, abstention) against the item-3 runs of the
-other three teachers, and an instrumented re-run of the baseline for its
-node/breaker solves (its trajectories equal the item-3 baseline's on
-1,275 of 1,275 roots):
+**Results on the compound suite (a brute-force upper bound for the breaker
+ordering).**  The clean-flip teacher with the item-3 and item-5 options
+(pair refit, abstention) against the item-3 runs of the other three
+teachers, and an instrumented re-run of the baseline for its node/breaker
+solves (its trajectories equal the item-3 baseline's on 1,275 of 1,275
+roots):
 
 | class (roots) | baseline_compare | topology first, always | topology first, guarded | topology first, clean flip | clean flip against the baseline, won / lost | node/breaker solves per episode: baseline, clean flip | mean actions: baseline, clean flip |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -1619,23 +1644,24 @@ the baseline).  It is the most conservative of the three orders: on the
 that re-partitioning one substation happened to fit, and none of them
 changed an outcome (605 of 625 trajectories equal the baseline's).
 
-**Cost.**  The screen runs the node/breaker estimate and up to
+**Cost.**  The screen ran the node/breaker estimate and up to
 8 flip re-estimates (9 solves) on every anomalous solve of a state that
 carries the node/breaker channel, and the topology context on the same
-state reuses them.  On the conventional suites only the breaker families
+state reused them.  On the conventional suites only the breaker families
 carry the channel: 9 solves per breaker episode under both teachers, an
 extra 0.4 to 1.1 per episode on the measurement+topology family, nothing
 elsewhere (0.1 per episode over a whole suite).  On the compound suite every
 root carries the channel (the uniform-metadata convention), so the screen
-runs on every anomalous state of every root: 23.1 node/breaker solves per
+ran on every anomalous state of every root: 23.1 node/breaker solves per
 episode against the baseline's 5.1, from 9 on a single-breaker root to about
 40 on a meter root, and the rollout of the 1,275 roots took 1578 s against
 843 s on the same 14 workers (the clean-flip run shared the machine with
 other jobs, so the time ratio is an upper bound).
 
-**Commit.**  The commit that adds this section (branch
-`claude/nostalgic-kalam-be5f7a`, 2026-10-28); the default switch that
-follows the check is a separate commit (section 6.4).
+**Commit.**  Added by `6ff5293` (branch `claude/nostalgic-kalam-be5f7a`,
+2026-10-28) and made the default by `b546d2d`; removed, with the default
+back on `baseline_compare`, by the commit that records the removal on
+`claude/upbeat-driscoll-ff493f` (section 6.4).
 
 ### 7.8 Stage 2 in sum
 
@@ -1643,7 +1669,7 @@ Roots solved of the 1,275, under the teachers as they stood after each
 item (items in the order they were done; every run on the same suite and
 seed, scada_only, 40 actions):
 
-| after | baseline_compare | topology first, always | topology first, guarded | topology first, clean flip |
+| after | baseline_compare | topology first, always | topology first, guarded | topology first, clean flip (removed; brute-force bound) |
 | --- | --- | --- | --- | --- |
 | stage 1 (with the isolated-line rule, section 3.2) | 546 (43%) | 692 (54%) | | |
 | item 1: the open-terminal cue, guarded variant | 546 | 692 | 702 (55%) | |
@@ -1656,12 +1682,18 @@ seed, scada_only, 40 actions):
 So the stage moved the baseline teacher's ceiling from 546 to 617 with
 two shared or optional tool repairs (the binding repair, 41 roots; the
 pair refit, 30) and the topology-first orders from 692 to 788 and 789;
-the always-on order is still the strongest on this suite, the guarded
+the always-on order is still the strongest on this suite, and the guarded
 order matches it within one root and loses none against the baseline
-here, and the clean-flip order is the only one that passed the
-independent check on the conventional suites, so it became the default
-teacher for new work (section 6.4).  Every item kept the conventional
-192-root suite at 192 of 192 under the baseline teacher.  What is left,
+here.  The clean-flip order passed the independent check on the
+conventional suites and was the default teacher for new work for part of a
+day, then was removed as brute-force screening (section 6.4, the user's
+decision in their words): a teacher decides when to look from observable
+evidence, and brute force may never be adopted to raise the success rate.
+Its 700 stays as a brute-force upper bound for the breaker ordering, the
+always-on order (an always-look policy) stays a flagged research variant,
+never a default, and the default teacher for new work is
+`baseline_compare`.  Every item kept the conventional 192-root suite at
+192 of 192 under the baseline teacher.  What is left,
 by class: two bus splits and mixed pairs depend on the second structural
 atom being routed first (the cue is blind to a split, the clean flip to a
 contaminated substation); the adjacent pairs need a second sweep or a

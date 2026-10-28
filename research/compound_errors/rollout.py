@@ -40,7 +40,7 @@ from psse_env.actions import (  # noqa: E402
     RUN_WLS,
 )
 from research.rl import decision_audit as audit  # noqa: E402
-from research.rl.decision_audit import node_breaker_cost, parse_run_options  # noqa: E402
+from research.rl.decision_audit import parse_run_options  # noqa: E402
 
 ROLLOUT_CONTRACT = "compound_expert_rollout_v1"
 COMPARE_TOOL = "compare_parameter_candidates"
@@ -152,7 +152,6 @@ def compact_episode(episode: Mapping[str, Any], root: Mapping[str, Any]) -> dict
                                     for s in reversed(steps) if str((s.get("action") or {}).get("tool")) == ASK_FOR_MORE_EVIDENCE
                                     and s.get("execution_status") == "success"), None),
         "abstentions": handoff_abstentions(steps),
-        "node_breaker_cost": node_breaker_cost(steps),
         "tools": tools,
         "corrections": corrections,
         "trace": slim_trace(steps),
@@ -219,12 +218,6 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             declared = row.get("abstentions") or []
             counter["abstention_episodes"] += int(bool(declared))
             counter["abstentions_unsupported"] += sum(1 for item in declared if item.get("supported") is False)
-            cost = row.get("node_breaker_cost") or {}
-            counter["clean_flip_screens"] += int(cost.get("screens") or 0)
-            counter["clean_flip_available_episodes"] += int(bool(cost.get("available")))
-            counter["node_breaker_screen_solves"] += int(cost.get("screen_solves") or 0)
-            counter["node_breaker_context_solves"] += int(cost.get("context_solves") or 0)
-            counter["topology_context_fetches"] += int(cost.get("contexts") or 0)
             outcomes[str(row.get("terminal_outcome") or ("nonterminal" if not row.get("terminal") else "terminal"))] += 1
             basis[str(row.get("basis"))] += 1
             if not row.get("success"):
@@ -252,9 +245,7 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     totals = Counter()
     for entry in by_class.values():
         for key in ("n", "success", "errors", "steps", "wls_calls", "comparisons", "invalid_action_episodes",
-                    "false_commit_episodes", "loop_episodes", "abstention_episodes", "abstentions_unsupported",
-                    "clean_flip_screens", "clean_flip_available_episodes", "node_breaker_screen_solves",
-                    "node_breaker_context_solves", "topology_context_fetches"):
+                    "false_commit_episodes", "loop_episodes", "abstention_episodes", "abstentions_unsupported"):
             totals[key] += int(entry.get(key, 0) or 0)
     return {"by_class": by_class, "totals": dict(totals)}
 

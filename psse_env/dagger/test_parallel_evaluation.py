@@ -21,7 +21,6 @@ import time
 import unittest
 from collections import Counter
 from pathlib import Path
-from unittest import mock
 
 import scripts.run_dagger_research as research_module
 from psse_env.dagger.evaluator import (
@@ -120,14 +119,6 @@ class ParallelEvaluationTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.scenarios = _scenarios()
         assert len(cls.scenarios) == sum(PLAN.values())
-
-    def setUp(self) -> None:
-        # Written against the baseline teacher, the default before 2026-10-28;
-        # these roots carry no node/breaker channel, which the clean-flip
-        # default refuses.  The workers inherit the environment.
-        patcher = mock.patch.dict(os.environ, {"PSSE_EXPERT_VARIANT": "baseline"})
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
     def test_parallel_reports_match_the_sequential_reports(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

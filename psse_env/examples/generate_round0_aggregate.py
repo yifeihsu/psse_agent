@@ -447,8 +447,8 @@ def build_environment(args: argparse.Namespace) -> tuple[TransactionalPSSEEnv, E
         hif_alpha_grid_size=args.hif_alpha_grid,
         hif_r_grid_size=args.hif_r_grid,
         hif_max_scans=args.hif_max_scans,
-        # The teacher variant's own signal (stage 2 item 6): the clean-flip
-        # teacher needs the provider's clean-flip screen.
+        # The teacher variant's own signal (stage 2): the guarded teacher
+        # needs the provider's open-terminal cue.
         **variant_provider_options(),
     )
     env = TransactionalPSSEEnv(

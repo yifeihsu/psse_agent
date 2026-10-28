@@ -13,7 +13,7 @@ from psse_env.actions import (
     GET_TOPOLOGY_CONTEXT,
     RUN_WLS,
 )
-from psse_env.oracle.expert_policy import CLEAN_FLIP_GUARD, FLOW_AT_NOISE_GUARD, ExpertPolicyOracle, _structural_first_order
+from psse_env.oracle.expert_policy import FLOW_AT_NOISE_GUARD, ExpertPolicyOracle, _structural_first_order
 from psse_env.oracle.expert_types import ExpertActionProposal
 from psse_env.oracle.expert_variants import EXPERT_VARIANTS, expert_variant_options
 
@@ -126,63 +126,37 @@ class GuardedTopologyFirstTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ExpertPolicyOracle(topology_first="sometimes")
 
-    def test_clean_flip_mode_follows_the_bound_screen(self) -> None:
-        """Stage 2 item 6: the breaker route leads only where the solve reports a flip that makes the estimate clean."""
-        expert = ExpertPolicyOracle(**expert_variant_options("baseline_compare_topology_clean_flip"))
-        self.assertEqual(expert.topology_first, CLEAN_FLIP_GUARD)
-
-        def wls(**record):
-            return _policy(fresh_context_evidence={"wls": {"successful": True, "clean_flip": record}})
-
-        self.assertTrue(expert._topology_first_for(wls(status="screened", available=True, cb_names=["CB_4_N2_B2"], solves=9)))
-        self.assertFalse(expert._topology_first_for(wls(status="screened", available=False, cb_names=[], solves=9)))
-        self.assertFalse(expert._topology_first_for(wls(status="estimate_failed", available=False, cb_names=[], solves=1)))
-        self.assertFalse(expert._topology_first_for(_fired()))  # the open-terminal cue is another mode's signal
-        self.assertFalse(expert._topology_first_for(_policy(fresh_context_evidence={"wls": {"successful": True}})))
-        direct = _policy(last_tool=RUN_WLS, last_tool_output={"tool_metrics": {"clean_flip": {"available": True}}})
-        self.assertTrue(expert._topology_first_for(direct))
-        # The other modes ignore the screen.
-        self.assertFalse(ExpertPolicyOracle(**expert_variant_options("baseline_compare_topology_guarded"))._topology_first_for(wls(available=True)))
-        self.assertFalse(ExpertPolicyOracle(**expert_variant_options("baseline_compare"))._topology_first_for(wls(available=True)))
-        self.assertEqual(expert_variant_options("baseline_compare_topology_clean_flip"),
-                         {"candidate_comparison": True, "topology_first": "clean_flip"})
-
-    def test_naming_the_clean_flip_teacher_turns_its_screen_on(self) -> None:
-        """Stage 2 item 6: an environment built for the clean-flip teacher computes the signal it reads."""
+    def test_naming_the_guarded_teacher_turns_its_cue_on(self) -> None:
+        """The guarded teacher reads the open-terminal cue, which no other teacher's environment reports (review of 2026-10-28)."""
         from psse_env.oracle.expert_variants import variant_provider_options
 
-        self.assertEqual(variant_provider_options("baseline_compare_topology_clean_flip"), {"clean_flip_screen": True})
-        # The guarded teacher reads the open-terminal cue, which no other
-        # teacher's environment reports (the stage-2 review of 2026-10-28).
         self.assertEqual(variant_provider_options("baseline_compare_topology_guarded"), {"flow_at_noise_cue": True})
         for name in ("baseline", "baseline_compare", "baseline_compare_topology_first"):
             self.assertEqual(variant_provider_options(name), {}, name)
 
-    def test_the_default_teacher_for_new_work_is_the_clean_flip_variant(self) -> None:
-        """The user's decision of 2026-10-28 after the independent check; recorded cells name their own teacher."""
+    def test_the_default_teacher_for_new_work_is_baseline_compare(self) -> None:
+        """The user's decision of 2026-10-28: no topology-first order by default; recorded cells name their own teacher."""
         import os
         from unittest import mock
 
         from psse_env.oracle.expert_variants import DEFAULT_EXPERT_VARIANT, current_expert_variant, variant_provider_options
 
-        self.assertEqual(DEFAULT_EXPERT_VARIANT, "baseline_compare_topology_clean_flip")
+        self.assertEqual(DEFAULT_EXPERT_VARIANT, "baseline_compare")
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("PSSE_EXPERT_VARIANT", None)
-            self.assertEqual(current_expert_variant(), "baseline_compare_topology_clean_flip")
-            self.assertEqual(expert_variant_options(), {"candidate_comparison": True, "topology_first": "clean_flip"})
-            # The default teacher's environment computes the screen it reads.
-            self.assertEqual(variant_provider_options(), {"clean_flip_screen": True})
-            # Named teachers are untouched: the manuscript's cell keeps baseline_compare.
-            self.assertEqual(current_expert_variant("baseline_compare"), "baseline_compare")
-            self.assertEqual(expert_variant_options("baseline_compare"), {"candidate_comparison": True})
-            self.assertEqual(variant_provider_options("baseline_compare"), {})
-            os.environ["PSSE_EXPERT_VARIANT"] = "baseline_compare"
             self.assertEqual(current_expert_variant(), "baseline_compare")
+            self.assertEqual(expert_variant_options(), {"candidate_comparison": True})
+            self.assertFalse(ExpertPolicyOracle(**expert_variant_options()).topology_first)
+            # The default teacher's environment reports no stage-2 signal.
             self.assertEqual(variant_provider_options(), {})
+            os.environ["PSSE_EXPERT_VARIANT"] = "baseline_compare_topology_guarded"
+            self.assertEqual(current_expert_variant(), "baseline_compare_topology_guarded")
+            self.assertEqual(variant_provider_options(), {"flow_at_noise_cue": True})
 
     def test_variant_registry(self) -> None:
         self.assertIn("baseline_compare_topology_guarded", EXPERT_VARIANTS)
-        self.assertIn("baseline_compare_topology_clean_flip", EXPERT_VARIANTS)
+        # Removed on 2026-10-28 as brute-force screening (study section 7.8).
+        self.assertNotIn("baseline_compare_topology_clean_flip", EXPERT_VARIANTS)
         self.assertEqual(expert_variant_options("baseline_compare_topology_guarded"),
                          {"candidate_comparison": True, "topology_first": "flow_at_noise"})
         self.assertEqual(expert_variant_options("baseline_compare"), {"candidate_comparison": True})
