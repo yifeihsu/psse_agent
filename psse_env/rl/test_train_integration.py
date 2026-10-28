@@ -21,6 +21,22 @@ TRIAGE = REPO_ROOT / "psse_env" / "oracle" / "models" / "triage_gnn_ieee14_20261
 
 @unittest.skipUnless(SUITE.is_file() and TRIAGE.is_dir(), "local development suite or triage model missing")
 class ExpertRolloutIntegrationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # run_phase points the research runner's module-level options at this
+        # cell (classifier profile, triage model, expert variant); restore them
+        # so later tests build their environments from the defaults.
+        import scripts.run_dagger_research as research
+
+        self.options = [
+            (options, dict(options))
+            for options in (research.RESEARCH_ENVIRONMENT_OPTIONS, research.RESEARCH_EXPERT_OPTIONS)
+        ]
+
+    def tearDown(self) -> None:
+        for options, original in self.options:
+            options.clear()
+            options.update(original)
+
     def test_rollout_and_update_phases_run_on_real_roots_with_the_expert(self) -> None:
         from psse_env.rl.train import Manifest, RLConfig, run_phase
 
