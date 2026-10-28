@@ -42,7 +42,7 @@ from psse_env.evidence_profile import (  # noqa: E402
 from psse_env.oracle.expert_variants import EXPERT_VARIANTS  # noqa: E402
 from research.hypothesis_ranking.expert_e2e import NEEDS_PHASORS, NEEDS_SPECTRA, _basis, _escalation_request, summarize  # noqa: E402
 from research.hypothesis_ranking.features import json_safe  # noqa: E402
-from research.rl.decision_audit import parse_run_options  # noqa: E402
+from research.rl.decision_audit import node_breaker_cost, parse_run_options  # noqa: E402
 
 PROFILES = (SCADA_ONLY_PROFILE, WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE, CLASSIFIER_GATED_PROFILE)
 COMPARE_TOOL = "compare_parameter_candidates"
@@ -221,6 +221,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             compact["basis"] = _basis(episode)
             compact["first_triage"] = first_triage(episode)
             compact["abstentions"] = handoff_abstentions(episode)
+            compact["node_breaker_cost"] = node_breaker_cost(episode.get("trace") or [])
             compact["corrections"] = [
                 {"tool": str((step.get("action") or {}).get("tool")),
                  "arguments": {k: v for k, v in ((step.get("action") or {}).get("arguments") or {}).items() if k != "state_id"},

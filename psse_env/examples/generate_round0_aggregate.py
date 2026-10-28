@@ -42,7 +42,7 @@ import psse_env.dagger.sft_audit as sft_audit_module
 import psse_env.dagger.splits as splits_module
 import psse_env.dagger.suite_builder as suite_builder_module
 import psse_env.oracle as oracle_module
-from psse_env.oracle.expert_variants import current_expert_variant, expert_variant_options
+from psse_env.oracle.expert_variants import variant_provider_options, current_expert_variant, expert_variant_options
 import psse_env.providers.matpower as matpower_provider_module
 import psse_env.providers.scenario_generator as scenario_generator_module
 import psse_env.transactional_env as transactional_env_module
@@ -447,6 +447,9 @@ def build_environment(args: argparse.Namespace) -> tuple[TransactionalPSSEEnv, E
         hif_alpha_grid_size=args.hif_alpha_grid,
         hif_r_grid_size=args.hif_r_grid,
         hif_max_scans=args.hif_max_scans,
+        # The teacher variant's own signal (stage 2 item 6): the clean-flip
+        # teacher needs the provider's clean-flip screen.
+        **variant_provider_options(),
     )
     env = TransactionalPSSEEnv(
         **providers.env_kwargs(),

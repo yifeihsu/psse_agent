@@ -1530,3 +1530,85 @@ variant (`psse_env/oracle/test_topology_first_order.py`).  The rollout
 records the screens, their solves and the topology-context fetches per
 episode, so the cost is read directly from the runs.
 
+**Results on the conventional suites (the independent check).**  Both
+teachers on the same code (items 1 to 6 in the tree), the end-to-end runner
+of section 7.1, 40 actions, scada_only; the validation suite and the hard
+draw are the files the cell built on torch (read back over SSH, section
+7.3), and the conventional test suite's file matches torch's byte for byte:
+
+| suite | baseline_compare | clean flip | identical trajectories | false commits | clean flip on a root without a breaker fault | node/breaker solves per episode: baseline, clean flip |
+| --- | --- | --- | --- | --- | --- | --- |
+| conventional test suite (192) | 192 | 192 | 159 | 0 | 0 | 2.6, 2.7 |
+| validation suite, torch file (96) | 96 | 96 | 79 | 0 | 0 | 2.6, 2.7 |
+| hard draw, torch file (193) | 185 | 185 | 184 | 0 | 0 | 0.7, 0.8 |
+
+The success counts are identical family by family on all three suites (the
+validation suite 96 of 96 for both teachers; the hard draw 24/24, 32/32,
+8/8, 64/72, 8/8, 41/41 and 8/8 for both), with no false commit, so the
+check passes.  The trajectories that differ are the topology roots (every
+one: the parameter-context fetch is skipped, 8.0 to 7.0 actions) and one
+measurement+topology root per suite (a clean flip on the second state
+after the meter fix).  On a measurement+topology root the meter error
+stays in the substation telemetry, so no single flip makes the estimate
+clean at the first state and the order stays the baseline's; and the
+parameter root of the hard draw that sank the guarded teacher
+(`r0_344bb11720e7`) shows no clean flip.  The same runs on the local
+smoke copies gave identical trajectories (96 of 96 and 193 of 193 for
+both teachers), as the root-by-root comparison of section 7.3 predicted.
+
+**Results on the compound suite.**  The clean-flip teacher with the item-3
+and item-5 options (pair refit, abstention) against the item-3 runs of the
+other three teachers, and an instrumented re-run of the baseline for its
+node/breaker solves (its trajectories equal the item-3 baseline's on
+1,275 of 1,275 roots):
+
+| class (roots) | baseline_compare | topology first, always | topology first, guarded | topology first, clean flip | clean flip against the baseline, won / lost | node/breaker solves per episode: baseline, clean flip | mean actions: baseline, clean flip |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| two R/X, adjacent (150) | 76 | 65 | 76 | 76 | +0 / -0 | 1.6, 22.9 | 14.1, 14.1 |
+| two R/X, distant (150) | 72 | 63 | 72 | 72 | +0 / -0 | 0.6, 15.4 | 10.5, 10.5 |
+| R/X + breaker, same line (75) | 47 | 75 | 71 | 75 | +28 / -0 | 6.1, 9.0 | 15.8, 7.0 |
+| R/X + breaker, shared bus (75) | 31 | 43 | 45 | 33 | +2 / -0 | 6.8, 24.7 | 20.4, 19.5 |
+| R/X + breaker, distant (150) | 73 | 109 | 109 | 90 | +17 / -0 | 6.2, 18.5 | 17.9, 14.7 |
+| meter + two R/X (150) | 66 | 54 | 66 | 66 | +0 / -0 | 1.7, 27.9 | 16.1, 16.1 |
+| meter on the R/X line (75) | 14 | 14 | 14 | 14 | +0 / -0 | 5.3, 28.4 | 14.7, 14.7 |
+| R/X + breaker + meter (150) | 59 | 97 | 97 | 60 | +1 / -0 | 6.7, 31.0 | 22.9, 22.3 |
+| two breakers, dangling (60) | 16 | 53 | 46 | 25 | +9 / -0 | 9.9, 29.4 | 25.9, 22.5 |
+| two breakers, mixed (45) | 20 | 43 | 30 | 27 | +7 / -0 | 14.8, 27.2 | 25.7, 23.7 |
+| two breakers, bus splits (45) | 22 | 39 | 28 | 22 | +0 / -0 | 13.8, 32.8 | 25.0, 24.6 |
+| control: one R/X (50) | 43 | 37 | 43 | 43 | +0 / -0 | 0.2, 9.5 | 7.5, 7.5 |
+| control: one breaker (50) | 31 | 50 | 44 | 50 | +19 / -0 | 6.8, 9.0 | 14.6, 7.0 |
+| control: one meter (50) | 47 | 47 | 47 | 47 | +0 / -0 | 7.9, 41.8 | 21.3, 21.3 |
+| all (1,275) | 617 (48%) | 789 (62%) | 788 (62%) | 700 (55%) | +83 / -0 | 5.1, 23.1 | 17.3, 15.7 |
+
+The clean-flip teacher wins 83 roots against the baseline and loses
+none, but stays well below the always-on and guarded orders (700 against
+789 and 788; against them +45 / -134 and +28 / -116).  It does what the
+always-on flag does where the breaker is the only fault the substation
+sees (the same-line class and the single-breaker control at 75 of 75 and
+50 of 50), and much less where a second fault contaminates the substation
+estimate, so that no single flip makes it clean (R/X + breaker distant 90
+against 109, R/X + breaker + meter 60 against 97, two bus splits 22 as
+the baseline).  It is the most conservative of the three orders: on the
+625 roots without a breaker atom it reported a clean flip in
+32 episodes, always after a line correction had left a moderate residual
+that re-partitioning one substation happened to fit, and none of them
+changed an outcome (605 of 625 trajectories equal the baseline's).
+
+**Cost.**  The screen runs the node/breaker estimate and up to
+8 flip re-estimates (9 solves) on every anomalous solve of a state that
+carries the node/breaker channel, and the topology context on the same
+state reuses them.  On the conventional suites only the breaker families
+carry the channel: 9 solves per breaker episode under both teachers, an
+extra 0.4 to 1.1 per episode on the measurement+topology family, nothing
+elsewhere (0.1 per episode over a whole suite).  On the compound suite every
+root carries the channel (the uniform-metadata convention), so the screen
+runs on every anomalous state of every root: 23.1 node/breaker solves per
+episode against the baseline's 5.1, from 9 on a single-breaker root to about
+40 on a meter root, and the rollout of the 1,275 roots took 1578 s against
+843 s on the same 14 workers (the clean-flip run shared the machine with
+other jobs, so the time ratio is an upper bound).
+
+**Commit.**  The commit that adds this section (branch
+`claude/nostalgic-kalam-be5f7a`, 2026-10-28); the default switch that
+follows the check is a separate commit (section 6.4).
+

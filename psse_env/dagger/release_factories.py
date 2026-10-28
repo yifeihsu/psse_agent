@@ -41,7 +41,7 @@ from psse_env.dagger.dataset_builder import (
 )
 from psse_env.dagger.protocol_bridge import canonical_to_internal_action, unified_tool_schemas
 from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
-from psse_env.oracle.expert_variants import expert_variant_options
+from psse_env.oracle.expert_variants import variant_provider_options, expert_variant_options
 from psse_env.providers.matpower import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import DEFAULT_CHI2_ALPHA
 from psse_env.sft.gates import (
@@ -93,8 +93,13 @@ def production_environment_factory(
     screen_calibration: str | None = None,
     hif_resistance_search: str = "physical_ohm",
     evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
+    clean_flip_screen: bool | None = None,
 ) -> TransactionalPSSEEnv:
     """Construct the real MATPOWER-backed deployment environment.
+
+    ``clean_flip_screen`` (stage 2 item 6 of the compound-error study): None
+    computes the provider's clean-flip screen exactly when the current teacher
+    variant reads it (``variant_provider_options``).
 
     ``seed`` and ``rng`` are accepted only for the evaluator's uniform factory
     calling convention.  The provider stack is deterministic for a fixed
@@ -119,6 +124,17 @@ def production_environment_factory(
         hif_r_grid_size=BC0_HIF_R_GRID_SIZE,
         hif_max_scans=BC0_HIF_MAX_SCANS,
         hif_resistance_search=hif_resistance_search,
+        # Passed only when on, so every other teacher's environment is built
+        # by exactly the call it was built by before (stage 2 item 6).
+        **(
+            {"clean_flip_screen": True}
+            if (
+                bool(variant_provider_options().get("clean_flip_screen", False))
+                if clean_flip_screen is None
+                else bool(clean_flip_screen)
+            )
+            else {}
+        ),
     )
     env = TransactionalPSSEEnv(
         **providers.env_kwargs(),

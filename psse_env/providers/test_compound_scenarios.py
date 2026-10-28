@@ -375,6 +375,41 @@ class CompoundScenarioTests(unittest.TestCase):
         self.assertIsNone(providers._pair_refit_partner({}, ppc, second))
         self.assertIsNone(providers._pair_refit_partner({"last_parameter_correction": {"line_index": "x"}}, ppc, second))
 
+    def test_clean_flip_screen_reports_a_clean_flip_on_a_single_breaker_root_only_when_named(self) -> None:
+        """Stage 2 item 6: the screen names the breaker whose flip makes the node/breaker estimate clean, and costs solves once per state."""
+        quiet = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only")
+        root = self.roots["control_cb"]
+        (breaker,) = root["true_topology_errors"]
+        plain = quiet.run_wls(_state(root))
+        self.assertNotIn("clean_flip", plain.get("tool_metrics", plain))
+        screened = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only", clean_flip_screen=True)
+        first = screened.run_wls(_state(root))
+        record = first.get("tool_metrics", first)["clean_flip"]
+        self.assertEqual(record["status"], "screened", record)
+        self.assertTrue(record["available"], record)
+        self.assertIn(breaker["cb_name"], record["cb_names"])
+        self.assertGreaterEqual(record["solves"], 2)
+        self.assertFalse(record["cached"])
+        # The topology context on the same state reuses the estimate: no new solves.
+        context = screened.get_topology_context(_state(root))
+        self.assertEqual(context.get("execution_status", "success"), "success", context)
+        self.assertEqual(context["node_breaker_solves"], 0)
+        self.assertTrue(context["node_breaker_estimate_cached"])
+        # Without a screen the context spends the same solves itself.
+        fresh = quiet.get_topology_context(_state(root))
+        self.assertEqual(fresh["node_breaker_solves"], record["solves"])
+        self.assertFalse(fresh["node_breaker_estimate_cached"])
+        again = screened.run_wls(_state(root))
+        again = again.get("tool_metrics", again)["clean_flip"]
+        self.assertTrue(again["cached"])
+        self.assertEqual(again["solves"], 0)
+        self.assertEqual(again["cb_names"], record["cb_names"])
+        # A root without a breaker atom reports no clean flip.
+        healthy = screened.run_wls(_state(self.roots["rx2_adjacent"]))
+        healthy = healthy.get("tool_metrics", healthy)["clean_flip"]
+        self.assertEqual(healthy["status"], "screened")
+        self.assertFalse(healthy["available"], healthy)
+
     def test_run_wls_reports_the_open_terminal_cue_on_dangling_lines_only(self) -> None:
         """Stage 2 (2026-10-28): ``flow_at_noise_lines`` names dangling lines and nothing else."""
         providers = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only")

@@ -45,7 +45,7 @@ from psse_env.dagger.rollout_collector import (  # noqa: E402
 )
 from psse_env.dagger.suite_builder import partition_release_scenario_v1  # noqa: E402
 from psse_env.oracle.expert_policy import ExpertPolicyOracle  # noqa: E402
-from psse_env.oracle.expert_variants import current_expert_variant, expert_variant_options  # noqa: E402
+from psse_env.oracle.expert_variants import variant_provider_options, current_expert_variant, expert_variant_options  # noqa: E402
 from psse_env.providers.scenario_generator import DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD
 from psse_env.systems import resolve_system
 from psse_env.evidence_profile import (
@@ -317,6 +317,12 @@ def research_diagnostic_environment_factory(
         # Compound-error study, stage 2 item 3: off unless a run names it.
         pair_refit_adjacent=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("pair_refit_adjacent", False)),
         target_first_partial=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("target_first_partial", False)),
+        # The teacher's own signal (item 6): on when the run names it, else
+        # whatever the run's teacher variant needs.
+        clean_flip_screen=bool(RESEARCH_ENVIRONMENT_OPTIONS.get(
+            "clean_flip_screen",
+            variant_provider_options(RESEARCH_EXPERT_OPTIONS.get("variant")).get("clean_flip_screen", False),
+        )),
         triage_classifier=RESEARCH_ENVIRONMENT_OPTIONS.get("triage_classifier"),
         **RESEARCH_HIF_SEARCH_BUDGET,
     )

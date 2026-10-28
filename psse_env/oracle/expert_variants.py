@@ -27,8 +27,14 @@ construct the same expert:
   route first only in a state whose WLS solve reports the open-terminal cue
   (``topology_first="flow_at_noise"``: a top branch candidate whose terminal
   flows read at noise while the stale model routes flow through it; stage 2
-  of the compound-error study, 2026-10-28).  ``baseline_compare`` and the
-  seven conventional families are untouched by either variant.
+  of the compound-error study, 2026-10-28);
+* ``baseline_compare_topology_clean_flip``: ``baseline_compare`` with the
+  breaker route first only in a state whose WLS solve reports that a
+  top-ranked breaker flip makes the node/breaker estimate clean
+  (``topology_first="clean_flip"``; the provider option ``clean_flip_screen``
+  computes the report; stage 2 item 6, the user's decision of 2026-10-28).
+  ``baseline_compare`` and the seven conventional families are untouched by
+  any of these variants.
 
 Research only.  The default is the baseline, so nothing changes unless a
 run names a variant; receipts record the variant beside the evidence
@@ -44,7 +50,8 @@ from psse_env.oracle.learned_ranker import DEFAULT_RANKER_MODEL
 EXPERT_VARIANT_ENV = "PSSE_EXPERT_VARIANT"
 DEFAULT_EXPERT_VARIANT = "baseline"
 EXPERT_VARIANTS = ("baseline", "ledger", "ledger_ranked", "ledger_ranked_compare", "baseline_compare",
-                   "baseline_compare_topology_first", "baseline_compare_topology_guarded")
+                   "baseline_compare_topology_first", "baseline_compare_topology_guarded",
+                   "baseline_compare_topology_clean_flip")
 
 
 def current_expert_variant(variant: str | None = None) -> str:
@@ -70,6 +77,8 @@ def expert_variant_options(variant: str | None = None, *, learned_ranker: Any = 
         return {"candidate_comparison": True, "topology_first": True}
     if name == "baseline_compare_topology_guarded":
         return {"candidate_comparison": True, "topology_first": "flow_at_noise"}
+    if name == "baseline_compare_topology_clean_flip":
+        return {"candidate_comparison": True, "topology_first": "clean_flip"}
     if name == "ledger":
         return {"hypothesis_ledger": True}
     options: dict[str, Any] = {
@@ -81,4 +90,19 @@ def expert_variant_options(variant: str | None = None, *, learned_ranker: Any = 
     return options
 
 
-__all__ = ["DEFAULT_EXPERT_VARIANT", "EXPERT_VARIANTS", "EXPERT_VARIANT_ENV", "current_expert_variant", "expert_variant_options"]
+#: Provider options a teacher variant needs in order to see its own routing
+#: signal: the clean-flip teacher reads the provider's clean-flip screen, so
+#: an environment built for it computes the screen (stage 2 item 6).  The
+#: environment factories merge these in unless a run sets the option itself.
+VARIANT_PROVIDER_OPTIONS: dict[str, dict[str, Any]] = {
+    "baseline_compare_topology_clean_flip": {"clean_flip_screen": True},
+}
+
+
+def variant_provider_options(variant: str | None = None) -> dict[str, Any]:
+    """Provider keyword arguments the named (else current) teacher variant needs."""
+    return dict(VARIANT_PROVIDER_OPTIONS.get(current_expert_variant(variant), {}))
+
+
+__all__ = ["DEFAULT_EXPERT_VARIANT", "EXPERT_VARIANTS", "EXPERT_VARIANT_ENV", "VARIANT_PROVIDER_OPTIONS",
+           "current_expert_variant", "expert_variant_options", "variant_provider_options"]

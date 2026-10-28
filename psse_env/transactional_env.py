@@ -857,6 +857,9 @@ class TransactionalPSSEEnv:
                 # Open-terminal cue among the top branch candidates (compound
                 # study, stage 2); the guarded topology-first order reads it.
                 "flow_at_noise_lines",
+                # Clean-flip screen of the node/breaker estimate (item 6); the
+                # clean-flip topology-first order reads it.
+                "clean_flip",
             ):
                 if key in wls:
                     contexts["wls"][key] = wls[key]
