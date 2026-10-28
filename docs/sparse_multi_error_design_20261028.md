@@ -34,7 +34,9 @@ meter), against the deployed rule's 48% and 7.6% on the same IEEE 118 pairs.  Th
 building on IEEE 118 as a read-only context first (stage S2, about a day of work, CPU only), and not on
 IEEE 14.
 
-Branch `claude/agitated-sammet-93f94e` (from `claude/nostalgic-kalam-be5f7a` a52a7e5).  Code:
+Branch `claude/agitated-sammet-93f94e` (from `claude/nostalgic-kalam-be5f7a` a52a7e5; the compound branch
+has since added item 6, the clean-flip default and its stage summary, 6ff5293, b546d2d and 6e5c478, whose
+numbers section 1 cites; the probe needs none of their code).  Code:
 `research/compound_errors/sparse_probe.py` (the probe), `research/compound_errors/sparse_report.py` (the
 tables).  Outputs (gitignored, like every study's): `output/sparse_multi_error_probe_20261028/` (line flag
 3, the deployed lambda threshold) and `output/sparse_multi_error_probe_20261028/lambda4/` (line flag 4):
@@ -55,9 +57,13 @@ The defaults are the run's settings (seed 20261028, 8 states, 1,200 pairs and tr
 
 The design answers these results of the compound study (stage 1 and stage 2, IEEE 14, 1,275 roots):
 
-- The rule expert solves 617 of 1,275 fixed-pair roots (48%) after the stage-2 tool repairs
-  (`baseline_compare` with the node/breaker re-render binding, the isolated-line rule and the adjacent
-  pair refit; 789 and 788 under the flagged topology-first variants), section 7.5.
+- After the stage-2 tool repairs (the node/breaker re-render binding, the isolated-line rule, the
+  adjacent pair refit) the rule expert solves 617 of 1,275 fixed-pair roots under `baseline_compare`
+  (48%), 789 and 788 under the always-on and guarded topology-first orders, and 700 (55%, +83 / -0
+  against `baseline_compare`) under the clean-flip order, the one that passed the independent check on the
+  conventional suites and became the default teacher for new work (`baseline_compare_topology_clean_flip`,
+  commit b546d2d; the compound note's section 7.8 at 6e5c478).  Its screen costs 9 node/breaker solves
+  per anomalous state, 23.1 per compound episode against 5.1.
 - A second error often goes silent after the first fix: 121 of the 150 distant line pairs carry a line
   whose own noiseless chi-square is below the alarm, 108 have one line unranked, and after an
   `ACCEPT_FINAL` commit the post-commit confirmation gate refused the second correction on 57 distant
@@ -305,8 +311,11 @@ redundancy 1 - h_ii: 0.40 on IEEE 14, 0.22 on IEEE 118, five meters below 0.3).
   above 20, and admitting the large ones at their natural size costs isolation (32% against 37% at
   delta = 2, T7) through larger footprints (a line at ratio 20 flags 13 buses, p90 21).
 - **Kinds**: meter, line R/X and breaker status per atom, uniform; on IEEE 118 a breaker atom is a line
-  status error on the bus-branch model until a node/breaker model exists (decision 3).  Distinct
-  elements only; no placement rule.
+  status error on the bus-branch model until a node/breaker model exists (decision 3).  The deployed
+  tools already correct it there: without a node/breaker binding, `get_topology_context` screens branch
+  status flips on the lines its multipliers rank and `correct_topology` flips a branch row.  Without the
+  node/breaker channel the clean-flip screen never runs, so on IEEE 118 the default teacher orders exactly
+  as `baseline_compare`.  Distinct elements only; no placement rule.
 - **Interaction recorded, not forced**: in the audit block, never in the policy view, every root records
   per atom its solo effect and kind, per pair the hops, the own-hypothesis canonical correlation, the
   footprint overlap and the cross-cluster block maximum, and per root the noiseless partition at the
@@ -341,7 +350,9 @@ A context tool, `get_cluster_context`, read-only, computed from the solve the st
 - **Dominance tags and ranked candidates per cluster**: the deployed WLS dominance (residual-dominant,
   branch-dominant, none) and the ranking dominance ratio (top over runner-up, 1.2 as deployed) computed
   on the cluster's own flags; the cluster's top five lines, top five meters and, with the node/breaker
-  channel, the topology screen's flips restricted to the cluster's yards.  The cluster's own list puts
+  channel, the topology screen's flips restricted to the cluster's yards (which also bounds the
+  clean-flip screen's 9 solves per anomalous state to the yards a cluster touches); without the channel,
+  the bus-branch status flips of the cluster's lines.  The cluster's own list puts
   the true line first on 80% of IEEE 118 pairs, 69% of triples and 74% and 55% of the roots at one and two
   errors per hundred branches, where the global list does on 60%, 43%, 53% and 33% (T7, T9).
 - **Noise clusters**: a cluster whose local alarm is silent is listed as such and offers no target; at
@@ -393,7 +404,8 @@ A context tool, `get_cluster_context`, read-only, computed from the solve the st
 ## 6. Budget and truth audit
 
 - **Budget**: 40 actions today.  Per alarmed cluster the stage-1 rollouts spent 7.5 actions on a single
-  line, 14.8 on a single breaker (7.0 topology-first), 21.3 on one to three meters, 10.5 to 21.0 on a pair
+  line, 14.8 on a single breaker (7.0 under the topology-first orders, the clean flip among them), 21.3 on
+  one to three meters, 10.5 to 21.0 on a pair
   and 23.0 on the three-atom class; the proposal is 40 + 20 per additional alarmed cluster at the first
   solve, capped at 100 (about 66 for the 2.3 clusters of a delta = 2 root).  The cluster count is
   observable, so the budget leaks nothing.
@@ -421,13 +433,16 @@ A context tool, `get_cluster_context`, read-only, computed from the solve the st
 
 ## 8. What the expert does per cluster
 
-`baseline_compare` unchanged inside a cluster: the cluster with the largest local effect ratio first, its
-family from the cluster's dominance tags and ranked candidates (meter, line, breaker, with the flagged
-topology-first variants' guard applied per cluster), its usual correct-verify-commit or rollback
+The teacher's rules unchanged inside a cluster: the cluster with the largest local effect ratio first, its
+family from the cluster's dominance tags and ranked candidates (meter, line, breaker, with the
+topology-first variants' order applied per cluster), its usual correct-verify-commit or rollback
 sequence, the in-cluster comparison of its top candidates before a resolution; on resolution the next cluster;
-on a merged cluster the strongest atom first, then a re-clustering solve.  With one cluster the variant is
-`baseline_compare` exactly, which the conventional 192-root suite must confirm (identical tool
-sequences), as every stage-2 item did.
+on a merged cluster the strongest atom first, then a re-clustering solve.  Every run names its teacher:
+`baseline_compare` explicitly (the default for new work is now `baseline_compare_topology_clean_flip`,
+so an unnamed run would silently change the reference arm), the clustered variant built on it
+(`baseline_compare_clustered`), and on IEEE 14 the clean-flip teacher with its clustered counterpart as a
+second arm.  With one cluster each clustered variant is its teacher exactly, which the conventional
+192-root suite must confirm (identical tool sequences), as every stage-2 item did.
 
 ## 9. Training implications
 
@@ -462,7 +477,7 @@ sequences), as every stage-2 item did.
 | S0 | this probe and note | done (CPU, about 6 minutes per configuration on 7 workers) | |
 | S1 | variable-count generator on IEEE 118: the bus-branch synthesizer of e8c7ddc with N ~ Poisson(delta x branches / 100), delta in {1, 2}, per-atom admission at 1.5, the band, meter / line / line-status atoms, the recorded interaction block; a 600-root suite (300 per density) plus a 120-root reduced-metering draw | about a day of code, a few hours of CPU build | e8c7ddc merged or rebased |
 | S2 | `get_cluster_context` read-only and its ledger block, no gate or verifier change; an offline partition audit on the S1 suite's noisy nonlinear solves against the recorded structure (expected from the probe: about 70% of pairs, 30% of triples recovered) | about a day of code, an hour of CPU | S1 |
-| S3 | cluster resolution (verifier option), per-cluster confirmation gate and per-cluster audit, expert variant `baseline_compare_clustered`; runs: the S1 suite under `baseline_compare` and the clustered variant, the IEEE 14 compound suite (regression; little change expected, its clusters merge), the conventional 192-root suite (identical tool sequences required) | two days of code, about an hour of CPU per run set | S2, the user's decisions 6 to 8 |
+| S3 | cluster resolution (verifier option), per-cluster confirmation gate and per-cluster audit, expert variant `baseline_compare_clustered`; runs, every teacher named explicitly: the S1 suite under `baseline_compare` and `baseline_compare_clustered` (on IEEE 118 the clean-flip default orders as the baseline), the IEEE 14 compound suite under `baseline_compare`, `baseline_compare_topology_clean_flip` and their clustered variants (regression; little change expected, its clusters merge), the conventional 192-root suite (identical tool sequences required) | two days of code, about an hour of CPU per run set | S2, the user's decisions 6 to 8 |
 | S4 | concurrency step 1 (per-cluster candidates on clones, sequential merge), behind a flag; actions, solves and success against S3 | a day | S3 |
 | S5 | a DAgger round on the cluster-centric observation | GPU cell | S3's teacher ceiling worth teaching |
 | S6 | partitioned sub-network estimation | research | S4, a larger system |
@@ -473,8 +488,10 @@ sequences), as every stage-2 item did.
    where 11% of pairs separate.
 2. **Where the variable-count suite lives**: IEEE 118 on the bus-branch path (recommended), IEEE 14 kept
    as the regression suite.
-3. **Breakers on IEEE 118**: line-status atoms on the bus-branch model now (recommended), or a
-   node/breaker model for IEEE 118 first (several days, and the stage-2 binding repairs to port).
+3. **Breakers on IEEE 118**: line-status atoms on the bus-branch model now, corrected through the
+   existing bus-branch topology route (recommended), or a node/breaker model for IEEE 118 first (several
+   days, the stage-2 binding repairs to port, and only then does the clean-flip default differ from
+   `baseline_compare` there).
 4. **The line flag for clustering**: 4 (recommended; 7.6% of clean IEEE 118 snapshots flagged against
    58.5% at 3), with the contexts' own lists at 3.
 5. **Admission**: per atom at a global effect ratio of 1.5 as asked, or on the cluster's local ratio,
