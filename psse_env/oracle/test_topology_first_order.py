@@ -155,6 +155,8 @@ class GuardedTopologyFirstTests(unittest.TestCase):
 
     def test_variant_registry(self) -> None:
         self.assertIn("baseline_compare_topology_guarded", EXPERT_VARIANTS)
+        # Removed on 2026-10-28 as brute-force screening (study section 7.8).
+        self.assertNotIn("baseline_compare_topology_clean_flip", EXPERT_VARIANTS)
         self.assertEqual(expert_variant_options("baseline_compare_topology_guarded"),
                          {"candidate_comparison": True, "topology_first": "flow_at_noise"})
         self.assertEqual(expert_variant_options("baseline_compare"), {"candidate_comparison": True})
