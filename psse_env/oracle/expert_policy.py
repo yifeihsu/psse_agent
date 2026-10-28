@@ -37,6 +37,7 @@ from psse_env.actions import (
     terminal_explanation_signatures,
     blocking_waveform_signatures,
     waveform_anomaly_signatures,
+    with_ambiguity_statements,
     with_isolated_line_abstentions,
 )
 from psse_env.oracle.candidate_quality import CandidateQualityOracle
@@ -205,7 +206,14 @@ class ExpertPolicyOracle:
         comparison_dominance_band: float = DEFAULT_COMPARISON_DOMINANCE_BAND,
         topology_first: bool | str = False,
         abstain_isolated_lines: bool = False,
+        state_ambiguity: bool = False,
     ) -> None:
+        # Item 7 step 3 (2026-10-28): every operator handoff the expert
+        # proposes states "ambiguous: line N, parameter or breaker" with the
+        # route confidence when the latest solve still alarms and cannot tell
+        # the two apart.  Recorded and reported, never required; off by
+        # default, so no teacher's actions change unless a run names it.
+        self.state_ambiguity = bool(state_ambiguity)
         # Compound-error study, stage 2 item 5 (decision C, 2026-10-28): every
         # operator handoff the expert proposes carries the explicit
         # "not identifiable: line N isolated by breaker M" statements its
@@ -264,9 +272,12 @@ class ExpertPolicyOracle:
     ) -> list[dict[str, Any]]:
         """Return ranked admissible actions for an oracle or policy-like state."""
         actions = [proposal.as_action() for proposal in self.next_action_proposals(state, history)]
-        if self.abstain_isolated_lines:
+        if self.abstain_isolated_lines or self.state_ambiguity:
             policy = self._context(state, history).policy_state
-            actions = [with_isolated_line_abstentions(action, policy) for action in actions]
+            if self.abstain_isolated_lines:
+                actions = [with_isolated_line_abstentions(action, policy) for action in actions]
+            if self.state_ambiguity:
+                actions = [with_ambiguity_statements(action, policy) for action in actions]
         return actions
 
     def next_action_proposals(

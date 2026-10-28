@@ -1741,6 +1741,35 @@ class IsolatedLineNotApplicableTests(unittest.TestCase):
                                 remaining=self._ledger(*unmarked["true_parameter_errors"]))  # type: ignore[misc]
         self.assertNotIn(ISOLATED_LINE_ABSTENTION_CHECK, quiet["checks"])
 
+    def test_an_ambiguity_statement_is_reported_with_the_truth_and_never_scored(self) -> None:
+        """Item 7 step 3 (2026-10-28): reported beside the other checks, no problem, the isolated-line check unchanged."""
+        from psse_env.dagger.release_audit import AMBIGUITY_STATEMENT_CHECK, ISOLATED_LINE_ABSTENTION_CHECK
+
+        scenario = self._scenario()
+        line_fault = scenario["true_parameter_errors"][0]  # type: ignore[index]
+        final_state = _final_state({"tool": "correct_topology", "arguments": {"line_index1": 2, "status": 0}})
+        plain = _audit_resolved(scenario, final_state, active=_active(case=self._breaker_fixed_case()),
+                                remaining=self._ledger(line_fault))
+        declared = copy.deepcopy(final_state)
+        output = dict(declared.get("last_tool_output") or {})
+        metrics = dict(output.get("tool_metrics") or {})
+        metrics["abstentions"] = [
+            {"kind": "ambiguous_parameter_or_breaker", "line_index": 2, "topology_confidence": 0.5,
+             "parameter_confidence": 0.5, "supported": True},
+            {"kind": "ambiguous_parameter_or_breaker", "line_index": 5, "topology_confidence": 0.3,
+             "parameter_confidence": 0.7, "supported": True},
+        ]
+        output["tool_metrics"] = metrics
+        declared["last_tool_output"] = output
+        result = _audit_resolved(scenario, declared, active=_active(case=self._breaker_fixed_case()),
+                                 remaining=self._ledger(line_fault))
+        report = result["checks"][AMBIGUITY_STATEMENT_CHECK]
+        self.assertEqual(report["problems"], [])
+        self.assertEqual([item["truth_on_line"] for item in report["statements"]], ["both", "neither"])
+        self.assertEqual(result["problems"], plain["problems"])
+        self.assertEqual(result["checks"][ISOLATED_LINE_ABSTENTION_CHECK], plain["checks"][ISOLATED_LINE_ABSTENTION_CHECK])
+        self.assertNotIn(AMBIGUITY_STATEMENT_CHECK, plain["checks"])
+
     def test_breaker_fixed_and_line_left_alone_passes(self) -> None:
         scenario = self._scenario()
         line_fault = scenario["true_parameter_errors"][0]  # type: ignore[index]

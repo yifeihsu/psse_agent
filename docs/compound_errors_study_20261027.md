@@ -1854,3 +1854,38 @@ something this step tunes.
 **Commit.**  The commit that adds this section (branch
 `claude/nostalgic-kalam-be5f7a`, 2026-10-28).
 
+### 8.3 Step 3: the ambiguity statement at handoff
+
+**The statement.**  When the teacher hands off with the alarm still
+standing and the latest solve cannot clearly tell an impedance error from
+an open terminal on the leading line, the handoff states "ambiguous: line
+N, parameter or breaker" in the structured field item 5 introduced
+(`abstentions`, kind `ambiguous_parameter_or_breaker`, beside any
+isolated-line statement): the line, the topology and parameter
+confidences, the confidence's basis, the breaker evidence when the agent
+fetched the topology context on that state, and the hypotheses the episode
+already tried on that line (from its committed and rejected corrections).
+"Cannot clearly tell" is a topology confidence between 0.25 and 0.75:
+neither hypothesis has three-to-one support.  The confidence is step 2's,
+refined by the topology context when that context names the same line
+(`psse_env/actions.py`: `ambiguity_statements`,
+`with_ambiguity_statements`, `with_handoff_statements`).  A handoff is
+the teacher's own statement that its recovery options are exhausted, so
+the statement rides every operator handoff that meets the condition.
+
+**Recorded and reported, never required.**  The environment records the
+statement in the handoff's tool metrics, marked supported when the latest
+solve's confidence names the same line inside the band; the truth audit
+reports it in its own check (`ambiguity_statement`) with what the hidden
+truth holds on that line (impedance error, open terminal, both or
+neither), never as a problem, and the isolated-line check of item 5 reads
+only its own statements.  The expert option `state_ambiguity` is off in
+every variant (research runs name it: `--expert-option
+state_ambiguity=1`), and the rollout summary counts the episodes that
+stated an ambiguity (`ambiguity_episodes`) apart from the isolated-line
+ones.  Tests: `psse_env/test_ambiguity_statement.py`, the audit report in
+`psse_env/dagger/test_release_audit.py`.  Step 5 measures how often each
+teacher states it and on which roots.
+
+**Commit.**  The commit that adds this section (branch
+`claude/nostalgic-kalam-be5f7a`, 2026-10-28).

@@ -538,6 +538,25 @@ ISOLATED_LINE_CHECK = "isolated_line_impedance"
 #: isolated line's impedance not identifiable.  Reported beside the
 #: not-applicable check; never a problem, so no verdict depends on it.
 ISOLATED_LINE_ABSTENTION_CHECK = "isolated_line_abstention"
+#: Item 7 step 3 (2026-10-28): the handoff's "ambiguous: line N, parameter or
+#: breaker" statements, reported with what the hidden truth holds on that line.
+#: Never a problem, so no verdict depends on them.
+AMBIGUITY_STATEMENT_CHECK = "ambiguity_statement"
+AMBIGUOUS_ROUTE_KIND = "ambiguous_parameter_or_breaker"
+
+
+def _truth_on_line(scenario: Mapping[str, Any], line_index: int) -> str:
+    """What the scenario's truth holds on a line: impedance_error, open_terminal, both or neither."""
+    row0 = int(line_index) - 1
+    impedance = any(
+        isinstance(item, Mapping) and item.get("branch_row0") is not None and int(item["branch_row0"]) == row0
+        for item in _as_sequence(scenario.get("true_parameter_errors", [])) or []
+    )
+    terminal = any(
+        isinstance(item, Mapping) and item.get("branch_row0") is not None and int(item["branch_row0"]) == row0
+        for item in _as_sequence(scenario.get("true_topology_errors", [])) or []
+    )
+    return "both" if impedance and terminal else "impedance_error" if impedance else "open_terminal" if terminal else "neither"
 
 
 def _declared_abstentions(final_state: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -2001,7 +2020,10 @@ def audit_episode_against_truth(
             "targets": sorted(list(target) for target in not_applicable_parameter_targets),
             "problems": [],
         }
-    declared_abstentions = _declared_abstentions(final_state)
+    all_statements = _declared_abstentions(final_state)
+    # The isolated-line check reads the isolated-line statements; the
+    # ambiguity statements of item 7 step 3 get their own report below.
+    declared_abstentions = [item for item in all_statements if item.get("kind") != AMBIGUOUS_ROUTE_KIND]
     if not_applicable_parameter_targets or declared_abstentions:
         isolated_lines = sorted(
             int(target[1]) + 1 for target in not_applicable_parameter_targets if target[0] == "branch_row0"
@@ -2019,6 +2041,16 @@ def audit_episode_against_truth(
             "status": status,
             "isolated_lines": isolated_lines,
             "declared": declared_abstentions,
+            "problems": [],
+        }
+    ambiguity = [item for item in all_statements if item.get("kind") == AMBIGUOUS_ROUTE_KIND]
+    if ambiguity:
+        checks[AMBIGUITY_STATEMENT_CHECK] = {
+            "status": "declared",
+            "statements": [
+                {**item, "truth_on_line": _truth_on_line(scenario, item["line_index"]) if isinstance(item.get("line_index"), int) else None}
+                for item in ambiguity
+            ],
             "problems": [],
         }
 
@@ -3146,6 +3178,7 @@ __all__ = [
     "REMAINING_FAULTS_CHECK",
     "ISOLATED_LINE_CHECK",
     "ISOLATED_LINE_ABSTENTION_CHECK",
+    "AMBIGUITY_STATEMENT_CHECK",
     "ISOLATED_LINE_NOT_APPLICABLE",
     "ReleaseAuditTolerances",
     "audit_post_correction_controller_handoff",

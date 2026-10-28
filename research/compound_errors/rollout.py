@@ -216,8 +216,11 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             counter["loop_episodes"] += int(bool(row.get("loop_detected")))
             counter["healthy_touched"] += int(row.get("healthy_components_preserved") is False)
             declared = row.get("abstentions") or []
-            counter["abstention_episodes"] += int(bool(declared))
-            counter["abstentions_unsupported"] += sum(1 for item in declared if item.get("supported") is False)
+            isolated = [item for item in declared if item.get("kind") != "ambiguous_parameter_or_breaker"]
+            ambiguous = [item for item in declared if item.get("kind") == "ambiguous_parameter_or_breaker"]
+            counter["abstention_episodes"] += int(bool(isolated))
+            counter["abstentions_unsupported"] += sum(1 for item in isolated if item.get("supported") is False)
+            counter["ambiguity_episodes"] += int(bool(ambiguous))
             outcomes[str(row.get("terminal_outcome") or ("nonterminal" if not row.get("terminal") else "terminal"))] += 1
             basis[str(row.get("basis"))] += 1
             if not row.get("success"):
@@ -245,7 +248,8 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     totals = Counter()
     for entry in by_class.values():
         for key in ("n", "success", "errors", "steps", "wls_calls", "comparisons", "invalid_action_episodes",
-                    "false_commit_episodes", "loop_episodes", "abstention_episodes", "abstentions_unsupported"):
+                    "false_commit_episodes", "loop_episodes", "abstention_episodes", "abstentions_unsupported",
+                    "ambiguity_episodes"):
             totals[key] += int(entry.get(key, 0) or 0)
     return {"by_class": by_class, "totals": dict(totals)}
 

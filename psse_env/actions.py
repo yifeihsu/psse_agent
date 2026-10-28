@@ -1500,8 +1500,8 @@ def isolated_line_abstentions(observation: Mapping[str, Any] | Any) -> list[dict
     return [out[key] for key in sorted(out, key=lambda k: (k[0], k[1] or ""))]
 
 
-def with_isolated_line_abstentions(action: Mapping[str, Any], observation: Mapping[str, Any] | Any) -> dict[str, Any]:
-    """The handoff action with its abstention statements attached; any other action, or none to declare, unchanged."""
+def with_handoff_statements(action: Mapping[str, Any], statements: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """An operator handoff with ``statements`` appended to its structured ``abstentions`` field; anything else unchanged."""
     try:
         normalized = normalize_action(action)
     except (TypeError, ValueError):
@@ -1509,22 +1509,126 @@ def with_isolated_line_abstentions(action: Mapping[str, Any], observation: Mappi
     request = normalized["arguments"].get("request")
     if normalized["tool"] != ASK_FOR_MORE_EVIDENCE or not str(request or "").startswith("operator_escalation:"):
         return normalized
-    statements = isolated_line_abstentions(observation)
     if not statements:
         return normalized
     arguments = dict(normalized["arguments"])
-    arguments["abstentions"] = statements
+    existing = arguments.get("abstentions")
+    arguments["abstentions"] = [*(existing if isinstance(existing, list) else []), *[dict(item) for item in statements]]
     return {"tool": normalized["tool"], "arguments": arguments}
 
 
+def with_isolated_line_abstentions(action: Mapping[str, Any], observation: Mapping[str, Any] | Any) -> dict[str, Any]:
+    """The handoff action with its abstention statements attached; any other action, or none to declare, unchanged."""
+    return with_handoff_statements(action, isolated_line_abstentions(observation))
+
+
+#: Item 7 step 3 (2026-10-28): when the teacher hands off with the alarm still
+#: standing and the solve cannot clearly tell an impedance error from an open
+#: terminal on the leading line (route confidence between 0.25 and 0.75, so
+#: neither hypothesis has three-to-one support), the handoff states
+#: "ambiguous: line N, parameter or breaker" with the confidence, in the same
+#: structured field.  Recorded and reported; no verdict depends on it.
+AMBIGUOUS_ROUTE_STATEMENT = "ambiguous_parameter_or_breaker"
+AMBIGUITY_BAND = (0.25, 0.75)
+
+
+def _route_confidence_of(observation: Mapping[str, Any] | Any) -> tuple[Mapping[str, Any] | None, bool]:
+    """The latest bound route confidence (the topology context's refinement when it names the same line) and whether the solve alarms."""
+    getter = getattr(observation, "get", None)
+    contexts = getter("fresh_context_evidence", {}) if callable(getter) else {}
+    contexts = contexts if isinstance(contexts, Mapping) else {}
+    wls = contexts.get("wls")
+    if not isinstance(wls, Mapping) or not wls.get("successful"):
+        return None, False
+    record = wls.get("route_confidence")
+    record = record if isinstance(record, Mapping) else None
+    topology = contexts.get("topology")
+    if record is not None and isinstance(topology, Mapping) and str(topology.get("state_id") or "") == str(wls.get("state_id") or ""):
+        refined = topology.get("route_confidence")
+        if isinstance(refined, Mapping) and refined.get("line_index") == record.get("line_index"):
+            record = refined
+    return record, bool(wls.get("anomalous"))
+
+
+def _routes_attempted(observation: Mapping[str, Any] | Any, line: int) -> list[str]:
+    """The hypotheses the episode's corrections tried on ``line`` (committed or rejected), from the observation."""
+    getter = getattr(observation, "get", None)
+    tried: set[str] = set()
+    for field in ("accepted_corrections", "rejected_hypotheses"):
+        for item in (getter(field, []) if callable(getter) else []) or []:
+            source = item.get("source_action") if isinstance(item, Mapping) else None
+            if source is None:
+                continue
+            try:
+                normalized = normalize_action(source)
+            except (TypeError, ValueError):
+                continue
+            target = normalized["arguments"].get("line_index", normalized["arguments"].get("line_index1"))
+            if target != line:
+                continue
+            if normalized["tool"] == CORRECT_PARAMETERS:
+                tried.add("parameter")
+            elif normalized["tool"] == CORRECT_TOPOLOGY:
+                tried.add("topology")
+    return sorted(tried)
+
+
+def ambiguity_statements(observation: Mapping[str, Any] | Any) -> list[dict[str, Any]]:
+    """The "ambiguous: line N, parameter or breaker" statement the latest solve supports at a handoff, else none."""
+    record, anomalous = _route_confidence_of(observation)
+    if record is None or not anomalous or record.get("line_index") is None:
+        return []
+    try:
+        topology = float(record["topology"])
+        line = int(record["line_index"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    if not AMBIGUITY_BAND[0] <= topology <= AMBIGUITY_BAND[1]:
+        return []
+    return [{
+        "kind": AMBIGUOUS_ROUTE_STATEMENT,
+        "line_index": line,
+        "topology_confidence": round(topology, 3),
+        "parameter_confidence": round(1.0 - topology, 3),
+        "basis": record.get("basis"),
+        "breaker_evidence": record.get("breaker_evidence"),
+        "attempted": _routes_attempted(observation, line),
+    }]
+
+
+def with_ambiguity_statements(action: Mapping[str, Any], observation: Mapping[str, Any] | Any) -> dict[str, Any]:
+    """The handoff action with its ambiguity statement attached (item 7 step 3); any other action unchanged."""
+    return with_handoff_statements(action, ambiguity_statements(observation))
+
+
 def abstention_record(declared: Any, observation: Mapping[str, Any] | Any) -> list[dict[str, Any]]:
-    """The declared abstentions of a handoff, each marked supported when an accepted breaker correction isolated that line."""
+    """The declared statements of a handoff, each marked supported by what the observation shows.
+
+    An isolated-line abstention is supported when an accepted breaker
+    correction isolated that line; an ambiguity statement (item 7 step 3)
+    when the latest solve's route confidence names the same line inside the
+    ambiguity band.
+    """
     supported = {(item["line_index"], item["cb_name"]) for item in isolated_line_abstentions(observation)}
     supported_lines = {line for line, _ in supported}
+    ambiguous_lines = {item["line_index"] for item in ambiguity_statements(observation)}
     records: list[dict[str, Any]] = []
     for item in declared if isinstance(declared, (list, tuple)) else []:
         if not isinstance(item, Mapping):
             records.append({"kind": None, "line_index": None, "cb_name": None, "supported": False, "malformed": True})
+            continue
+        if str(item.get("kind")) == AMBIGUOUS_ROUTE_STATEMENT:
+            line = item.get("line_index")
+            valid_line = isinstance(line, int) and not isinstance(line, bool)
+            records.append({
+                "kind": AMBIGUOUS_ROUTE_STATEMENT,
+                "line_index": int(line) if valid_line else None,
+                "topology_confidence": item.get("topology_confidence"),
+                "parameter_confidence": item.get("parameter_confidence"),
+                "basis": item.get("basis"),
+                "attempted": list(item.get("attempted") or []),
+                "supported": bool(valid_line and int(line) in ambiguous_lines),
+            })
             continue
         line = item.get("line_index")
         cb_name = item.get("cb_name")
