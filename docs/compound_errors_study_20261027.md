@@ -1161,12 +1161,19 @@ The two suites the user named, neither consulted when the residual floor
 was set: the conventional cell's validation suite (96 roots, 16/16/12/12/
 8/16/16 over measurement, measurement+parameter, measurement+topology,
 multi-measurement, no-error, parameter, topology) and the hard draw it
-evaluated (193 roots: 24/32/8/72/8/41/8), both taken from the local build
-of the cell's extra suites (`conventional_only_extra_suites_v1`, the
-files' hashes match the build report; the same files were uploaded to
-torch).  Both teachers ran through the end-to-end runner of section 7.1
-on the same code (item 2's binding repair included), 40 actions,
-scada_only.
+evaluated (193 roots: 24/32/8/72/8/41/8).  Correction of 2026-10-28: these
+runs used the local smoke build of the cell's extra suites
+(`conventional_only_extra_suites_v1`, built with a 14-root D0 exclusion),
+whose hashes match that build's own report, not the files the cell built
+on torch (370-root D0 exclusion), as first stated here.  Read back over
+SSH, the torch files hold the same 96 and 193 roots with identical
+execution payloads (cases, measurement vectors, metadata) and identical
+truth; the hard draw differs only in serialization and the validation
+suite only in each root's provenance fingerprint and the root order, none
+of which the runner's outcome depends on.  The clean-flip check of section
+7.7 was re-run on the torch files themselves.  Both teachers ran through
+the end-to-end runner of section 7.1 on the same code (item 2's binding
+repair included), 40 actions, scada_only.
 
 | suite | family (roots) | baseline_compare | guarded | identical trajectories |
 | --- | --- | --- | --- | --- |
@@ -1475,10 +1482,29 @@ the record.
 item 1's open-terminal cue, so the route can be closed while that cue
 stands on any line (`flow_at_noise_lines` non-empty): a wrong refit next
 to an open terminal does not clear the cue, a true refit on a settled
-root never sees one.  Results of the same three runs with the refined
-rule follow below; the conventional suite is unchanged under either rule
-(192 of 192, all 192 tool sequences identical, under the baseline
-teacher).
+root never sees one.  It does not rescue the rule:
+
+| teacher | item 3 (before) | rule as recommended | refined rule |
+| --- | --- | --- | --- |
+| baseline_compare | 617 (48%) | 470 (37%) | 549 (43%) |
+| topology first, always | 789 (62%) | 783 (61%) | 783 (61%) |
+| topology first, guarded | 788 (62%) | 748 (59%) | 748 (59%) |
+
+Nothing is won under any teacher with either rule.  The refinement halves
+the baseline teacher's loss (147 to 68 roots) but leaves the guarded
+teacher's 40 and the always-on flag's 6 unchanged: a wrong refit next to an
+open terminal lowers that line's residual below the cue's floor, so the
+verified solve no longer shows the cue and the route reopens (the guarded
+teacher's 40 losses are the same roots under both rules, 1,273 of 1,275
+trajectories identical).  The conventional suite is unchanged under either
+rule (192 of 192, all 192 tool sequences identical, baseline teacher).  So
+item 4 ends as a negative result: target-local acceptance is not safe while
+an unresolved breaker fault can bias a neighbouring line's estimate, and
+the option stays in the code, off, with the refinement and the
+parameter-only restriction, for the record.  What section 4 measured on
+true corrections refused below the floor (43 at two open faults) is
+better addressed by fixing the structural atom first, which items 1, 2
+and 6 do.
 
 ### 7.7 Item 6: the clean-flip condition (the user's decision after the failed check)
 
