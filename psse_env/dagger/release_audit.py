@@ -534,6 +534,20 @@ def _branch_truth_targets(
 
 ISOLATED_LINE_NOT_APPLICABLE = "line_isolated_by_breaker"
 ISOLATED_LINE_CHECK = "isolated_line_impedance"
+#: Stage 2 item 5 (decision C, 2026-10-28): whether the handoff declared the
+#: isolated line's impedance not identifiable.  Reported beside the
+#: not-applicable check; never a problem, so no verdict depends on it.
+ISOLATED_LINE_ABSTENTION_CHECK = "isolated_line_abstention"
+
+
+def _declared_abstentions(final_state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The abstention statements the final handoff carried, as the environment recorded them."""
+    output = final_state.get("last_tool_output")
+    output = output if isinstance(output, Mapping) else {}
+    metrics = output.get("tool_metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else output
+    declared = metrics.get("abstentions") if isinstance(metrics, Mapping) else None
+    return [dict(item) for item in declared if isinstance(item, Mapping)] if isinstance(declared, (list, tuple)) else []
 
 
 def _not_applicable_parameter_targets(scenario: Mapping[str, Any]) -> set[tuple[str, Any]]:
@@ -1987,6 +2001,26 @@ def audit_episode_against_truth(
             "targets": sorted(list(target) for target in not_applicable_parameter_targets),
             "problems": [],
         }
+    declared_abstentions = _declared_abstentions(final_state)
+    if not_applicable_parameter_targets or declared_abstentions:
+        isolated_lines = sorted(
+            int(target[1]) + 1 for target in not_applicable_parameter_targets if target[0] == "branch_row0"
+        )
+        declared_lines = sorted(
+            {int(item["line_index"]) for item in declared_abstentions if isinstance(item.get("line_index"), int)}
+        )
+        if isolated_lines and set(isolated_lines) <= set(declared_lines):
+            status = "declared"
+        elif isolated_lines:
+            status = "not_declared"
+        else:
+            status = "declared_without_isolated_fault"
+        checks[ISOLATED_LINE_ABSTENTION_CHECK] = {
+            "status": status,
+            "isolated_lines": isolated_lines,
+            "declared": declared_abstentions,
+            "problems": [],
+        }
 
     outcome = str(terminal_outcome) if terminal_outcome is not None else None
     resolved = outcome == "resolved"
@@ -3111,6 +3145,7 @@ __all__ = [
     "HEALTHY_MEASUREMENTS_CHECK",
     "REMAINING_FAULTS_CHECK",
     "ISOLATED_LINE_CHECK",
+    "ISOLATED_LINE_ABSTENTION_CHECK",
     "ISOLATED_LINE_NOT_APPLICABLE",
     "ReleaseAuditTolerances",
     "audit_post_correction_controller_handoff",

@@ -1691,6 +1691,11 @@ def research_expert_policy(environment_factory: Callable[..., Any]) -> Any:
     options = expert_variant_options(
         RESEARCH_EXPERT_OPTIONS.get("variant"), learned_ranker=RESEARCH_EXPERT_OPTIONS.get("learned_ranker"),
     )
+    # Named expert options of a research run on top of the variant
+    # (compound-error study, stage 2: ``abstain_isolated_lines``).
+    for key, value in RESEARCH_EXPERT_OPTIONS.items():
+        if key not in {"variant", "learned_ranker"}:
+            options[str(key)] = value
     return ObservableExpertPolicy(
         ExpertPolicyOracle(process_oracle=environment_factory().process_oracle, **options)
     )

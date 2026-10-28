@@ -1705,6 +1705,42 @@ class IsolatedLineNotApplicableTests(unittest.TestCase):
         remaining = [copy.deepcopy(row) for row in rows]
         return {"remaining_true_faults": remaining, "remaining_true_fault_count": len(remaining), "truth_complete": True}
 
+    def test_the_handoff_abstention_is_reported_and_never_scored(self) -> None:
+        """Stage 2 item 5 (decision C, 2026-10-28): declared or not, the statement changes no problem and no verdict."""
+        from psse_env.dagger.release_audit import ISOLATED_LINE_ABSTENTION_CHECK
+
+        scenario = self._scenario()
+        line_fault = scenario["true_parameter_errors"][0]  # type: ignore[index]
+        final_state = _final_state({"tool": "correct_topology", "arguments": {"line_index1": 2, "status": 0}})
+        plain = _audit_resolved(scenario, final_state, active=_active(case=self._breaker_fixed_case()),
+                                remaining=self._ledger(line_fault))
+        report = plain["checks"][ISOLATED_LINE_ABSTENTION_CHECK]
+        self.assertEqual((report["status"], report["isolated_lines"], report["declared"], report["problems"]),
+                         ("not_declared", [2], [], []))
+        declared = copy.deepcopy(final_state)
+        output = dict(declared.get("last_tool_output") or {})
+        metrics = dict(output.get("tool_metrics") or {})
+        metrics["abstentions"] = [{"kind": "line_isolated_by_breaker", "line_index": 2, "cb_name": "CB_2_L23_B1", "supported": True}]
+        output["tool_metrics"] = metrics
+        declared["last_tool_output"] = output
+        with_statement = _audit_resolved(scenario, declared, active=_active(case=self._breaker_fixed_case()),
+                                         remaining=self._ledger(line_fault))
+        report = with_statement["checks"][ISOLATED_LINE_ABSTENTION_CHECK]
+        self.assertEqual((report["status"], report["isolated_lines"], report["problems"]), ("declared", [2], []))
+        self.assertEqual(report["declared"][0]["line_index"], 2)
+        self.assertEqual(with_statement["problems"], plain["problems"])
+        self.assertEqual(with_statement["checks"][ISOLATED_LINE_CHECK], plain["checks"][ISOLATED_LINE_CHECK])
+        # A statement on a root without an isolated fault is reported as such, still without a problem.
+        unmarked = self._scenario(mark=False)
+        stray = _audit_resolved(unmarked, declared, active=_active(case=self._breaker_fixed_case()),
+                                remaining=self._ledger(*unmarked["true_parameter_errors"]))  # type: ignore[misc]
+        self.assertEqual(stray["checks"][ISOLATED_LINE_ABSTENTION_CHECK]["status"], "declared_without_isolated_fault")
+        self.assertEqual(stray["checks"][ISOLATED_LINE_ABSTENTION_CHECK]["problems"], [])
+        # A conventional truth with no statement gets no abstention check at all.
+        quiet = _audit_resolved(unmarked, final_state, active=_active(case=self._breaker_fixed_case()),
+                                remaining=self._ledger(*unmarked["true_parameter_errors"]))  # type: ignore[misc]
+        self.assertNotIn(ISOLATED_LINE_ABSTENTION_CHECK, quiet["checks"])
+
     def test_breaker_fixed_and_line_left_alone_passes(self) -> None:
         scenario = self._scenario()
         line_fault = scenario["true_parameter_errors"][0]  # type: ignore[index]

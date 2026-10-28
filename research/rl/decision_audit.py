@@ -440,11 +440,38 @@ class TruthGuidedPolicy(ScriptedThenExpertPolicy):
 # --------------------------------------------------------------------------- the audit of one root
 
 
+def parse_run_options(items: Sequence[str] | None) -> dict[str, Any]:
+    """``key=value`` research run options; values read as bool, int, float or text."""
+    options: dict[str, Any] = {}
+    for item in items or []:
+        key, separator, raw = str(item).partition("=")
+        if not separator or not key.strip():
+            raise ValueError(f"run option must be key=value, got {item!r}")
+        text = raw.strip()
+        lowered = text.lower()
+        value: Any
+        if lowered in {"true", "yes", "on", "1"}:
+            value = True
+        elif lowered in {"false", "no", "off", "0"}:
+            value = False
+        else:
+            try:
+                value = int(text)
+            except ValueError:
+                try:
+                    value = float(text)
+                except ValueError:
+                    value = text
+        options[key.strip()] = value
+    return options
+
+
 class _Harness:
     """Environment factory, expert and evaluator of one worker process."""
 
     def __init__(self, *, profile: str, expert_variant: str, triage_model: str | None, progress_basis: str | None,
-                 max_steps: int, seed: int, reward: Mapping[str, Any] | None) -> None:
+                 max_steps: int, seed: int, reward: Mapping[str, Any] | None,
+                 env_options: Mapping[str, Any] | None = None, expert_options: Mapping[str, Any] | None = None) -> None:
         import scripts.run_dagger_research as research
         from psse_env.dagger.evaluator import evaluate_rollout_suites
         from psse_env.dagger.release_factories import deterministic_case_loader
@@ -458,6 +485,17 @@ class _Harness:
         research.RESEARCH_ENVIRONMENT_OPTIONS["triage_classifier"] = triage_model
         if progress_basis:
             research.RESEARCH_ENVIRONMENT_OPTIONS["progress_basis"] = progress_basis
+        # Named options of a research run (compound-error study, stage 2):
+        # provider options such as ``pair_refit_adjacent`` and expert options
+        # such as ``abstain_isolated_lines``; nothing is set unless named.
+        for key, value in dict(env_options or {}).items():
+            research.RESEARCH_ENVIRONMENT_OPTIONS[str(key)] = value
+        for key in [k for k in research.RESEARCH_EXPERT_OPTIONS if k not in {"variant", "learned_ranker"}]:
+            research.RESEARCH_EXPERT_OPTIONS.pop(key, None)
+        for key, value in dict(expert_options or {}).items():
+            research.RESEARCH_EXPERT_OPTIONS[str(key)] = value
+        self.env_options = dict(env_options or {})
+        self.expert_options = dict(expert_options or {})
         research.RESEARCH_EXPERT_OPTIONS["variant"] = expert_variant
         self.env_factory = research.resolve_environment_factory("research", self.profile)
         self.evaluate = evaluate_rollout_suites

@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 from typing import Any, Mapping
 
 from .actions import (
+    abstention_record,
     AMBIGUOUS_BRANCH_CANDIDATES_REQUEST,
     COMPARE_PARAMETER_CANDIDATES,
     PARAMETER_COMPARISON_CONTRACT,
@@ -1685,6 +1686,13 @@ class TransactionalPSSEEnv:
                 self.terminal_outcome = "operator_escalation"
                 metrics["operator_escalation_audit"] = escalation_audit["ledger"]
                 metrics["terminal_outcome"] = self.terminal_outcome
+                declared = safe_normalize_action(action)["arguments"].get("abstentions")
+                if declared is not None:
+                    # Stage 2 item 5 (decision C): the handoff's explicit
+                    # abstentions, each marked supported when an accepted
+                    # breaker correction of this lineage isolated the line.
+                    # Recorded, never a precondition.
+                    metrics["abstentions"] = abstention_record(declared, self.current_state())
             return self._standard_output(execution_status="success", state_mutated=False, tool_metrics=metrics)
         return self.record_noop_failure(
             action=action,

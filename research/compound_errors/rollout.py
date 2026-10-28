@@ -40,6 +40,7 @@ from psse_env.actions import (  # noqa: E402
     RUN_WLS,
 )
 from research.rl import decision_audit as audit  # noqa: E402
+from research.rl.decision_audit import parse_run_options  # noqa: E402
 
 ROLLOUT_CONTRACT = "compound_expert_rollout_v1"
 COMPARE_TOOL = "compare_parameter_candidates"
@@ -150,11 +151,30 @@ def compact_episode(episode: Mapping[str, Any], root: Mapping[str, Any]) -> dict
         "escalation_request": next((str((s.get("action") or {}).get("arguments", {}).get("request"))
                                     for s in reversed(steps) if str((s.get("action") or {}).get("tool")) == ASK_FOR_MORE_EVIDENCE
                                     and s.get("execution_status") == "success"), None),
+        "abstentions": handoff_abstentions(steps),
         "tools": tools,
         "corrections": corrections,
         "trace": slim_trace(steps),
         "seconds": episode.get("seconds"),
     }
+
+
+def handoff_abstentions(steps: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The abstention statements of the episode's successful handoff, as the environment recorded them (stage 2 item 5)."""
+    for step in reversed(steps):
+        action = step.get("action") or {}
+        if str(action.get("tool")) != ASK_FOR_MORE_EVIDENCE or step.get("execution_status") != "success":
+            continue
+        output = step.get("policy_tool_output") or step.get("tool_output") or step.get("outcome") or {}
+        metrics = output.get("tool_metrics") if isinstance(output, Mapping) else None
+        recorded = metrics.get("abstentions") if isinstance(metrics, Mapping) else None
+        if isinstance(recorded, (list, tuple)):
+            return [dict(item) for item in recorded if isinstance(item, Mapping)]
+        declared = (action.get("arguments") or {}).get("abstentions")
+        if isinstance(declared, (list, tuple)):
+            return [dict(item) for item in declared if isinstance(item, Mapping)]
+        return []
+    return []
 
 
 def _run_root(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -195,6 +215,9 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             counter["false_commit_episodes"] += int(int(row.get("false_commit_count") or 0) > 0)
             counter["loop_episodes"] += int(bool(row.get("loop_detected")))
             counter["healthy_touched"] += int(row.get("healthy_components_preserved") is False)
+            declared = row.get("abstentions") or []
+            counter["abstention_episodes"] += int(bool(declared))
+            counter["abstentions_unsupported"] += sum(1 for item in declared if item.get("supported") is False)
             outcomes[str(row.get("terminal_outcome") or ("nonterminal" if not row.get("terminal") else "terminal"))] += 1
             basis[str(row.get("basis"))] += 1
             if not row.get("success"):
@@ -222,7 +245,7 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     totals = Counter()
     for entry in by_class.values():
         for key in ("n", "success", "errors", "steps", "wls_calls", "comparisons", "invalid_action_episodes",
-                    "false_commit_episodes", "loop_episodes"):
+                    "false_commit_episodes", "loop_episodes", "abstention_episodes", "abstentions_unsupported"):
             totals[key] += int(entry.get(key, 0) or 0)
     return {"by_class": by_class, "totals": dict(totals)}
 
@@ -243,8 +266,8 @@ def verdict_cells(entry: Mapping[str, Any]) -> dict[str, int]:
 
 def markdown(summary: Mapping[str, Any], *, title: str) -> str:
     lines = [f"# {title}", "",
-             "| class | n | solved | rate | mean actions | mean WLS | comparisons | true corrections final / partial / rejected / refused | wrong accepted / rejected | handoff | budget | false-commit ep. |",
-             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+             "| class | n | solved | rate | mean actions | mean WLS | comparisons | true corrections final / partial / rejected / refused | wrong accepted / rejected | handoff | budget | false-commit ep. | abstained (unsupported) |",
+             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for name, entry in summary["by_class"].items():
         cells = verdict_cells(entry)
         outcomes = entry.get("terminal_outcomes") or {}
@@ -252,11 +275,13 @@ def markdown(summary: Mapping[str, Any], *, title: str) -> str:
             f"| {name} | {entry['n']} | {entry['success']} | {100 * entry['success_rate']:.0f}% | {entry['mean_steps']:.1f} | "
             f"{entry['mean_wls_calls']:.2f} | {entry['comparisons']} | {cells.get('ACCEPT_FINAL', 0)} / {cells.get('ACCEPT_PARTIAL', 0)} / "
             f"{cells.get('REJECT', 0)} / {cells.get('refused', 0)} | {cells.get('wrong_accepted', 0)} / {cells.get('wrong_rejected', 0)} | "
-            f"{outcomes.get('operator_escalation', 0)} | {outcomes.get('nonterminal', 0)} | {entry.get('false_commit_episodes', 0)} |"
+            f"{outcomes.get('operator_escalation', 0)} | {outcomes.get('nonterminal', 0)} | {entry.get('false_commit_episodes', 0)} | "
+            f"{entry.get('abstention_episodes', 0)} ({entry.get('abstentions_unsupported', 0)}) |"
         )
     totals = summary["totals"]
     lines.append(f"| all | {totals['n']} | {totals['success']} | {100 * totals['success'] / max(1, totals['n']):.0f}% | "
-                 f"{totals['steps'] / max(1, totals['n']):.1f} | {totals['wls_calls'] / max(1, totals['n']):.2f} | {totals['comparisons']} | | | | | |")
+                 f"{totals['steps'] / max(1, totals['n']):.1f} | {totals['wls_calls'] / max(1, totals['n']):.2f} | {totals['comparisons']} | | | | | | "
+                 f"{totals.get('abstention_episodes', 0)} ({totals.get('abstentions_unsupported', 0)}) |")
     return "\n".join(lines)
 
 
@@ -281,6 +306,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--per-class", type=int, default=None)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--env-option", action="append", default=None, metavar="KEY=VALUE",
+                        help="research environment option, e.g. pair_refit_adjacent=1 (stage 2 item 3)")
+    parser.add_argument("--expert-option", action="append", default=None, metavar="KEY=VALUE",
+                        help="expert option on top of the variant, e.g. abstain_isolated_lines=1 (stage 2 item 5)")
     args = parser.parse_args(argv)
 
     roots = load_suite(args.suite)
@@ -302,7 +331,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.limit:
         roots = roots[: args.limit]
     settings = dict(profile=args.profile, expert_variant=args.expert, triage_model=None, progress_basis=args.progress_basis,
-                    max_steps=args.max_steps, seed=args.seed, reward=None)
+                    max_steps=args.max_steps, seed=args.seed, reward=None,
+                    env_options=parse_run_options(args.env_option), expert_options=parse_run_options(args.expert_option))
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
     print(f"[rollout] {len(roots)} roots from {args.suite} under {args.profile} ({args.expert}), workers {args.workers}", flush=True)

@@ -1455,6 +1455,94 @@ def safe_normalize_action(action: Any) -> dict[str, Any]:
         return invalid_action("schema_error", str(exc))
 
 
+#: Compound-error study, stage 2 item 5 (the user's decision of 2026-10-28,
+#: reading C): a handoff may carry explicit abstentions, "not identifiable:
+#: line N isolated by breaker M", as a structured ``abstentions`` argument.
+#: They are recorded by the environment and reported by the evaluator and
+#: the truth audit; no verdict depends on them.
+ISOLATED_LINE_ABSTENTION = "line_isolated_by_breaker"
+_OPEN_STATUS_TEXT = frozenset({"0", "open", "false"})
+
+
+def isolated_line_abstentions(observation: Mapping[str, Any] | Any) -> list[dict[str, Any]]:
+    """The lines that the accepted breaker corrections of the active lineage left isolated, as abstentions.
+
+    An accepted ``correct_topology`` that opened a breaker on a single line
+    terminal (``status`` open with a ``line_index``) de-energised that line,
+    so its impedance is not identifiable from the snapshot; the statement
+    names the line and the breaker.  Read from the policy observation's
+    ``accepted_corrections`` only.
+    """
+    getter = getattr(observation, "get", None)
+    accepted = getter("accepted_corrections", []) if callable(getter) else []
+    out: dict[tuple[int, str | None], dict[str, Any]] = {}
+    for item in accepted or []:
+        source = item.get("source_action") if isinstance(item, Mapping) else None
+        if source is None:
+            continue
+        try:
+            normalized = normalize_action(source)
+        except (TypeError, ValueError):
+            continue
+        if normalized["tool"] != CORRECT_TOPOLOGY:
+            continue
+        arguments = normalized["arguments"]
+        line = arguments.get("line_index")
+        if line is None and arguments.get("line_index1") is not None:
+            line = arguments.get("line_index1")
+        if isinstance(line, bool) or not isinstance(line, int):
+            continue
+        if str(arguments.get("status")).strip().lower() not in _OPEN_STATUS_TEXT:
+            continue
+        cb_name = arguments.get("cb_name")
+        key = (int(line), str(cb_name) if cb_name is not None else None)
+        out.setdefault(key, {"kind": ISOLATED_LINE_ABSTENTION, "line_index": int(line), "cb_name": key[1]})
+    return [out[key] for key in sorted(out, key=lambda k: (k[0], k[1] or ""))]
+
+
+def with_isolated_line_abstentions(action: Mapping[str, Any], observation: Mapping[str, Any] | Any) -> dict[str, Any]:
+    """The handoff action with its abstention statements attached; any other action, or none to declare, unchanged."""
+    try:
+        normalized = normalize_action(action)
+    except (TypeError, ValueError):
+        return dict(action)
+    request = normalized["arguments"].get("request")
+    if normalized["tool"] != ASK_FOR_MORE_EVIDENCE or not str(request or "").startswith("operator_escalation:"):
+        return normalized
+    statements = isolated_line_abstentions(observation)
+    if not statements:
+        return normalized
+    arguments = dict(normalized["arguments"])
+    arguments["abstentions"] = statements
+    return {"tool": normalized["tool"], "arguments": arguments}
+
+
+def abstention_record(declared: Any, observation: Mapping[str, Any] | Any) -> list[dict[str, Any]]:
+    """The declared abstentions of a handoff, each marked supported when an accepted breaker correction isolated that line."""
+    supported = {(item["line_index"], item["cb_name"]) for item in isolated_line_abstentions(observation)}
+    supported_lines = {line for line, _ in supported}
+    records: list[dict[str, Any]] = []
+    for item in declared if isinstance(declared, (list, tuple)) else []:
+        if not isinstance(item, Mapping):
+            records.append({"kind": None, "line_index": None, "cb_name": None, "supported": False, "malformed": True})
+            continue
+        line = item.get("line_index")
+        cb_name = item.get("cb_name")
+        kind = item.get("kind")
+        ok = (
+            str(kind) == ISOLATED_LINE_ABSTENTION
+            and isinstance(line, int) and not isinstance(line, bool)
+            and ((int(line), str(cb_name)) in supported if cb_name is not None else int(line) in supported_lines)
+        )
+        records.append({
+            "kind": str(kind) if kind is not None else None,
+            "line_index": int(line) if isinstance(line, int) and not isinstance(line, bool) else None,
+            "cb_name": str(cb_name) if cb_name is not None else None,
+            "supported": bool(ok),
+        })
+    return records
+
+
 def action_signature(action: Mapping[str, Any] | str) -> str:
     normalized = normalize_action(action)
     args_text = json.dumps(normalized["arguments"], sort_keys=True, separators=(",", ":"))

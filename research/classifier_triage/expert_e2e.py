@@ -42,6 +42,7 @@ from psse_env.evidence_profile import (  # noqa: E402
 from psse_env.oracle.expert_variants import EXPERT_VARIANTS  # noqa: E402
 from research.hypothesis_ranking.expert_e2e import NEEDS_PHASORS, NEEDS_SPECTRA, _basis, _escalation_request, summarize  # noqa: E402
 from research.hypothesis_ranking.features import json_safe  # noqa: E402
+from research.rl.decision_audit import parse_run_options  # noqa: E402
 
 PROFILES = (SCADA_ONLY_PROFILE, WLS_GATED_PROFILE, SUSPICION_GATED_PROFILE, CLASSIFIER_GATED_PROFILE)
 COMPARE_TOOL = "compare_parameter_candidates"
@@ -107,6 +108,27 @@ def triage_summary(episodes: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def handoff_abstentions(episode: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The abstention statements of the episode's successful handoff, as the environment recorded them (compound study, stage 2 item 5)."""
+    for step in reversed(episode.get("trace") or []):
+        action = step.get("action") or {}
+        if str(action.get("tool")) != "ask_for_more_evidence":
+            continue
+        output = step.get("policy_tool_output") or step.get("tool_output") or step.get("outcome") or {}
+        status = step.get("execution_status")
+        if status is None and isinstance(output, Mapping):
+            status = output.get("execution_status")
+        if status != "success":
+            continue
+        metrics = output.get("tool_metrics") if isinstance(output, Mapping) else None
+        recorded = metrics.get("abstentions") if isinstance(metrics, Mapping) else None
+        if isinstance(recorded, (list, tuple)):
+            return [dict(item) for item in recorded if isinstance(item, Mapping)]
+        declared = (action.get("arguments") or {}).get("abstentions")
+        return [dict(item) for item in declared if isinstance(item, Mapping)] if isinstance(declared, (list, tuple)) else []
+    return []
+
+
 def load_suite(path: Path, families: Sequence[str] | None, limit: int | None, per_family: int | None = None) -> list[dict[str, Any]]:
     roots = json.loads(Path(path).read_text(encoding="utf-8"))
     if isinstance(roots, Mapping):
@@ -142,6 +164,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=20261006)
     parser.add_argument("--progress-basis", choices=PROGRESS_BASES, default=DEFAULT_PROGRESS_BASIS,
                         help="basis of a candidate's global progress in the environment (psse_env.transactional_env)")
+    parser.add_argument("--env-option", action="append", default=None, metavar="KEY=VALUE",
+                        help="research environment option (compound-error study, stage 2)")
+    parser.add_argument("--expert-option", action="append", default=None, metavar="KEY=VALUE",
+                        help="expert option on top of the variant (compound-error study, stage 2)")
     args = parser.parse_args(argv)
     started = time.perf_counter()
     out = Path(args.output_dir)
@@ -154,6 +180,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     research.RESEARCH_ENVIRONMENT_OPTIONS["normalized_residual_threshold"] = 4.0
     research.RESEARCH_ENVIRONMENT_OPTIONS["triage_classifier"] = args.triage_model
     research.RESEARCH_ENVIRONMENT_OPTIONS["progress_basis"] = args.progress_basis
+    env_options = parse_run_options(args.env_option)
+    expert_options = parse_run_options(args.expert_option)
+    for key, value in env_options.items():
+        research.RESEARCH_ENVIRONMENT_OPTIONS[key] = value
+    for key, value in expert_options.items():
+        research.RESEARCH_EXPERT_OPTIONS[key] = value
     research.RESEARCH_EXPERT_OPTIONS["variant"] = args.expert
     factory = research.resolve_environment_factory("research", profile)
 
@@ -174,6 +206,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     summary["triage"] = triage_summary(episodes)
     summary["workflow"] = workflow_summary(episodes)
     summary.update(profile=profile, expert=args.expert, triage_model=args.triage_model, progress_basis=args.progress_basis,
+                   env_options=env_options, expert_options=expert_options,
                    suite=str(args.suite), roots=len(roots),
                    seed=args.seed, max_steps=int(args.max_steps), total_seconds=time.perf_counter() - started)
     (out / "summary.json").write_text(json.dumps(json_safe(summary), indent=2, sort_keys=True), encoding="utf-8")
@@ -187,6 +220,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             compact["escalation_request"] = _escalation_request(episode)
             compact["basis"] = _basis(episode)
             compact["first_triage"] = first_triage(episode)
+            compact["abstentions"] = handoff_abstentions(episode)
             compact["corrections"] = [
                 {"tool": str((step.get("action") or {}).get("tool")),
                  "arguments": {k: v for k, v in ((step.get("action") or {}).get("arguments") or {}).items() if k != "state_id"},

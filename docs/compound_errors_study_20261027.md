@@ -815,7 +815,7 @@ depends on it, the conventional families are untouched, and the stricter
 reading (B), in which the statement is required for a solved verdict on a
 root that carries such a line, is a future decision tied to a compound
 DAgger round.  Implemented in its turn in the order of section 6.3
-(section 7.3).
+(section 7.4).
 
 On adopting the guarded teacher (section 7.1), the user's decision of
 2026-10-28, in their words: "Adopt the guarded topology-first teacher as
@@ -1207,4 +1207,113 @@ better) or a residual floor that scales with the line's modelled flow
 would be the next candidates; and the loss mechanism is again a wrong flip
 accepted as partial progress (section 7.1's one lost root), which item 4's
 target-first acceptance may also touch.
+
+### 7.4 Item 5: the explicit abstention at handoff (decision C)
+
+**The statement.**  An accepted `correct_topology` that opened a breaker
+on a single line terminal (status open, with a `line_index`) de-energised
+that line, so its impedance is not identifiable from the snapshot.  With
+the expert option `abstain_isolated_lines` every operator handoff the
+expert proposes (`ask_for_more_evidence` with an `operator_escalation:*`
+request) carries the statements its accepted breaker corrections justify,
+as a structured `abstentions` argument: one `{kind:
+line_isolated_by_breaker, line_index: N, cb_name: M}` per isolated line,
+read from the observation's own `accepted_corrections`
+(`psse_env/actions.py`: `isolated_line_abstentions`,
+`with_isolated_line_abstentions`).  The environment records the declared
+statements in the handoff's tool metrics (`abstentions`), each marked
+`supported` when an accepted breaker correction of that lineage isolated
+the line; a malformed or unsupported statement is recorded as such and
+never a precondition (`abstention_record`).  The truth audit reports it
+beside the not-applicable check of section 3.2
+(`isolated_line_abstention`: `declared`, `not_declared`, or
+`declared_without_isolated_fault`) with no problem attached, so no
+verdict depends on it, under either reading of the user's decision the
+stricter one (B) would be a one-line change in that check.  The rollout
+records the statements per episode and the per-class table counts the
+episodes that abstained and the unsupported statements.
+
+**Scope.**  The option is off in every variant, so no existing teacher's
+actions change unless a run names it; the compound runs below name it for
+all three teachers (`--expert-option abstain_isolated_lines=1`, the
+research run options added for stage 2 together with `--env-option`),
+and the conventional suite is run once with it on to show that the
+statement changes no conventional verdict.  Tests:
+`psse_env/test_isolated_line_abstention.py` (the statements, the
+attachment, the record), the audit report in
+`psse_env/dagger/test_release_audit.py`.
+
+**Results.**  The same 1,275 roots under the three teachers with the
+option on (before: the item-2 runs):
+
+| class (roots) | baseline: solved before, after; handoffs with the statement | always: solved before, after; with the statement | guarded: solved before, after; with the statement |
+| --- | --- | --- | --- |
+| two R/X, adjacent (150) | 50, 50; 1 | 42, 42; 15 | 50, 50; 4 |
+| two R/X, distant (150) | 72, 72; 2 | 63, 63; 25 | 72, 72; 2 |
+| R/X + breaker, same line (75) | 47, 47; 49 | 75, 75; 75 | 71, 71; 71 |
+| R/X + breaker, shared bus (75) | 32, 32; 47 | 43, 43; 72 | 46, 46; 70 |
+| R/X + breaker, distant (150) | 73, 73; 95 | 109, 109; 147 | 109, 109; 142 |
+| meter + two R/X (150) | 61, 61; 1 | 51, 51; 16 | 61, 61; 1 |
+| meter on the R/X line (75) | 14, 14; 3 | 14, 14; 4 | 14, 14; 3 |
+| R/X + breaker + meter (150) | 59, 59; 90 | 97, 97; 139 | 97, 97; 135 |
+| two breakers, dangling (60) | 16, 16; 41 | 53, 53; 57 | 46, 46; 56 |
+| two breakers, mixed (45) | 20, 20; 37 | 43, 43; 45 | 30, 30; 41 |
+| two breakers, bus splits (45) | 22, 22; 0 | 39, 39; 1 | 28, 28; 1 |
+| control: one R/X (50) | 43, 43; 0 | 37, 37; 6 | 43, 43; 0 |
+| control: one breaker (50) | 31, 31; 23 | 50, 50; 35 | 44, 44; 35 |
+| control: one meter (50) | 47, 47; 0 | 47, 47; 0 | 47, 47; 0 |
+| all (1,275) | 587, 587; 389 | 763, 763; 637 | 758, 758; 561 |
+
+As the decision requires, nothing else moves: every teacher's tool
+sequence is identical on 1,275 of 1,275 roots and no outcome flips.  No
+statement is unsupported.  On the 84 roots that carry an isolated line
+(section 3.2) every solved root hands off with the statement (51 of 51,
+83 of 83 and 79 of 79 under the three teachers), so under reading (B) the
+same roots would stay solved.  The statements on roots without an
+isolated truth line (the adjacent pairs: 1, 15 and 4; the distant pairs:
+2, 25 and 2; and so on) are truthful about what the agent did, a wrong
+flip that opened a healthy terminal, and the audit reports them as
+`declared_without_isolated_fault`; their count per class is a direct
+reading of the wrong-flip mechanism of sections 3.1 and 7.3 (the
+always-on flag's 15 on adjacent pairs against the guarded teacher's 4).
+On a bus split no statement is made, because no single line is isolated.
+The conventional suite with the option on, baseline teacher: 192 of 192,
+all 192 tool sequences identical to the control; the statement rides the
+handoff on the 24 measurement+topology roots and on the 25 topology roots
+whose flip opened a line terminal (the 7 bus-split roots carry none).
+The end-to-end runner's compact record now carries the statements too.
+
+**Commit.**  The commit that adds this section (branch
+`claude/nostalgic-kalam-be5f7a`, 2026-10-28); 516 tests pass.
+
+### 7.5 Item 3: one alternating pair refit inside the second correction of an adjacent pair
+
+**The defect.**  On an adjacent pair the one-shot single-line estimate of
+each line is biased by the other's error: the first line's refit on the
+stale model is within tolerance on 73 of 126 adjacent roots (median
+reactance error 26%), the second's on 65 of 129, and one more pass over
+the first line on the model that carries the second line's estimate
+brings it to 112 of 131 (6%), section 5.3.  The stage-1 probe also showed
+where that pass cannot run: on the gated environment a third correction
+after the second commit is refused on 77 of 150 roots
+(`post_correction_confirmation_required` 67, `correction_not_supported`
+10), because the solve is clean or the context no longer supports the
+line, so the expert cannot schedule the pass as an action of its own.
+
+**The repair (provider option `pair_refit_adjacent`, off by default).**
+Inside `correct_parameters`, when the state's last committed parameter
+correction (`last_parameter_correction` in the metadata, now admitted
+through the evidence boundaries) is on a line that shares a bus with the
+line being corrected, the executor runs one alternating pass after the
+single-line fit: the earlier line is refit on the model that carries this
+line's estimate, then this line again; both rows go into the candidate,
+the output reports `pair_refit` (the partner line and both refits) and the
+final values, and the metadata records the partner.  A failed pass leaves
+the single-line estimate and is reported as skipped.  Nothing changes for
+a line without an adjacent committed predecessor, so a root with one
+parameter error, the conventional families among them, is handled exactly
+as before (`MatpowerDeploymentProviders(pair_refit_adjacent=False)` is
+the default; the research runs name it with `--env-option
+pair_refit_adjacent=1`).  Tests: the pass on the adjacent fixture and the
+partner rule (`psse_env/providers/test_compound_scenarios.py`).
 

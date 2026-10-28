@@ -37,6 +37,7 @@ from psse_env.actions import (
     terminal_explanation_signatures,
     blocking_waveform_signatures,
     waveform_anomaly_signatures,
+    with_isolated_line_abstentions,
 )
 from psse_env.oracle.candidate_quality import CandidateQualityOracle
 from psse_env.oracle.anomaly_evidence import normalized_residual_alarm
@@ -203,7 +204,15 @@ class ExpertPolicyOracle:
         candidate_comparison: bool = False,
         comparison_dominance_band: float = DEFAULT_COMPARISON_DOMINANCE_BAND,
         topology_first: bool | str = False,
+        abstain_isolated_lines: bool = False,
     ) -> None:
+        # Compound-error study, stage 2 item 5 (decision C, 2026-10-28): every
+        # operator handoff the expert proposes carries the explicit
+        # "not identifiable: line N isolated by breaker M" statements its
+        # accepted breaker corrections justify.  Recorded and reported, never
+        # required for a verdict; off by default, so no existing teacher's
+        # actions change unless a run names the option.
+        self.abstain_isolated_lines = bool(abstain_isolated_lines)
         # Compound-error study (2026-10-27): the breaker route ahead of the
         # parameter route inside the structural tier.  Off by default; the
         # ``baseline_compare_topology_first`` variant turns it on everywhere,
@@ -254,7 +263,11 @@ class ExpertPolicyOracle:
         history: list[Mapping[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Return ranked admissible actions for an oracle or policy-like state."""
-        return [proposal.as_action() for proposal in self.next_action_proposals(state, history)]
+        actions = [proposal.as_action() for proposal in self.next_action_proposals(state, history)]
+        if self.abstain_isolated_lines:
+            policy = self._context(state, history).policy_state
+            actions = [with_isolated_line_abstentions(action, policy) for action in actions]
+        return actions
 
     def next_action_proposals(
         self,
