@@ -477,6 +477,7 @@ class MatpowerDeploymentProviders:
         flow_noise_sigma: float = 3.0,
         flow_noise_residual: float = 8.0,
         pair_refit_adjacent: bool = False,
+        target_first_partial: bool = False,
         chi2_alpha: float = 0.05,
         normalized_residual_threshold: float | None = None,
         breaker_candidate_count: int = 8,
@@ -570,6 +571,10 @@ class MatpowerDeploymentProviders:
         # line's estimate, then this line again.  Off by default: the single
         # line fit is the one every existing result rests on.
         self.pair_refit_adjacent = bool(pair_refit_adjacent)
+        # Stage 2 item 4: the verifier keeps a target-fixed correction with
+        # non-negative global progress as partial progress whatever the
+        # floor (CandidateQualityOracle.target_first_partial).  Off by default.
+        self.target_first_partial = bool(target_first_partial)
         self.lambda_threshold = float(lambda_threshold)
         self.chi2_alpha = float(chi2_alpha)
         if not math.isfinite(self.chi2_alpha) or not 0.0 < self.chi2_alpha < 1.0:
@@ -685,6 +690,7 @@ class MatpowerDeploymentProviders:
             case_differ=matpower_case_differ,
             case_loader=_load_python_case,
             branch_first_partial=self.branch_first_partial,
+            target_first_partial=self.target_first_partial,
         )
 
     def request_additional_evidence(self, state: Mapping[str, Any]) -> dict[str, Any]:

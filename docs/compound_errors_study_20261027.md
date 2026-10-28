@@ -837,6 +837,20 @@ adopted and the differing roots are reported.  The outcome is recorded in
 section 7.3: the check failed on one root of the hard draw, so nothing was
 adopted and the guarded teacher stays a flagged variant.
 
+After that failure, the user's decision of 2026-10-28, in their words:
+"Yes: after item 4, try the clean-flip condition (breaker route first only
+when a flip makes the node/breaker estimate clean) and re-run the same
+independent check on the validation and hard suites."  So one more item
+follows item 4 (section 7.7): a flagged teacher variant whose breaker
+route goes first only when a candidate flip makes the node/breaker
+estimate clean (its substation chi-square under its limit, not merely
+better), evaluated on item 1's protocol (the compound suite under the
+baseline, the always-on flag, the flow-at-noise guarded variant and the
+new one; the conventional 192-root suite; then the independent check on
+the validation and hard suites under the same pass criterion and the same
+adoption rule), with the cost of the clean-flip test per episode (the
+extra node/breaker solves) reported beside the counts.
+
 ## 7. Stage 2: the tool repairs, one at a time (2026-10-28)
 
 The ground rules, from the request: the items of section 6.3 in order, one
@@ -1385,4 +1399,108 @@ carry the declaration such a candidate needs.
 **Commit.**  The commit that adds this section (branch
 `claude/nostalgic-kalam-be5f7a`, 2026-10-28); provider option, off by
 default; 521 tests pass.
+
+### 7.6 Item 4: target-first partial acceptance
+
+**The defect.**  With several faults open, a true correction's own target
+test clears while the global statistic moves little, and the verifier's
+partial-progress floor (20% of the parent anomaly for a meter, 30% for a
+branch) refuses it: section 4 counted 75 true corrections rejected at two
+open faults, 43 of them below the floor, against wrong corrections whose
+target test does not clear.  A floor scaled by the number of open
+suspects would admit 106 wrong corrections for 24 true ones (section
+6.2, item 4), so the recommendation was target-local: keep a correction
+whose own target metric clears and whose global progress is not negative,
+whatever the floor, and keep the floor for corrections whose target does
+not clear.
+
+**The repair (verifier option `target_first_partial`, off by default).**
+`CandidateQualityOracle(target_first_partial=True)` adds one route to the
+branch of its decision where the target is fixed, the solve is not
+resolved and global progress is below the floor: a parameter correction
+with global progress at or above zero is kept as `ACCEPT_PARTIAL`
+(`target_first_partial`).  Parameters only: the first version admitted
+meters and breakers too, and on the conventional suite it cost three
+multi-meter roots (192 to 189), because a breaker edit's "target fixed"
+is the requested status itself, so the topology screening began to
+advertise wrong flips that the expert then took and could not roll back
+cleanly; a meter edit likewise zeroes its own residual by construction.
+For those two families the floor stays.  The existing branch-first waiver
+keeps precedence where it applies; a negative global progress or an
+unfixed target is refused as before, and every other disposition is
+untouched.  The deployment provider passes the option
+through (`MatpowerDeploymentProviders(target_first_partial=...)`), the
+research factory reads it from the run options (`--env-option
+target_first_partial=1`), and nothing changes unless a run names it.
+Tests: `psse_env/oracle/test_target_first_partial.py`.  The runs below
+name it on top of items 3 and 5, so the before columns are the item-3
+runs.
+
+**Results, the rule as recommended.**  A clear loss, and nothing won:
+
+| class (roots) | baseline_compare: before, after | topology first, always: before, after | topology first, guarded: before, after |
+| --- | --- | --- | --- |
+| two R/X, adjacent (150) | 76, 76 | 65, 65 | 76, 76 |
+| two R/X, distant (150) | 72, 72 | 63, 63 | 72, 72 |
+| R/X + breaker, same line (75) | 47, 21 | 75, 75 | 71, 63 |
+| R/X + breaker, shared bus (75) | 31, 11 | 43, 43 | 45, 44 |
+| R/X + breaker, distant (150) | 73, 30 | 109, 109 | 109, 102 |
+| meter + two R/X (150) | 66, 63 | 54, 52 | 66, 63 |
+| meter on the R/X line (75) | 14, 14 | 14, 14 | 14, 14 |
+| R/X + breaker + meter (150) | 59, 30 | 97, 96 | 97, 90 |
+| two breakers, dangling (60) | 16, 7 | 53, 53 | 46, 42 |
+| two breakers, mixed (45) | 20, 19 | 43, 43 | 30, 30 |
+| two breakers, bus splits (45) | 22, 20 | 39, 39 | 28, 26 |
+| control: one R/X (50) | 43, 43 | 37, 37 | 43, 43 |
+| control: one breaker (50) | 31, 20 | 50, 50 | 44, 39 |
+| control: one meter (50) | 47, 44 | 47, 44 | 47, 44 |
+| all (1,275) | 617 (48%), 470 (37%), 147 lost | 789 (62%), 783 (61%), 6 lost | 788 (62%), 748 (59%), 40 lost |
+
+Every loss is on a root that still carries a breaker fault (or a meter
+fault, the three one-meter controls) when the parameter route runs: there
+a neighbouring line's refit does clear that line's own multiplier while
+the fault stands, which is exactly the masking the floor was guarding
+against.  Under the baseline teacher the wrong parameter corrections
+accepted as partial progress go from 366 to 641 across the suite (true
+ones 515 to 554), and the roots that end with the breaker never fixed
+follow; the always-on flag, which fixes the breaker before any parameter
+correction, loses only 6 (meter roots), and the guarded teacher 40, on
+the breaker roots whose cue did not fire.  The stage-1 reading that "a
+wrong line's target test does not clear" held for the parameter and
+meter classes of section 4, not for lines next to an open terminal.  So
+the rule as recommended is not kept; the option stays available, off, for
+the record.
+
+**A refinement, measured after the loss.**  The verified solve carries
+item 1's open-terminal cue, so the route can be closed while that cue
+stands on any line (`flow_at_noise_lines` non-empty): a wrong refit next
+to an open terminal does not clear the cue, a true refit on a settled
+root never sees one.  Results of the same three runs with the refined
+rule follow below; the conventional suite is unchanged under either rule
+(192 of 192, all 192 tool sequences identical, under the baseline
+teacher).
+
+### 7.7 Item 6: the clean-flip condition (the user's decision after the failed check)
+
+**The condition.**  On an anomalous solve of a state that carries the
+node/breaker channel, the provider (option `clean_flip_screen`, off by
+default; the research runs name it with `--env-option
+clean_flip_screen=1`) runs the node/breaker estimate on the reported
+breaker map, re-estimates with each of the top-ranked breaker flips (the
+same `breaker_candidate_count` the topology context screens), and reports
+in the WLS metrics (`clean_flip`, kept in the observation's durable WLS
+ledger) whether any flip brings the substation chi-square under its limit
+(`available`, the breakers that do, the solves spent).  The estimate and
+its flip screens are computed once per state (keyed on the case, the
+measurement vector and the reported map), so a topology context fetched on
+the same state reuses them: the screen's own cost is the solves it spends
+on states where no context follows.  The expert mode
+`topology_first="clean_flip"` (variant `baseline_compare_topology_clean_flip`)
+puts the breaker route first only in a state whose latest bound solve
+reports such a flip; everything else is the baseline's order.  Tests: the
+screen on a single-breaker fixture and its reuse by the context
+(`psse_env/providers/test_compound_scenarios.py`), the mode and the
+variant (`psse_env/oracle/test_topology_first_order.py`).  The rollout
+records the screens, their solves and the topology-context fetches per
+episode, so the cost is read directly from the runs.
 

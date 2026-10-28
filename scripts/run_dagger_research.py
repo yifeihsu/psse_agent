@@ -316,6 +316,7 @@ def research_diagnostic_environment_factory(
         ),
         # Compound-error study, stage 2 item 3: off unless a run names it.
         pair_refit_adjacent=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("pair_refit_adjacent", False)),
+        target_first_partial=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("target_first_partial", False)),
         triage_classifier=RESEARCH_ENVIRONMENT_OPTIONS.get("triage_classifier"),
         **RESEARCH_HIF_SEARCH_BUDGET,
     )

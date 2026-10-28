@@ -88,6 +88,7 @@ class CandidateQualityOracle:
         coupled_measurement_partial: bool = True,
         accepted_channel_measurement_partial: bool = True,
         branch_first_partial: bool = False,
+        target_first_partial: bool = False,
         mode: str = "auto",
         case_differ: Any = None,
         case_loader: Any = None,
@@ -138,6 +139,21 @@ class CandidateQualityOracle:
         # the masking risk the floor guards against; the strict audit still
         # scores any healthy-line edit as a failure.
         self.branch_first_partial = bool(branch_first_partial)
+        # Compound-error study, stage 2 item 4 (2026-10-28): with several
+        # faults open, a true correction's own target test clears while the
+        # global statistic moves little, and the partial-progress floor
+        # refuses it (section 4 of the study: 43 true corrections rejected
+        # below the floor at two open faults, against wrong ones whose target
+        # test does not clear).  With this option a correction whose target
+        # is fixed and whose global progress is not negative is kept as
+        # partial progress whatever the floor; the floor still governs a
+        # correction whose target is not fixed.  Off by default.
+        # Parameters only: a breaker edit's target "test" is the requested
+        # status itself and a meter edit zeroes its own residual by
+        # construction, so for those families the floor stays (the broader
+        # rule let the topology screening advertise wrong flips on three
+        # multi-meter roots of the conventional suite, 192 to 189).
+        self.target_first_partial = bool(target_first_partial)
         if mode not in {"auto", "synthetic", "deployment"}:
             raise ValueError("mode must be 'auto', 'synthetic', or 'deployment'.")
         self.mode = mode
@@ -382,6 +398,19 @@ class CandidateQualityOracle:
                 and verification.get("measurement_target_rank_one") is True
                 and verification.get("measurement_branch_routes_closed") is True
             )
+            # The route is closed while the verified solve still shows an
+            # open-terminal cue on any line (item 1's ``flow_at_noise_lines``):
+            # on a root with a breaker fault a neighbouring line's refit can
+            # clear its own multiplier while the fault stands (the first run
+            # of item 4 lost 40 breaker roots that way), so the floor keeps
+            # governing until the structural route has been settled.
+            target_first_route = bool(
+                self.target_first_partial
+                and not synthetic_truth
+                and action_family == "parameter"
+                and global_progress >= 0.0
+                and not verification.get("flow_at_noise_lines")
+            )
             if branch_first_route:
                 disposition = CandidateDisposition.ACCEPT_PARTIAL
                 progress_class = "branch_first_partial"
@@ -391,6 +420,17 @@ class CandidateQualityOracle:
                         "branch_target_resolved",
                         "residual_outlier_remains",
                         "branch_partial_floor_waived",
+                        "global_anomaly_remains",
+                    ]
+                )
+            elif target_first_route:
+                disposition = CandidateDisposition.ACCEPT_PARTIAL
+                progress_class = "target_first_partial"
+                rationale.extend(
+                    [
+                        "target_fixed",
+                        "global_progress_nonnegative",
+                        "global_partial_floor_waived",
                         "global_anomaly_remains",
                     ]
                 )
