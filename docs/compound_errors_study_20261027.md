@@ -1889,3 +1889,79 @@ teacher states it and on which roots.
 
 **Commit.**  The commit that adds this section (branch
 `claude/nostalgic-kalam-be5f7a`, 2026-10-28).
+
+### 8.4 Step 4: recovering from a wrong committed correction, two contracts (designed, not built)
+
+The user's rule asks the agent to roll back after fruitless cycles and try
+the other error type.  Today it cannot: `rollback_state` discards only the
+open candidate, and a committed correction has no undo.  How much is at
+stake, from the item-3 runs (pair refit and abstention options):
+
+| teacher | failed roots (of 1,275) | with a wrong correction committed | of those, a true correction also tried | failed without a wrong commit |
+| --- | --- | --- | --- | --- |
+| baseline_compare | 658 | 318 | 226 | 340 |
+| topology first, guarded | 487 | 130 | 92 | 357 |
+
+So an undo could reach at most the 130 guarded failures (318 under the
+baseline teacher) whose final model carries a wrong edit: 130 wrong
+parameter edits, 78 wrong meter edits and 24 wrong breaker flips under the
+guarded teacher.  The other 357 failures end with no wrong edit kept (a
+true fault left uncorrected, a verifier limit, a silent atom) and neither
+contract changes their outcome.  The user is choosing between the two
+contracts below; neither is built until the decision is relayed.
+
+**A. A gated revert action.**
+- *Action.*  `revert_correction(state_id, to_state_id)`: make an ancestor
+  of the active state in the committed lineage active again, discarding
+  the committed corrections after it.  The state store already keeps every
+  committed state with its parent, so the revert is a pointer move with an
+  exact hash check, as `rollback_state` is for a candidate.
+- *Gate* (process oracle, observable quantities only).  Allowed only to an
+  ancestor of the active state, only after K correction cycles since that
+  ancestor without global progress (the WLS objective not lower than at the
+  ancestor; K = 2 is the natural first setting), at most once per
+  ancestor, and with no open candidate.  The reverted corrections move to a
+  policy-visible `reverted_corrections` list with their hypothesis family
+  and line, so the expert and a student see what was tried and switch to
+  the other family on that line.
+- *Teacher.*  After K fruitless cycles on the same alarm, revert to the
+  state before the first correction of the current hypothesis and take the
+  other route on the leading line (parameter after a failed breaker flip,
+  breaker after a failed impedance edit), using step 2's confidence for the
+  order; after the second hypothesis also fails, hand off with step 3's
+  statement.
+- *Scoring.*  The audit scores the final model as today; a reverted edit is
+  neither kept nor counted as a false commit (it was committed under the
+  gate's evidence, then withdrawn), and a revert that removes a true
+  correction shows as an uncorrected fault in the final model.  New
+  metrics: reverts per episode, roots recovered after a revert.
+- *Costs and risks.*  A new tool in the action vocabulary (schema, the
+  process oracle, the student's tool list, DAgger labels); revert cycles,
+  bounded by once-per-ancestor and the action budget; the K-cycle rule
+  spends actions before it fires (two to three cycles of five to six
+  actions under the 40-action budget).
+
+**B. Hand-off only.**
+- *No undo.*  The contract stays as it is.  After K correction cycles on
+  the same alarm without global progress the teacher stops and hands off,
+  with step 3's ambiguity statement and the confidence, instead of
+  continuing on a model that may carry its own wrong edit.
+- *Teacher.*  The first route is chosen by step 2's confidence (the
+  "attempt one hypothesis first" half of the user's rule), and a failed
+  first hypothesis ends in an honest handoff rather than a switch (the
+  "hand off and report the case" half).
+- *Scoring.*  Unchanged: such roots stay failures, reported with the
+  statement; a handoff that keeps a wrong edit fails on that edit as today.
+- *Costs and risks.*  None in the contract; it cannot recover any of the
+  130 (318) roots above, it only stops them earlier and labels them.
+
+**A third shape, for reference.**  Trying a hypothesis on an isolated
+clone and committing only what verifies, as `compare_parameter_candidates`
+already does for impedance candidates, would avoid the undo altogether
+(a "compare routes" step that fits the breaker flip and the impedance edit
+on clones and reports both verdicts).  It costs one action and the clone
+solves an agent asked for, so it is not a screen; it is listed because it
+answers the same need, not proposed in place of the user's two options.
+
+**Commit.**  The commit that adds this section (branch
+`claude/nostalgic-kalam-be5f7a`, 2026-10-28): design only, no code.
