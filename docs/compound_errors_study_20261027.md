@@ -1965,3 +1965,103 @@ answers the same need, not proposed in place of the user's two options.
 
 **Commit.**  The commit that adds this section (branch
 `claude/nostalgic-kalam-be5f7a`, 2026-10-28): design only, no code.
+
+### 8.5 Step 5: the guarded teacher with steps 1-3, measured
+
+All runs on the same code (steps 1 to 3 committed), scada_only, 40
+actions, with the pair refit, the isolated-line abstention and the
+ambiguity statement switched on for every teacher (the statement only
+appears under the guarded teacher, the only one whose solve carries the
+confidence).  The always-look order (`baseline_compare_topology_first`)
+is shown as a labelled reference only, never as a candidate.
+
+**Compound suite** (roots solved; the item-3 runs in brackets):
+
+| class (roots) | baseline_compare | guarded | always-look (reference) | guarded against baseline, won / lost | handoffs with an ambiguity statement (guarded) |
+| --- | --- | --- | --- | --- | --- |
+| two R/X, adjacent (150) | 76 (76) | 76 (76) | 65 (65) | +0 / -0 | 6 |
+| two R/X, distant (150) | 72 (72) | 72 (72) | 63 (63) | +0 / -0 | 3 |
+| R/X + breaker, same line (75) | 47 (47) | 71 (71) | 75 (75) | +24 / -0 | 0 |
+| R/X + breaker, shared bus (75) | 31 (31) | 45 (45) | 43 (43) | +14 / -0 | 5 |
+| R/X + breaker, distant (150) | 73 (73) | 111 (109) | 109 (109) | +38 / -0 | 0 |
+| meter + two R/X (150) | 66 (66) | 66 (66) | 54 (54) | +0 / -0 | 6 |
+| meter on the R/X line (75) | 14 (14) | 14 (14) | 14 (14) | +0 / -0 | 8 |
+| R/X + breaker + meter (150) | 59 (59) | 97 (97) | 97 (97) | +38 / -0 | 5 |
+| two breakers, dangling (60) | 16 (16) | 46 (46) | 53 (53) | +30 / -0 | 1 |
+| two breakers, mixed (45) | 20 (20) | 30 (30) | 43 (43) | +10 / -0 | 2 |
+| two breakers, bus splits (45) | 22 (22) | 27 (28) | 39 (39) | +5 / -0 | 3 |
+| control: one R/X (50) | 43 (43) | 43 (43) | 37 (37) | +0 / -0 | 1 |
+| control: one breaker (50) | 31 (31) | 44 (44) | 50 (50) | +13 / -0 | 0 |
+| control: one meter (50) | 47 (47) | 47 (47) | 47 (47) | +0 / -0 | 0 |
+| all (1,275) | 617 (617) | 789 (788) | 789 (789) | +172 / -0 | 40 |
+
+Mean actions: 17.3 (baseline), 13.8 (guarded), 14.1 (always-look); no
+false commit under any teacher.  The baseline and the always-look
+reference reproduce their item-3 trajectories on 1,275 of 1,275 roots;
+the guarded teacher changes 34, all on breaker classes where the
+confidence moved the order (R/X + breaker distant +2, two bus splits -1).
+
+**Conventional suites** (end-to-end runner; the validation suite and the
+hard draw are the torch files):
+
+| suite | baseline_compare | guarded | always-look (reference) | guarded trajectories equal to the baseline's |
+| --- | --- | --- | --- | --- |
+| conventional test suite (192) | 192 | 192 | 178 | 141 |
+| validation (96) | 96 | 96 | 89 | 76 |
+| hard draw (193) | 185 | 184 | 163 | 182 |
+
+No false commit anywhere.  Per family, the guarded teacher equals the
+baseline everywhere except the hard draw's parameter family (41 to 40):
+the same root as in section 7.3, `r0_344bb11720e7`.  There the confidence
+is 0.854 for an open terminal on line 6: a lightly loaded line (1.2 sigma
+of P flow, 22.7 sigma of P residual) that is the runner-up branch
+candidate at 0.854 of the top multiplier, while the true error is an
+impedance error on the top-ranked line 3.  The breaker route goes first,
+the flip opening line 6 lowers the objective and is kept (a viable
+partial step under the user's rule), line 3 is then corrected, and the
+episode hands off with the wrong flip on the model.  This is the user's
+lightly loaded ambiguity, and it is reported as a failure.  Recovering it
+needs the revert of section 8.4 (now step 6), not a rule aimed at it.
+The always-look reference loses 14, 7 and 22 conventional roots, all
+parameter or measurement+parameter roots on which the topology context
+offers a line outage that verifies as partial progress.
+
+**The remaining guarded failures on the compound suite, by mechanism**
+(486 roots; in brackets, how many of them carry a true fault on a line
+whose flows read at noise without the cue at the first solve, the lightly
+loaded ambiguity the user accepts as a failure):
+
+| mechanism | roots | lightly loaded | where |
+| --- | --- | --- | --- |
+| an impedance fault never corrected | 174 | 74 | two R/X distant 57, meter + two R/X 39, adjacent 20, R/X + breaker distant 19 |
+| every fault touched, the final model outside tolerance | 70 | 19 | meter + two R/X 15, adjacent 14, distant 11, meter on the line 11 |
+| the action budget spent, or a loop | 70 | 19 | meter + two R/X 14, adjacent 13, R/X + breaker + meter 10, two bus splits 10 |
+| a wrong impedance edit kept | 58 | 16 | across ten classes |
+| an impedance correction attempted and not accepted | 43 | 4 | meter on the line 21 (the verifier limit of section 5.1) |
+| a wrong impedance and a wrong meter edit kept | 19 | 3 | adjacent 6, two bus splits 5 |
+| a wrong meter edit kept | 16 | 5 | adjacent 8, meter on the line 4 |
+| a breaker fault left, no wrong edit | 16 | 14 | R/X + breaker + meter 7, distant 4 |
+| a wrong breaker flip kept (alone or with a wrong meter edit) | 12 | 1 | |
+| a meter fault never corrected | 6 | 0 | |
+| a wrong breaker flip and a wrong impedance edit kept | 2 | 0 | adjacent 2 |
+
+155 of the 486 failures carry the lightly loaded ambiguity; 113 keep a
+wrong edit, the population the revert of step 6 can reach; the rest are
+faults the teacher never reached or could not fit (silent second atoms,
+the adjacent-pair estimator, the verifier limit on a meter on the faulted
+line).  None of them is addressed by a rule here.
+
+**The ambiguity statements** (guarded teacher, compound suite): 40
+handoffs stated one (39 of them failed roots).  The stated line carried
+an impedance error on 11, an open terminal on 8 and neither on 21; 37 of
+the 40 rest on a lightly loaded line without the cue
+(`flow_at_noise_without_cue`).  So the statement names a faulted line a
+little under half the time: it reports the solve's ambiguity honestly, it
+does not locate the fault.  On the conventional suites it appears once
+(the hard draw's `r0_098e749ba7ac`, a solved measurement+parameter root,
+line 19 at 0.343).
+
+**Commit.**  The commit that adds this section (branch
+`claude/nostalgic-kalam-be5f7a`, 2026-10-28).  Item 7's commits so far:
+713c0ff (step 1), 0952ab1 (step 2), e76b18e (step 3), 619e659 (step 4).
+
