@@ -1998,8 +1998,10 @@ is shown as a labelled reference only, never as a candidate.
 Mean actions: 17.3 (baseline), 13.8 (guarded), 14.1 (always-look); no
 false commit under any teacher.  The baseline and the always-look
 reference reproduce their item-3 trajectories on 1,275 of 1,275 roots;
-the guarded teacher changes 34, all on breaker classes where the
-confidence moved the order (R/X + breaker distant +2, two bus splits -1).
+the guarded teacher changes 34, 33 of them on classes with a breaker
+error, where the confidence moved the order (R/X + breaker distant +2, two
+bus splits -1; the other 31 keep their outcome), and one on two R/X
+adjacent with the outcome unchanged.
 
 **Conventional suites** (end-to-end runner; the validation suite and the
 hard draw are the torch files):
