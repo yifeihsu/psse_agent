@@ -41,7 +41,7 @@ from psse_env.dagger.dataset_builder import (
 )
 from psse_env.dagger.protocol_bridge import canonical_to_internal_action, unified_tool_schemas
 from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
-from psse_env.oracle.expert_variants import variant_provider_options, expert_variant_options
+from psse_env.oracle.expert_variants import variant_environment_options, variant_provider_options, expert_variant_options
 from psse_env.providers.matpower import MatpowerDeploymentProviders
 from psse_env.providers.scenario_generator import DEFAULT_CHI2_ALPHA
 from psse_env.sft.gates import (
@@ -137,6 +137,9 @@ def production_environment_factory(
         # four-and-five-error recoveries mid-cycle.
         max_steps=DEFAULT_EPISODE_ACTION_LIMIT,
         history_window=4,
+        # The walk teacher's gated revert (item 7 step 6); every other
+        # teacher's environment is built by the call it was built by before.
+        **variant_environment_options(),
     )
     if env.production_dataset_mode is not True:
         raise RuntimeError("release environment did not enter production dataset mode")

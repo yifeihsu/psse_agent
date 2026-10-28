@@ -543,6 +543,9 @@ ISOLATED_LINE_ABSTENTION_CHECK = "isolated_line_abstention"
 #: Never a problem, so no verdict depends on them.
 AMBIGUITY_STATEMENT_CHECK = "ambiguity_statement"
 AMBIGUOUS_ROUTE_KIND = "ambiguous_parameter_or_breaker"
+#: Item 7 step 6: the statement of the competing hypotheses, with confidences.
+AMBIGUOUS_HYPOTHESES_KIND = "ambiguous_hypotheses"
+AMBIGUITY_KINDS = frozenset({AMBIGUOUS_ROUTE_KIND, AMBIGUOUS_HYPOTHESES_KIND})
 
 
 def _truth_on_line(scenario: Mapping[str, Any], line_index: int) -> str:
@@ -557,6 +560,30 @@ def _truth_on_line(scenario: Mapping[str, Any], line_index: int) -> str:
         for item in _as_sequence(scenario.get("true_topology_errors", [])) or []
     )
     return "both" if impedance and terminal else "impedance_error" if impedance else "open_terminal" if terminal else "neither"
+
+
+def _ambiguity_truth(scenario: Mapping[str, Any], item: Mapping[str, Any]) -> dict[str, Any]:
+    """An ambiguity statement with what the truth holds on each target it names (reported, never a problem)."""
+    if item.get("kind") != AMBIGUOUS_HYPOTHESES_KIND:
+        line = item.get("line_index")
+        return {**item, "truth_on_line": _truth_on_line(scenario, line) if isinstance(line, int) else None}
+    meters = {
+        int(fault.get("index", fault.get("index0", -1)))
+        for fault in _as_sequence(scenario.get("true_measurement_errors", [])) or []
+        if isinstance(fault, Mapping)
+    }
+    hypotheses = []
+    for hypothesis in item.get("hypotheses") or []:
+        if not isinstance(hypothesis, Mapping):
+            continue
+        if hypothesis.get("family") == "measurement":
+            index = hypothesis.get("measurement_index")
+            truth = "bad_meter" if isinstance(index, int) and index in meters else "neither"
+        else:
+            line = hypothesis.get("line_index")
+            truth = _truth_on_line(scenario, line) if isinstance(line, int) else None
+        hypotheses.append({**hypothesis, "truth_on_target": truth})
+    return {**item, "hypotheses": hypotheses}
 
 
 def _declared_abstentions(final_state: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -2023,7 +2050,7 @@ def audit_episode_against_truth(
     all_statements = _declared_abstentions(final_state)
     # The isolated-line check reads the isolated-line statements; the
     # ambiguity statements of item 7 step 3 get their own report below.
-    declared_abstentions = [item for item in all_statements if item.get("kind") != AMBIGUOUS_ROUTE_KIND]
+    declared_abstentions = [item for item in all_statements if item.get("kind") not in AMBIGUITY_KINDS]
     if not_applicable_parameter_targets or declared_abstentions:
         isolated_lines = sorted(
             int(target[1]) + 1 for target in not_applicable_parameter_targets if target[0] == "branch_row0"
@@ -2043,14 +2070,11 @@ def audit_episode_against_truth(
             "declared": declared_abstentions,
             "problems": [],
         }
-    ambiguity = [item for item in all_statements if item.get("kind") == AMBIGUOUS_ROUTE_KIND]
+    ambiguity = [item for item in all_statements if item.get("kind") in AMBIGUITY_KINDS]
     if ambiguity:
         checks[AMBIGUITY_STATEMENT_CHECK] = {
             "status": "declared",
-            "statements": [
-                {**item, "truth_on_line": _truth_on_line(scenario, item["line_index"]) if isinstance(item.get("line_index"), int) else None}
-                for item in ambiguity
-            ],
+            "statements": [_ambiguity_truth(scenario, item) for item in ambiguity],
             "problems": [],
         }
 

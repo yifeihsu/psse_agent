@@ -68,6 +68,7 @@ from psse_env.actions import (
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     RUN_HSE_FROM_PATH,
     RUN_THREE_PHASE_NLM_FROM_PATH,
+    hypothesis_confidence_vector,
     unexplained_signatures,
 )
 from psse_env.state_store import apply_modification
@@ -1936,6 +1937,7 @@ class MatpowerDeploymentProviders:
         # confidence of item 7 step 2.
         flow_at_noise_lines: list[int] = []
         route_confidence: dict[str, Any] | None = None
+        hypothesis_confidence: dict[str, Any] | None = None
         # While a waveform-level anomaly (harmonic distortion, three-phase
         # unbalance, or a suspected HIF) stands, the fundamental-frequency
         # solve's bad-data attributions are physically unreliable: the
@@ -1989,6 +1991,7 @@ class MatpowerDeploymentProviders:
             if self.flow_at_noise_cue:
                 flow_at_noise_lines = self._flow_at_noise_lines(solved, range(int(solved["nl"])))
                 route_confidence = self._route_confidence(solved)
+                hypothesis_confidence = self._hypothesis_confidence(solved, route_confidence)
         metrics: dict[str, Any] = {
             **self._binding(state),
             "evidence_source": "deployment_wls:lagrangian_port",
@@ -2022,6 +2025,8 @@ class MatpowerDeploymentProviders:
             # Parameter-versus-open-terminal confidence for the leading line
             # (item 7 step 2): from this solve's own quantities, no extra solve.
             metrics["route_confidence"] = route_confidence
+            # The confidence over meter, parameter and topology (item 7 step 6).
+            metrics["hypothesis_confidence"] = hypothesis_confidence
         if conditional:
             metrics["hif_conditioning"] = conditional["conditioning"]
             metrics["conditional_meter_scores"] = conditional["conditional_scores"]
@@ -2927,6 +2932,35 @@ class MatpowerDeploymentProviders:
         refined["breaker_evidence"] = evidence
         refined["source"] = "node_breaker_context"
         return refined
+
+    def _breaker_refined_confidences(
+        self, solved: Mapping[str, Any], breaker_findings: Sequence[Mapping[str, Any]]
+    ) -> dict[str, Any]:
+        """The topology context's refinements: the route confidence (step 2) and the three-category vector (step 6)."""
+        refined = self._breaker_refined_confidence(solved, breaker_findings)
+        return {"route_confidence": refined, "hypothesis_confidence": self._hypothesis_confidence(solved, refined)}
+
+    def _hypothesis_confidence(
+        self, solved: Mapping[str, Any], route_confidence: Mapping[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Confidence over meter, parameter and topology from this solve's own quantities (item 7 step 6), no extra solve.
+
+        The largest normalized residual against the largest normalized branch
+        multiplier gives the meter share; the branch share splits by the
+        open-terminal confidence ``route_confidence`` (the solve's own, or the
+        topology context's refinement).  ``psse_env.actions`` holds the rule.
+        """
+        payload = solved["payload"]
+        residuals = [abs(float(value)) for value in payload.get("r") or []]
+        lambdas = [abs(float(value)) for value in payload.get("lambdaN") or []]
+        nl = int(solved["nl"])
+        measurement_index = max(range(len(residuals)), key=lambda i: residuals[i]) if residuals else None
+        top = max(range(len(lambdas)), key=lambda i: lambdas[i]) if lambdas else None
+        parameter_line = top // 2 + 1 if top is not None and top // 2 < nl else None
+        return hypothesis_confidence_vector(
+            max(residuals, default=0.0), max(lambdas, default=0.0), route_confidence,
+            measurement_index=measurement_index, parameter_line=parameter_line,
+        )
 
     def _flow_at_noise_lines(self, solved: Mapping[str, Any], rows0: Sequence[int]) -> list[int]:
         """Lines (1-based) among ``rows0`` whose terminal flows read like an open terminal.
@@ -3959,7 +3993,7 @@ class MatpowerDeploymentProviders:
             # Item 7 step 2: the route confidence refined by this context's
             # own breaker multipliers, only when a run reads the cue.
             **(
-                {"route_confidence": self._breaker_refined_confidence(solved, breaker_findings)}
+                self._breaker_refined_confidences(solved, breaker_findings)
                 if self.flow_at_noise_cue
                 else {}
             ),

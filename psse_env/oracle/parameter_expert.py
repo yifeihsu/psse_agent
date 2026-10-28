@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from psse_env.actions import CORRECT_MEASUREMENTS, CORRECT_PARAMETERS, GET_PARAMETER_CONTEXT
+from psse_env.actions import CORRECT_MEASUREMENTS, CORRECT_PARAMETERS, GET_PARAMETER_CONTEXT, withdrawn_families
 from psse_env.oracle.expert_types import (
     ExpertActionProposal,
     dominance_confidence,
@@ -80,8 +80,12 @@ class ParameterExpert:
         # branch evidence is dominant or explicit.  Forcing parameter-first
         # here was measured to chase verification-rejected phantom lines until
         # the recovery budget exhausted (4 of 19 mixed episodes regressed).
+        # Item 7 step 6: a meter correction a revert withdrew on this state
+        # hands the lead to the branch families.
+        withdrawn_measurement = "measurement" in withdrawn_families(state)
         suppress_parameter_hints = bool(
             measurement_dominant
+            and not withdrawn_measurement
             and not branch_dominant
             and not explicit_parameter_codes
             and not partial_measurement

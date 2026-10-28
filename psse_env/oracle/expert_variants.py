@@ -29,7 +29,15 @@ construct the same expert:
   flows read at noise while the stale model routes flow through it; stage 2
   of the compound-error study, 2026-10-28; the provider reports the cue only
   to this teacher, ``variant_provider_options``).  ``baseline_compare`` and
-  the seven conventional families are untouched by either variant.
+  the seven conventional families are untouched by either variant;
+* ``baseline_compare_guarded_walk``: the guarded teacher whose balanced routes
+  follow the ranking of the confidence over meter, parameter and topology,
+  and which, where it would hand off after a hypothesis's commits went
+  fruitless, reverts to the state before that hypothesis and walks the
+  ranking to the next one (``hypothesis_walk=True``; item 7 step 6 of the
+  compound-error study, the user's decision of 2026-10-28).  Its environment
+  carries the gated revert (``variant_environment_options``:
+  ``revert_fruitless_cycles``).
 
 Research only.  The default for new work, what a pipeline env or a research
 script picks up when it names no variant, is ``baseline_compare`` (the user's
@@ -54,7 +62,8 @@ EXPERT_VARIANT_ENV = "PSSE_EXPERT_VARIANT"
 #: name theirs.  Until then the default was ``baseline``.
 DEFAULT_EXPERT_VARIANT = "baseline_compare"
 EXPERT_VARIANTS = ("baseline", "ledger", "ledger_ranked", "ledger_ranked_compare", "baseline_compare",
-                   "baseline_compare_topology_first", "baseline_compare_topology_guarded")
+                   "baseline_compare_topology_first", "baseline_compare_topology_guarded",
+                   "baseline_compare_guarded_walk")
 
 
 def current_expert_variant(variant: str | None = None) -> str:
@@ -80,6 +89,8 @@ def expert_variant_options(variant: str | None = None, *, learned_ranker: Any = 
         return {"candidate_comparison": True, "topology_first": True}
     if name == "baseline_compare_topology_guarded":
         return {"candidate_comparison": True, "topology_first": "flow_at_noise"}
+    if name == "baseline_compare_guarded_walk":
+        return {"candidate_comparison": True, "topology_first": "flow_at_noise", "hypothesis_walk": True}
     if name == "ledger":
         return {"hypothesis_ledger": True}
     options: dict[str, Any] = {
@@ -97,6 +108,20 @@ def expert_variant_options(variant: str | None = None, *, learned_ranker: Any = 
 #: environment factories merge these in unless a run sets the option itself.
 VARIANT_PROVIDER_OPTIONS: dict[str, dict[str, Any]] = {
     "baseline_compare_topology_guarded": {"flow_at_noise_cue": True},
+    "baseline_compare_guarded_walk": {"flow_at_noise_cue": True},
+}
+
+#: Item 7 step 6: the gated revert's fruitless-cycle count, chosen from the
+#: guarded teacher's stage-2 trajectories: 96% of the committed states of its
+#: solved compound roots moved on to their next commit within 2 fruitless
+#: correction cycles (91% within none), so a hypothesis still fruitless after
+#: 3 is past what a productive state needed (the compound-error study,
+#: section 8.6).  A candidate for learning, with when to abandon a hypothesis.
+REVERT_FRUITLESS_CYCLES = 3
+
+#: Environment options a teacher variant needs: the walk teacher's gated revert.
+VARIANT_ENVIRONMENT_OPTIONS: dict[str, dict[str, Any]] = {
+    "baseline_compare_guarded_walk": {"revert_fruitless_cycles": REVERT_FRUITLESS_CYCLES},
 }
 
 
@@ -105,5 +130,11 @@ def variant_provider_options(variant: str | None = None) -> dict[str, Any]:
     return dict(VARIANT_PROVIDER_OPTIONS.get(current_expert_variant(variant), {}))
 
 
-__all__ = ["DEFAULT_EXPERT_VARIANT", "EXPERT_VARIANTS", "EXPERT_VARIANT_ENV", "VARIANT_PROVIDER_OPTIONS",
-           "current_expert_variant", "expert_variant_options", "variant_provider_options"]
+def variant_environment_options(variant: str | None = None) -> dict[str, Any]:
+    """Environment keyword arguments the named (else current) teacher variant needs."""
+    return dict(VARIANT_ENVIRONMENT_OPTIONS.get(current_expert_variant(variant), {}))
+
+
+__all__ = ["DEFAULT_EXPERT_VARIANT", "EXPERT_VARIANTS", "EXPERT_VARIANT_ENV", "REVERT_FRUITLESS_CYCLES",
+           "VARIANT_ENVIRONMENT_OPTIONS", "VARIANT_PROVIDER_OPTIONS", "current_expert_variant",
+           "expert_variant_options", "variant_environment_options", "variant_provider_options"]

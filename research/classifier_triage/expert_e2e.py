@@ -108,6 +108,18 @@ def triage_summary(episodes: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def first_hypothesis_confidence(steps: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """The three-category confidence of the episode's first successful WLS (item 7 step 6), when the solve carried one."""
+    for step in steps:
+        if str((step.get("action") or {}).get("tool")) != "run_wls" or step.get("execution_status") != "success":
+            continue
+        output = step.get("policy_tool_output") if isinstance(step.get("policy_tool_output"), Mapping) else {}
+        metrics = output.get("tool_metrics") if isinstance(output.get("tool_metrics"), Mapping) else {}
+        record = metrics.get("hypothesis_confidence")
+        return dict(record) if isinstance(record, Mapping) else None
+    return None
+
+
 def handoff_abstentions(episode: Mapping[str, Any]) -> list[dict[str, Any]]:
     """The abstention statements of the episode's successful handoff, as the environment recorded them (compound study, stage 2 item 5)."""
     for step in reversed(episode.get("trace") or []):
@@ -222,6 +234,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             compact["first_triage"] = first_triage(episode)
             compact["abstentions"] = handoff_abstentions(episode)
             compact["revert_accounting"] = dict(episode.get("revert_accounting") or {})
+            compact["first_hypothesis_confidence"] = first_hypothesis_confidence(
+                [step for step in episode.get("trace") or [] if not step.get("intervention")])
             compact["corrections"] = [
                 {"tool": str((step.get("action") or {}).get("tool")),
                  "arguments": {k: v for k, v in ((step.get("action") or {}).get("arguments") or {}).items() if k != "state_id"},

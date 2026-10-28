@@ -883,6 +883,8 @@ class TransactionalPSSEEnv:
                 "flow_at_noise_lines",
                 # Item 7 step 2: the parameter-versus-open-terminal confidence.
                 "route_confidence",
+                # Item 7 step 6: the confidence over meter, parameter, topology.
+                "hypothesis_confidence",
             ):
                 if key in wls:
                     contexts["wls"][key] = wls[key]
@@ -4355,6 +4357,7 @@ class TransactionalPSSEEnv:
             "topology_findings",
             "topology_candidate_screening",
             "route_confidence",
+            "hypothesis_confidence",
             "route_status",
             "route_status_reason",
         ):

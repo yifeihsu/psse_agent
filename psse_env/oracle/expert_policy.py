@@ -30,9 +30,14 @@ from psse_env.actions import (
     RECOVERY_BUDGET_EXHAUSTED_REQUEST,
     POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
+    REVERT_STATE,
     RUN_WLS,
     action_signature,
+    correction_hypothesis,
+    hypothesis_vector_of,
+    revert_ledger_of,
     safe_normalize_action,
+    withdrawn_families,
     successful_current_wls,
     terminal_explanation_signatures,
     blocking_waveform_signatures,
@@ -49,7 +54,7 @@ from psse_env.oracle.expert_types import (
 )
 from psse_env.oracle.measurement_expert import MeasurementExpert
 from psse_env.oracle.parameter_expert import ParameterExpert
-from psse_env.oracle.process_validity import ProcessValidityOracle
+from psse_env.oracle.process_validity import ProcessValidityOracle, revert_refusal
 from psse_env.oracle.recovery_expert import RecoveryExpert
 from psse_env.oracle.termination_expert import TerminationExpert
 from psse_env.oracle.hif_continuation import hif_meter_route_ready, recovery_signatures
@@ -207,7 +212,17 @@ class ExpertPolicyOracle:
         topology_first: bool | str = False,
         abstain_isolated_lines: bool = False,
         state_ambiguity: bool = False,
+        hypothesis_walk: bool = False,
     ) -> None:
+        # Item 7 step 6 (the user's decision of 2026-10-28 and the confidence
+        # amendment): the balanced routes follow the ranking of the confidence
+        # over meter, parameter and topology; when the teacher would hand off
+        # with the alarm standing after a hypothesis's commits went fruitless,
+        # it reverts to the state before that hypothesis's first commit (the
+        # environment's gate decides whether it may) and walks the ranking to
+        # the next hypothesis there.  Off by default; the revert also needs an
+        # environment built with it.
+        self.hypothesis_walk = bool(hypothesis_walk)
         # Item 7 step 3 (2026-10-28): every operator handoff the expert
         # proposes states "ambiguous: line N, parameter or breaker" with the
         # route confidence when the latest solve still alarms and cannot tell
@@ -605,6 +620,16 @@ class ExpertPolicyOracle:
                 return _triage_first_order(ranked, triage_first_family(current_triage_report(state_view)))
             return _structural_first_order(ranked, topology_first=self._topology_first_for(policy))
         escalation = self._recovery_exhaustion_proposals(policy, context.history)
+        if self.hypothesis_walk:
+            switch = self._rank_and_filter(
+                self._hypothesis_switch_proposals(policy, escalation),
+                policy,
+                seen_signatures=seen_signatures,
+                blocked_correction_tools=blocked_correction_tools,
+                mandatory=False,
+            )
+            if switch:
+                return switch
         return self._rank_and_filter(
             escalation,
             policy,
@@ -612,6 +637,77 @@ class ExpertPolicyOracle:
             blocked_correction_tools=blocked_correction_tools,
             mandatory=False,
         )
+
+    def _hypothesis_switch_proposals(
+        self,
+        policy: PolicyObservation | Mapping[str, Any],
+        escalation: Sequence[ExpertActionProposal],
+    ) -> list[ExpertActionProposal]:
+        """Revert a fruitless hypothesis instead of handing off (item 7 step 6), when the gate admits it.
+
+        Only where the teacher would otherwise hand the alarm over: the
+        hypothesis is the family of the latest committed correction on the
+        active lineage, and the revert goes to the state before that family's
+        first commit in the latest run of its commits.  The environment's gate
+        decides (fruitless cycles since that commit, the alarm standing, once
+        per ancestor), and the budget must still close a lifecycle after the
+        revert (the budget handoff's own floor, plus the revert).
+        """
+        if not any(
+            safe_normalize_action(proposal.action)["tool"] == ASK_FOR_MORE_EVIDENCE
+            and str(safe_normalize_action(proposal.action)["arguments"].get("request") or "").startswith("operator_escalation:")
+            for proposal in escalation
+        ):
+            return []
+        ledger = revert_ledger_of(policy)
+        if ledger is None:
+            return []
+        try:
+            remaining_budget = int(self._get(policy, "remaining_budget", 0) or 0)
+        except (TypeError, ValueError):
+            return []
+        if remaining_budget < 5:
+            return []
+        lineage = [entry for entry in ledger.get("lineage") or [] if isinstance(entry, Mapping)]
+        if not lineage:
+            return []
+
+        def family(entry: Mapping[str, Any]) -> str | None:
+            hypothesis = correction_hypothesis(entry.get("source_action") or {})
+            return hypothesis[0] if hypothesis else None
+
+        current = family(lineage[-1])
+        start = len(lineage) - 1
+        while start > 0 and family(lineage[start - 1]) == current:
+            start -= 1
+        active_id = self._get(policy, "active_state_id")
+        arguments = {"state_id": active_id, "to_state_id": lineage[start].get("state_id")}
+        if current is None or revert_refusal(policy, arguments) is not None:
+            return []
+        return [ExpertActionProposal(
+            action={"tool": REVERT_STATE, "arguments": arguments},
+            source_expert="recovery_expert",
+            confidence=1.0,
+            evidence_codes=[
+                "hypothesis_fruitless_after_commit",
+                f"withdrawn_family={current}",
+                f"fruitless_cycles_since={lineage[start].get('fruitless_cycles_since')}",
+            ],
+            admissible=True,
+            estimated_immediate_risk=0.0,
+        )]
+
+    def _hypothesis_vector(self, policy: PolicyObservation | Mapping[str, Any]) -> Mapping[str, Any] | None:
+        """The latest bound confidence over meter, parameter and topology (item 7 step 6), else None."""
+        vector, _ = hypothesis_vector_of(policy)
+        if vector is not None:
+            return vector
+        if self._get(policy, "last_tool") == RUN_WLS:
+            output = self._get(policy, "last_tool_output", {}) or {}
+            metrics = output.get("tool_metrics") if isinstance(output, Mapping) else None
+            record = metrics.get("hypothesis_confidence") if isinstance(metrics, Mapping) else None
+            return record if isinstance(record, Mapping) else None
+        return None
 
     def _flow_at_noise_lines(self, policy: PolicyObservation | Mapping[str, Any]) -> list[int]:
         """Lines the latest bound WLS solve flagged with the open-terminal cue (empty without one).
@@ -654,6 +750,18 @@ class ExpertPolicyOracle:
         """
         if self.topology_first is True:
             return True
+        if self.hypothesis_walk:
+            # A family a revert withdrew on this state goes behind the other
+            # branch family; otherwise the ranking of the confidence decides.
+            withdrawn = withdrawn_families(policy)
+            if "topology" in withdrawn and "parameter" not in withdrawn:
+                return False
+            if "parameter" in withdrawn and "topology" not in withdrawn:
+                return True
+            vector = self._hypothesis_vector(policy)
+            ranking = list(vector.get("ranking") or []) if vector is not None else []
+            if "topology" in ranking and "parameter" in ranking:
+                return ranking.index("topology") < ranking.index("parameter")
         if self.topology_first == FLOW_AT_NOISE_GUARD:
             confidence = self._route_confidence(policy)
             if confidence is not None and confidence.get("topology") is not None:

@@ -335,6 +335,98 @@ def revert_ledger_of(observation: Mapping[str, Any] | Any) -> Mapping[str, Any] 
     ledger = getter("revert_ledger") if callable(getter) else None
     return ledger if isinstance(ledger, Mapping) and ledger.get("contract") == REVERT_CONTRACT else None
 
+
+def withdrawn_families(observation: Mapping[str, Any] | Any) -> set[str]:
+    """Families of the corrections a revert withdrew on the active state (item 7 step 6)."""
+    getter = getattr(observation, "get", None)
+    if not callable(getter):
+        return set()
+    active_id = str(getter("active_state_id") or "")
+    families: set[str] = set()
+    for record in getter("rejected_hypotheses") or []:
+        if not isinstance(record, Mapping) or record.get("rejection_kind") != REVERTED_REJECTION_KIND:
+            continue
+        if active_id and str(record.get("candidate_parent_id") or "") != active_id:
+            continue
+        hypothesis = correction_hypothesis(record.get("source_action") or {})
+        if hypothesis is not None:
+            families.add(hypothesis[0])
+    return families
+
+
+#: Item 7 step 6 (the user's amendment of 2026-10-28): a confidence over the
+#: three balanced error categories, meter (bad data), parameter (R/X) and
+#: topology (breaker), from quantities the solve already produced.  The meter
+#: share is the largest normalized residual against the largest normalized
+#: branch multiplier, r / (r + lambda), the classical Lagrangian test; the
+#: branch share splits into topology and parameter by the open-terminal
+#: confidence of step 2.  The ranking uses the bands the routes already use:
+#: the meter leads only outside the 1.2 dominance band (r > 1.2 lambda), the
+#: open terminal leads the branch block above 0.5.  Two hypotheses compete when
+#: the rule that orders them cannot separate them: meter and branch inside the
+#: dominance band, parameter and topology inside step 3's 3:1 band.
+HYPOTHESIS_FAMILIES = ("measurement", "parameter", "topology")
+LAGRANGIAN_DOMINANCE_BAND = 1.2
+HYPOTHESIS_CONFIDENCE_CONTRACT = "balanced_hypothesis_confidence_v1"
+
+
+def hypothesis_ranking(residual_max: float, multiplier_max: float, open_terminal: float) -> list[str]:
+    """The route order the vector implies: meter first only when meter dominant, the open terminal first above 0.5."""
+    branch = ["topology", "parameter"] if open_terminal > 0.5 else ["parameter", "topology"]
+    if residual_max > LAGRANGIAN_DOMINANCE_BAND * multiplier_max:
+        return ["measurement", *branch]
+    return [*branch, "measurement"]
+
+
+def competing_hypotheses(residual_max: float, multiplier_max: float, open_terminal: float) -> list[str]:
+    """The families the leading one cannot be told apart from by the rule that orders them (empty when it stands clear)."""
+    leader = hypothesis_ranking(residual_max, multiplier_max, open_terminal)[0]
+    if leader == "measurement":
+        return []
+    out = []
+    if AMBIGUITY_BAND[0] <= open_terminal <= AMBIGUITY_BAND[1]:
+        out.append("parameter" if leader == "topology" else "topology")
+    if not multiplier_max > LAGRANGIAN_DOMINANCE_BAND * residual_max:
+        out.append("measurement")
+    return out
+
+
+def hypothesis_confidence_vector(
+    residual_max: float,
+    multiplier_max: float,
+    route_confidence: Mapping[str, Any] | None,
+    *,
+    measurement_index: int | None = None,
+    parameter_line: int | None = None,
+) -> dict[str, Any] | None:
+    """The three-category confidence, its ranking and the competing hypotheses, from one solve (None without evidence)."""
+    residual_max, multiplier_max = abs(float(residual_max)), abs(float(multiplier_max))
+    total = residual_max + multiplier_max
+    if not total > 0.0:
+        return None
+    try:
+        open_terminal = float((route_confidence or {}).get("topology") or 0.0)
+    except (TypeError, ValueError):
+        open_terminal = 0.0
+    measurement = residual_max / total
+    branch = 1.0 - measurement
+    topology_line = (route_confidence or {}).get("line_index")
+    return {
+        "contract": HYPOTHESIS_CONFIDENCE_CONTRACT,
+        "measurement": round(measurement, 3),
+        "parameter": round(branch * (1.0 - open_terminal), 3),
+        "topology": round(branch * open_terminal, 3),
+        "ranking": hypothesis_ranking(residual_max, multiplier_max, open_terminal),
+        "competing": competing_hypotheses(residual_max, multiplier_max, open_terminal),
+        "residual_max": round(residual_max, 2),
+        "multiplier_max": round(multiplier_max, 2),
+        "open_terminal_confidence": round(open_terminal, 3),
+        "measurement_index": measurement_index,
+        "parameter_line": parameter_line,
+        "topology_line": topology_line if topology_line is not None else parameter_line,
+        "breaker_refined": bool((route_confidence or {}).get("source") == "node_breaker_context"),
+    }
+
 # Read-only specialized diagnostics executed through configured evidence
 # providers.  They share the canonical deployment tool names so DAgger data
 # and the production corpus keep one model-visible surface.
@@ -1612,8 +1704,83 @@ def _routes_attempted(observation: Mapping[str, Any] | Any, line: int) -> list[s
     return sorted(tried)
 
 
+#: Item 7 step 6: with the three-category confidence on the solve, the
+#: statement lists the leading hypothesis and every one competing with it,
+#: each with its confidence and target, instead of the parameter-or-breaker
+#: pair alone.  Recorded and reported; no verdict depends on it.
+AMBIGUOUS_HYPOTHESES_STATEMENT = "ambiguous_hypotheses"
+AMBIGUITY_STATEMENT_KINDS = frozenset({AMBIGUOUS_ROUTE_STATEMENT, AMBIGUOUS_HYPOTHESES_STATEMENT})
+
+
+def hypothesis_vector_of(observation: Mapping[str, Any] | Any) -> tuple[Mapping[str, Any] | None, bool]:
+    """The latest bound three-category confidence (the topology context's refinement when bound to the same state) and whether the solve alarms."""
+    getter = getattr(observation, "get", None)
+    contexts = getter("fresh_context_evidence", {}) if callable(getter) else {}
+    contexts = contexts if isinstance(contexts, Mapping) else {}
+    wls = contexts.get("wls")
+    if not isinstance(wls, Mapping) or not wls.get("successful"):
+        return None, False
+    record = wls.get("hypothesis_confidence")
+    record = record if isinstance(record, Mapping) else None
+    topology = contexts.get("topology")
+    if record is not None and isinstance(topology, Mapping) and str(topology.get("state_id") or "") == str(wls.get("state_id") or ""):
+        refined = topology.get("hypothesis_confidence")
+        if isinstance(refined, Mapping):
+            record = refined
+    return record, bool(wls.get("anomalous"))
+
+
+def _hypothesis_target(vector: Mapping[str, Any], family: str) -> dict[str, Any]:
+    if family == "measurement":
+        return {"measurement_index": vector.get("measurement_index")}
+    return {"line_index": vector.get("topology_line" if family == "topology" else "parameter_line")}
+
+
+def _families_attempted(observation: Mapping[str, Any] | Any) -> list[str]:
+    """The families the active lineage committed or the active state rejected, from the observation."""
+    getter = getattr(observation, "get", None)
+    tried: set[str] = set()
+    for field in ("accepted_corrections", "rejected_hypotheses"):
+        for item in (getter(field, []) if callable(getter) else []) or []:
+            source = item.get("source_action") if isinstance(item, Mapping) else None
+            hypothesis = correction_hypothesis(source) if source else None
+            if hypothesis is not None:
+                tried.add(hypothesis[0])
+    return sorted(tried)
+
+
+def hypothesis_statements(observation: Mapping[str, Any] | Any) -> list[dict[str, Any]]:
+    """The competing hypotheses, with their confidences, that the latest solve supports at a handoff, else none."""
+    vector, anomalous = hypothesis_vector_of(observation)
+    if vector is None or not anomalous or not vector.get("competing"):
+        return []
+    ranking = [str(family) for family in vector.get("ranking") or []]
+    if not ranking:
+        return []
+    families = [ranking[0], *[str(family) for family in vector["competing"]]]
+    return [{
+        "kind": AMBIGUOUS_HYPOTHESES_STATEMENT,
+        "hypotheses": [
+            {"family": family, "confidence": vector.get(family), **_hypothesis_target(vector, family)}
+            for family in families
+        ],
+        "ranking": ranking,
+        "breaker_refined": bool(vector.get("breaker_refined")),
+        "attempted": _families_attempted(observation),
+        "withdrawn": sorted(withdrawn_families(observation)),
+    }]
+
+
 def ambiguity_statements(observation: Mapping[str, Any] | Any) -> list[dict[str, Any]]:
-    """The "ambiguous: line N, parameter or breaker" statement the latest solve supports at a handoff, else none."""
+    """The ambiguity statement the latest solve supports at a handoff, else none.
+
+    With the three-category confidence on the solve (item 7 step 6), the
+    competing hypotheses; otherwise step 3's "ambiguous: line N, parameter
+    or breaker".
+    """
+    vector, _ = hypothesis_vector_of(observation)
+    if vector is not None:
+        return hypothesis_statements(observation)
     record, anomalous = _route_confidence_of(observation)
     if record is None or not anomalous or record.get("line_index") is None:
         return []
@@ -1650,11 +1817,27 @@ def abstention_record(declared: Any, observation: Mapping[str, Any] | Any) -> li
     """
     supported = {(item["line_index"], item["cb_name"]) for item in isolated_line_abstentions(observation)}
     supported_lines = {line for line, _ in supported}
-    ambiguous_lines = {item["line_index"] for item in ambiguity_statements(observation)}
+    current = ambiguity_statements(observation)
+    ambiguous_lines = {item["line_index"] for item in current if item.get("kind") == AMBIGUOUS_ROUTE_STATEMENT}
+    competing_sets = [
+        sorted(str(h.get("family")) for h in item.get("hypotheses") or [])
+        for item in current if item.get("kind") == AMBIGUOUS_HYPOTHESES_STATEMENT
+    ]
     records: list[dict[str, Any]] = []
     for item in declared if isinstance(declared, (list, tuple)) else []:
         if not isinstance(item, Mapping):
             records.append({"kind": None, "line_index": None, "cb_name": None, "supported": False, "malformed": True})
+            continue
+        if str(item.get("kind")) == AMBIGUOUS_HYPOTHESES_STATEMENT:
+            hypotheses = [dict(h) for h in item.get("hypotheses") or [] if isinstance(h, Mapping)]
+            records.append({
+                "kind": AMBIGUOUS_HYPOTHESES_STATEMENT,
+                "hypotheses": hypotheses,
+                "ranking": list(item.get("ranking") or []),
+                "attempted": list(item.get("attempted") or []),
+                "withdrawn": list(item.get("withdrawn") or []),
+                "supported": sorted(str(h.get("family")) for h in hypotheses) in competing_sets,
+            })
             continue
         if str(item.get("kind")) == AMBIGUOUS_ROUTE_STATEMENT:
             line = item.get("line_index")

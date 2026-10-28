@@ -45,7 +45,7 @@ from psse_env.dagger.rollout_collector import (  # noqa: E402
 )
 from psse_env.dagger.suite_builder import partition_release_scenario_v1  # noqa: E402
 from psse_env.oracle.expert_policy import ExpertPolicyOracle  # noqa: E402
-from psse_env.oracle.expert_variants import variant_provider_options, current_expert_variant, expert_variant_options  # noqa: E402
+from psse_env.oracle.expert_variants import variant_environment_options, variant_provider_options, current_expert_variant, expert_variant_options  # noqa: E402
 from psse_env.providers.scenario_generator import DEFAULT_NORMALIZED_RESIDUAL_THRESHOLD
 from psse_env.systems import resolve_system
 from psse_env.evidence_profile import (
@@ -333,8 +333,11 @@ def research_diagnostic_environment_factory(
         history_window=4,
         progress_basis=str(RESEARCH_ENVIRONMENT_OPTIONS.get("progress_basis") or DEFAULT_PROGRESS_BASIS),
         # Item 7 step 6: the gated revert, off unless a run names the number
-        # of fruitless cycles that admits it.
-        revert_fruitless_cycles=int(RESEARCH_ENVIRONMENT_OPTIONS.get("revert_fruitless_cycles") or 0),
+        # of fruitless cycles that admits it or its teacher variant needs it.
+        revert_fruitless_cycles=int(RESEARCH_ENVIRONMENT_OPTIONS.get(
+            "revert_fruitless_cycles",
+            variant_environment_options(RESEARCH_EXPERT_OPTIONS.get("variant")).get("revert_fruitless_cycles", 0),
+        ) or 0),
     )
     if env.production_dataset_mode is not True:
         raise RuntimeError("research environment did not enter production dataset mode")

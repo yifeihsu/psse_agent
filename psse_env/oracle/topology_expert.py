@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from psse_env.actions import CORRECT_MEASUREMENTS, CORRECT_TOPOLOGY, GET_TOPOLOGY_CONTEXT
+from psse_env.actions import CORRECT_MEASUREMENTS, CORRECT_TOPOLOGY, GET_TOPOLOGY_CONTEXT, withdrawn_families
 from psse_env.oracle.expert_types import (
     ExpertActionProposal,
     dominance_confidence,
@@ -66,8 +66,12 @@ class TopologyExpert:
             if not str(code).startswith("wls_branch_multiplier")
         ]
         partial_measurement = self._accepted_partial_measurement(state)
+        # Item 7 step 6: a meter correction a revert withdrew on this state
+        # hands the lead to the branch families.
+        withdrawn_measurement = "measurement" in withdrawn_families(state)
         suppress_topology_hints = bool(
             measurement_dominant
+            and not withdrawn_measurement
             and not branch_dominant
             and not explicit_topology_codes
             and not partial_measurement

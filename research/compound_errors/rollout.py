@@ -159,11 +159,24 @@ def compact_episode(episode: Mapping[str, Any], root: Mapping[str, Any]) -> dict
                                     and s.get("execution_status") == "success"), None),
         "abstentions": handoff_abstentions(steps),
         "revert_accounting": dict(episode.get("revert_accounting") or {}),
+        "first_hypothesis_confidence": first_hypothesis_confidence(steps),
         "tools": tools,
         "corrections": corrections,
         "trace": slim_trace(steps),
         "seconds": episode.get("seconds"),
     }
+
+
+def first_hypothesis_confidence(steps: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """The three-category confidence of the episode's first successful WLS (item 7 step 6), when the solve carried one."""
+    for step in steps:
+        if str((step.get("action") or {}).get("tool")) != RUN_WLS or step.get("execution_status") != "success":
+            continue
+        output = step.get("policy_tool_output") if isinstance(step.get("policy_tool_output"), Mapping) else {}
+        metrics = output.get("tool_metrics") if isinstance(output.get("tool_metrics"), Mapping) else {}
+        record = metrics.get("hypothesis_confidence")
+        return dict(record) if isinstance(record, Mapping) else None
+    return None
 
 
 def reverted_state_ids(steps: Sequence[Mapping[str, Any]]) -> set[str]:
