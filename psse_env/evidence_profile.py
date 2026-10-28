@@ -154,15 +154,17 @@ _PARAMETER_SCAN_FIELDS = frozenset({
 #: Node/breaker substation channel of the topology route (2026-10-22): the
 #: reported breaker map, the substation telemetry at SCADA accuracies (node
 #: voltages, unit and load meters, terminal and breaker flows), the rendered
-#: operator layout and meter nodes, the model identity, and the record a
-#: breaker correction leaves for its verification.  SCADA-class data, kept
+#: operator layout and meter nodes, the model identity, the record a
+#: breaker correction leaves for its verification, and the planning-bus
+#: case a structural re-render keeps as its electrical reference
+#: (compound-error study, stage 2, 2026-10-28).  SCADA-class data, kept
 #: under scada_only so breaker-status errors stay diagnosable by breaker
 #: (docs/conventional_only_cell_20261022.md); phasors, spectra, HIF and
 #: triage data stay stripped.
 SCADA_NODE_BREAKER_FIELDS = frozenset({
     "substation_telemetry", "reported_breaker_status", "operator_layout",
     "operator_voltage_meter_nodes", "topology_model_id", "topology_model_fingerprint",
-    "last_topology_correction",
+    "last_topology_correction", "planning_reference_case",
 })
 _SCADA_METADATA_FIELDS = frozenset({
     "sigma_z", "measurement_covariance", "structural_zero_indices",
@@ -196,7 +198,7 @@ _GATED_METADATA_FIELDS = frozenset({
     "branch_current_sigma_pu", "harmonic_measurements", "harmonic_orders",
     "substation_telemetry", "reported_breaker_status", "operator_layout",
     "operator_voltage_meter_nodes", "topology_model_id", "topology_model_fingerprint",
-    "last_topology_correction", "pristine_model_dir",
+    "last_topology_correction", "planning_reference_case", "pristine_model_dir",
 })
 _GATED_STRUCTURED_METADATA_FIELDS = frozenset({
     "parameter_scans", "operator_noise", "noise_contract", "measurement_convention",

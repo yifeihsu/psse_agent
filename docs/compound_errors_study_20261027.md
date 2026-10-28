@@ -803,6 +803,40 @@ compound session: the tool repairs in the note's section 6.3 order, re-run
 on the same suite, no DAgger round yet."  Section 7 records it item by
 item.
 
+On the handoff half of item 5 (the explicit abstention on an isolated
+line), the user's decision of 2026-10-28, in their words: "Reading (C):
+add the explicit 'not identifiable: line N isolated by breaker M' statement
+at handoff, recorded and reported, but never required for the solved
+verdict; switch to (B) only if a DAgger round is drawn on compound
+classes."  So the statement rides the existing handoff request as a
+structured field on compound roots, the evaluator and the audit record and
+report it (how often each teacher emits it, and on which roots), no verdict
+depends on it, the conventional families are untouched, and the stricter
+reading (B), in which the statement is required for a solved verdict on a
+root that carries such a line, is a future decision tied to a compound
+DAgger round.  Implemented in its turn in the order of section 6.3
+(section 7.3).
+
+On adopting the guarded teacher (section 7.1), the user's decision of
+2026-10-28, in their words: "Adopt the guarded topology-first teacher as
+the default for new work once an independent check on the validation and
+hard suites shows no change in success counts; the paper's recorded
+results stay as they are."  The check: `baseline_compare` and
+`baseline_compare_topology_guarded` on the conventional cell's validation
+suite and on the hard draw it evaluated (the suites the budget study's
+specs name, neither consulted when the residual floor was set), with the
+end-to-end runner of section 7.1, the same code for both teachers, 40
+actions, scada_only; it passes only with identical success counts per
+family on both suites and no false commit.  On a pass the guarded variant
+becomes the default teacher for new work only (what a pipeline env or a
+research script picks up when it names none), `baseline_compare` stays
+available by name, every recorded cell's env, the paper's evidence folder
+and `docs/papers` stay untouched, the tests that pin `baseline_compare`
+stay and one is added for the default; on any failing count nothing is
+adopted and the differing roots are reported.  The outcome is recorded in
+section 7.3: the check failed on one root of the hard draw, so nothing was
+adopted and the guarded teacher stays a flagged variant.
+
 ## 7. Stage 2: the tool repairs, one at a time (2026-10-28)
 
 The ground rules, from the request: the items of section 6.3 in order, one
@@ -1021,4 +1055,156 @@ unchanged.
 untouched and stays the teacher; `baseline_compare_topology_guarded` is a
 named variant of the compound work, and adopting it elsewhere is the
 user's decision.
+
+### 7.2 Item 2: the node/breaker binding after a structural re-render
+
+**The defect.**  A breaker flip that splits or merges a bus re-renders
+the operator model: the candidate's case has operator sections as buses
+(15 after one split, 16 after two).  The binding the topology route
+builds for every later call took the state's current case as the
+electrical reference, and both the node/breaker estimator and the
+topology processor (`node_network`, `operator_model_from_map` in
+`Transmission/`) look a line up by its planning-bus endpoints, so the
+first branch ending on section 15 raised a `KeyError` inside
+`get_topology_context` and `correct_topology`, which the environment
+reported as `dispatch_error`.  Every root that needs a second structural
+flip (the 45 two-split roots, and the mixed pairs whose split comes
+second) ended with that breaker unfixable: section 6.2, item 2.
+
+**The repair (shared path, exact for states that never re-rendered).**
+The first structural re-render now records the planning-bus case it
+rendered from (`planning_reference_case`, admitted through the scada_only
+and gated evidence boundaries beside the other node/breaker fields,
+`psse_env/evidence_profile.py`).  A state descending from a re-render
+builds its binding from that case with the current case's branch
+parameters copied row by row (an accepted impedance correction survives)
+and every line in service (statuses are derived from the breaker map, as
+before), and a second structural flip renders from that reference rather
+than from the sectioned case; the record is carried forward.  A state
+whose case is not on planning buses and that carries no reference reports
+`topology_reference_unavailable` instead of raising.  A state that never
+re-rendered takes exactly the path it took before (its own case), so a
+single split, the conventional topology family's case, is rendered as it
+was.  The test
+(`test_two_bus_splits_are_corrected_from_the_planning_reference`,
+`psse_env/providers/test_compound_scenarios.py`) fixes both splits of a
+two-split root in sequence through the topology context and the
+executor, 15 then 16 operator buses, and checks that the solve is clean
+afterwards and that the binding's reference is the 14-bus case.
+
+**Results.**  The same 1,275 roots under the three teachers, before (the
+item-1 runs of section 7.1) and after the repair, same code otherwise:
+
+| class (roots) | baseline_compare: before, after | topology first, always: before, after | topology first, guarded: before, after | mean actions after: baseline, always, guarded |
+| --- | --- | --- | --- | --- |
+| two R/X, adjacent (150) | 50, 50 | 42, 42 | 50, 50 | 16.7, 18.8, 16.7 |
+| two R/X, distant (150) | 72, 72 | 63, 63 | 72, 72 | 10.5, 14.2, 10.5 |
+| R/X + breaker, same line (75) | 47, 47 | 75, 75 | 71, 71 | 16.6, 7.0, 8.6 |
+| R/X + breaker, shared bus (75) | 32, 32 | 43, 43 | 46, 46 | 21.0, 13.7, 13.2 |
+| R/X + breaker, distant (150) | 73, 73 | 109, 109 | 109, 109 | 18.1, 12.2, 12.0 |
+| meter + two R/X (150) | 61, 61 | 51, 51 | 61, 61 | 16.7, 19.8, 16.7 |
+| meter on the R/X line (75) | 14, 14 | 14, 14 | 14, 14 | 14.7, 14.9, 14.7 |
+| R/X + breaker + meter (150) | 59, 59 | 97, 97 | 97, 97 | 23.0, 16.3, 16.7 |
+| two breakers, dangling (60) | 16, 16 | 53, 53 | 46, 46 | 25.7, 10.9, 12.7 |
+| two breakers, mixed (45) | 1, 20 | 11, 43 | 2, 30 | 25.6, 11.0, 16.0 |
+| two breakers, bus splits (45) | 0, 22 | 0, 39 | 0, 28 | 25.0, 11.3, 20.6 |
+| control: one R/X (50) | 43, 43 | 37, 37 | 43, 43 | 7.5, 10.0, 7.5 |
+| control: one breaker (50) | 31, 31 | 50, 50 | 44, 44 | 14.6, 7.0, 10.3 |
+| control: one meter (50) | 47, 47 | 47, 47 | 47, 47 | 21.3, 21.4, 21.3 |
+| all (1,275) | 546 (43%), 587 (46%) | 692 (54%), 763 (60%) | 702 (55%), 758 (59%) | 17.8, 14.5, 14.1 |
+
+Every gain is on the two classes that need a second structural flip, 41,
+71 and 56 roots under the three teachers, and no root is lost under any of
+them (identical trajectories on 1,221, 1,187 and 1,206 of 1,275; the rest
+are roots where a second structural flip was attempted, some of them
+without a change of outcome).  The conventional suite is untouched: the
+baseline teacher re-run on this code solves 192 of 192 with all 192
+trajectories identical to the control of section 7.1 (a single split
+renders from the state's own case, as before).
+
+What still fails on the two-split class is the ordering problem of
+section 3.1, not the binding: under the baseline teacher 23 of 45 roots
+end with the second split unfixed because the parameter route runs first
+on the re-rendered state and commits a wrong impedance edit (94 parameter
+corrections refused along the way, the accepted ones modifying healthy
+lines); the guarded teacher recovers 6 more (28 of 45) but a bus split
+shows the open-terminal cue only when a line's end lands on an empty
+section, so 17 roots take the parameter route at the second state; the
+always-on flag, which asks the topology context again regardless, reaches
+39 of 45 (the 6 left end with a wrong edit beside the second split).  The
+mixed pairs follow the same pattern (20, 43 and 30 of 45).  So item 2 is
+the executor repair it set out to be, and the two-breaker classes are now
+limited by the cue's blindness to bus splits and by the parameter route's
+masking of a breaker fault (item 4's verifier question).
+
+**Commit.**  The commit that adds this section (branch
+`claude/nostalgic-kalam-be5f7a`, 2026-10-28); shared path, exact for every
+state that never re-rendered; 482 tests pass.
+
+### 7.3 The independent check of the guarded teacher (2026-10-28): not adopted
+
+The two suites the user named, neither consulted when the residual floor
+was set: the conventional cell's validation suite (96 roots, 16/16/12/12/
+8/16/16 over measurement, measurement+parameter, measurement+topology,
+multi-measurement, no-error, parameter, topology) and the hard draw it
+evaluated (193 roots: 24/32/8/72/8/41/8), both taken from the local build
+of the cell's extra suites (`conventional_only_extra_suites_v1`, the
+files' hashes match the build report; the same files were uploaded to
+torch).  Both teachers ran through the end-to-end runner of section 7.1
+on the same code (item 2's binding repair included), 40 actions,
+scada_only.
+
+| suite | family (roots) | baseline_compare | guarded | identical trajectories |
+| --- | --- | --- | --- | --- |
+| validation | measurement (16) | 16 | 16 | 16 |
+| validation | measurement+parameter (16) | 16 | 16 | 16 |
+| validation | measurement+topology (12) | 12 | 12 | 4 |
+| validation | multi_measurement (12) | 12 | 12 | 12 |
+| validation | no_error (8) | 8 | 8 | 8 |
+| validation | parameter (16) | 16 | 16 | 16 |
+| validation | topology (16) | 16 | 16 | 4 |
+| validation | all (96) | 96 | 96 | 76 |
+| hard draw | measurement (24) | 24 | 24 | 24 |
+| hard draw | measurement+parameter (32) | 32 | 32 | 32 |
+| hard draw | measurement+topology (8) | 8 | 8 | 3 |
+| hard draw | multi_measurement (72) | 64 | 64 | 72 |
+| hard draw | no_error (8) | 8 | 8 | 8 |
+| hard draw | parameter (41) | 41 | 40 | 40 |
+| hard draw | topology (8) | 8 | 8 | 3 |
+| hard draw | all (193) | 185 | 184 | 182 |
+
+No false commit on either suite under either teacher.  On the validation
+suite the 20 trajectories that differ are the 8 measurement+topology and
+12 topology roots on which the cue fires at the first solve, each the
+baseline's trajectory minus the parameter-context fetch; the cue fires on
+no root without a breaker atom.  On the hard draw 10 of the 11 differing
+trajectories are the same one-action shortening on 5 measurement+topology
+and 5 topology roots.  The eleventh is the failure: on the parameter root
+`r0_344bb11720e7` (ambiguous stratum, one true error on line 3 at 0.43 of
+its nominal impedance) the cue fires at the first solve on line 6, a
+lightly loaded healthy line (1.2 sigma of P flow, 2.2 sigma of Q, 22.7
+sigma of P residual): the operator's model, with line 3's impedance too
+high, routes through line 6 flow that the meters do not see, the very
+signature the cue reads as an open terminal.  The guarded teacher fetches
+the topology context first, which offers a flip opening line 6's terminal;
+the verifier accepts it as partial progress; the parameter correction on
+line 3 follows and is accepted, then a meter edit is tried and rolled back,
+and the episode hands off with the wrong breaker edit committed (the
+baseline compares lines, corrects line 3 and hands off in 8 actions).  So
+the hard draw's parameter family goes from 41 to 40 and the check fails on
+one count.
+
+Under the user's rule (identical success counts per family on both suites)
+nothing is adopted: `baseline` stays the code default, `baseline_compare`
+stays the conventional cell's teacher, and `baseline_compare_topology_guarded`
+stays a flagged variant of the compound work.  Two readings for later, not
+acted on: the cue alone cannot tell an open terminal from a healthy line
+starved by a neighbour's impedance error (the compound suite shows the
+same on 7 of 625 roots without a breaker atom, 6 of them adjacent pairs),
+so a clean-flip condition on the topology side (admit the breaker route
+first only when a flip makes the node/breaker estimate clean, not merely
+better) or a residual floor that scales with the line's modelled flow
+would be the next candidates; and the loss mechanism is again a wrong flip
+accepted as partial progress (section 7.1's one lost root), which item 4's
+target-first acceptance may also touch.
 

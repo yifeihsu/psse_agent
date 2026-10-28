@@ -3166,12 +3166,45 @@ class MatpowerDeploymentProviders:
                 "error_detail": "state telemetry fingerprint differs from the provider's model",
             }
         try:
-            reference = copy.deepcopy(_load_python_case(self._case_path(state)))
+            current = copy.deepcopy(_load_python_case(self._case_path(state)))
         except Exception as exc:
             return {
                 "error_code": "topology_context_input_error",
                 "error_detail": f"{type(exc).__name__}: {exc}",
             }
+        planning_case = metadata.get("planning_reference_case")
+        planning_bus_count = len({node.planning_bus for node in model.nodes.values()})
+        if planning_case:
+            # The state descends from a structural breaker correction (a bus
+            # split or merge) that re-rendered the operator model, so its
+            # case's buses are operator sections, not the planning buses the
+            # node/breaker model and the topology processor are keyed by
+            # (compound-error study, stage 2, 2026-10-28).  The electrical
+            # reference is the planning-bus case recorded at the first
+            # re-render, carrying the current case's branch parameters row by
+            # row, so an accepted parameter correction survives.
+            try:
+                reference = copy.deepcopy(_load_python_case(str(planning_case)))
+            except Exception as exc:
+                return {
+                    "error_code": "topology_context_input_error",
+                    "error_detail": f"{type(exc).__name__}: {exc}",
+                }
+            if reference["branch"].shape[0] != current["branch"].shape[0]:
+                return {
+                    "error_code": "topology_reference_mismatch",
+                    "error_detail": "the planning reference and the current case carry different branch rows",
+                }
+            columns = min(reference["branch"].shape[1], current["branch"].shape[1], 10)
+            reference["branch"][:, 2:columns] = current["branch"][:, 2:columns]
+        elif int(current["bus"].shape[0]) != planning_bus_count:
+            return {
+                "error_code": "topology_reference_unavailable",
+                "error_detail": "the state's operator model was re-rendered without a planning reference",
+            }
+        else:
+            reference = current
+            planning_case = self._case_path(state)
         if reference["branch"].shape[1] > 10:
             reference["branch"][:, 10] = 1.0
         meters: dict[int, str] = {}
@@ -3185,6 +3218,7 @@ class MatpowerDeploymentProviders:
         return {
             "model": model,
             "reference": reference,
+            "planning_reference_case": str(planning_case),
             "reported_labels": {str(name): str(value) for name, value in reported.items()},
             "telemetry": telemetry,
             "meter_nodes": meters,
@@ -3507,12 +3541,19 @@ class MatpowerDeploymentProviders:
         labels = binding["reported_labels"]
         new_labels = dict(labels)
         new_labels[cb_name] = new_label
-        try:
-            current = _load_python_case(self._case_path(state))
-        except Exception as exc:
-            return self._failure(
-                "topology_correction_input_error", f"{type(exc).__name__}: {exc}"
-            )
+        old_layout = self._metadata(state).get("operator_layout")
+        if self._metadata(state).get("planning_reference_case"):
+            # A second structural flip renders from the planning-bus reference
+            # the binding rebuilt (stage 2 item 2), never from the sectioned
+            # case of the first one.
+            current = binding["reference"]
+        else:
+            try:
+                current = _load_python_case(self._case_path(state))
+            except Exception as exc:
+                return self._failure(
+                    "topology_correction_input_error", f"{type(exc).__name__}: {exc}"
+                )
         try:
             case, layout = operator_model_from_map(
                 current, binding["model"], status_map_from_labels(new_labels), binding["meter_nodes"]
@@ -3523,7 +3564,6 @@ class MatpowerDeploymentProviders:
             covariance = np.asarray(operator_noise["measurement_covariance"], dtype=float)
             if not np.array_equal(covariance, np.diag(np.diag(covariance))):
                 raise ValueError("correlated physical meter covariance requires a full-covariance WLS solver")
-            old_layout = self._metadata(state).get("operator_layout")
             if isinstance(old_layout, Mapping):
                 source_measurements = np.asarray(self._measurements(state), dtype=float)
                 projected_source = operator_vector_for_layout(telemetry, old_layout)
@@ -3553,6 +3593,7 @@ class MatpowerDeploymentProviders:
                 "metadata_updates": {
                     "reported_breaker_status": new_labels,
                     "operator_layout": layout,
+                    "planning_reference_case": binding["planning_reference_case"],
                     "substation_telemetry": telemetry,
                     "sigma_z": operator_noise["measurement_sigma"],
                     "operator_noise": operator_noise,

@@ -24,7 +24,7 @@ GENERATOR_OPTIONS = dict(
     normalized_residual_threshold=4.0,
     min_measurement_error_sigma=10.0,
 )
-CLASSES = ("rx2_adjacent", "rx_cb_same_line", "meter_on_rx", "cb2_mixed", "control_cb", "control_meter")
+CLASSES = ("rx2_adjacent", "rx_cb_same_line", "meter_on_rx", "cb2_mixed", "control_cb", "control_meter", "cb2_split")
 
 
 def _spec(name: str) -> CompoundSpec:
@@ -279,6 +279,43 @@ class CompoundScenarioTests(unittest.TestCase):
         self.assertEqual(context.get("execution_status", "success"), "success", context)
         self.assertTrue(context["parameter_scans_available"])
         self.assertEqual(context["parameter_scan_count"], COMPOUND_SCAN_COUNT)
+
+    def test_two_bus_splits_are_corrected_from_the_planning_reference(self) -> None:
+        """Stage 2 item 2 (2026-10-28): the second structural flip binds to planning buses, not to the first flip's sections."""
+        providers = MatpowerDeploymentProviders(chi2_alpha=0.01, evidence_profile="scada_only")
+        root = self.roots["cb2_split"]
+        truth = {row["cb_name"]: int(row["true_cb_closed"]) for row in root["true_topology_errors"]}
+        self.assertEqual(len(truth), 2)
+        state = _state(root)
+        planning_case = state["case"]
+        for step, (cb_name, status) in enumerate(truth.items()):
+            context = providers.get_topology_context(state)
+            self.assertEqual(context.get("execution_status", "success"), "success", (step, context.get("error_code"), context.get("error_detail")))
+            offered = {
+                (item["arguments"]["cb_name"], int(item["arguments"]["status"]))
+                for item in context.get("supported_corrections") or []
+            }
+            self.assertTrue(offered & set(truth.items()), (step, offered))
+            action = normalize_action({"tool": "correct_topology", "arguments": {"state_id": state["state_id"], "cb_name": cb_name, "status": status}})
+            output = providers.correct_topology(state, action)
+            self.assertEqual(output.get("execution_status", "success"), "success", (step, output.get("error_code"), output.get("error_detail")))
+            self.assertEqual(output["breaker_effect"], "bus_split")
+            self.assertEqual(output["operator_bus_count"], 15 + step)
+            modification = output["modification"]
+            self.assertEqual(modification["metadata_updates"]["planning_reference_case"], planning_case)
+            state = copy.deepcopy(state)
+            state["state_id"] = f"episode:s{step + 1}"
+            state["case"] = modification["case"]
+            state["measurements"] = list(modification["measurements"])
+            state["metadata"].update(copy.deepcopy(modification["metadata_updates"]))
+        solved = providers.run_wls(state)
+        metrics = solved.get("tool_metrics", solved)
+        self.assertEqual(solved.get("execution_status", "success"), "success", solved)
+        self.assertFalse(metrics["chi_square_alarm"], metrics)
+        self.assertLess(float(metrics["max_normalized_residual"]), 4.0)
+        binding = providers._topology_binding(state)
+        self.assertEqual(binding["reference"]["bus"].shape[0], 14)
+        self.assertEqual(binding["planning_reference_case"], planning_case)
 
     def test_run_wls_reports_the_open_terminal_cue_on_dangling_lines_only(self) -> None:
         """Stage 2 (2026-10-28): ``flow_at_noise_lines`` names dangling lines and nothing else."""
