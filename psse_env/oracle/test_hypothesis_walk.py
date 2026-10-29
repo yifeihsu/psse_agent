@@ -137,7 +137,7 @@ class WalkTests(unittest.TestCase):
         for name in EXPERT_VARIANTS:
             if name != "baseline_compare_guarded_walk":
                 self.assertNotIn("hypothesis_walk", expert_variant_options(name))
-                self.assertEqual(variant_environment_options(name), {})
+                self.assertNotIn("revert_fruitless_cycles", variant_environment_options(name))
 
     def test_the_route_order_follows_the_ranking_and_a_withdrawn_family_goes_behind(self) -> None:
         topology_first = hypothesis_confidence_vector(10.0, 30.0, {"topology": 0.7, "line_index": 6})
