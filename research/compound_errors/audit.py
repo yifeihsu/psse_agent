@@ -43,8 +43,14 @@ def class_of(root: Mapping[str, Any]) -> str:
 
 def select_roots(suite: Sequence[Mapping[str, Any]], episodes: Mapping[str, Mapping[str, Any]], *,
                  solved_per_class: int, failed_per_class: int | None, seed: int,
-                 classes: Sequence[str] | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Every failed root (capped per class when asked) and a seeded sample of solved roots per class."""
+                 classes: Sequence[str] | None,
+                 reference: Mapping[str, Mapping[str, Any]] | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Every failed root (capped per class when asked) and a seeded sample of solved roots per class.
+
+    With ``reference`` (another rollout's episodes), a failed root is audited
+    only when the reference solved it: under a tighter action budget, the
+    roots the budget lost.
+    """
     by_class: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for root in suite:
         name = class_of(root)
@@ -55,6 +61,8 @@ def select_roots(suite: Sequence[Mapping[str, Any]], episodes: Mapping[str, Mapp
     report: dict[str, Any] = {}
     for name, roots in sorted(by_class.items()):
         failed = [r for r in roots if not bool((episodes.get(str(r["execution"]["scenario_id"])) or {}).get("success"))]
+        if reference is not None:
+            failed = [r for r in failed if bool((reference.get(str(r["execution"]["scenario_id"])) or {}).get("success"))]
         solved = [r for r in roots if r not in failed]
         rng = random.Random(f"{seed}:{name}")
         rng.shuffle(failed)
@@ -121,6 +129,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--system", default=None, help="the suite's registered system (default: read from the roots)")
     parser.add_argument("--env-option", action="append", default=None, metavar="KEY=VALUE",
                         help="research environment option of the rollout, e.g. pair_refit_adjacent=1")
+    parser.add_argument("--reference-episodes", type=Path, default=None,
+                        help="audit only failed roots this rollout solved (e.g. the 40-action run beside a budget run)")
     args = parser.parse_args(argv)
 
     from research.compound_errors.rollout import multi_scan_rcond, suite_system, system_progress_basis
@@ -130,13 +140,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         suite = suite.get("scenarios") or suite.get("roots") or []
     system = suite_system(suite, args.system)
     args.progress_basis = system_progress_basis(system, args.progress_basis)
-    episodes = {}
-    for line in args.episodes.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            record = json.loads(line)
-            episodes[str(record["scenario_id"])] = record
+    def read_episodes(path: Path) -> dict[str, dict[str, Any]]:
+        records = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                record = json.loads(line)
+                records[str(record["scenario_id"])] = record
+        return records
+
+    episodes = read_episodes(args.episodes)
+    reference = read_episodes(args.reference_episodes) if args.reference_episodes else None
     roots, selection = select_roots(suite, episodes, solved_per_class=args.solved_per_class, failed_per_class=args.failed_per_class,
-                                    seed=args.sample_seed, classes=args.classes)
+                                    seed=args.sample_seed, classes=args.classes, reference=reference)
     settings = dict(profile=args.profile, expert_variant=args.expert, triage_model=None, progress_basis=args.progress_basis,
                     max_steps=args.max_steps, seed=args.seed, reward=None,
                     env_options=audit.parse_run_options(args.env_option))
@@ -173,6 +188,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         stream.close()
     summary = audit.summarize(results)
     summary.update(contract=AUDIT_CONTRACT, suite=str(args.suite), episodes=str(args.episodes), system=system,
+                   reference_episodes=str(args.reference_episodes) if args.reference_episodes else None,
                    multi_scan_rcond=multi_scan_rcond(),
                    progress_basis=args.progress_basis, env_options=settings["env_options"], profile=args.profile,
                    expert=args.expert, max_states=args.max_states, max_alternatives=args.max_alternatives,

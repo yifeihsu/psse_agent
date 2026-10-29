@@ -32,6 +32,15 @@ The open-terminal cue fires falsely on 54 of the 625 IEEE 118 roots (8.6%)
 against 7 of 625 on IEEE 14, and ranking ambiguity does not grow at
 high-degree buses: it shrinks.
 
+Section 9 (2026-10-29) adds an action-budget sweep.  At 16 actions the expert
+keeps 424 of its 456 IEEE 118 successes.  With the true targets, 30 of the 34
+lost roots fit in the budget, but a single different decision recovers only
+1.  The loss is one recurring route choice: after a committed meter
+correction, the measurement route or the parameter route.  Its cue, the
+maximum normalized residual, nearly separates the two with one threshold on
+both systems.  At the deployed 40 actions the route-choice headroom is 10 of
+625 roots.
+
 Branch `claude/pensive-darwin-33a0d8` (fast-forwarded from the compound
 branch at a52a7e5).  Commits: e8c7ddc (the bus-branch synthesizer, the pair
 metrics, the scripts' system switch, tests), d148464 (the comparison script,
@@ -565,7 +574,8 @@ Follow-ups this note does not start:
   parameter route, actionable on every root, costs four rejected lines per
   meter fix; on residual-dominant solves the route order could be the
   measurement tier's first, which is a teacher change for the conventional
-  families too and so the user's call.
+  families too and so the user's call.  Section 9 measures this cost under a
+  budget.
 - Breaker classes on IEEE 118 need either a node/breaker model or the
   bus-branch line-status route (`get_topology_context` already screens
   status flips without a node/breaker binding, as the 32 line-outage edits of
@@ -600,3 +610,187 @@ The validation runs of the guard option (section 3) and the progress-basis
 check are `output/compound_errors_ieee14_busbranch_20261028/expert_baseline_compare_{sparse_rcond,excess}/`
 and `output/compound_errors_ieee118_20261028/validation_{dense_svd,sparse_rcond}/`;
 their outcomes are in `docs/compound_errors_ieee118_20261028/guard_validation.json`.
+
+## 9. Action budget and route-choice headroom (2026-10-29)
+
+The RL watchlist names route choice under ambiguity as a decision a learned
+policy might improve on.  Before any learning, this section measures how much
+of the expert's success depends on the action budget, and how much a
+different decision could recover.  Same suites, same expert (`baseline_compare`,
+`scada_only`, rollout seed 20261006; the IEEE 118 runs with the sparse guard),
+budgets of 12, 16 and 20 actions against the deployed 40; a decision audit of
+every root the 16-action budget loses (four decision states, three menu
+alternatives each and the truth probe, all under 16 actions:
+`audit.py --max-steps 16 --reference-episodes <40-action run>`); and the
+40-action audit of the 169 IEEE 118 failures widened from two states and two
+alternatives to four and three.  `research/compound_errors/budget_headroom.py`
+does the tabulation; the tracked tables are `budget_headroom.{json,md}`,
+`*_budget{12,16,20}_summary.*`, `*_audit_budget16_summary.*` and
+`ieee118_audit_wide40_summary.*` in `docs/compound_errors_ieee118_20261028/`.
+Success is the truth-audited resolution of section 3, so an episode that
+resolves the state and then hands off with `recovery_budget_exhausted`
+counts as solved (152 of the 303 budget handoffs at 16 actions on IEEE 118).
+
+### 9.1 Success against the budget
+
+| class | IEEE 118: 12 / 16 / 20 / 40 actions | IEEE 14 control: 12 / 16 / 20 / 40 actions |
+| --- | --- | --- |
+| two R/X lines, adjacent (150) | 94 / 97 / 96 / 95 | 44 / 59 / 59 / 61 |
+| two R/X lines, distant (150) | 130 / 130 / 130 / 130 | 115 / 115 / 115 / 115 |
+| meter + two R/X (150) | 0 / 129 / 129 / 130 | 0 / 77 / 85 / 88 |
+| meter on the faulted line + R/X (75) | 4 / 4 / 9 / 11 | 11 / 11 / 11 / 13 |
+| control: one R/X line (50) | 45 / 45 / 45 / 45 | 48 / 48 / 48 / 48 |
+| control: 1 to 3 meters (50) | 17 / 19 / 25 / 45 | 14 / 18 / 28 / 49 |
+| all (625) | 290 / 424 / 434 / 456 | 232 / 328 / 346 / 374 |
+
+- Sixteen actions keep 93% of the deployed successes on IEEE 118 (424 of
+  456) and 88% on the control (328 of 374); twelve keep 64% and 62%.
+- The drop at 12 actions comes from the interface, not from a decision.  No
+  meter + two R/X root is solved at 12 on either system.  Three corrections
+  cost at least 13 actions: one WLS, then for each correction a context, the
+  correction, the verifying WLS and the commit.  The expert's shortest such
+  solve at 40 actions takes 15.
+- Between 16 and 40 actions, 33 of the 34 IEEE 118 losses fall in two
+  classes: the meter controls (19 solved at 16, 45 at 40) and the meter on the
+  faulted line (4 and 11).  On the control the meter + two R/X class (77 and 88) and the
+  adjacent pairs (59 and 61) lose roots as well.
+- A tighter budget sometimes wins: 2 adjacent pairs on IEEE 118 and 5 roots
+  on the control are solved at 16 actions and not at 40.  This was not
+  examined further.
+
+### 9.2 What a 16-action budget loses, and what recovers it
+
+| class | IEEE 118: lost / legal alternative / truth probe only / neither | IEEE 14 control: lost / legal / truth only / neither |
+| --- | --- | --- |
+| two R/X lines, adjacent | 0 | 6 / 4 / 0 / 2 |
+| meter + two R/X | 1 / 0 / 0 / 1 | 12 / 0 / 2 / 10 |
+| meter on the faulted line + R/X | 7 / 0 / 7 / 0 | 2 / 1 / 1 / 0 |
+| control: 1 to 3 meters | 26 / 1 / 23 / 2 | 31 / 4 / 19 / 8 |
+| all | 34 / 1 / 30 / 3 | 51 / 9 / 22 / 20 |
+
+The paths show where the budget goes.  On a lost two-meter control the
+40-action path typically runs as follows:
+
+1. `run_wls, get_measurement_context, correct_measurements, run_wls,
+   commit_state` fixes the first meter.
+2. The expert then takes the parameter route:
+   `get_parameter_context, compare_parameter_candidates`, then
+   `correct_parameters, run_wls, rollback_state` once for each candidate line,
+   two to five times.
+3. `get_topology_context, get_measurement_context, correct_measurements,
+   run_wls, commit_state` fixes the second meter.
+
+A three-meter root pays the detour twice.  The 26 lost IEEE 118 meter
+controls average 28.5 actions and 3.9 rolled-back corrections at 40 actions.
+The truth probe takes the measurement route for each true meter and needs 12
+actions for two meters and 16 for three (13.8 on average).  The meter-on-line
+roots follow the same pattern with the parameter route first: 21.7 actions and
+2.0 rollbacks, against 12 for the truth probe.
+
+Why a single deviation does not recover them: at the state after the first
+commit the menu is the parameter, topology and measurement contexts.  The
+audit takes the measurement context; the expert, called again, goes on with
+`compare_parameter_candidates`.  The expert re-chooses the route at every
+call, so a one-action deviation that only fetches a context is undone at the
+next call.  Wherever a decision recurs, the legal-alternative bin is a lower
+bound on route-choice headroom.  The truth probe, which knows the true
+targets, is the upper bound; a policy can approach it only by choosing the
+measurement route again at each recurrence, from what it observes.
+
+The control's other losses have different causes:
+
+- The adjacent pairs' four legal alternatives replace the comparison at the
+  first decision state with a direct correction of one of the two compared
+  lines (the first on two roots, the second on two).  That order resolves the
+  pair in 11 to 16 actions; the expert's order needs more than 16.
+- Ten meter + two R/X roots need more than 16 actions even with the true
+  targets.  The context refuses the true meter correction while the lines
+  dominate, and the verifier accepts the two true line corrections only as
+  partial.  The case then needs further passes that do not fit in 16 actions;
+  the 40-action runs make them.
+- The eight meter controls in "neither" are not route choices.  The context
+  refuses the truth probe's joint meter correction.  The verifier then rejects
+  one true single-meter correction, which is rolled back (the probe corrects
+  the meters in a fixed order), so a true meter is still in place when the
+  budget ends.
+
+### 9.3 The deployed budget, audited wider
+
+At 40 actions the four-by-three audit of the 169 IEEE 118 failures finds 10
+legal alternatives, 4 interface limits and 155 evidence limits.  The two-by-two
+audit of section 4 found 8, 5 and 156 on the same roots.  The two additions
+are an adjacent pair and a meter + two R/X root.  Both are recovered at the
+fourth audited state, where the expert compares two candidate lines and the
+alternative corrects the second candidate directly.  Four of the five failed
+meter controls are recovered by the measurement context after the first
+commit: with 40 actions, the expert's continuation after it fits in the
+budget.  No class changes character.  At the deployed budget the failures are
+the evidence and interface limits of section 4, and the route-choice headroom
+is 10 of 625 roots (1.6%).
+
+### 9.4 What the route choice can see
+
+After the first committed correction, while the alarm is still on, the
+verifying `run_wls` reports a maximum normalized residual.  It is on the
+agent's observation before the next action.  In the 40-action runs, grouped by
+the committed correction and the next true correction the episode committed:
+
+| committed, then next true correction | IEEE 118: n / median / at least 11 / at least 12 | IEEE 14 control: n / median / at least 11 / at least 12 |
+| --- | --- | --- |
+| meter, then meter | 32 / 19.4 / 32 / 32 | 39 / 15.5 / 37 / 32 |
+| meter, then line | 19 / 9.6 / 4 / 1 | 36 / 7.4 / 4 / 3 |
+| line, then line | 347 / 14.5 / | 287 / 9.5 / |
+| line, then meter | 44 / 19.8 / | 64 / 17.3 / |
+
+After a committed meter correction, the residual separates another bad meter
+from a bad line with one threshold on both systems.  At 11 it catches 32 of 32
+and 37 of 39 meter-then-meter states and admits 4 of 19 and 4 of 36
+meter-then-line states.  After a committed line correction it does not
+separate them (75% against 100% of the IEEE 118 states reach 10).  These are
+the expert's own states, in sample, and conditional on its first commit being
+a meter.
+
+### 9.5 What this means for RL
+
+- At the deployed 40 actions there is little route choice to learn: 10 of 625
+  IEEE 118 roots.  The rest are evidence and interface limits, which the RL
+  watchlist places outside what a policy can learn around.
+- Under a 16-action budget there is headroom.  With the true targets, 30 of
+  the 34 lost IEEE 118 roots fit in the budget (31 of 51 on the control, 9 of
+  them by a legal alternative).  On IEEE 118 the loss is one recurring
+  decision: after a committed meter correction with the alarm still on, take
+  the measurement route or the parameter route.  Its cue is observable, and
+  one threshold nearly separates it on both systems.  The first candidate is
+  therefore a rule, not a policy.  A labelled rule probe would stay on the
+  measurement route after a committed meter correction while the maximum
+  normalized residual is at least 11.  It should run over both 625-root suites
+  at 16 and 40 actions, counting what it recovers on the meter roots against
+  what it costs where the next error is a line (meter + two R/X, meter on the
+  faulted line).  It reads an observable cue and adds no action, so it is not
+  a screen.  A learned router has a claim only on what such a rule leaves: the
+  overlap band (7 to 11 on the control), the line-or-meter choice after a line
+  commit, and the adjacent pairs' choice between comparing and correcting.
+- A 12-action budget measures the interface, not decisions.  Budgeted RL
+  experiments on these classes should use 16 or 20 actions.
+
+Not run here: the rule probe itself.  It is a teacher variant the user should
+decide on, and `baseline_compare` is unchanged.
+
+### 9.6 Reproduction
+
+```
+PSSE_MULTI_SCAN_RCOND=sparse_symmetric python -m research.compound_errors.rollout --suite output/compound_errors_ieee118_20261028/suite.json --output-dir output/compound_errors_ieee118_20261028/budget_16 --system case118 --expert baseline_compare --max-steps 16 --workers 9
+python -m research.compound_errors.rollout --suite output/compound_errors_ieee14_busbranch_20261028/suite.json --output-dir output/compound_errors_ieee14_busbranch_20261028/budget_16 --expert baseline_compare --max-steps 16 --workers 4
+PSSE_MULTI_SCAN_RCOND=sparse_symmetric python -m research.compound_errors.audit --suite output/compound_errors_ieee118_20261028/suite.json --episodes output/compound_errors_ieee118_20261028/budget_16/episodes.jsonl --reference-episodes output/compound_errors_ieee118_20261028/expert_baseline_compare/episodes.jsonl --output-dir output/compound_errors_ieee118_20261028/audit_budget16 --system case118 --expert baseline_compare --max-steps 16 --max-states 4 --max-alternatives 3 --solved-per-class 0 --seed 20261019 --workers 14
+python -m research.compound_errors.audit --suite output/compound_errors_ieee14_busbranch_20261028/suite.json --episodes output/compound_errors_ieee14_busbranch_20261028/budget_16/episodes.jsonl --reference-episodes output/compound_errors_ieee14_busbranch_20261028/expert_baseline_compare/episodes.jsonl --output-dir output/compound_errors_ieee14_busbranch_20261028/audit_budget16 --expert baseline_compare --max-steps 16 --max-states 4 --max-alternatives 3 --solved-per-class 0 --seed 20261019 --workers 4
+PSSE_MULTI_SCAN_RCOND=sparse_symmetric python -m research.compound_errors.audit --suite output/compound_errors_ieee118_20261028/suite.json --episodes output/compound_errors_ieee118_20261028/expert_baseline_compare/episodes.jsonl --output-dir output/compound_errors_ieee118_20261028/audit_wide40 --system case118 --expert baseline_compare --max-states 4 --max-alternatives 3 --solved-per-class 0 --seed 20261019 --workers 14
+python -m research.compound_errors.budget_headroom --run ieee118:40=<D>/expert_baseline_compare/episodes.jsonl --run ieee118:12=<D>/budget_12/episodes.jsonl --run ieee118:16=<D>/budget_16/episodes.jsonl --run ieee118:20=<D>/budget_20/episodes.jsonl --run ieee14_control:40=<C>/expert_baseline_compare/episodes.jsonl --run ieee14_control:12=<C>/budget_12/episodes.jsonl --run ieee14_control:16=<C>/budget_16/episodes.jsonl --run ieee14_control:20=<C>/budget_20/episodes.jsonl --audit ieee118:16=<D>/audit_budget16/roots.jsonl --audit ieee14_control:16=<C>/audit_budget16/roots.jsonl --output-dir <D>/budget_headroom
+```
+
+The 12- and 20-action rollouts differ only in `--max-steps` and the output
+folder (`budget_12/`, `budget_20/`).  `<D>` is
+`output/compound_errors_ieee118_20261028`, `<C>` is
+`output/compound_errors_ieee14_busbranch_20261028`.  Run times: the IEEE 118
+rollouts took 30 to 36 min on 9 workers, the control's 11 to 13 min on 4, the
+budget audits 17 min (IEEE 118, 14 workers) and 12 min (control, 4), and the
+wide audit 82 min.

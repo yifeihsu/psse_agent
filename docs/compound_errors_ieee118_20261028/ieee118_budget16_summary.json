@@ -1,0 +1,309 @@
+{
+  "by_class": {
+    "control_meter": {
+      "abstention_episodes": 0,
+      "abstentions_unsupported": 0,
+      "basis": {
+        "counterfactual_resolution": 19,
+        "none": 31
+      },
+      "comparisons": 21,
+      "corrections_true": 52,
+      "corrections_wrong": 74,
+      "errors": 0,
+      "failure_reasons": {
+        "final_measurements_outside_clean_tolerance": 31,
+        "resolved_episode_has_remaining_true_faults": 31
+      },
+      "false_commit_episodes": 0,
+      "healthy_touched": 0,
+      "invalid_action_episodes": 0,
+      "loop_episodes": 0,
+      "mean_comparisons": 0.42,
+      "mean_steps": 12.12,
+      "mean_wls_calls": 3.52,
+      "n": 50,
+      "steps": 606,
+      "success": 19,
+      "success_rate": 0.38,
+      "terminal_outcomes": {
+        "operator_escalation": 50
+      },
+      "verdicts": {
+        "correct_measurements:true:ACCEPT_FINAL": 19,
+        "correct_measurements:true:ACCEPT_PARTIAL": 33,
+        "correct_parameters:wrong:REJECT": 74
+      },
+      "wls_calls": 176
+    },
+    "control_rx": {
+      "abstention_episodes": 0,
+      "abstentions_unsupported": 0,
+      "basis": {
+        "counterfactual_resolution": 45,
+        "none": 5
+      },
+      "comparisons": 28,
+      "corrections_true": 49,
+      "corrections_wrong": 8,
+      "errors": 0,
+      "failure_reasons": {
+        "accepted_parameter_target_outside_same_family_truth": 2,
+        "accepted_target_nonregression_false_target": 2,
+        "final_case_outside_clean_tolerance": 5,
+        "healthy_case_component_modified": 2,
+        "resolved_episode_has_remaining_true_faults": 4
+      },
+      "false_commit_episodes": 0,
+      "healthy_touched": 2,
+      "invalid_action_episodes": 3,
+      "loop_episodes": 2,
+      "mean_comparisons": 0.56,
+      "mean_steps": 7.94,
+      "mean_wls_calls": 2.14,
+      "n": 50,
+      "steps": 397,
+      "success": 45,
+      "success_rate": 0.9,
+      "terminal_outcomes": {
+        "operator_escalation": 50
+      },
+      "verdicts": {
+        "correct_parameters:true:ACCEPT_FINAL": 46,
+        "correct_parameters:true:refused": 3,
+        "correct_parameters:wrong:ACCEPT_FINAL": 1,
+        "correct_parameters:wrong:ACCEPT_PARTIAL": 1,
+        "correct_parameters:wrong:REJECT": 5,
+        "correct_parameters:wrong:refused": 1
+      },
+      "wls_calls": 107
+    },
+    "meter_on_rx": {
+      "abstention_episodes": 0,
+      "abstentions_unsupported": 0,
+      "basis": {
+        "counterfactual_resolution": 4,
+        "none": 71
+      },
+      "comparisons": 43,
+      "corrections_true": 92,
+      "corrections_wrong": 167,
+      "errors": 0,
+      "failure_reasons": {
+        "accepted_measurement_targets_outside_truth": 3,
+        "accepted_parameter_target_outside_same_family_truth": 5,
+        "accepted_target_nonregression_false_target": 13,
+        "accepted_topology_target_outside_same_family_truth": 6,
+        "final_case_outside_clean_tolerance": 66,
+        "final_measurements_outside_clean_tolerance": 63,
+        "healthy_case_component_modified": 11,
+        "healthy_measurement_modified": 2,
+        "resolved_episode_has_remaining_true_faults": 68
+      },
+      "false_commit_episodes": 0,
+      "healthy_touched": 15,
+      "invalid_action_episodes": 44,
+      "loop_episodes": 13,
+      "mean_comparisons": 0.5733333333333334,
+      "mean_steps": 14.186666666666667,
+      "mean_wls_calls": 4.413333333333333,
+      "n": 75,
+      "steps": 1064,
+      "success": 4,
+      "success_rate": 0.05333333333333334,
+      "terminal_outcomes": {
+        "nonterminal": 2,
+        "operator_escalation": 73
+      },
+      "verdicts": {
+        "correct_measurements:true:ACCEPT_FINAL": 1,
+        "correct_measurements:true:ACCEPT_PARTIAL": 19,
+        "correct_measurements:wrong:ACCEPT_PARTIAL": 4,
+        "correct_measurements:wrong:REJECT": 3,
+        "correct_parameters:true:ACCEPT_FINAL": 5,
+        "correct_parameters:true:ACCEPT_PARTIAL": 5,
+        "correct_parameters:true:REJECT": 59,
+        "correct_parameters:true:refused": 3,
+        "correct_parameters:wrong:ACCEPT_PARTIAL": 6,
+        "correct_parameters:wrong:REJECT": 83,
+        "correct_parameters:wrong:refused": 65,
+        "correct_topology:wrong:ACCEPT_PARTIAL": 6
+      },
+      "wls_calls": 331
+    },
+    "meter_rx2": {
+      "abstention_episodes": 0,
+      "abstentions_unsupported": 0,
+      "basis": {
+        "counterfactual_resolution": 129,
+        "none": 21
+      },
+      "comparisons": 199,
+      "corrections_true": 426,
+      "corrections_wrong": 31,
+      "errors": 0,
+      "failure_reasons": {
+        "accepted_parameter_target_outside_same_family_truth": 10,
+        "accepted_target_nonregression_false_target": 12,
+        "accepted_topology_target_outside_same_family_truth": 2,
+        "final_case_outside_clean_tolerance": 17,
+        "final_measurements_outside_clean_tolerance": 10,
+        "healthy_case_component_modified": 12,
+        "resolved_episode_has_remaining_true_faults": 21
+      },
+      "false_commit_episodes": 0,
+      "healthy_touched": 12,
+      "invalid_action_episodes": 9,
+      "loop_episodes": 6,
+      "mean_comparisons": 1.3266666666666667,
+      "mean_steps": 15.806666666666667,
+      "mean_wls_calls": 4.04,
+      "n": 150,
+      "steps": 2371,
+      "success": 129,
+      "success_rate": 0.86,
+      "terminal_outcomes": {
+        "nonterminal": 3,
+        "operator_escalation": 147
+      },
+      "verdicts": {
+        "correct_measurements:true:ACCEPT_FINAL": 102,
+        "correct_measurements:true:ACCEPT_PARTIAL": 38,
+        "correct_parameters:true:ACCEPT_FINAL": 32,
+        "correct_parameters:true:ACCEPT_PARTIAL": 244,
+        "correct_parameters:true:REJECT": 2,
+        "correct_parameters:true:refused": 8,
+        "correct_parameters:wrong:ACCEPT_FINAL": 3,
+        "correct_parameters:wrong:ACCEPT_PARTIAL": 7,
+        "correct_parameters:wrong:REJECT": 9,
+        "correct_parameters:wrong:refused": 10,
+        "correct_topology:wrong:ACCEPT_PARTIAL": 2
+      },
+      "wls_calls": 606
+    },
+    "rx2_adjacent": {
+      "abstention_episodes": 0,
+      "abstentions_unsupported": 0,
+      "basis": {
+        "counterfactual_resolution": 97,
+        "none": 53
+      },
+      "comparisons": 172,
+      "corrections_true": 302,
+      "corrections_wrong": 63,
+      "errors": 0,
+      "failure_reasons": {
+        "accepted_parameter_target_outside_same_family_truth": 14,
+        "accepted_target_nonregression_false_target": 21,
+        "accepted_topology_target_outside_same_family_truth": 7,
+        "final_case_outside_clean_tolerance": 50,
+        "healthy_case_component_modified": 21,
+        "resolved_episode_has_remaining_true_faults": 37
+      },
+      "false_commit_episodes": 0,
+      "healthy_touched": 23,
+      "invalid_action_episodes": 27,
+      "loop_episodes": 22,
+      "mean_comparisons": 1.1466666666666667,
+      "mean_steps": 13.006666666666666,
+      "mean_wls_calls": 3.4133333333333336,
+      "n": 150,
+      "steps": 1951,
+      "success": 97,
+      "success_rate": 0.6466666666666666,
+      "terminal_outcomes": {
+        "nonterminal": 6,
+        "operator_escalation": 144
+      },
+      "verdicts": {
+        "correct_parameters:true:ACCEPT_FINAL": 103,
+        "correct_parameters:true:ACCEPT_PARTIAL": 164,
+        "correct_parameters:true:REJECT": 3,
+        "correct_parameters:true:refused": 32,
+        "correct_parameters:wrong:ACCEPT_FINAL": 2,
+        "correct_parameters:wrong:ACCEPT_PARTIAL": 13,
+        "correct_parameters:wrong:REJECT": 22,
+        "correct_parameters:wrong:refused": 19,
+        "correct_topology:wrong:ACCEPT_FINAL": 1,
+        "correct_topology:wrong:ACCEPT_PARTIAL": 6
+      },
+      "wls_calls": 512
+    },
+    "rx2_distant": {
+      "abstention_episodes": 0,
+      "abstentions_unsupported": 0,
+      "basis": {
+        "counterfactual_resolution": 130,
+        "none": 20
+      },
+      "comparisons": 183,
+      "corrections_true": 292,
+      "corrections_wrong": 32,
+      "errors": 0,
+      "failure_reasons": {
+        "accepted_measurement_targets_outside_truth": 1,
+        "accepted_parameter_target_outside_same_family_truth": 10,
+        "accepted_target_nonregression_false_target": 10,
+        "final_case_outside_clean_tolerance": 18,
+        "final_measurements_outside_clean_tolerance": 1,
+        "healthy_case_component_modified": 10,
+        "healthy_measurement_modified": 1,
+        "resolved_episode_has_remaining_true_faults": 19
+      },
+      "false_commit_episodes": 0,
+      "healthy_touched": 10,
+      "invalid_action_episodes": 13,
+      "loop_episodes": 6,
+      "mean_comparisons": 1.22,
+      "mean_steps": 12.48,
+      "mean_wls_calls": 3.14,
+      "n": 150,
+      "steps": 1872,
+      "success": 130,
+      "success_rate": 0.8666666666666667,
+      "terminal_outcomes": {
+        "nonterminal": 1,
+        "operator_escalation": 149
+      },
+      "verdicts": {
+        "correct_measurements:wrong:ACCEPT_FINAL": 1,
+        "correct_parameters:true:ACCEPT_FINAL": 131,
+        "correct_parameters:true:ACCEPT_PARTIAL": 146,
+        "correct_parameters:true:REJECT": 2,
+        "correct_parameters:true:refused": 13,
+        "correct_parameters:wrong:ACCEPT_FINAL": 4,
+        "correct_parameters:wrong:ACCEPT_PARTIAL": 6,
+        "correct_parameters:wrong:REJECT": 11,
+        "correct_parameters:wrong:refused": 10
+      },
+      "wls_calls": 471
+    }
+  },
+  "contract": "compound_expert_rollout_v1",
+  "env_options": {},
+  "expert": "baseline_compare",
+  "expert_options": {},
+  "max_steps": 16,
+  "multi_scan_rcond": "sparse_symmetric",
+  "profile": "scada_only",
+  "progress_basis": "chi_square_excess",
+  "roots": 625,
+  "seed": 20261006,
+  "suite": "output\\compound_errors_ieee118_20261028\\suite.json",
+  "system": "case118",
+  "total_seconds": 2004.6,
+  "totals": {
+    "abstention_episodes": 0,
+    "abstentions_unsupported": 0,
+    "comparisons": 646,
+    "errors": 0,
+    "false_commit_episodes": 0,
+    "invalid_action_episodes": 96,
+    "loop_episodes": 49,
+    "n": 625,
+    "steps": 8261,
+    "success": 424,
+    "wls_calls": 2203
+  },
+  "workers": 9
+}
