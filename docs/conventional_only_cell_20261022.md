@@ -1001,3 +1001,18 @@ whose successes differ between the draws by more than two roots for the same
 policy, or whose strata, error magnitudes or effects differ in the suite
 statistics, is flagged for the manuscript to explain; nothing is redrawn or
 dropped after the evaluations.
+
+**Launch.** Deployed 2026-10-29T01:57Z from f005b4f (the incremental bundle
+4d34050..f005b4f uploaded over ssh stdin into the cell's source; the dry-run
+prerequisites passed) and submitted at 01:58 UTC with
+`submit_test_draw2_20261029.sh`: fp-xdraw 21304171 (CPU partition `cs`), then
+fp-xeval test2_40 21304172 and test2_40_r2 21304174 (after the draw), then
+test2_budget12 21304176 and test2_budget20 21304179 (after test2_40) and
+test2_budget12_r2 21304177 and test2_budget20_r2 21304181 (after test2_40_r2),
+the GPU jobs on the `a100|h100|h200|rtx6000` union with preemption opt-in and
+requeue, no GPU type pinned. Records: `out/extra/test_draw2/` (the draw) and
+`out/extra/evaluations/test2_*/`. Status:
+
+```bash
+MSYS_NO_PATHCONV=1 wsl -- ssh torch "export PATH=/opt/slurm/bin:\$PATH; sacct -j 21304171,21304172,21304174,21304176,21304177,21304179,21304181 -X -o JobID%12,JobName%10,State%12,Elapsed%12,NodeList%10"
+```
