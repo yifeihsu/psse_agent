@@ -393,7 +393,7 @@ def sanitize_scada_observation(value: Any) -> Any:
                 result[text] = {
                     family: sanitize_scada_observation(record)
                     for family, record in (item.items() if isinstance(item, Mapping) else [])
-                    if family in {"wls", "measurement", "parameter", "topology", "parameter_comparison"}
+                    if family in {"wls", "measurement", "parameter", "topology", "parameter_comparison", "route_comparison"}
                 }
             else:
                 result[text] = sanitize_scada_observation(item)

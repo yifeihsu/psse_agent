@@ -33,6 +33,7 @@ from psse_env.actions import (
     POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     REVERT_STATE,
+    COMPARE_ROUTES,
     ROLLBACK_STATE,
     RUN_ALTERNATIVE_TEST,
     RUN_WLS,
@@ -346,6 +347,10 @@ class ProcessValidityOracle:
             refusal = revert_refusal(state, args)
             if refusal is not None:
                 error_code, error_detail = refusal
+        elif tool == COMPARE_ROUTES:
+            refusal = self._route_comparison_refusal(state, args, store=store, strict=strict, has_open_candidate=has_open_candidate)
+            if refusal is not None:
+                error_code, error_detail = refusal
         elif tool not in MACRO_ACTIONS:
             error_code, error_detail = "unknown_tool", str(tool)
         elif tool in disabled or (
@@ -643,6 +648,59 @@ class ProcessValidityOracle:
             "error_detail": error_detail,
             "valid_next_actions": repairs,
         }
+
+    def route_comparison_targets(self, state: Any, arguments: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+        """The corrections ``compare_routes`` fits: the supported impedance edit on the parameter line, then the
+        supported breaker flips on the topology line; ``None`` when either route has no supported correction there."""
+        parameter_line = arguments.get("parameter_line")
+        topology_line = arguments.get("topology_line")
+        if any(isinstance(line, bool) or not isinstance(line, int) or line <= 0 for line in (parameter_line, topology_line)):
+            return None
+        parameter = [
+            action for action in self._supported_corrections_for_family(state, "parameter")
+            if action["arguments"].get("line_index") == parameter_line
+        ][:1]
+        topology = [
+            action for action in self._supported_corrections_for_family(state, "topology")
+            if action["arguments"].get("line_index") == topology_line
+        ][:_actions.ROUTE_COMPARISON_MAX_BREAKERS]
+        if not parameter or not topology:
+            return None
+        return [*parameter, *topology]
+
+    def _route_comparison_refusal(
+        self, state: Any, arguments: Mapping[str, Any], *, store: Any | None, strict: bool, has_open_candidate: bool,
+    ) -> tuple[str, str] | None:
+        """Why the gate refuses ``compare_routes`` (item 7 step 7), else ``None``.
+
+        It exists only where the environment lists it; otherwise it needs what
+        the parameter comparison needs (no open candidate, the active state, a
+        current WLS on a strict profile), fresh parameter and topology contexts
+        supporting a correction on the named lines, and no comparison of the
+        same lines on this state yet.
+        """
+        if COMPARE_ROUTES not in _actions.research_tools_of(state):
+            return "unknown_tool", COMPARE_ROUTES
+        active_id = state.get("active_state_id")
+        requested = arguments.get("state_id") or active_id
+        if has_open_candidate:
+            return "candidate_lifecycle_violation", "route_comparison_with_open_candidate"
+        if not self._known_current_state(store, requested):
+            return "unknown_state_id", str(requested)
+        if str(requested) != str(active_id):
+            return "state_reference_mismatch", "route_comparison_state_not_active"
+        if strict and not successful_current_wls(state):
+            return "missing_precondition", "current_balanced_wls_required"
+        if not self._context_is_fresh(state, "parameter") or not self._context_is_fresh(state, "topology"):
+            return "missing_precondition", "route_comparison_needs_both_branch_contexts"
+        if self.route_comparison_targets(state, arguments) is None:
+            return "missing_precondition", "route_comparison_target_not_supported"
+        recorded = _actions.route_comparison_evidence(state)
+        if recorded is not None and (recorded.get("parameter_line"), recorded.get("topology_line")) == (
+            arguments.get("parameter_line"), arguments.get("topology_line")
+        ):
+            return "missing_precondition", "route_comparison_already_recorded"
+        return None
 
     @staticmethod
     def _known_current_state(store: Any | None, state_id: Any) -> bool:

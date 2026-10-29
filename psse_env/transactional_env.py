@@ -46,6 +46,9 @@ from .actions import (
     REVERT_CONTRACT,
     REVERT_STATE,
     REVERTED_REJECTION_KIND,
+    COMPARE_ROUTES,
+    ROUTE_COMPARISON_CONTRACT,
+    ROUTE_COMPARISON_FAMILY,
     ROLLBACK_STATE,
     RUN_ALTERNATIVE_TEST,
     RUN_HSE_FROM_PATH,
@@ -488,6 +491,7 @@ class TransactionalPSSEEnv:
         evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
         progress_basis: str = DEFAULT_PROGRESS_BASIS,
         revert_fruitless_cycles: int = 0,
+        route_comparison: bool = False,
     ) -> None:
         self.evidence_profile = validate_evidence_profile(evidence_profile)
         # Item 7 step 6: the gated revert of a committed correction, admitted
@@ -497,6 +501,10 @@ class TransactionalPSSEEnv:
         if isinstance(revert_fruitless_cycles, bool) or int(revert_fruitless_cycles) < 0:
             raise ValueError(f"revert_fruitless_cycles must be a non-negative int, got {revert_fruitless_cycles!r}")
         self.revert_fruitless_cycles = int(revert_fruitless_cycles)
+        # Item 7 step 7: ``compare_routes`` (the impedance edit against the
+        # breaker flip, fitted on isolated clones).  Off by default: the tool is
+        # unknown and the observation lists no research tools, as before.
+        self.route_comparison = bool(route_comparison)
         if progress_basis not in PROGRESS_BASES:
             raise ValueError(f"progress_basis must be one of {PROGRESS_BASES}, got {progress_basis!r}")
         self.progress_basis = str(progress_basis)
@@ -890,6 +898,8 @@ class TransactionalPSSEEnv:
                     contexts["wls"][key] = wls[key]
         if self.revert_fruitless_cycles:
             summary["revert_ledger"] = self._revert_ledger(active_id)
+        if self.route_comparison:
+            summary["research_tools"] = [COMPARE_ROUTES]
         return self._sanitize_observation(summary) if is_strict_boundary(self.evidence_profile) else summary
 
     def _fruitless_cycles_since(self, lineage: list[str], index: int) -> int:
@@ -1174,6 +1184,10 @@ class TransactionalPSSEEnv:
             revert_ledger=(
                 policy_safe_copy(dict(summary["revert_ledger"]))
                 if isinstance(summary.get("revert_ledger"), Mapping) else None
+            ),
+            research_tools=(
+                [str(tool) for tool in summary["research_tools"]]
+                if isinstance(summary.get("research_tools"), list) else None
             ),
         )
 
@@ -1576,6 +1590,8 @@ class TransactionalPSSEEnv:
             )
         if tool == REVERT_STATE and self.revert_fruitless_cycles:
             return self._step_revert(action)
+        if tool == COMPARE_ROUTES and self.route_comparison:
+            return self._step_route_comparison(action)
         if tool == FINALIZE_DIAGNOSIS:
             self.terminal = True
             self.terminal_outcome = "resolved"
@@ -4472,6 +4488,136 @@ class TransactionalPSSEEnv:
         "converged",
     )
 
+    def _fit_on_branch(self, correction: dict[str, Any], active_id: str) -> tuple[dict[str, Any], int, int]:
+        """Run ``correction`` and its verification solve on an isolated clone; the observable verdict and the call counts.
+
+        The clone is discarded: no candidate opens on the live state and
+        nothing in the store changes.  Shared by the parameter comparison and
+        the route comparison.
+        """
+        branch = self.clone()
+        branch._comparison_branch = True
+        try:
+            corrected = branch.dispatch_valid_action(correction)
+        except Exception as exc:  # a provider failure is a verdict, not an episode failure
+            corrected = {"execution_status": "failure", "error_code": "dispatch_error",
+                         "error_detail": type(exc).__name__, "tool_metrics": {}}
+        if corrected.get("execution_status") != "success" or branch.current_candidate_id is None:
+            return {
+                "execution_status": "failure", "stage": "correction",
+                "error_code": corrected.get("error_code"), "error_detail": corrected.get("error_detail"),
+                "verification_verdict": None,
+            }, 1, 0
+        branch._record_transition(correction, corrected, source_state_id=active_id, source_candidate_id=None)
+        wls_action = {"tool": RUN_WLS, "arguments": {"state_id": str(branch.current_candidate_id)}}
+        try:
+            verified = branch.dispatch_valid_action(wls_action)
+        except Exception as exc:
+            verified = {"execution_status": "failure", "error_code": "dispatch_error",
+                        "error_detail": type(exc).__name__, "tool_metrics": {}}
+        metrics = verified.get("tool_metrics") if isinstance(verified.get("tool_metrics"), Mapping) else {}
+        # The branch store holds the verification verdict the process gate
+        # would apply to this candidate (commit or rollback legality).  On
+        # a comparison branch it is labelled without hidden truth, so it is
+        # the environment's own observable verdict, reported under its own
+        # name: the oracle's disposition keys stay out of policy payloads.
+        try:
+            candidate_payload = branch.store.get_state(str(branch.current_candidate_id))
+        except StateStoreError:
+            candidate_payload = {}
+        assessment = candidate_payload.get("candidate_assessment")
+        assessment = assessment if isinstance(assessment, Mapping) else {}
+        fit: dict[str, Any] = {
+            "execution_status": str(verified.get("execution_status") or "failure"),
+            "stage": "verification",
+            "error_code": verified.get("error_code"),
+            "error_detail": verified.get("error_detail"),
+            "verification_verdict": candidate_payload.get("candidate_disposition"),
+            "verification_rationale": [str(code) for code in assessment.get("rationale_codes") or []],
+        }
+        for key in self._COMPARISON_VERDICT_KEYS:
+            if key in metrics:
+                fit[key] = metrics[key]
+        return fit, 1, 1
+
+    def _step_route_comparison(self, action: dict[str, Any]) -> dict[str, Any]:
+        """Fit the impedance edit and the breaker flips on isolated clones and report their verdicts (item 7 step 7).
+
+        The candidates are the parameter context's supported correction on
+        ``parameter_line`` and the topology context's supported corrections on
+        ``topology_line`` (the process gate resolves them, so they are exactly
+        what the agent could open).  Each runs with its verification solve on
+        its own clone, as in the parameter comparison; the verdicts are ranked
+        the same way (accepted before inconclusive before rejected, then
+        global progress, then the smaller statistic, then request order) and
+        recorded under ``fresh_context_evidence["route_comparison"]`` on the
+        active state.  One policy action; nothing on the live state changes.
+        """
+        args = action["arguments"]
+        active_id = str(self.store.active_state_id)
+        active_payload = self.store.get_state(active_id)
+        if getattr(self, "_comparison_branch", False):
+            return self._standard_output(
+                execution_status="failure", error_code="comparison_unavailable",
+                error_detail="comparison_inside_comparison_branch", state_mutated=False,
+            )
+        if self.current_candidate_id is not None:
+            return self._standard_output(
+                execution_status="failure", error_code="candidate_lifecycle_violation",
+                error_detail="route_comparison_with_open_candidate", state_mutated=False,
+            )
+        if self.wls_runner is None or getattr(self.candidate_quality_oracle, "mode", None) == "synthetic" or not (
+            callable(self.correction_executors.get(CORRECT_PARAMETERS)) and callable(self.correction_executors.get(CORRECT_TOPOLOGY))
+        ):
+            return self._standard_output(
+                execution_status="failure", error_code="comparison_unavailable",
+                error_detail="route_comparison_needs_both_executors_and_an_observable_verdict", state_mutated=False,
+            )
+        targets = self.process_oracle.route_comparison_targets(self.current_state(), args)
+        if targets is None:
+            return self._standard_output(
+                execution_status="failure", error_code="missing_precondition",
+                error_detail="route_comparison_target_not_supported", state_mutated=False,
+            )
+        candidates: list[dict[str, Any]] = []
+        internal_corrections = 0
+        internal_wls = 0
+        for rank, correction in enumerate(targets):
+            correction = safe_normalize_action(correction)
+            fit, corrections_run, solves_run = self._fit_on_branch(correction, active_id)
+            internal_corrections += corrections_run
+            internal_wls += solves_run
+            candidates.append({
+                "route": "parameter" if correction["tool"] == CORRECT_PARAMETERS else "topology",
+                "correction": policy_safe_copy(correction),
+                "line_index": correction["arguments"].get("line_index"),
+                "cb_name": correction["arguments"].get("cb_name"),
+                "request_rank": rank,
+                **fit,
+            })
+        ranked = rank_parameter_comparison(candidates)
+        best = ranked[0] if ranked else None
+        verified = bool(best and best.get("execution_status") == "success"
+                        and best.get("verification_verdict") in ("ACCEPT_FINAL", "ACCEPT_PARTIAL"))
+        record = policy_safe_copy({
+            "context_tool": COMPARE_ROUTES,
+            "contract": ROUTE_COMPARISON_CONTRACT,
+            "context_binding": "direct_context",
+            "state_id": active_id,
+            "state_hash": active_payload["state_hash"],
+            "evidence_source": "controller_observed:branch_verification",
+            "parameter_line": args.get("parameter_line"),
+            "topology_line": args.get("topology_line"),
+            "candidates": ranked,
+            "best_route": best.get("route") if verified else None,
+            "internal_correction_calls": internal_corrections,
+            "internal_wls_calls": internal_wls,
+        })
+        context_evidence = dict(self.context_flags.get("fresh_context_evidence") or {})
+        context_evidence[ROUTE_COMPARISON_FAMILY] = record
+        self.context_flags["fresh_context_evidence"] = context_evidence
+        return self._standard_output(execution_status="success", state_mutated=False, tool_metrics=record)
+
     def _step_parameter_comparison(self, action: dict[str, Any]) -> dict[str, Any]:
         """Fit the requested parameter candidates on isolated branches and report their verdicts (2026-10-19).
 
@@ -4537,54 +4683,11 @@ class TransactionalPSSEEnv:
         internal_wls = 0
         for rank, line in enumerate(lines):
             verdict: dict[str, Any] = {"line_index": int(line), "request_rank": rank}
-            branch = self.clone()
-            branch._comparison_branch = True
             correction = {"tool": CORRECT_PARAMETERS, "arguments": {"state_id": active_id, "line_index": int(line)}}
-            try:
-                corrected = branch.dispatch_valid_action(correction)
-            except Exception as exc:  # a provider failure is a verdict, not an episode failure
-                corrected = {"execution_status": "failure", "error_code": "dispatch_error",
-                             "error_detail": type(exc).__name__, "tool_metrics": {}}
-            internal_corrections += 1
-            if corrected.get("execution_status") != "success" or branch.current_candidate_id is None:
-                verdict.update({
-                    "execution_status": "failure", "stage": "correction",
-                    "error_code": corrected.get("error_code"), "error_detail": corrected.get("error_detail"),
-                    "verification_verdict": None,
-                })
-                candidates.append(verdict)
-                continue
-            branch._record_transition(correction, corrected, source_state_id=active_id, source_candidate_id=None)
-            wls_action = {"tool": RUN_WLS, "arguments": {"state_id": str(branch.current_candidate_id)}}
-            try:
-                verified = branch.dispatch_valid_action(wls_action)
-            except Exception as exc:
-                verified = {"execution_status": "failure", "error_code": "dispatch_error",
-                            "error_detail": type(exc).__name__, "tool_metrics": {}}
-            internal_wls += 1
-            metrics = verified.get("tool_metrics") if isinstance(verified.get("tool_metrics"), Mapping) else {}
-            # The branch store holds the verification verdict the process gate
-            # would apply to this candidate (commit or rollback legality).  On
-            # a comparison branch it is labelled without hidden truth, so it is
-            # the environment's own observable verdict, reported under its own
-            # name: the oracle's disposition keys stay out of policy payloads.
-            try:
-                candidate_payload = branch.store.get_state(str(branch.current_candidate_id))
-            except StateStoreError:
-                candidate_payload = {}
-            assessment = candidate_payload.get("candidate_assessment")
-            assessment = assessment if isinstance(assessment, Mapping) else {}
-            verdict.update({
-                "execution_status": str(verified.get("execution_status") or "failure"),
-                "stage": "verification",
-                "error_code": verified.get("error_code"),
-                "error_detail": verified.get("error_detail"),
-                "verification_verdict": candidate_payload.get("candidate_disposition"),
-                "verification_rationale": [str(code) for code in assessment.get("rationale_codes") or []],
-            })
-            for key in self._COMPARISON_VERDICT_KEYS:
-                if key in metrics:
-                    verdict[key] = metrics[key]
+            fit, corrections_run, solves_run = self._fit_on_branch(correction, active_id)
+            internal_corrections += corrections_run
+            internal_wls += solves_run
+            verdict.update(fit)
             candidates.append(verdict)
         # An earlier comparison of other lines on this exact state stays in
         # the ledger; the new verdicts replace any for the same line.

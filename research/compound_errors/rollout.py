@@ -160,11 +160,33 @@ def compact_episode(episode: Mapping[str, Any], root: Mapping[str, Any]) -> dict
         "abstentions": handoff_abstentions(steps),
         "revert_accounting": dict(episode.get("revert_accounting") or {}),
         "first_hypothesis_confidence": first_hypothesis_confidence(steps),
+        "route_comparisons": route_comparisons(steps),
         "tools": tools,
         "corrections": corrections,
         "trace": slim_trace(steps),
         "seconds": episode.get("seconds"),
     }
+
+
+def route_comparisons(steps: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The episode's successful route comparisons (item 7 step 7): lines, best route, each route's verdict."""
+    out = []
+    for step in steps:
+        if str((step.get("action") or {}).get("tool")) != "compare_routes" or step.get("execution_status") != "success":
+            continue
+        output = step.get("policy_tool_output") if isinstance(step.get("policy_tool_output"), Mapping) else {}
+        metrics = output.get("tool_metrics") if isinstance(output.get("tool_metrics"), Mapping) else {}
+        out.append({
+            "parameter_line": metrics.get("parameter_line"),
+            "topology_line": metrics.get("topology_line"),
+            "best_route": metrics.get("best_route"),
+            "candidates": [
+                {key: item.get(key) for key in ("route", "line_index", "cb_name", "verification_verdict", "global_progress",
+                                                "chi_square_statistic", "execution_status")}
+                for item in metrics.get("candidates") or [] if isinstance(item, Mapping)
+            ],
+        })
+    return out
 
 
 def first_hypothesis_confidence(steps: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:

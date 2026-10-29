@@ -186,11 +186,15 @@ class PolicyObservation:
     # and the reverts).  Only an environment built with the revert has one;
     # everywhere else the field is absent from the serialized observation.
     revert_ledger: dict[str, Any] | None = None
+    # Item 7 step 7: tools this environment adds beyond the macro vocabulary
+    # (``compare_routes``); absent from the serialized observation otherwise.
+    research_tools: list[str] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
-        if payload.get("revert_ledger") is None:
-            payload.pop("revert_ledger", None)
+        for optional in ("revert_ledger", "research_tools"):
+            if payload.get(optional) is None:
+                payload.pop(optional, None)
         forbidden = find_forbidden_policy_paths(payload)
         if forbidden:
             raise ValueError(f"PolicyObservation contains privileged fields: {', '.join(forbidden)}")

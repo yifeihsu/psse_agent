@@ -356,6 +356,58 @@ def revert_ledger_of(observation: Mapping[str, Any] | Any) -> Mapping[str, Any] 
     return ledger if isinstance(ledger, Mapping) and ledger.get("contract") == REVERT_CONTRACT else None
 
 
+#: Item 7 step 7 (the user's request of 2026-10-28, "Build it here"): instead
+#: of committing a parameter-or-breaker guess and reverting it later, compare
+#: the two routes before committing.  One action fits the impedance edit on the
+#: parameter line and the supported breaker flips on the topology line, each on
+#: an isolated clone of the active state, runs the verification solve
+#: ``run_wls`` would run on each, and reports the verdicts side by side; no
+#: candidate opens and no state changes.  Like the revert, the tool exists only
+#: in an environment built with it (``route_comparison``), which lists it in
+#: the observation's ``research_tools``; it is in none of the vocabularies
+#: below, so the student's tool surface is unchanged.
+COMPARE_ROUTES = "compare_routes"
+ROUTE_COMPARISON_CONTRACT = "branch_verified_route_comparison_v1"
+#: The ``fresh_context_evidence`` family that records the comparison on the
+#: active state; dropped with the other balanced contexts when the state changes.
+ROUTE_COMPARISON_FAMILY = "route_comparison"
+#: Breaker flips on the topology line a comparison fits at most (a line has two terminals).
+ROUTE_COMPARISON_MAX_BREAKERS = 2
+
+
+def research_tools_of(observation: Mapping[str, Any] | Any) -> set[str]:
+    """Tools the environment adds beyond the macro vocabulary, as its observation lists them."""
+    getter = getattr(observation, "get", None)
+    tools = getter("research_tools") if callable(getter) else None
+    return {str(tool) for tool in tools} if isinstance(tools, (list, tuple)) else set()
+
+
+def route_comparison_evidence(observation: Mapping[str, Any] | Any) -> Mapping[str, Any] | None:
+    """The route comparison recorded on the active state, else ``None``."""
+    getter = getattr(observation, "get", None)
+    contexts = getter("fresh_context_evidence") if callable(getter) else None
+    evidence = contexts.get(ROUTE_COMPARISON_FAMILY) if isinstance(contexts, Mapping) else None
+    if not isinstance(evidence, Mapping):
+        return None
+    active_id = str(getter("active_state_id") or "")
+    if active_id and str(evidence.get("state_id") or "") != active_id:
+        return None
+    return evidence if isinstance(evidence.get("candidates"), (list, tuple)) else None
+
+
+def route_comparison_best_family(observation: Mapping[str, Any] | Any) -> str | None:
+    """The family of the best-verified route compared on the active state, when it verified (final or partial)."""
+    evidence = route_comparison_evidence(observation)
+    candidates = [item for item in (evidence or {}).get("candidates") or [] if isinstance(item, Mapping)]
+    if not candidates:
+        return None
+    best = candidates[0]
+    if best.get("execution_status") != "success" or best.get("verification_verdict") not in ("ACCEPT_FINAL", "ACCEPT_PARTIAL"):
+        return None
+    hypothesis = correction_hypothesis(best.get("correction") or {})
+    return hypothesis[0] if hypothesis else None
+
+
 def withdrawn_families(observation: Mapping[str, Any] | Any) -> set[str]:
     """Families of the corrections a revert withdrew on the active state (item 7 step 6)."""
     getter = getattr(observation, "get", None)
