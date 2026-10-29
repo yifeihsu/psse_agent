@@ -7,7 +7,10 @@ PATH is a suite (a JSON list of scenario rows), an aggregate (JSONL rows), or a
 glob of them, expanded here so that a pattern matching nothing is recorded
 instead of silently vanishing.  Every row's physical root is read the way
 check_suite_exclusion.py reads it (the row, its ``metadata``, its
-``grouping``); a JSON list of fingerprint strings is read as roots too.
+``grouping``); a JSON list of fingerprint strings, and rows that carry the
+fingerprint under another key (``physical_root``, ``fp``, ``root``: the
+conventional-only cell's list of local-preflight roots), are read as roots
+too, though check_suite_exclusion.py cannot read such a file itself.
 Writes ROOTS.json, a JSON list of ``{"physical_root_fingerprint": ...}``
 (sorted, unique) that build_suite.py takes as a ``--protected-suite``, and
 ROOTS.report.json: per file, its size, sha256, rows, roots, rows without a
@@ -27,6 +30,8 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 HERE = Path(__file__).resolve().parent
+#: Keys under which a hand-written root list stores the fingerprint.
+ALIAS_KEYS = ("physical_root", "fp", "root")
 
 
 def _exclusion():
@@ -60,6 +65,11 @@ def read_roots(path: Path, fingerprint: Callable[[Any], str]) -> dict[str, Any]:
         if root:
             roots.add(root)
             row_roots += 1
+            return
+        alias = next((item[key] for key in ALIAS_KEYS if isinstance(item, dict)
+                      and isinstance(item.get(key), str) and item[key].startswith("physical_")), "")
+        if alias:
+            roots.add(alias)
         else:
             rootless += 1
 

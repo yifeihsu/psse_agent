@@ -313,12 +313,14 @@ def test_reference_roots_collect_every_readable_set(tmp_path: Path) -> None:
                     json.dumps({"physical_root_fingerprint": "physical_c"}) + "\n" + json.dumps({"example_id": "x"}) + "\n")
     suite = write(tmp_path / "suite.json", json.dumps([{"grouping": {"physical_root_fingerprint": "physical_d"}}]))
     strings = write(tmp_path / "strings.json", json.dumps(["physical_e", "not a root"]))
+    aliased = write(tmp_path / "aliased.json", json.dumps([{"scenario_id": "r0_x", "fp": "physical_f"}]))
     report_file = write(tmp_path / "report.json", json.dumps({"roots": 3}))
     own = write(tmp_path / "draw" / "development.json", json.dumps([{"grouping": {"physical_root_fingerprint": "physical_new"}}]))
     patterns = [str(tmp_path / "cell*" / "out" / "d0" / "aggregate.raw.jsonl"), str(suite), str(suite), str(strings),
-                str(report_file), str(tmp_path / "missing*.json"), str(tmp_path / "draw" / "*.json")]
+                str(aliased), str(report_file), str(tmp_path / "missing*.json"), str(tmp_path / "draw" / "*.json")]
     roots, report = collect.collect(patterns, [tmp_path / "draw"])
-    assert roots == {"physical_a", "physical_b", "physical_c", "physical_d", "physical_e"}
+    assert roots == {"physical_a", "physical_b", "physical_c", "physical_d", "physical_e", "physical_f"}
+    assert report["files"][str(aliased)]["roots"] == 1 and report["files"][str(aliased)]["checkable"] is False
     files = report["files"]
     assert files[str(partial)]["rows_without_root"] == 1 and files[str(partial)]["checkable"] is False
     assert files[str(suite)]["roots"] == 1 and files[str(report_file)]["rows"] == 0
@@ -327,8 +329,8 @@ def test_reference_roots_collect_every_readable_set(tmp_path: Path) -> None:
     output = tmp_path / "out" / "protected_roots.json"
     assert collect.main(patterns + ["--exclude-dir", str(tmp_path / "draw"), "--output", str(output)]) == 0
     written = json.loads(output.read_text(encoding="utf-8"))
-    assert [row["physical_root_fingerprint"] for row in written] == ["physical_a", "physical_b", "physical_c", "physical_d", "physical_e"]
-    assert json.loads((tmp_path / "out" / "protected_roots.report.json").read_text(encoding="utf-8"))["roots"] == 5
+    assert [row["physical_root_fingerprint"] for row in written] == [f"physical_{c}" for c in "abcdef"]
+    assert json.loads((tmp_path / "out" / "protected_roots.report.json").read_text(encoding="utf-8"))["roots"] == 6
     # check_suite_exclusion reads the written roots as a reference suite.
     assert _load("check_suite_exclusion.py").reference_roots(output) == roots
 
