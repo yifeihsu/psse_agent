@@ -68,6 +68,26 @@ def test_extra_cpu_stages_request_no_gpu_and_are_deployed(name: str) -> None:
         assert deployed in deploy, deployed
 
 
+def test_round2_rerun_tables_holm_pairs_and_sources(tmp_path: Path) -> None:
+    rerun = _load("r2rerun_tables.py")
+    result = rerun.holm({"a": 0.001, "b": 0.03, "c": 0.04})
+    assert result["a"]["rejected"] and result["a"]["holm_p"] == pytest.approx(0.003)
+    assert not result["b"]["rejected"] and result["b"]["holm_p"] == pytest.approx(0.06)  # 0.03 > 0.05 / 2
+    # The step-down stops at b, so c is not rejected although 0.04 < 0.05; its Holm p keeps the running maximum.
+    assert not result["c"]["rejected"] and result["c"]["holm_p"] == pytest.approx(0.06)
+    assert all(rerun.holm({"a": 0.001, "b": 0.02, "c": 0.04})[k]["rejected"] for k in "abc")
+    first = {"x": {"success": True}, "y": {"success": False}, "z": {"success": False}}
+    second = {"x": {"success": False}, "y": {"success": True}, "z": {"success": True}}
+    assert rerun.paired(first, second, "success") == {"paired_roots": 3, "fails_only_first": 2, "fails_only_second": 1, "p": 1.0}
+    names = rerun.sources(tmp_path, "", "_pool_20261023")
+    evaluations = tmp_path / "out" / "extra" / "evaluations"
+    assert names["draw2@40"]["files"]["r2"] == evaluations / "test2_40_r2" / "bc0_eval.json"
+    assert names["draw1@16"]["files"]["r2_pool"] == evaluations / "test_budget16_r2_pool_20261023" / "bc0_eval.json"
+    assert names["hard@40"]["files"]["r2"] == evaluations / "hard_r2" / "bc0_eval.json"
+    assert names["validation@40"]["files"]["r2_pool"] == evaluations / "validation_r2_control_pool_20261023" / "bc0_eval.json"
+    assert names["draw1@40"]["files"]["r2"] == tmp_path / "out" / "r2" / "collection" / "evaluation" / "r1_eval.json"
+
+
 def test_round2_rerun_evaluations_reuse_the_recorded_names_and_refuse_a_record_left_in_place() -> None:
     text = (CELL / "submit_r2_rerun_20261029.sh").read_text(encoding="utf-8")
     plan = re.findall(r'^  "(\S+) (\S+) (\S+)"$', text, flags=re.MULTILINE)
