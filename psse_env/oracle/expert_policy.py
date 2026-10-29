@@ -31,11 +31,15 @@ from psse_env.actions import (
     POST_CORRECTION_CONFIRMATION_REQUEST,
     RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     REVERT_STATE,
+    COMPARE_ROUTES,
     RUN_WLS,
     action_signature,
     correction_hypothesis,
     hypothesis_vector_of,
+    research_tools_of,
     revert_ledger_of,
+    route_comparison_best_family,
+    route_comparison_evidence,
     safe_normalize_action,
     withdrawn_families,
     successful_current_wls,
@@ -213,7 +217,15 @@ class ExpertPolicyOracle:
         abstain_isolated_lines: bool = False,
         state_ambiguity: bool = False,
         hypothesis_walk: bool = False,
+        route_comparison: bool = False,
     ) -> None:
+        # Item 7 step 7 (the user's request of 2026-10-28): where the solve's
+        # confidence says the impedance edit and the breaker flip compete, fetch
+        # both branch contexts, compare the two routes on isolated clones
+        # (``compare_routes``, one action) and correct the best-verified route
+        # first.  Off by default; the tool also needs an environment built
+        # with it.
+        self.route_comparison = bool(route_comparison)
         # Item 7 step 6 (the user's decision of 2026-10-28 and the confidence
         # amendment): the balanced routes follow the ranking of the confidence
         # over meter, parameter and topology; when the teacher would hand off
@@ -618,6 +630,13 @@ class ExpertPolicyOracle:
             if is_classifier_gated(policy):
                 state_view = policy if isinstance(policy, Mapping) else policy.as_dict()
                 return _triage_first_order(ranked, triage_first_family(current_triage_report(state_view)))
+            if self.route_comparison:
+                first = self._route_comparison_first(
+                    ranked, policy, seen_signatures=seen_signatures, blocked_correction_tools=blocked_correction_tools,
+                )
+                if first is not None:
+                    return [first, *ranked]
+                ranked = self._route_comparison_order(ranked, policy)
             return _structural_first_order(ranked, topology_first=self._topology_first_for(policy))
         escalation = self._recovery_exhaustion_proposals(policy, context.history)
         if self.hypothesis_walk:
@@ -697,6 +716,106 @@ class ExpertPolicyOracle:
             estimated_immediate_risk=0.0,
         )]
 
+    def _route_comparison_first(
+        self,
+        ranked: list[ExpertActionProposal],
+        policy: PolicyObservation | Mapping[str, Any],
+        *,
+        seen_signatures: set[str],
+        blocked_correction_tools: set[str],
+    ) -> ExpertActionProposal | None:
+        """The step the route comparison needs next, when parameter and breaker compete on this state (item 7 step 7).
+
+        The trigger is the solve's own confidence (the topology context's
+        refinement when it is bound): a branch family leads and the other one
+        competes with it (step 3's 3:1 band).  The breaker context is fetched
+        first, since its refinement may settle the question, then the
+        parameter context, then ``compare_routes`` on the hypotheses' own
+        lines.  Once per state, before either route was tried on it, and only
+        while a branch move is still on the table.
+        """
+        if COMPARE_ROUTES not in research_tools_of(policy) or route_comparison_evidence(policy) is not None:
+            return None
+        if not any(safe_normalize_action(p.action)["tool"] in STRUCTURAL_PATH_TOOLS for p in ranked):
+            return None
+        vector = self._hypothesis_vector(policy)
+        ranking = list(vector.get("ranking") or []) if vector is not None else []
+        if not ranking or ranking[0] not in ("parameter", "topology"):
+            return None
+        other = "topology" if ranking[0] == "parameter" else "parameter"
+        if other not in set(vector.get("competing") or []):
+            return None
+        active_id = self._get(policy, "active_state_id")
+        for record in self._get(policy, "rejected_hypotheses", []) or []:
+            source = record.get("source_action") if isinstance(record, Mapping) else None
+            hypothesis = correction_hypothesis(source) if source else None
+            if hypothesis is not None and hypothesis[0] in ("parameter", "topology") and str(
+                record.get("candidate_parent_id") or ""
+            ) == str(active_id):
+                return None
+        codes = ["competing_branch_hypotheses", f"leading={ranking[0]}"]
+        action: dict[str, Any] | None = None
+        for family, tool in (("topology", GET_TOPOLOGY_CONTEXT), ("parameter", GET_PARAMETER_CONTEXT)):
+            fresh = bool(self._get(policy, f"has_fresh_{family}_context", False)) and str(
+                self._get(policy, f"{family}_context_state_id") or ""
+            ) == str(active_id)
+            if not fresh:
+                action = {"tool": tool, "arguments": {"state_id": active_id}}
+                codes.append("route_comparison_context_needed")
+                break
+        if action is None:
+            state_view = policy if isinstance(policy, Mapping) else policy.as_dict()
+            topology_line = vector.get("topology_line")
+            parameter_lines = [vector.get("parameter_line")] + [
+                proposal.action["arguments"].get("line_index") for proposal in ranked
+                if safe_normalize_action(proposal.action)["tool"] == CORRECT_PARAMETERS
+            ]
+            for parameter_line in parameter_lines:
+                arguments = {"state_id": active_id, "parameter_line": parameter_line, "topology_line": topology_line}
+                if self.process_oracle.route_comparison_targets(state_view, arguments) is not None:
+                    action = {"tool": COMPARE_ROUTES, "arguments": arguments}
+                    codes.append("branch_verified_route_comparison_before_correction")
+                    break
+        if action is None:
+            return None
+        checked = self._rank_and_filter(
+            [ExpertActionProposal(action=action, source_expert="recovery_expert", confidence=1.0,
+                                  evidence_codes=codes, admissible=True, estimated_immediate_risk=0.0)],
+            policy, seen_signatures=seen_signatures, blocked_correction_tools=blocked_correction_tools, mandatory=False,
+        )
+        return checked[0] if checked else None
+
+    @staticmethod
+    def _route_comparison_order(
+        ranked: list[ExpertActionProposal], policy: PolicyObservation | Mapping[str, Any],
+    ) -> list[ExpertActionProposal]:
+        """The compared corrections in the comparison's verdict order, best first; every other proposal keeps its slot."""
+        evidence = route_comparison_evidence(policy)
+        if evidence is None:
+            return ranked
+        order = []
+        for item in evidence.get("candidates") or []:
+            correction = item.get("correction") if isinstance(item, Mapping) else None
+            if isinstance(correction, Mapping):
+                arguments = {k: v for k, v in (correction.get("arguments") or {}).items() if k != "state_id"}
+                order.append(action_signature({"tool": correction.get("tool"), "arguments": arguments}))
+
+        def key_of(proposal: ExpertActionProposal) -> str | None:
+            normalized = safe_normalize_action(proposal.action)
+            arguments = {k: v for k, v in normalized["arguments"].items() if k != "state_id"}
+            signature = action_signature({"tool": normalized["tool"], "arguments": arguments})
+            return signature if signature in order else None
+
+        positions = [index for index, proposal in enumerate(ranked) if key_of(proposal) is not None]
+        if len(positions) < 2:
+            return ranked
+        reordered = sorted((ranked[index] for index in positions), key=lambda proposal: order.index(key_of(proposal)))
+        result = list(ranked)
+        for position, proposal in zip(positions, reordered):
+            result[position] = replace(proposal, evidence_codes=[
+                *proposal.evidence_codes, f"route_comparison_rank={order.index(key_of(proposal)) + 1}"])
+        return result
+
     def _hypothesis_vector(self, policy: PolicyObservation | Mapping[str, Any]) -> Mapping[str, Any] | None:
         """The latest bound confidence over meter, parameter and topology (item 7 step 6), else None."""
         vector, _ = hypothesis_vector_of(policy)
@@ -750,6 +869,11 @@ class ExpertPolicyOracle:
         """
         if self.topology_first is True:
             return True
+        if self.route_comparison:
+            # A route comparison on this state that verified a route decides.
+            best = route_comparison_best_family(policy)
+            if best in ("topology", "parameter"):
+                return best == "topology"
         if self.hypothesis_walk:
             # A family a revert withdrew on this state goes behind the other
             # branch family; otherwise the ranking of the confidence decides.

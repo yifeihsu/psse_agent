@@ -37,7 +37,13 @@ construct the same expert:
   ranking to the next one (``hypothesis_walk=True``; item 7 step 6 of the
   compound-error study, the user's decision of 2026-10-28).  Its environment
   carries the gated revert (``variant_environment_options``:
-  ``revert_fruitless_cycles``).
+  ``revert_fruitless_cycles``);
+* ``baseline_compare_guarded_routes``: the guarded teacher that, where the
+  solve's confidence says the impedance edit and the breaker flip compete,
+  compares the two routes on isolated clones before correcting either and
+  takes the best-verified route first (``route_comparison=True``; item 7
+  step 7, the user's request of 2026-10-28).  Its environment carries the
+  ``compare_routes`` tool (``variant_environment_options``).
 
 Research only.  The default for new work, what a pipeline env or a research
 script picks up when it names no variant, is ``baseline_compare`` (the user's
@@ -63,7 +69,7 @@ EXPERT_VARIANT_ENV = "PSSE_EXPERT_VARIANT"
 DEFAULT_EXPERT_VARIANT = "baseline_compare"
 EXPERT_VARIANTS = ("baseline", "ledger", "ledger_ranked", "ledger_ranked_compare", "baseline_compare",
                    "baseline_compare_topology_first", "baseline_compare_topology_guarded",
-                   "baseline_compare_guarded_walk")
+                   "baseline_compare_guarded_walk", "baseline_compare_guarded_routes")
 
 
 def current_expert_variant(variant: str | None = None) -> str:
@@ -91,6 +97,8 @@ def expert_variant_options(variant: str | None = None, *, learned_ranker: Any = 
         return {"candidate_comparison": True, "topology_first": "flow_at_noise"}
     if name == "baseline_compare_guarded_walk":
         return {"candidate_comparison": True, "topology_first": "flow_at_noise", "hypothesis_walk": True}
+    if name == "baseline_compare_guarded_routes":
+        return {"candidate_comparison": True, "topology_first": "flow_at_noise", "route_comparison": True}
     if name == "ledger":
         return {"hypothesis_ledger": True}
     options: dict[str, Any] = {
@@ -109,6 +117,7 @@ def expert_variant_options(variant: str | None = None, *, learned_ranker: Any = 
 VARIANT_PROVIDER_OPTIONS: dict[str, dict[str, Any]] = {
     "baseline_compare_topology_guarded": {"flow_at_noise_cue": True},
     "baseline_compare_guarded_walk": {"flow_at_noise_cue": True},
+    "baseline_compare_guarded_routes": {"flow_at_noise_cue": True},
 }
 
 #: Item 7 step 6: the gated revert's fruitless-cycle count, chosen from the
@@ -122,6 +131,7 @@ REVERT_FRUITLESS_CYCLES = 3
 #: Environment options a teacher variant needs: the walk teacher's gated revert.
 VARIANT_ENVIRONMENT_OPTIONS: dict[str, dict[str, Any]] = {
     "baseline_compare_guarded_walk": {"revert_fruitless_cycles": REVERT_FRUITLESS_CYCLES},
+    "baseline_compare_guarded_routes": {"route_comparison": True},
 }
 
 

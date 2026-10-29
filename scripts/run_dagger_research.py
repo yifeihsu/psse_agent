@@ -338,6 +338,12 @@ def research_diagnostic_environment_factory(
             "revert_fruitless_cycles",
             variant_environment_options(RESEARCH_EXPERT_OPTIONS.get("variant")).get("revert_fruitless_cycles", 0),
         ) or 0),
+        # Item 7 step 7: the route comparison, on when the run names it or its
+        # teacher variant needs it.
+        route_comparison=bool(RESEARCH_ENVIRONMENT_OPTIONS.get(
+            "route_comparison",
+            variant_environment_options(RESEARCH_EXPERT_OPTIONS.get("variant")).get("route_comparison", False),
+        )),
     )
     if env.production_dataset_mode is not True:
         raise RuntimeError("research environment did not enter production dataset mode")
