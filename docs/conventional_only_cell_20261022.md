@@ -795,7 +795,7 @@ each on gr102 and completed by 14:13 UTC.
 Status:
 
 ```bash
-MSYS_NO_PATHCONV=1 wsl -- ssh torch "export PATH=/opt/slurm/bin:\$PATH; sacct -j 21070126,21070127,21070128,21101407,21101408,21101409 -o JobID%12,JobName%10,State%12,Elapsed%12,NodeList%10; ls /scratch/yx3882/research_full_pipeline_20261022_conventional/out/extra/evaluations/"
+MSYS_NO_PATHCONV=1 wsl -- ssh torch "/opt/slurm/bin/sacct -j 21070126,21070127,21070128,21101407,21101408,21101409 -o JobID%12,JobName%10,State%12,Elapsed%12,NodeList%10; ls /scratch/yx3882/research_full_pipeline_20261022_conventional/out/extra/evaluations/"
 ```
 
 **Results (2026-10-27; `out/extra/budget_tables.{json,md}` on torch, copies
@@ -1002,17 +1002,23 @@ policy, or whose strata, error magnitudes or effects differ in the suite
 statistics, is flagged for the manuscript to explain; nothing is redrawn or
 dropped after the evaluations.
 
-**Launch.** Deployed 2026-10-29T01:57Z from f005b4f (the incremental bundle
-4d34050..f005b4f uploaded over ssh stdin into the cell's source; the dry-run
-prerequisites passed) and submitted at 01:58 UTC with
-`submit_test_draw2_20261029.sh`: fp-xdraw 21304171 (CPU partition `cs`), then
-fp-xeval test2_40 21304172 and test2_40_r2 21304174 (after the draw), then
-test2_budget12 21304176 and test2_budget20 21304179 (after test2_40) and
-test2_budget12_r2 21304177 and test2_budget20_r2 21304181 (after test2_40_r2),
+**Launch.** First submitted 2026-10-29T01:58Z from f005b4f (jobs 21304171 to
+21304181) and cancelled three minutes in, while the builder was drawing:
+the reference collection had read 8,080 roots from 60 files but none of the
+53 in `local_only_dev_roots.json`, which stores them under the key `fp`
+(fixed in 8e07f94; the collector now reads `physical_root`, `fp` and `root`
+as well). Redeployed from 8e07f94 at 02:11 UTC (the incremental bundle
+f005b4f..8e07f94 over ssh stdin; the dry-run prerequisites passed), the
+cancelled run's partial outputs removed, and resubmitted at 02:12 UTC with
+`submit_test_draw2_20261029.sh`: fp-xdraw 21305137 (CPU partition `cs`), then
+fp-xeval test2_40 21305138 and test2_40_r2 21305139 (after the draw), then
+test2_budget12 21305140 and test2_budget20 21305143 (after test2_40) and
+test2_budget12_r2 21305142 and test2_budget20_r2 21305144 (after test2_40_r2);
 the GPU jobs on the `a100|h100|h200|rtx6000` union with preemption opt-in and
 requeue, no GPU type pinned. Records: `out/extra/test_draw2/` (the draw) and
-`out/extra/evaluations/test2_*/`. Status:
+`out/extra/evaluations/test2_*/`. Status (Slurm's full path, so no `$` reaches
+the WSL shell):
 
 ```bash
-MSYS_NO_PATHCONV=1 wsl -- ssh torch "export PATH=/opt/slurm/bin:\$PATH; sacct -j 21304171,21304172,21304174,21304176,21304177,21304179,21304181 -X -o JobID%12,JobName%10,State%12,Elapsed%12,NodeList%10"
+MSYS_NO_PATHCONV=1 wsl -- ssh torch "/opt/slurm/bin/sacct -j 21305137,21305138,21305139,21305140,21305142,21305143,21305144 -X -o JobID%12,JobName%10,State%12,Elapsed%12,NodeList%10"
 ```
