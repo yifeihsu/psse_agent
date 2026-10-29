@@ -36,7 +36,7 @@ attempts failed on integration gaps fixed in 5955cfe, bd59df4, ae99f03).
 | Development draw | detection threshold 1.0 with the true line admitted anywhere in the top 2 of the deployed ranking; each root records its stratum |
 | Student | `google/gemma-4-12B-it` 4-bit base plus rank-16 LoRA |
 | BC0 | one pass over the D0 train view at lr 1e-4, micro-batch 1 x 4 accumulation, best validation-loss checkpoint on a 128-row family-stratified subset of the D0 validation split |
-| Rounds | beta 0.25 collection in 12-step episodes; the safe rows mixed 1:1 with the pool (round 1: D0; round 2: D0 plus round 1's rows); one pass at lr 3e-5 continuing the student; final adapter |
+| Rounds | beta 0.25 collection in `EPISODE_MAX_STEPS`-step episodes; the safe rows form half of the mixture (`D1_SHARE`). Through 2026-10-28: the new rows mixed 1:1 with a uniform sample of the pool (round 1: D0; round 2: D0 plus round 1's rows), one pass at lr 3e-5 continuing the student, final adapter. From 2026-10-29 (`ROUND_AGGREGATE=cumulative`, `ROUND_INIT=bc0`): the on-policy side keeps every earlier round's safe rows in full against a D0 sample, and every round trains from the BC0 adapter for one pass at lr 3e-5; see "Round recipe revision (2026-10-29)" |
 | Evaluation | student versus candidate on the same 160 development roots, 40-step budget, production case loader; BC0 vs R1 in round 1 (plus the expert itself), R1 vs R2 in round 2 |
 | Signatures | harmonic and unbalance discovered from the WLS anomaly; HIF keeps its relay flag; research HIF budget 7 x 9 x 10 |
 | Scheduler | stage 0 on the `cs` CPU partition (16 CPUs); GPU stages on the `a100\|h100\|h200\|rtx6000` union with preemption opt-in and requeue |
@@ -244,6 +244,53 @@ and bounded comparisons per episode (`summarize.py`), `policy_table.py` prints
 the per-policy table, and `check_suite_exclusion.py --reference-suite` checks
 the fresh development set against earlier suites.  Design, preflight, job ids
 and results: `docs/conventional_only_cell_20261022.md`.
+
+## Round recipe revision (2026-10-29)
+
+Why: in two of the six recorded cells round 2 scored below round 1 (2026-09-08:
+R1 147, R2 146, two measurement+parameter roots lost to the commit-rollback
+loop R1 had removed from BC0; 2026-10-01: R1 158, R2 156), and never above
+it by more than a root. The pool recipe gave round 2 only about one in seven
+of round 1's rows (D1 competed with D0 for the uniformly sampled replay
+slots), continued the student with a restarted schedule, and kept the final
+checkpoint, so R2 was a small unselected perturbation of a policy at the
+ceiling that had been trained almost without the corrections R1 learned.
+The analysis is in `docs/dagger_round2_regression_20261029.md`.
+
+What changed (`pipeline.env`, `stage_collect.sbatch`, `stage_train.sbatch`,
+`scripts/run_dagger_research.py`):
+
+- `ROUND_AGGREGATE=cumulative` (default): round 2 passes
+  `--prior-onpolicy-dir out/r1/collection` to the runner, which rebinds
+  round 1's exported safe rows (`d1.chat.jsonl` against `d1.all.jsonl`) to
+  the current canonical view, keeps them all on the on-policy side of the
+  mixture beside round 2's rows, samples D0 to `D1_SHARE`, protects their
+  roots from collection, and binds their content hashes in `config.json`.
+  `mixture_report.json` records `prior_onpolicy_selected`,
+  `prior_onpolicy_retained_fraction` and the rows per earlier round, and the
+  `collection.done` receipt (`research_full_pipeline_collection_done_v2`)
+  mirrors them. `ROUND_AGGREGATE=pool` keeps the 2026-09-07 pool
+  (`out/r2/pool/`) for a reproduction.
+- `ROUND_INIT=bc0` (default): `stage_train.sbatch` initializes every round's
+  training from `out/bc0/lora` (`TRAIN_INIT`) instead of the collecting
+  student, so rounds differ only by their aggregate; the receipt
+  (`research_full_pipeline_training_done_v2`) records `init_adapter_path`,
+  `round_init` and `round_aggregate` beside the student. `ROUND_INIT=previous`
+  continues the collecting student as before. Collection and the paired
+  evaluation are unchanged: the round's student collects, and the candidate
+  is read against that student.
+- Every mixture carries an exact label-conflict audit (`label_conflicts` in
+  `mixture_report.json` and the collection receipt): canonical observations
+  rendered with more than one semantic target, with example ids. A nonzero
+  count means the teacher's label is not a function of the observation (the
+  2026-10-01 spectra-versus-meter-edit case) and should be fixed before the
+  training stage runs.
+
+Cost: a 122-root round 2 trains on about 2,200 rows instead of 1,070 (about
+550 optimizer steps, roughly five hours at the measured 2.5 hours per 285
+steps). A cell deployed before 2026-10-29 that is resumed with this code
+keeps its recorded configuration only under `ROUND_AGGREGATE=pool
+ROUND_INIT=previous`; a cumulative round 2 must start from a fresh `out/r2`.
 
 ## Ambiguity design (ranked testing with escalation fallback)
 

@@ -12,9 +12,12 @@
 #SBATCH --comment=preemption=yes;requeue=true
 #SBATCH --open-mode=append
 #SBATCH --output=/scratch/yx3882/research_full_pipeline_20260912/logs/train-%j.out
-# Full pipeline, DAgger training for PIPELINE_ROUND (r1 or r2): continue the
-# round's student for one pass over the 1:1 mixture (micro-batch 1 x 4
-# accumulation, lr 3e-5) and keep the final adapter as the candidate.
+# Full pipeline, DAgger training for PIPELINE_ROUND (r1 or r2): one pass over
+# the round's mixture (micro-batch 1 x 4 accumulation, lr 3e-5) from
+# TRAIN_INIT, the BC0 adapter under ROUND_INIT=bc0 (default since 2026-10-29:
+# every round is trained from the same initialization on its aggregate) or
+# the collecting student under ROUND_INIT=previous (the 2026-09-07 recipe);
+# the final adapter is the candidate.
 set -euo pipefail
 PIPE=/scratch/yx3882/research_full_pipeline_20260912
 # shellcheck source=pipeline.env
@@ -24,6 +27,8 @@ ROUND=${PIPELINE_ROUND:?PIPELINE_ROUND (r1 or r2) must be exported by the submit
 round_bindings "$ROUND"
 echo "[train:$ROUND] job ${SLURM_JOB_ID:-manual} restart ${SLURM_RESTART_COUNT:-0} node ${SLURMD_NODENAME:-?} $(date -u +%FT%TZ)"
 [[ -s "$ROUND_DIR/collection.done" ]] || { echo "collection for $ROUND has not completed" >&2; exit 2; }
+[[ -s "$TRAIN_INIT/adapter_model.safetensors" ]] || { echo "training initialization adapter missing: $TRAIN_INIT" >&2; exit 2; }
+echo "[train:$ROUND] aggregate $ROUND_AGGREGATE; initialization $ROUND_INIT ($TRAIN_INIT); collecting student $STUDENT"
 nvidia-smi --query-gpu=name,memory.total,uuid,driver_version --format=csv,noheader \
   > "$LOGS/gpu-train-$ROUND-${SLURM_JOB_ID:-manual}-r${SLURM_RESTART_COUNT:-0}.csv" || true
 nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader -l 60 \
@@ -101,7 +106,7 @@ if [[ ! -s "$CANDIDATE/adapter_model.safetensors" || ! -s "$TRAIN_DIR/research_r
     --model-choice "$MODEL_CHOICE" \
     --train "$MIXTURE" \
     --validation "$VALIDATION_SUBSET" \
-    --initial-adapter "$STUDENT" \
+    --initial-adapter "$TRAIN_INIT" \
     --output-dir "$TRAIN_DIR" \
     --max-length "$TRAIN_MAX_LENGTH" \
     --strict-prompt-length \
@@ -123,7 +128,7 @@ if [[ ! -s "$CANDIDATE/adapter_model.safetensors" || ! -s "$TRAIN_DIR/research_r
     --report-to none \
     "${resume_args[@]}"
 fi
-"$PY" - "$TRAIN_DIR" "$ROUND_DIR/training.done" "$ROUND" "$MIXTURE_ROWS" "$TRAIN_MAX_STEPS" "$STUDENT" <<'PY'
+"$PY" - "$TRAIN_DIR" "$ROUND_DIR/training.done" "$ROUND" "$MIXTURE_ROWS" "$TRAIN_MAX_STEPS" "$STUDENT" "$TRAIN_INIT" "$ROUND_INIT" "$ROUND_AGGREGATE" <<'PY'
 import json
 import os
 import sys
@@ -134,10 +139,14 @@ from psse_env.dagger.release_factories import checkpoint_tree_sha256
 train_dir = Path(sys.argv[1])
 run = json.loads((train_dir / "research_run.json").read_text(encoding="utf-8"))
 payload = {
-    "contract": "research_full_pipeline_training_done_v1",
+    "contract": "research_full_pipeline_training_done_v2",
     "round": sys.argv[3],
     "student_path": sys.argv[6],
     "student_tree_sha256": checkpoint_tree_sha256(sys.argv[6]),
+    "init_adapter_path": sys.argv[7],
+    "init_adapter_tree_sha256": checkpoint_tree_sha256(sys.argv[7]),
+    "round_init": sys.argv[8],
+    "round_aggregate": sys.argv[9],
     "candidate_path": str(train_dir / "lora"),
     "candidate_tree_sha256": checkpoint_tree_sha256(train_dir / "lora"),
     "mixture_rows": int(sys.argv[4]),
@@ -151,6 +160,6 @@ with os.fdopen(fd, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, indent=2, sort_keys=True)
     handle.write("\n")
 os.replace(temporary, output)
-print(json.dumps({k: payload[k] for k in ("round", "mixture_rows", "max_steps", "research_run_passed")}))
+print(json.dumps({k: payload[k] for k in ("round", "round_init", "round_aggregate", "mixture_rows", "max_steps", "research_run_passed")}))
 PY
 echo "fp-train-$ROUND-complete"

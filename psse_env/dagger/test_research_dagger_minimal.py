@@ -12,9 +12,14 @@ import scripts.run_dagger_research as research_module
 from scripts.run_dagger_research import (
     DEFAULT_DEVELOPMENT_PLAN,
     DEFAULT_TRAIN_PLAN,
+    PRIOR_ONPOLICY_CHAT_FILENAME,
+    PRIOR_ONPOLICY_RAW_FILENAME,
     RESEARCH_HIF_SEARCH_BUDGET,
+    RESEARCH_MIXTURE_CONTRACT,
     allocate_scenarios,
+    audit_mixture_label_conflicts,
     build_research_mixture,
+    load_prior_onpolicy_rounds,
     collect_resumable,
     evaluate_paired_adapters,
     export_research_rows,
@@ -919,3 +924,236 @@ class StudentOnlyEvaluationTests(unittest.TestCase):
         ]
         self.assertFalse(parser().parse_args(required).eval_student_only)
         self.assertTrue(parser().parse_args(required + ["--eval-student-only"]).eval_student_only)
+
+
+def _chat_row(example_id: str, root: str, *, profile: str = "wls_gated_diagnostics") -> dict:
+    return {
+        "example_id": example_id,
+        "physical_root_fingerprint": root,
+        "metadata": {"protocol": "canonical", "evidence_profile": profile},
+    }
+
+
+class CumulativeAggregateTests(unittest.TestCase):
+    """The 2026-10-29 mixture: earlier rounds' safe rows stay in full.
+
+    Under the 2026-09-07 recipe round 2 mixed its new rows 1:1 with a uniform
+    sample of D0 plus D1, so the corrections R1 had learned at its own failure
+    states reached R2's training pass only in proportion to D1's share of the
+    pool (about one row in seven).  The cumulative mixture is the DAgger
+    aggregate: new rows plus every earlier round's rows against a D0 sample.
+    """
+
+    def test_cumulative_mixture_keeps_every_prior_round_row(self) -> None:
+        d0 = [_chat_row(f"d0_{i}", f"d0_root_{i}") for i in range(40)]
+        d1 = [_chat_row(f"d1_{i}", f"d1_root_{i}") for i in range(4)]
+        prior = [
+            dict(_chat_row(f"p_{i}", f"p_root_{i}"), research_prior_onpolicy_round=1)
+            for i in range(12)
+        ]
+        mixture, report = build_research_mixture(
+            d0, d1, d1_share=0.5, d1_cap=None, seed=3, prior_onpolicy_rows=prior
+        )
+        self.assertEqual(report["contract"], RESEARCH_MIXTURE_CONTRACT)
+        self.assertEqual(len(mixture), 32)
+        self.assertEqual(report["d0_selected"], 16)
+        self.assertEqual(report["d1_selected"], 4)
+        self.assertEqual(report["prior_onpolicy_available"], 12)
+        self.assertEqual(report["prior_onpolicy_selected"], 12)
+        self.assertEqual(report["prior_onpolicy_retained_fraction"], 1.0)
+        self.assertEqual(report["prior_onpolicy_rows_by_round"], {"1": 12})
+        self.assertEqual(report["onpolicy_selected"], 16)
+        self.assertEqual(report["actual_onpolicy_share"], 0.5)
+        self.assertEqual(report["actual_d1_share"], 4 / 32)
+        self.assertEqual(report["mixture_rows"], 32)
+        sources = {}
+        for row in mixture:
+            sources.setdefault(row["research_mixture_source"], set()).add(row["example_id"])
+            self.assertEqual(row["metadata"]["research_mixture_source"], row["research_mixture_source"])
+        self.assertEqual(sources["d1"], {f"d1_{i}" for i in range(4)})
+        self.assertEqual(sources["d1_prior"], {f"p_{i}" for i in range(12)})
+        self.assertEqual(len(sources["d0"]), 16)
+        # The report carries the (empty) exact-conflict audit for rows whose
+        # prompt is not the JSON observation contract.
+        self.assertEqual(report["label_conflicts"]["conflicting_observations"], 0)
+        self.assertEqual(report["label_conflicts"]["unaudited_rows"], 32)
+
+    def test_pool_sampling_drops_most_prior_rows_while_cumulative_keeps_them(self) -> None:
+        d0 = [_chat_row(f"d0_{i}", f"d0_root_{i}") for i in range(360)]
+        d1 = [_chat_row(f"d1_{i}", f"d1_root_{i}") for i in range(60)]
+        prior = [
+            dict(_chat_row(f"p_{i}", f"p_root_{i}"), research_prior_onpolicy_round=1)
+            for i in range(60)
+        ]
+        # 2026-09-07 recipe: the earlier round's rows compete with D0 inside
+        # the sampled pool, so their expected survival is their pool share.
+        pooled, pooled_report = build_research_mixture(
+            d0 + prior, d1, d1_share=0.5, d1_cap=None, seed=11, audit_conflicts=False
+        )
+        survived = sum(row["example_id"].startswith("p_") for row in pooled)
+        self.assertEqual(pooled_report["d0_selected"], 60)
+        self.assertLess(survived, 20)
+        cumulative, report = build_research_mixture(
+            d0, d1, d1_share=0.5, d1_cap=None, seed=11,
+            prior_onpolicy_rows=prior, audit_conflicts=False,
+        )
+        self.assertEqual(sum(row["example_id"].startswith("p_") for row in cumulative), 60)
+        self.assertEqual(report["d0_selected"], 120)
+        self.assertEqual(len(cumulative), 240)
+        self.assertNotIn("label_conflicts", report)
+
+    def test_without_prior_rows_the_mixture_is_unchanged(self) -> None:
+        d0 = [_chat_row(f"d0_{i}", f"d0_root_{i}") for i in range(20)]
+        d1 = [_chat_row(f"d1_{i}", f"d1_root_{i}") for i in range(4)]
+        mixture, report = build_research_mixture(d0, d1, d1_share=0.25, d1_cap=None, seed=3)
+        again, _ = build_research_mixture(d0, d1, d1_share=0.25, d1_cap=None, seed=3, prior_onpolicy_rows=[])
+        self.assertEqual([row["example_id"] for row in mixture], [row["example_id"] for row in again])
+        self.assertEqual(report["prior_onpolicy_available"], 0)
+        self.assertIsNone(report["prior_onpolicy_retained_fraction"])
+        self.assertEqual(report["actual_onpolicy_share"], report["actual_d1_share"])
+
+    def test_prior_rows_must_keep_roots_disjoint_from_d0_and_the_new_round(self) -> None:
+        d0 = [_chat_row("d0", "root_d0")]
+        d1 = [_chat_row("d1", "root_d1")]
+        for prior_root in ("root_d0", "root_d1"):
+            with self.assertRaisesRegex(ValueError, "Prior on-policy rows overlap"):
+                build_research_mixture(
+                    d0, d1, d1_share=0.5, d1_cap=None, seed=1,
+                    prior_onpolicy_rows=[_chat_row("p", prior_root)],
+                )
+        with self.assertRaisesRegex(ValueError, "Prior on-policy chat rows must retain"):
+            build_research_mixture(
+                d0, d1, d1_share=0.5, d1_cap=None, seed=1,
+                prior_onpolicy_rows=[{"example_id": "rootless", "metadata": {"evidence_profile": "wls_gated_diagnostics"}}],
+            )
+        with self.assertRaisesRegex(ValueError, "evidence profile"):
+            build_research_mixture(
+                d0, d1, d1_share=0.5, d1_cap=None, seed=1,
+                prior_onpolicy_rows=[_chat_row("p", "root_p", profile="scada_only")],
+            )
+
+    def test_exact_conflict_audit_reports_one_observation_with_two_targets(self) -> None:
+        first = _raw_row("root_a")
+        state_id = first["policy_observation"]["active_state_id"]
+        other_target = dict(first, example_id="example_root_a_other")
+        other_target["preferred_action"] = {
+            "tool": "get_measurement_context",
+            "arguments": {"state_id": state_id},
+        }
+        same_target = dict(first, example_id="example_root_a_same")
+        rows = examples_to_chat_sft(
+            [first, other_target, same_target], protocol="canonical", allow_ineligible_auxiliary=True
+        )
+        report = audit_mixture_label_conflicts(rows)
+        self.assertEqual(report["contract"], "research_mixture_exact_label_conflicts_v1")
+        self.assertEqual(report["audited_rows"], 3)
+        self.assertEqual(report["unaudited_rows"], 0)
+        self.assertEqual(report["unique_observations"], 1)
+        self.assertEqual(report["conflicting_observations"], 1)
+        self.assertEqual(report["conflicting_rows"], 3)
+        self.assertEqual(report["conflict_rate"], 1.0)
+        self.assertEqual(
+            report["conflicts"][0]["example_ids"],
+            ["example_root_a", "example_root_a_other", "example_root_a_same"],
+        )
+        self.assertEqual(len(report["conflicts"][0]["semantic_actions"]), 2)
+        agreeing = audit_mixture_label_conflicts([rows[0], rows[2]])
+        self.assertEqual(agreeing["conflicting_observations"], 0)
+        self.assertEqual(agreeing["unique_observations"], 1)
+        # Through the mixture builder the audit lands in the report.
+        d0 = [dict(rows[2], physical_root_fingerprint="root_d0", example_id="d0_row")]
+        _mixture, mixture_report = build_research_mixture(
+            d0, [rows[0]], d1_share=0.5, d1_cap=None, seed=1,
+            prior_onpolicy_rows=[dict(rows[1], physical_root_fingerprint="root_prior")],
+        )
+        self.assertEqual(mixture_report["label_conflicts"]["conflicting_observations"], 1)
+        self.assertEqual(mixture_report["label_conflicts"]["conflicting_rows"], 3)
+
+    def _write_round(self, directory: Path, roots: list[str], *, ineligible: str | None = None) -> list[dict]:
+        raw = [mark_research_label_eligibility(_raw_row(root)) for root in roots]
+        if ineligible is not None:
+            raw.append(mark_research_label_eligibility(_raw_row(ineligible, audit_passed=False)))
+        chat = examples_to_chat_sft(
+            [row for row in raw if row["research_label_eligible"]],
+            protocol="canonical",
+            allow_ineligible_auxiliary=True,
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / PRIOR_ONPOLICY_RAW_FILENAME).write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in raw), encoding="utf-8"
+        )
+        (directory / PRIOR_ONPOLICY_CHAT_FILENAME).write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in chat), encoding="utf-8"
+        )
+        return chat
+
+    def test_prior_round_loader_rebinds_rows_and_tags_their_round(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            first = Path(temp) / "r1" / "collection"
+            second = Path(temp) / "r2" / "collection"
+            self._write_round(first, ["root_a", "root_b"], ineligible="root_q")
+            self._write_round(second, ["root_c"])
+            rows, reports = load_prior_onpolicy_rounds([first, second])
+            self.assertEqual([row["example_id"] for row in rows], ["example_root_a", "example_root_b", "example_root_c"])
+            self.assertEqual([row["research_prior_onpolicy_round"] for row in rows], [1, 1, 2])
+            self.assertEqual(rows[0]["metadata"]["research_prior_onpolicy_round"], 1)
+            self.assertEqual(rows[2]["metadata"]["research_prior_onpolicy_dir"], str(second.resolve()))
+            self.assertEqual({row["physical_root_fingerprint"] for row in rows}, {"root_a", "root_b", "root_c"})
+            self.assertEqual([report["ordinal"] for report in reports], [1, 2])
+            self.assertEqual(reports[0]["raw_rows"], 3)
+            self.assertEqual(reports[0]["eligible_raw_rows"], 2)
+            self.assertEqual(reports[0]["chat_rows"], 2)
+            self.assertEqual(reports[0]["physical_roots"], 2)
+            self.assertEqual(reports[0]["observation_view"]["rerendered_rows"], 2)
+            self.assertEqual(len(reports[0]["chat_sha256"]), 64)
+            # The quarantined row never enters the aggregate.
+            self.assertNotIn("example_root_q", {row["example_id"] for row in rows})
+            # The rows carry no private collection fields into the prompt.
+            for row in rows:
+                self.assertNotIn("private_truth_marker", json.dumps(row["messages"]))
+
+    def test_prior_round_loader_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            missing = Path(temp) / "missing"
+            missing.mkdir()
+            with self.assertRaisesRegex(ValueError, "lacks"):
+                load_prior_onpolicy_rounds([missing])
+            round_dir = Path(temp) / "r1"
+            chat = self._write_round(round_dir, ["root_a"])
+            # A chat row the ledger does not mark eligible is refused.
+            (round_dir / PRIOR_ONPOLICY_CHAT_FILENAME).write_text(
+                json.dumps(dict(chat[0], example_id="example_root_zz")) + "\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "does not mark research_label_eligible"):
+                load_prior_onpolicy_rounds([round_dir])
+            # The same round listed twice repeats example ids.
+            self._write_round(round_dir, ["root_a"])
+            with self.assertRaisesRegex(ValueError, "repeat example_id"):
+                load_prior_onpolicy_rounds([round_dir, round_dir])
+            self.assertEqual(load_prior_onpolicy_rounds([]), ([], []))
+
+    def test_fixed_suites_reject_roots_of_earlier_rounds(self) -> None:
+        from scripts.run_dagger_research import prepare_scenario_split
+
+        scenario = lambda root: {
+            "scenario_id": f"hif-{root}",
+            "grouping": {"physical_root_fingerprint": root, "scenario_family": "hif"},
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            # run() passes earlier rounds' roots as protected roots, so a
+            # training suite that reuses a round-1 root is refused.
+            with self.assertRaisesRegex(ValueError, "D0 or protected roots"):
+                prepare_scenario_split(
+                    output_dir=Path(temp),
+                    d0_raw_path=Path(temp) / "d0.jsonl",
+                    d0_roots={"d0"},
+                    train_plan={"hif": 1},
+                    development_plan={"hif": 1},
+                    candidate_multiplier=3,
+                    seed=7,
+                    run_descriptor={},
+                    protected_roots={"p"} | {"round1_root"},
+                    fixed_training=[scenario("round1_root")],
+                    fixed_development=[scenario("dev")],
+                    scenario_suite={},
+                )
