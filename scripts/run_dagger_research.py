@@ -43,6 +43,7 @@ from psse_env.dagger.rollout_collector import (  # noqa: E402
     DAGGER1_OBSERVABLE_RECOVERY_SUPERVISION,
     DaggerRolloutCollector,
 )
+from psse_env.dagger.sft_audit import audit_teacher_realizability  # noqa: E402
 from psse_env.dagger.suite_builder import partition_release_scenario_v1  # noqa: E402
 from psse_env.oracle.expert_policy import ExpertPolicyOracle  # noqa: E402
 from psse_env.oracle.expert_variants import current_expert_variant, expert_variant_options  # noqa: E402
@@ -70,6 +71,15 @@ from psse_env.sft.provenance import git_source_state  # noqa: E402
 
 RESEARCH_CONTRACT = "research_dagger_minimal_v1"
 RESEARCH_LABEL_CONTRACT = "observable_learner_state_research_v1"
+#: Mixture contract (2026-10-29).  Every earlier round's safe on-policy rows
+#: stay on the on-policy side of the mixture in full instead of competing
+#: with the expert aggregate for the sampled replay slots: the DAgger
+#: aggregate D0 U D1 U ... U Dk, with D0 sampled to the requested share.
+RESEARCH_MIXTURE_CONTRACT = "research_dagger_cumulative_mixture_v2"
+#: Files a previous round's collection directory must provide so its rows can
+#: be re-rendered under the current canonical view and traced to their roots.
+PRIOR_ONPOLICY_RAW_FILENAME = "d1.all.jsonl"
+PRIOR_ONPOLICY_CHAT_FILENAME = "d1.chat.jsonl"
 DEFAULT_TRAIN_PLAN = {
     "measurement+parameter": 12,
     "multi_measurement": 12,
@@ -635,6 +645,92 @@ def refresh_d0_training_view(
         "rerendered_rows": len(refreshed),
         "rows_changed_from_input_view": changed,
     }
+
+
+def load_prior_onpolicy_rounds(
+    directories: Sequence[str | Path],
+    *,
+    evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Load every earlier round's safe on-policy rows for cumulative aggregation.
+
+    Each directory is a previous round's collection output.  Its exported
+    chat rows are rebound to its raw rows by ``example_id`` and re-rendered
+    under the current canonical view exactly like the D0 replay, so a prompt
+    contract change between rounds cannot leave two renderings of one
+    observation in the same training pass.  Only rows the earlier round
+    exported as training-eligible (``research_label_eligible``) are loaded;
+    the complete ledger is never promoted here.
+    """
+
+    rows: list[dict[str, Any]] = []
+    reports: list[dict[str, Any]] = []
+    seen_ids: dict[str, str] = {}
+    for ordinal, value in enumerate(directories, start=1):
+        directory = Path(value).expanduser().resolve(strict=True)
+        raw_path = directory / PRIOR_ONPOLICY_RAW_FILENAME
+        chat_path = directory / PRIOR_ONPOLICY_CHAT_FILENAME
+        for required in (raw_path, chat_path):
+            if not required.is_file():
+                raise ValueError(
+                    f"Prior on-policy round {directory} lacks {required.name}"
+                )
+        raw_rows = load_jsonl(raw_path)
+        chat_rows = load_jsonl(chat_path)
+        eligible_ids = {
+            str(row.get("example_id") or "").strip()
+            for row in raw_rows
+            if row.get("research_label_eligible") is True
+        }
+        ineligible = [
+            str(row.get("example_id") or index)
+            for index, row in enumerate(chat_rows)
+            if str(row.get("example_id") or "").strip() not in eligible_ids
+        ]
+        if ineligible:
+            raise ValueError(
+                f"Prior on-policy round {directory} exported rows its ledger does "
+                f"not mark research_label_eligible: {ineligible[:8]}"
+            )
+        refreshed, view_report = refresh_d0_training_view(
+            raw_rows, chat_rows, evidence_profile=evidence_profile
+        )
+        roots: set[str] = set()
+        for row in refreshed:
+            example_id = str(row.get("example_id") or "").strip()
+            if example_id in seen_ids:
+                raise ValueError(
+                    f"Prior on-policy rounds repeat example_id {example_id!r} "
+                    f"({seen_ids[example_id]} and {directory})"
+                )
+            seen_ids[example_id] = str(directory)
+            root = _row_root(row)
+            if not root:
+                raise ValueError(
+                    f"Prior on-policy row {example_id!r} from {directory} lost its physical root"
+                )
+            roots.add(root)
+            row["research_prior_onpolicy_round"] = ordinal
+            metadata = row.get("metadata")
+            metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+            metadata["research_prior_onpolicy_round"] = ordinal
+            metadata["research_prior_onpolicy_dir"] = str(directory)
+            row["metadata"] = metadata
+        rows.extend(refreshed)
+        reports.append(
+            {
+                "ordinal": ordinal,
+                "directory": str(directory),
+                "raw_rows": len(raw_rows),
+                "eligible_raw_rows": len(eligible_ids),
+                "chat_rows": len(chat_rows),
+                "physical_roots": len(roots),
+                "raw_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+                "chat_sha256": hashlib.sha256(chat_path.read_bytes()).hexdigest(),
+                "observation_view": view_report,
+            }
+        )
+    return rows, reports
 
 
 def allocate_scenarios(
@@ -1376,6 +1472,42 @@ def export_research_rows(
     return updated, chat_rows, failures
 
 
+def audit_mixture_label_conflicts(
+    rows: Sequence[Mapping[str, Any]], *, max_details: int = 8
+) -> dict[str, Any]:
+    """Exact teacher-conflict report over a training mixture of chat rows.
+
+    DAgger assumes the teacher is a function of the policy observation.  When
+    the aggregate renders one canonical observation with two different
+    semantic targets (a teacher whose choice depends on evidence the student
+    cannot see, or two rounds labelled by different teachers), the student is
+    fitted to incompatible labels and its choice at that state can flip from
+    one round to the next.  The report is diagnostic: rows whose prompt is not
+    the JSON observation contract are counted as unaudited, never as failing.
+    """
+
+    audit = audit_teacher_realizability(rows, max_conflict_details=max_details)
+    return {
+        "contract": "research_mixture_exact_label_conflicts_v1",
+        "total_rows": audit["total_examples"],
+        "audited_rows": audit["labeled_examples"],
+        "unaudited_rows": audit["unlabeled_or_invalid_examples"],
+        "unique_observations": audit["unique_observations"],
+        "conflicting_observations": audit["conflict_observations"],
+        "conflicting_rows": audit["conflicting_examples"],
+        "conflict_rate": audit["conflict_rate"],
+        "conflicts": [
+            {
+                "observation_hash": conflict["observation_hash"],
+                "example_ids": list(conflict["example_ids"])[:max_details],
+                "semantic_actions": conflict["semantic_actions"],
+            }
+            for conflict in audit["conflicts"]
+        ],
+        "conflict_details_truncated": audit["conflict_details_truncated"],
+    }
+
+
 def build_research_mixture(
     d0_rows: Sequence[Mapping[str, Any]],
     d1_rows: Sequence[Mapping[str, Any]],
@@ -1384,13 +1516,30 @@ def build_research_mixture(
     d1_cap: int | None,
     seed: int,
     evidence_profile: str = DEFAULT_EVIDENCE_PROFILE,
+    prior_onpolicy_rows: Sequence[Mapping[str, Any]] | None = None,
+    audit_conflicts: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build the round's training pass as the DAgger aggregate.
+
+    The on-policy side holds the new round's safe rows (``d1_rows``, capped by
+    ``d1_cap``) plus every earlier round's safe rows (``prior_onpolicy_rows``)
+    in full; the expert aggregate ``d0_rows`` is sampled so the on-policy side
+    is ``d1_share`` of the pass.  Earlier rounds therefore never compete with
+    D0 for the sampled replay slots: a correction the student learned at its
+    own failure states in round k stays in the training pass of round k+1
+    instead of surviving only in proportion to its share of the pool.
+    """
+
     if not 0.0 < float(d1_share) <= 1.0:
         raise ValueError("d1_share must be in (0, 1]")
     if d1_cap is not None and d1_cap <= 0:
         raise ValueError("d1_cap must be positive when supplied")
+    prior_rows = list(prior_onpolicy_rows or [])
     validate_training_evidence_profile(d0_rows, evidence_profile=evidence_profile, source="D0 replay")
     validate_training_evidence_profile(d1_rows, evidence_profile=evidence_profile, source="D1 collection")
+    validate_training_evidence_profile(
+        prior_rows, evidence_profile=evidence_profile, source="Prior on-policy rounds"
+    )
     rootless_d0 = [
         str(row.get("example_id") or index)
         for index, row in enumerate(d0_rows)
@@ -1411,14 +1560,30 @@ def build_research_mixture(
             "D1 chat rows must retain physical_root_fingerprint for paired root "
             f"isolation; missing examples: {rootless_d1[:8]}"
         )
-    overlapping_roots = (
-        {_row_root(row) for row in d0_rows}
-        & {_row_root(row) for row in d1_rows}
-    )
+    rootless_prior = [
+        str(row.get("example_id") or index)
+        for index, row in enumerate(prior_rows)
+        if not _row_root(row)
+    ]
+    if rootless_prior:
+        raise ValueError(
+            "Prior on-policy chat rows must retain physical_root_fingerprint; "
+            f"missing examples: {rootless_prior[:8]}"
+        )
+    d0_roots = {_row_root(row) for row in d0_rows}
+    d1_roots = {_row_root(row) for row in d1_rows}
+    prior_roots = {_row_root(row) for row in prior_rows}
+    overlapping_roots = d0_roots & d1_roots
     if overlapping_roots:
         raise ValueError(
             "D0 and D1 training rows overlap on physical roots: "
             f"{sorted(overlapping_roots)[:8]}"
+        )
+    prior_overlap = prior_roots & (d0_roots | d1_roots)
+    if prior_overlap:
+        raise ValueError(
+            "Prior on-policy rows overlap D0 or the new round on physical roots: "
+            f"{sorted(prior_overlap)[:8]}"
         )
     rng = random.Random(int(seed))
     selected_d1 = list(copy.deepcopy(list(d1_rows)))
@@ -1426,14 +1591,20 @@ def build_research_mixture(
         selected_d1 = rng.sample(selected_d1, d1_cap)
     if not selected_d1:
         raise ValueError("No safe exported D1 rows are available for research training")
+    selected_prior = list(copy.deepcopy(prior_rows))
+    onpolicy_total = len(selected_d1) + len(selected_prior)
     target_d0 = (
         0
         if math.isclose(float(d1_share), 1.0)
-        else math.floor(len(selected_d1) * (1.0 - float(d1_share)) / float(d1_share))
+        else math.floor(onpolicy_total * (1.0 - float(d1_share)) / float(d1_share))
     )
     selected_d0 = rng.sample(list(d0_rows), min(len(d0_rows), target_d0))
     mixture: list[dict[str, Any]] = []
-    for source, source_rows in (("d0", selected_d0), ("d1", selected_d1)):
+    for source, source_rows in (
+        ("d0", selected_d0),
+        ("d1", selected_d1),
+        ("d1_prior", selected_prior),
+    ):
         for source_row in source_rows:
             row = copy.deepcopy(dict(source_row))
             row["research_mixture_source"] = source
@@ -1443,18 +1614,35 @@ def build_research_mixture(
             row["metadata"] = metadata
             mixture.append(row)
     rng.shuffle(mixture)
+    prior_by_round = Counter(
+        int(row.get("research_prior_onpolicy_round") or 0) for row in selected_prior
+    )
     report = {
-        "contract": RESEARCH_CONTRACT,
+        "contract": RESEARCH_MIXTURE_CONTRACT,
         "evidence_profile": evidence_profile,
         "requested_d1_share": float(d1_share),
+        "requested_onpolicy_share": float(d1_share),
         "d0_available": len(d0_rows),
         "d1_available": len(d1_rows),
         "d0_selected": len(selected_d0),
         "d1_selected": len(selected_d1),
+        "prior_onpolicy_available": len(prior_rows),
+        "prior_onpolicy_selected": len(selected_prior),
+        "prior_onpolicy_retained_fraction": (
+            len(selected_prior) / len(prior_rows) if prior_rows else None
+        ),
+        "prior_onpolicy_rows_by_round": {
+            str(ordinal): count for ordinal, count in sorted(prior_by_round.items())
+        },
+        "onpolicy_selected": onpolicy_total,
+        "mixture_rows": len(mixture),
         "actual_d1_share": len(selected_d1) / len(mixture),
+        "actual_onpolicy_share": onpolicy_total / len(mixture),
         "d1_cap": d1_cap,
         "seed": int(seed),
     }
+    if audit_conflicts:
+        report["label_conflicts"] = audit_mixture_label_conflicts(mixture)
     return mixture, report
 
 
@@ -2078,6 +2266,21 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--max-steps", type=int, default=DEFAULT_EPISODE_ACTION_LIMIT)
     result.add_argument("--d1-cap", type=int, default=150)
     result.add_argument("--d1-share", type=float, default=0.25)
+    result.add_argument(
+        "--prior-onpolicy-dir",
+        action="append",
+        default=[],
+        type=Path,
+        metavar="DIR",
+        help=(
+            "Repeatable collection directory of an earlier DAgger round (holding "
+            f"{PRIOR_ONPOLICY_RAW_FILENAME} and {PRIOR_ONPOLICY_CHAT_FILENAME}). "
+            "Its safe rows join the new round's rows on the on-policy side of the "
+            "mixture in full, so the training pass is the DAgger aggregate "
+            "D0 U D1 U ... U Dk rather than the latest round against a uniform "
+            "sample of everything before it; its roots are excluded from collection"
+        ),
+    )
     result.add_argument("--candidate-multiplier", type=int, default=3)
     result.add_argument(
         "--plan-preset",
@@ -2321,7 +2524,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     protected_suites = load_protected_suite_roots(args.protected_suite)
     protected_roots = set(protected_suites["physical_roots"])
-    excluded_roots = set(d0_roots) | protected_roots
+    prior_onpolicy_rows, prior_onpolicy_reports = load_prior_onpolicy_rounds(
+        list(getattr(args, "prior_onpolicy_dir", None) or []),
+        evidence_profile=args.evidence_profile,
+    )
+    prior_onpolicy_roots = {_row_root(row) for row in prior_onpolicy_rows}
+    prior_overlap = prior_onpolicy_roots & (set(d0_roots) | protected_roots)
+    if prior_overlap:
+        raise ValueError(
+            "Prior on-policy rounds overlap D0 or protected roots: "
+            f"{sorted(prior_overlap)[:8]}"
+        )
+    # Earlier rounds' roots are protected like D0: the new round may neither
+    # roll out on them nor export rows from them.
+    excluded_roots = set(d0_roots) | protected_roots | prior_onpolicy_roots
     d0_view_fingerprint = hashlib.sha256(
         _stable_json(d0_train_rows).encode("utf-8")
     ).hexdigest()
@@ -2400,11 +2616,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     if args.protected_suite:
         run_descriptor["protected_suites"] = protected_suites
+    if prior_onpolicy_reports:
+        # Bound like the protected suites: a resumed collection must name the
+        # same earlier rounds, and the suite check treats their roots as taken.
+        run_descriptor["prior_onpolicy_rounds"] = [
+            {
+                key: report[key]
+                for key in ("ordinal", "directory", "chat_rows", "physical_roots", "raw_sha256", "chat_sha256")
+            }
+            for report in prior_onpolicy_reports
+        ]
     training, development = prepare_scenario_split(
         output_dir=output_dir,
         d0_raw_path=d0_raw,
         d0_roots=d0_roots,
-        protected_roots=protected_roots,
+        protected_roots=protected_roots | prior_onpolicy_roots,
         train_plan=train_plan,
         development_plan=development_plan,
         candidate_multiplier=args.candidate_multiplier,
@@ -2479,7 +2705,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         d1_cap=args.d1_cap,
         seed=args.seed,
         evidence_profile=args.evidence_profile,
+        prior_onpolicy_rows=prior_onpolicy_rows,
     )
+    mixture_report["prior_onpolicy_rounds"] = prior_onpolicy_reports
     _write_jsonl(output_dir / "round1.train.jsonl", mixture)
     _write_json(output_dir / "mixture_report.json", mixture_report)
     comparison = None
@@ -2555,6 +2783,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "d1_chat": str(output_dir / "d1.chat.jsonl"),
             "d0_train_current": str(output_dir / "d0.train.current.jsonl"),
             "round1_train": str(output_dir / "round1.train.jsonl"),
+            "prior_onpolicy_rounds": [
+                report["directory"] for report in prior_onpolicy_reports
+            ],
         },
     }
     if args.protected_suite:

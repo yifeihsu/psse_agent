@@ -483,7 +483,7 @@ def test_pipeline_env_declares_every_setting_the_stages_use() -> None:
         "ADMISSION_MODE", "NORMALIZED_RESIDUAL_THRESHOLD", "CORPUS_COUNTS", "CORPUS_NUM_SCANS",
         "FROZEN_STUDENT_ADAPTER", "ZEROSHOT_EVAL_NAME", "EVIDENCE_PROFILE", "HIF_SIGNATURE_MODE",
         "PMU_PHASOR_SIGMA", "TRIAGE_CLASSIFIER", "CORPUS_LOAD_SCALE_MIN", "CORPUS_LOAD_SCALE_MAX", "PROGRESS_BASIS",
-        "UNVERIFIED_EXPERT_LABEL_POLICY",
+        "UNVERIFIED_EXPERT_LABEL_POLICY", "ROUND_AGGREGATE", "ROUND_INIT",
     ):
         assert name in declared, name
     assert 'export PSSE_HIF_WORKERS="${SLURM_CPUS_PER_TASK:-8}"' in text
@@ -920,3 +920,54 @@ def test_evidence_profile_default_is_suspicion_gated_and_every_guard_accepts_it(
                  "hif_physical69_main_valid_extra_detectable_19x10_20260923opf",
                  "out_measurements_imbalance_currents_ybus_detectable_162_20260923opf"):
         assert name in readme, name
+
+
+def test_rounds_aggregate_cumulatively_and_train_from_bc0_by_default() -> None:
+    """The 2026-10-29 round recipe: a later round keeps every earlier round's
+    safe rows in its mixture (the DAgger aggregate) and trains from the BC0
+    adapter, with the 2026-09-07 recipe (pool sampling, continuing the
+    student) still selectable per cell."""
+    env = (CELL / "pipeline.env").read_text(encoding="utf-8")
+    assert "ROUND_AGGREGATE=${ROUND_AGGREGATE:-cumulative}" in env
+    assert "ROUND_INIT=${ROUND_INIT:-bc0}" in env
+    assert 'case "$ROUND_AGGREGATE" in cumulative|pool)' in env
+    assert 'case "$ROUND_INIT" in bc0|previous)' in env
+    assert "docs/dagger_round2_regression_20261029.md" in env
+    bindings = env[env.index("round_bindings() {"):env.index("collection_args() {")]
+    assert "PRIOR_ONPOLICY_DIRS=()" in bindings
+    r2 = bindings[bindings.index("    r2)"):bindings.index("    *) echo")]
+    assert 'if [[ "$ROUND_AGGREGATE" == pool ]]; then' in r2
+    assert "POOL_RAW=$R2_DIR/pool/raw.jsonl" in r2 and "POOL_TRAIN=$R2_DIR/pool/train.jsonl" in r2
+    assert "POOL_RAW=$D0_DIR/aggregate.raw.jsonl" in r2 and "POOL_TRAIN=$D0_DIR/aggregate.train_view.jsonl" in r2
+    assert 'PRIOR_ONPOLICY_DIRS=("$R1_DIR/collection")' in r2
+    assert "STUDENT=$R1_DIR/training/lora" in r2
+    assert 'if [[ "$ROUND_INIT" == bc0 ]]; then' in bindings
+    assert "TRAIN_INIT=$BC0_DIR/lora" in bindings and "TRAIN_INIT=$STUDENT" in bindings
+    collection = env[env.index("collection_args() {"):]
+    assert 'for prior in "${PRIOR_ONPOLICY_DIRS[@]}"; do COLLECTION_ARGS+=(--prior-onpolicy-dir "$prior"); done' in collection
+    assert collection.index('(( ${#PRIOR_ONPOLICY_DIRS[@]} ))') < collection.index("--prior-onpolicy-dir")
+    collect = (CELL / "stage_collect.sbatch").read_text(encoding="utf-8")
+    assert 'if [[ "$ROUND" == r2 && "$ROUND_AGGREGATE" == pool && ! -s "$ROUND_DIR/pool/manifest.json" ]]; then' in collect
+    assert '"round_aggregate": sys.argv[4]' in collect and '"$ROUND_AGGREGATE" <<\'PY\'' in collect
+    assert '"prior_onpolicy_rounds"' in collect and '"mixture_label_conflicts"' in collect
+    assert "research_full_pipeline_collection_done_v2" in collect
+    train = (CELL / "stage_train.sbatch").read_text(encoding="utf-8")
+    assert '--initial-adapter "$TRAIN_INIT"' in train and '--initial-adapter "$STUDENT"' not in train
+    assert '[[ -s "$TRAIN_INIT/adapter_model.safetensors" ]]' in train
+    assert '"$STUDENT" "$TRAIN_INIT" "$ROUND_INIT" "$ROUND_AGGREGATE" <<\'PY\'' in train
+    assert '"init_adapter_path": sys.argv[7]' in train and '"round_init": sys.argv[8]' in train
+    assert '"round_aggregate": sys.argv[9]' in train
+    assert "research_full_pipeline_training_done_v2" in train
+    # The collector accepts the repeated flag the cell passes.
+    import scripts.run_dagger_research as research
+    args = research.parser().parse_args([
+        "--d0-raw", "raw", "--d0-train", "train", "--adapter-path", "adapter", "--output-dir", "out",
+        "--prior-onpolicy-dir", "/cell/out/r1/collection", "--prior-onpolicy-dir", "/cell/out/r2/collection",
+    ])
+    assert args.prior_onpolicy_dir == [Path("/cell/out/r1/collection"), Path("/cell/out/r2/collection")]
+    assert research.parser().parse_args(
+        ["--d0-raw", "raw", "--d0-train", "train", "--adapter-path", "adapter", "--output-dir", "out"]
+    ).prior_onpolicy_dir == []
+    readme = (CELL / "README.md").read_text(encoding="utf-8")
+    assert "ROUND_AGGREGATE" in readme and "ROUND_INIT" in readme
+    assert "docs/dagger_round2_regression_20261029.md" in readme

@@ -15,11 +15,14 @@
 # Full pipeline, DAgger collection for PIPELINE_ROUND (r1 or r2).
 #
 # The round's student rolls out on its training suite with the expert
-# labelling every visited state (beta 0.25, 12-step episodes); the safe rows
-# are mixed 1:1 with the round's pool.  Round 1 pools the expert aggregate;
-# round 2 pools the aggregate plus round 1's labelled rows, so the mixture
-# is D2 against D0 + D1.  The collector keeps a completed-root ledger, so a
-# requeue resumes.
+# labelling every visited state (beta 0.25, EPISODE_MAX_STEPS-step episodes);
+# the safe rows form the on-policy side of a mixture whose share is D1_SHARE.
+# ROUND_AGGREGATE=cumulative (default since 2026-10-29): round 2's on-policy
+# side is D2 plus every round-1 safe row, re-rendered under the current view,
+# against a D0 sample, so the pass is the DAgger aggregate D0 U D1 U D2.
+# ROUND_AGGREGATE=pool is the 2026-09-07 recipe: round 2 mixes D2 1:1 with a
+# uniform sample of the pool D0 + D1.  The collector keeps a completed-root
+# ledger, so a requeue resumes.
 set -euo pipefail
 PIPE=/scratch/yx3882/research_full_pipeline_20260912
 # shellcheck source=pipeline.env
@@ -40,7 +43,7 @@ opendss_local_model
 stage_cleanup() { kill "$GPU_SAMPLER_PID" 2>/dev/null || true; rm -rf "$OPENDSS_LOCAL"; }
 trap stage_cleanup EXIT
 
-if [[ "$ROUND" == r2 && ! -s "$ROUND_DIR/pool/manifest.json" ]]; then
+if [[ "$ROUND" == r2 && "$ROUND_AGGREGATE" == pool && ! -s "$ROUND_DIR/pool/manifest.json" ]]; then
   # The round-2 pool: every D0 raw row plus every round-1 labelled row, and
   # the training views that go with them.  Raw rows are rebound by
   # example_id when the view is refreshed, so the ids must stay unique.
@@ -85,7 +88,7 @@ cd "$SRC"
 collection_args "$ROUND"
 if [[ ! -s "$ROUND_DIR/collection.done" ]]; then
   "$PY" scripts/run_dagger_research.py "${COLLECTION_ARGS[@]}" > "$ROUND_DIR/collection_console.json"
-  "$PY" - "$COLLECTION_DIR" "$ROUND_DIR/collection.done" "$ROUND" <<'PY'
+  "$PY" - "$COLLECTION_DIR" "$ROUND_DIR/collection.done" "$ROUND" "$ROUND_AGGREGATE" <<'PY'
 import hashlib
 import json
 import os
@@ -105,9 +108,20 @@ training = json.loads((collection / "training_scenarios.json").read_text(encodin
 development = json.loads((collection / "development_scenarios.json").read_text(encoding="utf-8"))
 mixture = collection / "round1.train.jsonl"
 rows = sum(1 for line in mixture.read_text(encoding="utf-8").splitlines() if line.strip())
+mixture_report = report.get("mixture") or {}
+conflicts = mixture_report.get("label_conflicts") or {}
 payload = {
-    "contract": "research_full_pipeline_collection_done_v1",
+    "contract": "research_full_pipeline_collection_done_v2",
     "round": sys.argv[3],
+    "round_aggregate": sys.argv[4],
+    "prior_onpolicy_rounds": [
+        {k: entry.get(k) for k in ("ordinal", "directory", "chat_rows", "physical_roots", "chat_sha256")}
+        for entry in (mixture_report.get("prior_onpolicy_rounds") or [])
+    ],
+    "mixture_label_conflicts": {
+        k: conflicts.get(k)
+        for k in ("audited_rows", "unaudited_rows", "unique_observations", "conflicting_observations", "conflicting_rows", "conflict_rate")
+    },
     "research_profile": report.get("research_profile"),
     "training_roots": len(training),
     "training_families": dict(sorted(Counter(row["grouping"]["scenario_family"] for row in training).items())),
@@ -126,7 +140,7 @@ with os.fdopen(fd, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, indent=2, sort_keys=True)
     handle.write("\n")
 os.replace(temporary, output)
-print(json.dumps({k: payload[k] for k in ("round", "training_roots", "label_yield", "mixture_rows")}))
+print(json.dumps({k: payload[k] for k in ("round", "round_aggregate", "training_roots", "label_yield", "mixture_rows", "mixture_label_conflicts")}))
 PY
 fi
 echo "fp-collect-$ROUND-complete"
