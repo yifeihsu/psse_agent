@@ -2047,11 +2047,13 @@ loaded ambiguity the user accepts as a failure):
 | a meter fault never corrected | 6 | 0 | |
 | a wrong breaker flip and a wrong impedance edit kept | 2 | 0 | adjacent 2 |
 
-155 of the 486 failures carry the lightly loaded ambiguity; 113 keep a
-wrong edit, the population the revert of step 6 can reach; the rest are
-faults the teacher never reached or could not fit (silent second atoms,
-the adjacent-pair estimator, the verifier limit on a meter on the faulted
-line).  None of them is addressed by a rule here.
+155 of the 486 failures carry the lightly loaded ambiguity; 129 keep a
+wrong committed edit (the 107 of the wrong-edit rows above, which ended in
+a handoff, and 22 of the budget and loop row), the population the revert of
+step 6 can reach; the rest are faults the teacher never reached or could
+not fit (silent second atoms, the adjacent-pair estimator, the verifier
+limit on a meter on the faulted line).  None of them is addressed by a rule
+here.  (Corrected on 2026-10-28: the first version of this section said 113.)
 
 **The ambiguity statements** (guarded teacher, compound suite): 40
 handoffs stated one (39 of them failed roots).  The stated line carried
@@ -2067,3 +2069,311 @@ line 19 at 0.343).
 `claude/nostalgic-kalam-be5f7a`, 2026-10-28).  Item 7's commits so far:
 713c0ff (step 1), 0952ab1 (step 2), e76b18e (step 3), 619e659 (step 4).
 
+### 8.6 Step 6: the gated revert, the confidence over all categories, and the teacher that walks it
+
+The user chose design A of section 8.4 ("extend rollback") and widened step
+2's confidence to every balanced category: "this confidence mechanism doesn't
+need to be limited to parameter versus topology errors. If we can introduce a
+confidence score across all error categories, we could either trigger a
+handoff or explore different candidate paths whenever competing hypotheses
+arise."  Two commits: the contract, then the teacher rule.
+
+**The contract (`revert_state`).**  `revert_state(to_state_id)` makes a
+committed ancestor of the active state active again.  It exists only in an
+environment built with `revert_fruitless_cycles=K` (research runs: the
+`baseline_compare_guarded_walk` variant, or `--env-option
+revert_fruitless_cycles=K`); every other environment refuses it as an unknown
+tool and its observation carries no revert ledger, so every existing teacher,
+the paper contract and the student's tool surface are as they were.  The
+process gate admits a revert only
+- with no open candidate,
+- to a committed ancestor of the active state,
+- at most once per ancestor (a second revert to it is a lifecycle violation),
+- after at least K fruitless correction cycles since that ancestor's commit
+  on the active lineage (a rolled-back candidate or an executor failure; a
+  process refusal tested nothing), fewer being a lifecycle violation,
+- with the alarm still standing on the active state;
+and it costs an action.  On a revert the controller's flags and the private
+truth return to their snapshot at the ancestor's commit: the accepted
+corrections are those of the new active lineage, and the contexts fetched on
+the ancestor and its latest WLS are current again (no new solve).  The
+correction withdrawn on the ancestor joins the ancestor's rejected hypotheses
+(kind `reverted_after_fruitless_cycles`), so it is not tried there again, it
+counts as tested for a handoff, and it opens the meter route under branch
+dominance exactly as a rejected branch hypothesis does.  Every withdrawn
+correction stays in the policy-visible `revert_ledger` (the committed lineage
+with the fruitless cycles since each ancestor's commit and whether it was
+reverted to, the withdrawn corrections, the reverts).  The truth audit reads
+the final state, so it scores the corrections on the active lineage at the
+handoff and healthy-component preservation on the final active state; the
+compound rollout marks each withdrawn correction `reverted`.  The evaluator
+records each revert's outcome (`revert_accounting`): the first correction
+executed after it tests another (family, line) hypothesis, a recovery, or the
+withdrawn one again, a loop (`loop_detected`), or none follows.  Files:
+`psse_env/state_store.py` (`revert`), `psse_env/oracle/process_validity.py`
+(`revert_refusal`), `psse_env/transactional_env.py` (`_step_revert`,
+`_revert_ledger`), `psse_env/dagger/evaluator.py` (`update_revert_events`);
+tests in `psse_env/test_gated_revert.py`.
+
+**The confidence over meter, parameter and topology.**  From quantities the
+solve already produced, no extra solve (`hypothesis_confidence` beside step
+2's route confidence, under the same provider option, so only the guarded
+teachers' solves carry it):
+- meter (bad data) = r / (r + lambda), the largest normalized residual
+  against the largest normalized branch multiplier, the classical Lagrangian
+  test the routes already use;
+- the branch share lambda / (r + lambda) splits into topology (breaker) and
+  parameter (R/X) by step 2's open-terminal confidence c: topology = branch x
+  c, parameter = branch x (1 - c);
+- the topology context refines c with its breaker multipliers (step 2's
+  refinement) and so refines the vector; the parameter and measurement
+  contexts re-read the same solve and leave it as it is.
+The ranking uses the bands the routes already use, so no new threshold: the
+meter leads only when the solve is meter dominant (r > 1.2 lambda; the meter
+is weighed against the branch block, because the Lagrangian test separates
+meter from branch, not meter from one branch hypothesis), the open terminal
+leads the branch block when c > 0.5 (step 2's rule).  Two hypotheses compete
+when the rule that orders them cannot separate them: meter and branch inside
+the 1.2 band, parameter and topology inside step 3's 3:1 band (c between 0.25
+and 0.75).  Waveform families stay out of scope: their confidences would come
+from the triage classifier's family scores (`family_scores`, 2026-10-13),
+which already rank harmonic, HIF and unbalance against the balanced families
+under `classifier_gated_diagnostics`.
+
+**The ambiguity statement, generalized.**  At a handoff with the alarm
+standing, when the latest solve's vector has competitors, the statement
+(`ambiguous_hypotheses`) lists the leading hypothesis and every competing
+one, each with its confidence and target (meter index or line), the ranking,
+the families the lineage already tried and those withdrawn on the state.
+It supersedes step 3's parameter-or-breaker statement wherever the solve
+carries the vector, is recorded and reported (the truth audit adds what the
+truth holds on each target), and is never required.
+
+**The teacher rule (`baseline_compare_guarded_walk`).**  The guarded teacher
+with `hypothesis_walk`:
+- the balanced routes follow the vector's ranking (the meter/branch order
+  is the existing dominance rule, so this changes only where the breaker
+  context's refinement moves c across 0.5);
+- where it would hand off with the alarm standing, it reverts instead, when
+  the gate admits it and the budget still closes a lifecycle after the revert
+  (the budget handoff's floor of 4, plus the revert): to the state before the
+  first commit of the current hypothesis (the family of the latest commit,
+  back through its run of commits);
+- on the reverted state the withdrawn family goes behind the next one in the
+  ranking (a withdrawn breaker flip puts the parameter route first, a
+  withdrawn impedance edit the breaker route; a withdrawn meter edit lets the
+  branch families propose on a meter-dominant solve);
+- when the ranking is exhausted on a state that cannot be reverted again, it
+  hands off with the statement.
+The start handoff ("no category stands clearly above at the start") is the
+other half of the user's rule.  It is measured from the walk run itself: the
+decision reads only the first solve, so the handoff arm's outcome on every
+start-ambiguous root is a handoff, and on every other root the walk's own
+outcome.  Running it live needs one more escalation request in the contract
+(today's handoffs require the same-state routes exhausted); not built.
+
+**Choosing K.**  From the guarded teacher's step-5 trajectories (fruitless
+cycles on each committed state before the episode moved on):
+
+| committed states | 0 | 1 | 2 | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| solved roots, states that moved on to a further commit (805) | 729 (91%) | 17 (93%) | 24 (96%) | 15 (98%) | 16 (100%) | 4 |
+| solved roots, the final state (789) | 788 | 1 | | | | |
+
+| failed roots with a wrong commit (129): fruitless cycles since the first wrong commit | 0 | 1 | 2 | 3 | 4 | 5 | 6+ |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| roots (cumulative) | 63 (49%) | 8 (55%) | 12 (64%) | 6 (69%) | 15 (81%) | 17 (94%) | 8 |
+
+96% of the committed states of solved roots moved on within 2 fruitless
+cycles, so K = 3: a hypothesis still fruitless after 3 cycles is past what a
+productive state needed (the baseline teacher's productive states needed more,
+92% within 3, because its order delays the breaker route).  At K = 3 a revert
+is admissible by the end on 46 of the 129 guarded failures with a wrong
+commit.  63 of them never had a fruitless cycle after the wrong commit: on 47
+the state it produced offered no correction to try and the teacher handed off
+at once, and on 16 every later correction was accepted until the handoff.  A
+gate that counts fruitless cycles cannot admit a revert on them at any K;
+admitting one on an exhausted state with nothing tried is a different
+contract (section 8.7).
+K and "when to abandon a hypothesis", "which hypothesis next" (the ranking
+walk) and "when to hand off" (start ambiguity against exploring) are
+candidates for learning (RL); the rules here are their hand-set starting
+points.
+
+**DAgger labelling with a revert (design only).**
+- Vocabulary: `revert_state(state_id, to_state_id)` is outside the
+  student's tool surface (`MACRO_ACTIONS`, the protocol bridge's schemas);
+  training on the walk teacher adds it there and to the dataset builder, and
+  renders the revert ledger in the student prompt.  Nothing of that is built.
+- Labels: the teacher's revert is a function of the observation alone (the
+  ledger's lineage and fruitless cycles, the bound WLS alarm, the budget),
+  so it is imitable; it fires only at would-be handoffs, so revert rows are
+  rare (one per reverting episode) and need weighting or oversampling.
+- Student states: on states the student reached through its own fruitless
+  commits the teacher relabels from the same ledger, so aggregated rows teach
+  when to abandon; a student revert the gate refuses (too early, a second
+  one) is a lifecycle violation, a recovery row like a refused commit.
+- After a revert the teacher's next label walks the ranking with the
+  withdrawn family behind; a student that repeats the withdrawn hypothesis on
+  the same line is flagged as a loop by the evaluator.
+- K is part of the environment contract, so supervised data must hold it
+  fixed; learning when to abandon happens inside the window the gate admits.
+
+**Measured** (compound suite, the settings of step 5; the conventional
+suites through the end-to-end runner, the validation suite and the hard draw
+being the torch files; walk = `baseline_compare_guarded_walk`, guarded = the
+step-5 run, unchanged by this step):
+
+| class (roots) | baseline | guarded | walk | always-look (reference) | walk against guarded, won / lost | episodes with a revert |
+| --- | --- | --- | --- | --- | --- | --- |
+| two R/X, adjacent (150) | 76 | 76 | 76 | 65 | +0 / -0 | 7 |
+| two R/X, distant (150) | 72 | 72 | 72 | 63 | +0 / -0 | 2 |
+| R/X + breaker, same line (75) | 47 | 71 | 71 | 75 | +0 / -0 | 0 |
+| R/X + breaker, shared bus (75) | 31 | 45 | 45 | 43 | +0 / -0 | 2 |
+| R/X + breaker, distant (150) | 73 | 111 | 111 | 109 | +0 / -0 | 2 |
+| meter + two R/X (150) | 66 | 66 | 66 | 54 | +0 / -0 | 10 |
+| meter on the R/X line (75) | 14 | 14 | 14 | 14 | +0 / -0 | 6 |
+| R/X + breaker + meter (150) | 59 | 97 | 97 | 97 | +0 / -0 | 7 |
+| two breakers, dangling (60) | 16 | 46 | 46 | 53 | +0 / -0 | 1 |
+| two breakers, mixed (45) | 20 | 30 | 30 | 43 | +0 / -0 | 0 |
+| two breakers, bus splits (45) | 22 | 27 | 28 | 39 | +1 / -0 | 4 |
+| control: one R/X (50) | 43 | 43 | 43 | 37 | +0 / -0 | 0 |
+| control: one breaker (50) | 31 | 44 | 44 | 50 | +0 / -0 | 1 |
+| control: one meter (50) | 47 | 47 | 47 | 47 | +0 / -0 | 0 |
+| all (1,275) | 617 | 789 | 790 | 789 | +1 / -0 | 42 |
+
+| suite | baseline | guarded | walk | always-look (reference) |
+| --- | --- | --- | --- | --- |
+| conventional test suite (192) | 192 | 192 | 192 | 178 |
+| validation (96) | 96 | 96 | 96 | 89 |
+| hard draw (193) | 185 | 184 | 184 | 163 |
+
+Mean actions on the compound suite: 17.3 (baseline), 13.8 (guarded), 14.2
+(walk), 14.1 (always-look).  No false commit under any teacher on any suite.
+The baseline and the always-look reference reproduce their step-5 runs on
+1,275 of 1,275 compound roots, and the baseline reproduces step 5 root for
+root on the conventional suites (192 of 192, 96 of 96, 193 of 193), with its
+observation identical to d056b35 (0 of 172 steps differ on 14 conventional
+roots, two per family).  Away from its reverts the walk teacher's
+trajectories are the guarded teacher's on every root (the 1,233 compound
+episodes without a revert and all 481 conventional roots): the vector's
+ranking reproduces the guarded order everywhere, so the 42 reverts are the
+whole behavioural difference.  It never reverts on a conventional root.  The hard draw's `r0_344bb11720e7`
+stays lost: its wrong flip on line 6 is followed by an accepted correction of
+line 3 and no fruitless cycle, so the gate never admits a revert (the
+lightly loaded ambiguity, reported as a failure).
+
+**The reverts.**  42 compound episodes reverted, each once.  The correction
+executed next tested another hypothesis on 41 and the withdrawn one again on
+1 (a second breaker on the same line); the first run of this measurement
+labelled four more as loops because a meter edit carried no target, so a
+different meter counted as the same hypothesis, fixed in 11f1209 (labels
+only; the trajectories are the same).  The reverting episodes used 36.1
+actions on average: 40 ended in a handoff, 1 ran out of budget and 1 was
+solved (`r0_d8b8f11b8711`, two bus splits: a wrong impedance edit on line 15
+was withdrawn after five fruitless parameter attempts, and two breaker flips
+then solved the root).  The walk run carries 134 loop flags against the
+guarded run's 130: four reverting episodes, all failed either way, re-ran the
+same solve after corrections that failed numerically on the reverted-to
+state (the evaluator's ordinary non-advancing repeat).
+
+What the reverts withdrew decides whether the rule can work: 28 of the 42
+withdrew only true corrections (13 meter edits, 7 impedance edits, 8 breaker
+flips), 13 only wrong ones, 1 both.  In 24 of the 42 the fruitless attempts
+after the commit belonged to another family: the next fault's corrections
+failing on top of a correct commit, which is no evidence against it.
+Restricting the revert to hypotheses chosen while another competed (the
+vector's competitors on the ancestor) does not separate them either: of the
+32 reverts to the root it keeps 6, and 4 of those withdrew true corrections.
+So a commit followed by fruitless cycles is wrong less often than right, and
+the rule as specified withdraws true corrections two to one.  It costs no
+root, because it fires only where the episode was failing anyway.
+
+**The guarded failures that ended with a wrong commit (129)**, under the
+walk teacher:
+
+| class | roots | solved | reverted, failed without a wrong edit | reverted, still a wrong edit | no revert |
+| --- | --- | --- | --- | --- | --- |
+| two R/X, adjacent | 25 | 0 | 3 | 1 | 21 |
+| two R/X, distant | 3 | 0 | 0 | 0 | 3 |
+| R/X + breaker, same line | 1 | 0 | 0 | 0 | 1 |
+| R/X + breaker, shared bus | 10 | 0 | 0 | 1 | 9 |
+| R/X + breaker, distant | 7 | 0 | 0 | 0 | 7 |
+| meter + two R/X | 12 | 0 | 0 | 2 | 10 |
+| meter on the R/X line | 11 | 0 | 1 | 1 | 9 |
+| R/X + breaker + meter | 12 | 0 | 0 | 0 | 12 |
+| two breakers, dangling | 10 | 0 | 0 | 1 | 9 |
+| two breakers, mixed | 13 | 0 | 0 | 0 | 13 |
+| two breakers, bus splits | 17 | 1 | 0 | 3 | 13 |
+| control: one R/X | 2 | 0 | 0 | 0 | 2 |
+| control: one breaker | 6 | 0 | 0 | 1 | 5 |
+| all | 129 | 1 | 4 | 10 | 114 |
+
+Why 114 never reverted (every one of them ended in a handoff): 75 had no
+fruitless cycle since the first commit of the hypothesis the teacher would
+revert (the state the commit produced offered nothing to try, or every later
+correction was accepted), 23 had one or two (fewer than K = 3), and 16 had
+too little budget left for a revert and a new lifecycle.
+
+**Calibration of the confidence vector** (the first solve of each root):
+the top-ranked category is a true error family on 1,198 of 1,275 compound
+roots (94%), and the top two contain one on all 1,275.  It is weakest where
+a breaker error looks like an impedance error: bus splits 14 of 45 (31%; the
+parameter family leads on 31), the one-breaker control 32 of 50 (64%), two
+breakers mixed 32 of 45 (71%); 93% on two adjacent R/X errors, 99-100% on the
+other classes.  On the conventional suites, among the roots whose first solve
+alarms: 171 of 176, 81 of 88 and 160 of 185.
+
+**The start handoff, measured from the walk run.**  192 compound roots are
+start-ambiguous (no category clearly above at the first solve); the walk
+teacher solved 115 of them, so handing off at the start would solve 675 of
+1,275 instead of 790.  On the conventional suites 9, 5 and 28 roots are
+start-ambiguous and the walk solved 9, 5 and 27 of them: the handoff arm
+would score 183 of 192, 91 of 96 and 157 of 193.  Exploring is clearly
+better; the start handoff hands over roots the teacher solves.
+
+**The competing-hypotheses statement.**  40 compound handoffs carried it
+(all failed roots).  At least one listed hypothesis named a true fault on its
+target on 27 of them, none on 13; per hypothesis, the parameter one was on a
+faulted line 22 of 40 times, the breaker one 6 of 25, the meter one 3 of 16.
+
+**Reading.**  The contract works as specified (gated, once per ancestor,
+with the truth and the flags restored, labelled in the evaluator, the
+baseline untouched), and the confidence vector ranks a true family first on
+94% of compound roots.  The revert-and-walk teacher does not pay: +1 root,
+0.4 more actions per episode, and its reverts withdraw true corrections two
+to one, because the signal it acts on, fruitless cycles after a commit, comes
+mostly from other faults.  It stays a labelled research variant; the guarded
+teacher of step 5 remains the compound teacher.
+
+**Candidates for learning (RL)**, flagged as the user asked: when to abandon
+a hypothesis (the hand rule above withdraws the wrong commit only one time
+in three, so the decision needs a credit signal the rule does not read: which
+commit the remaining alarm belongs to), which hypothesis next (the ranking
+walk), when to hand off (the start handoff against exploring: exploring wins
+by 115 compound roots), and K itself, which the supervised data must hold
+fixed as part of the environment contract.
+
+### 8.7 Open questions
+
+1. *Exhausted states.*  75 of the 114 unreached wrong-commit failures hand
+   off with no fruitless cycle since the hypothesis's first commit (nothing
+   left to try, or every later correction accepted), so the gate's count
+   stays at zero.  Admitting a revert there is a different contract; given
+   that the latest commit is wrong one time in three, it would mostly
+   withdraw more true corrections.  The recommendation is not to widen it.
+2. *Telling the wrong commit.*  What would identify it is evidence about the
+   commit itself: its own target metric re-read on the current state, or,
+   better, not committing a parameter-or-breaker guess at all: comparing the
+   two routes on isolated clones before committing (the third shape of
+   section 8.4, `compare_parameter_candidates` widened to a breaker flip
+   against an impedance edit on the leading line).  It costs one action and
+   the clone solves the agent asked for, so it is not a screen.  Not built.
+3. *A live start handoff* needs one more escalation request in the contract
+   (today's handoffs require the same-state routes exhausted).  The derived
+   arm above suggests it is not worth building for the teacher.
+
+**Commits.**  4e37f2d (the contract), 7197c0a (the teacher rule), 11f1209
+(the loop label), and the commit that adds this section (branch
+`claude/nostalgic-kalam-be5f7a`, 2026-10-28).  Outputs (gitignored):
+`output/item7_step6/` (compound and conventional runs, logs, the test logs).
