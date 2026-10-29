@@ -41,6 +41,13 @@ maximum normalized residual, nearly separates the two with one threshold on
 both systems.  At the deployed 40 actions the route-choice headroom is 10 of
 625 roots.
 
+Section 10 (2026-10-29) runs that threshold as a labelled rule, an opt-in
+option of the rule expert (`meter_route_residual=11`; `baseline_compare` is
+unchanged).  It gains 30 IEEE 118 roots at 16 actions (424 to 454) and 28 on
+the IEEE 14 control (328 to 356), all of them meter controls, and 5 and 1 at
+40 actions.  It loses no root on either system at either budget.  Its cost
+is a few more wrong meters committed on roots that fail under both teachers.
+
 Branch `claude/pensive-darwin-33a0d8` (fast-forwarded from the compound
 branch at a52a7e5).  Commits: e8c7ddc (the bus-branch synthesizer, the pair
 metrics, the scripts' system switch, tests), d148464 (the comparison script,
@@ -773,8 +780,7 @@ a meter.
 - A 12-action budget measures the interface, not decisions.  Budgeted RL
   experiments on these classes should use 16 or 20 actions.
 
-Not run here: the rule probe itself.  It is a teacher variant the user should
-decide on, and `baseline_compare` is unchanged.
+The rule probe itself is section 10.
 
 ### 9.6 Reproduction
 
@@ -794,3 +800,157 @@ folder (`budget_12/`, `budget_20/`).  `<D>` is
 rollouts took 30 to 36 min on 9 workers, the control's 11 to 13 min on 4, the
 budget audits 17 min (IEEE 118, 14 workers) and 12 min (control, 4), and the
 wide audit 82 min.
+
+## 10. The meter-route rule probe (2026-10-29)
+
+Section 9.5 proposed a labelled rule for the one recurring decision the
+16-action budget loses on.  After a committed meter correction with the alarm
+still on, the rule stays on the measurement route while the maximum
+normalized residual is at least 11.  This section runs it.  The rule is an
+opt-in option of the rule expert, `ExpertPolicyOracle(meter_route_residual=11)`,
+run as `rollout.py --expert baseline_compare --expert-option
+meter_route_residual=11`.  `baseline_compare` and every named variant are
+unchanged.  The rule acts in a state where two things hold: the latest
+committed correction is a meter correction, and the active state's solve
+reports a maximum normalized residual of at least 11.  There it changes two
+things:
+
+1. The meter route leads.  The measurement context, and the meter
+   corrections it supports, go ahead of the parameter and topology tiers,
+   which otherwise come first.
+2. The measurement expert's post-commit branch guard stands down.  After a
+   partial meter commit, that guard holds meter corrections back while a
+   branch-multiplier signature is current and a branch route is untried.  The
+   guard, not only the order, is what forced the parameter detour of
+   section 9.2.  The branch-dominance suppression still applies: no meter
+   correction while a branch multiplier dominates the solve and no residual
+   does.
+
+The rule reads only what the solve reports to the agent and adds no action,
+so it is not a screen.  The runs use the suites, rollout seed and guard
+settings of section 9.  `research/compound_errors/meter_route_probe.py` pairs
+every root with `baseline_compare` on the same budget.  The tracked tables are
+`meter_route_probe.{json,md}` and `*_meter_route11_{16,40}_summary.*` in
+`docs/compound_errors_ieee118_20261028/`.  As a check that the option touches
+nothing else: on every root where `baseline_compare`'s episode never reaches a
+state the rule fires in, the two trajectories are identical action for
+action.
+
+### 10.1 Success
+
+| class | IEEE 118, 16 actions: baseline_compare / rule | IEEE 118, 40 actions | IEEE 14 control, 16 actions | IEEE 14 control, 40 actions |
+| --- | --- | --- | --- | --- |
+| two R/X lines, adjacent (150) | 97 / 97 | 95 / 95 | 59 / 59 | 61 / 61 |
+| two R/X lines, distant (150) | 130 / 130 | 130 / 130 | 115 / 115 | 115 / 115 |
+| meter + two R/X (150) | 129 / 129 | 130 / 130 | 77 / 77 | 88 / 88 |
+| meter on the faulted line + R/X (75) | 4 / 4 | 11 / 11 | 11 / 11 | 13 / 13 |
+| control: one R/X line (50) | 45 / 45 | 45 / 45 | 48 / 48 | 48 / 48 |
+| control: 1 to 3 meters (50) | 19 / 49 | 45 / 50 | 18 / 46 | 49 / 50 |
+| all (625) | 424 / 454 | 456 / 461 | 328 / 356 | 374 / 375 |
+
+- **No losses.** The rule loses no root in any of the four pairings (2,500
+  paired episodes).  Every gain is a meter control.
+- **16 actions.** The rule gains 30 roots on IEEE 118 and 28 on the
+  control.  On IEEE 118 it solves 454 roots, two fewer than
+  `baseline_compare` with 40 actions (456).  On the meter controls it beats
+  that 40-action total: 49 against 45.
+- **40 actions.** The rule gains 5 roots on IEEE 118 and 1 on the control,
+  and solves all 50 meter controls on both systems.  The six roots
+  `baseline_compare` fails at 40 are all three-meter controls.  On each it
+  commits two true meters, tries and rolls back seven or eight line
+  corrections, and hands off with `recovery_budget_exhausted` after 38
+  actions.  The rule solves each in 15 actions.
+
+Against the decision audit of section 9.2 (the roots the 16-action budget
+loses):
+
+- **IEEE 118:** the rule recovers 25 of the 26 lost meter controls within 16
+  actions:
+  - the 23 that only the truth probe recovered;
+  - the one with a legal alternative;
+  - one of the two in "neither".  There the truth probe's fixed meter order
+    failed and the expert's own order does not.
+- **IEEE 14 control:** the rule recovers 27 of 31: 17 of the 19 truth-only
+  roots, all 4 legal ones and 6 of the 8 in "neither".
+- **Meter on the faulted line:** the lost roots stay lost (7 on IEEE 118, 2
+  on the control).  Their detour is the parameter route, taken before any
+  meter commit.  The rule does not touch that decision.
+
+### 10.2 What is left on the meter controls
+
+The rule still fails five meter controls at 16 actions, 1 on IEEE 118 and 4
+on the control; all five solve at 40.  In each, a true meter commit leaves a
+maximum normalized residual between 10.3 and 11.0, just under the threshold,
+with another bad meter still in place.  The rule stays quiet, the expert
+takes the parameter route, and the budget ends.  These five sit in the
+overlap band of section 9.4.
+
+### 10.3 What the rule costs
+
+- **Actions.** On the meter controls both teachers solve with 40 actions,
+  the mean falls from 19.8 to 10.8 actions on IEEE 118 and from 21.3 to 12.4
+  on the control.  Budget handoffs at 40 fall from 22 to 12 and from 32 to
+  21.
+- **Other classes.** Outside the meter controls the rule changes 26 IEEE 118
+  and 23 control trajectories at 40 actions: adjacent pairs, the two
+  meter-and-line classes, and one distant pair on the control.  No outcome
+  changes, and in total those episodes are shorter (by 60 and 30 actions).
+- **Committed wrong meters.** On IEEE 118 at 40 actions they rise from 48 to
+  54, on 4 roots; on the control from 49 to 57, on 6 roots.  At 16 actions
+  they rise from 5 to 6 and from 9 to 10, on one root each.  Every one of
+  these roots fails under both teachers.  This is the masking the lifted
+  guard admits.  After a wrong meter commit that hides a bad line (mostly
+  the meter-on-line class), the residual still reads as meter-led, and the
+  rule keeps editing meters.  No outcome changes, but these failures end
+  with more healthy meters edited.
+
+### 10.4 The cue in the states the rule acted on
+
+| rule decisions, by the meter commit before them | IEEE 118, 16 actions | IEEE 118, 40 actions | IEEE 14 control, 16 actions | IEEE 14 control, 40 actions |
+| --- | --- | --- | --- | --- |
+| after a true meter commit: next true correction meter / line / none | 50 / 4 / 5 | 50 / 7 / 4 | 47 / 3 / 2 | 47 / 4 / 6 |
+| after a wrong meter commit: next true correction meter / line / none | 0 / 0 / 4 | 6 / 0 / 22 | 2 / 0 / 3 | 5 / 0 / 26 |
+
+- **After a true meter commit.** The next true correction is a meter in 47
+  to 50 of the 52 to 61 states where the rule decides, and a line in 3 to 7.
+  That is close to the in-sample separation of section 9.4, now on states
+  the rule itself led the expert into.  When a line comes next, the rule
+  spends the measurement context, and any meter candidates it offers, before
+  the line route resumes.  None of those roots was lost.
+- **After a wrong meter commit.** Every decision the rule takes there is on
+  a root that fails under both teachers.
+
+### 10.5 What this means for RL
+
+- **The recurring decision of section 9 needs no learning.** A
+  one-threshold rule on an observable cue settles it:
+  - it recovers 25 of the 26 IEEE 118 meter controls the 16-action budget
+    lost, and 27 of 31 on the control;
+  - it loses no root on either system;
+  - it brings the 16-action IEEE 118 total within 2 roots of the deployed
+    40-action total.
+- **What remains for a learned router is smaller:**
+  1. The threshold band from 10.3 to 11: five meter controls at 16 actions.
+  2. The first route on meter-on-line roots, before any commit.  The truth
+     probe recovers 7 IEEE 118 roots at 16 actions; the rule recovers none.
+  3. The adjacent pairs' order, compare first or correct first: 4 control
+     roots at 16 actions.
+  4. When to leave the meter route after a wrong meter commit, the rule's
+     only cost.  This is the credit-assignment problem of hypothesis
+     abandonment (RL watchlist item 1), not a threshold.
+- **Not decided here:** whether the rule becomes a named teacher variant, and
+  so a DAgger teacher for compound cells.  It is a research option.
+
+### 10.6 Reproduction
+
+```
+PSSE_MULTI_SCAN_RCOND=sparse_symmetric python -m research.compound_errors.rollout --suite output/compound_errors_ieee118_20261028/suite.json --output-dir output/compound_errors_ieee118_20261028/meter_route11_40 --expert baseline_compare --expert-option meter_route_residual=11 --max-steps 40 --workers 11
+python -m research.compound_errors.rollout --suite output/compound_errors_ieee14_busbranch_20261028/suite.json --output-dir output/compound_errors_ieee14_busbranch_20261028/meter_route11_40 --expert baseline_compare --expert-option meter_route_residual=11 --max-steps 40 --workers 5
+python -m research.compound_errors.meter_route_probe --threshold 11 --pair ieee118:40=<D>/expert_baseline_compare/episodes.jsonl,<D>/meter_route11_40/episodes.jsonl --pair ieee118:16=<D>/budget_16/episodes.jsonl,<D>/meter_route11_16/episodes.jsonl --pair ieee14_control:40=<C>/expert_baseline_compare/episodes.jsonl,<C>/meter_route11_40/episodes.jsonl --pair ieee14_control:16=<C>/budget_16/episodes.jsonl,<C>/meter_route11_16/episodes.jsonl --output-dir <D>/meter_route_probe
+```
+
+The 16-action rollouts differ only in `--max-steps 16`, the output folder
+(`meter_route11_16/`) and the worker count (9 and 4).  `<D>` and `<C>` are as
+in section 9.6.  All four rollouts ran at once on 32 cores.  The IEEE 118
+runs took 29 min at 40 actions (11 workers) and 31 min at 16 (9 workers);
+the control's took 12 and 13 min (5 and 4 workers).
