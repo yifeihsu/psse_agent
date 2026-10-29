@@ -16,9 +16,9 @@ GPU_STAGES = (
 )
 CPU_STAGES = ("stage_d0.sbatch",)
 # Follow-up stages of a finished cell (2026-10-23): CPU work outside stage 0.
-EXTRA_CPU_STAGES = ("stage_extra_cpu.sbatch",)
+EXTRA_CPU_STAGES = ("stage_extra_cpu.sbatch", "stage_test_draw.sbatch")
 SHELL_FILES = ("prerequisites.sh", "submit_pipeline.sh", "status_pipeline.sh", "deploy_remote.sh",
-               "submit_extras_20261023.sh", "submit_extras_20261027.sh")
+               "submit_extras_20261023.sh", "submit_extras_20261027.sh", "submit_test_draw2_20261029.sh")
 PYTHON_FILES = ("build_suite.py", "summarize.py")
 
 
@@ -62,7 +62,7 @@ def test_extra_cpu_stages_request_no_gpu_and_are_deployed(name: str) -> None:
     assert "\r" not in text
     deploy = (CELL / "deploy_remote.sh").read_text(encoding="utf-8")
     for deployed in (name, "stage_control_train.sbatch", "stage_eval_suite.sbatch", "submit_extras_20261023.sh",
-                     "submit_extras_20261027.sh"):
+                     "submit_extras_20261027.sh", "stage_test_draw.sbatch", "submit_test_draw2_20261029.sh"):
         assert deployed in deploy, deployed
 
 
@@ -260,6 +260,190 @@ def test_budget_submit_script_writes_the_horizon_into_its_specs() -> None:
     # The spec is sourced after pipeline.env, so its EVAL_MAX_STEPS overrides the cell's horizon.
     assert stage.index('source "$PIPE/pipeline.env"') < stage.index('source "$EVAL_SPEC"')
     assert '--max-steps "$EVAL_MAX_STEPS"' in stage and '"${EVAL_MAX_STEPS:?}"' in stage
+
+
+def test_second_test_draw_repeats_the_first_draws_builder_invocation() -> None:
+    stage = (CELL / "stage_test_draw.sbatch").read_text(encoding="utf-8")
+    first = (CELL / "stage_d0.sbatch").read_text(encoding="utf-8")
+    for flag in ('--round-train-plan "$ROUND_TRAIN_PLAN"', '--development-plan "$DEVELOPMENT_PLAN"', '--rounds "$DAGGER_ROUNDS"',
+                 '--training-threshold "$SUITE_TRAINING_THRESHOLD"', '--development-threshold "$SUITE_DEVELOPMENT_THRESHOLD"',
+                 '--development-rank-allowance "$SUITE_DEVELOPMENT_RANK_ALLOWANCE"',
+                 '--min-measurement-error-sigma "$MEASUREMENT_ERROR_MIN_SIGMA"', '--topology-effects "$TOPOLOGY_EFFECTS"',
+                 '"${system_args[@]}"', '"${suite_waveform_args[@]}"', '--d0-raw "$D0_DIR/aggregate.raw.jsonl"',
+                 '--protected-suite "$BC0_SUITE"'):
+        assert flag in stage and flag in first, flag
+    assert '--seed "$TEST_DRAW_SEED"' in stage and '--seed "$SEED_SUITE"' not in stage
+    assert '--candidate-multiplier "$multiplier"' in stage
+    assert 'for multiplier in "$CANDIDATE_MULTIPLIER" "$TEST_DRAW_FALLBACK_MULTIPLIER"' in stage
+    assert '--protected-suite "$DRAW/protected_roots.json"' in stage and "collect_reference_roots.py" in stage and "set -f" in stage
+    assert '--suite-dir "$DRAW/suite"' in stage and "check_suite_exclusion.py" in stage and "checkable_paths" in stage
+    assert "suite_stats.py" in stage and "draw.done" in stage
+    overrides = (CELL / "overrides" / "conventional_only_20261022.env").read_text(encoding="utf-8")
+    settings = dict(re.findall(r"^([A-Z0-9_]+)=(.*)$", overrides, flags=re.MULTILINE))
+    assert settings["TEST_DRAW_NAME"] == "test_draw2" and settings["TEST_DRAW_PREFIX"] == "test2"
+    used = {int(settings[k]) for k in ("SEED_SUITE", "SEED_CONTROL", "SEED_D0", "SEED_ROUND")} | {int(settings["SEED_SUITE"]) + 1}
+    seed = int(settings["TEST_DRAW_SEED"])
+    assert seed not in used and seed + 1 not in used
+    assert int(settings["TEST_DRAW_FALLBACK_MULTIPLIER"]) > 3
+    references = settings["TEST_DRAW_REFERENCES"]
+    for pattern in ("research_full_pipeline_*/out/d0/aggregate.raw.jsonl", "research_full_pipeline_*/out/suite/development.json",
+                    "research_full_pipeline_*/out/suite/r*_training.json", "research_full_pipeline_*/out/extra/suites/hard.json",
+                    "research_full_pipeline_*/out/extra/suites/validation.json",
+                    "research_full_pipeline_*/out/extra/control_d0/aggregate.raw.jsonl", "hard_draw_20261015/hard_*.json",
+                    "$EXTRA_VALIDATION_SOURCE", "$EXTRA_HARD_SOURCE"):
+        assert pattern in references, pattern
+    submit = (CELL / "submit_test_draw2_20261029.sh").read_text(encoding="utf-8")
+    assert "stage_test_draw.sbatch" in submit and '--dependency=afterok:"$dependency"' in submit
+    assert "SUITE=$DRAW/suite/development.json" in submit and 'BUDGETS=${BUDGETS:-"12 20"}' in submit
+    assert '"${PREFIX}_${FULL}"' in submit and '"${PREFIX}_budget${budget}_r2"' in submit and '"r2=$R2"' in submit
+
+
+def test_reference_roots_collect_every_readable_set(tmp_path: Path) -> None:
+    collect = _load("collect_reference_roots.py")
+
+    def write(path: Path, text: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    clean = write(tmp_path / "cellA" / "out" / "d0" / "aggregate.raw.jsonl",
+                  json.dumps({"physical_root_fingerprint": "physical_a"}) + "\n"
+                  + json.dumps({"metadata": {"physical_root_fingerprint": "physical_b"}}) + "\n")
+    partial = write(tmp_path / "cellB" / "out" / "d0" / "aggregate.raw.jsonl",
+                    json.dumps({"physical_root_fingerprint": "physical_c"}) + "\n" + json.dumps({"example_id": "x"}) + "\n")
+    suite = write(tmp_path / "suite.json", json.dumps([{"grouping": {"physical_root_fingerprint": "physical_d"}}]))
+    strings = write(tmp_path / "strings.json", json.dumps(["physical_e", "not a root"]))
+    report_file = write(tmp_path / "report.json", json.dumps({"roots": 3}))
+    own = write(tmp_path / "draw" / "development.json", json.dumps([{"grouping": {"physical_root_fingerprint": "physical_new"}}]))
+    patterns = [str(tmp_path / "cell*" / "out" / "d0" / "aggregate.raw.jsonl"), str(suite), str(suite), str(strings),
+                str(report_file), str(tmp_path / "missing*.json"), str(tmp_path / "draw" / "*.json")]
+    roots, report = collect.collect(patterns, [tmp_path / "draw"])
+    assert roots == {"physical_a", "physical_b", "physical_c", "physical_d", "physical_e"}
+    files = report["files"]
+    assert files[str(partial)]["rows_without_root"] == 1 and files[str(partial)]["checkable"] is False
+    assert files[str(suite)]["roots"] == 1 and files[str(report_file)]["rows"] == 0
+    assert report["patterns"][str(tmp_path / "missing*.json")] == 0 and "skipped" in files[str(own)]
+    assert sorted(report["checkable_paths"]) == sorted([str(clean), str(suite)])
+    output = tmp_path / "out" / "protected_roots.json"
+    assert collect.main(patterns + ["--exclude-dir", str(tmp_path / "draw"), "--output", str(output)]) == 0
+    written = json.loads(output.read_text(encoding="utf-8"))
+    assert [row["physical_root_fingerprint"] for row in written] == ["physical_a", "physical_b", "physical_c", "physical_d", "physical_e"]
+    assert json.loads((tmp_path / "out" / "protected_roots.report.json").read_text(encoding="utf-8"))["roots"] == 5
+    # check_suite_exclusion reads the written roots as a reference suite.
+    assert _load("check_suite_exclusion.py").reference_roots(output) == roots
+
+
+def test_suite_stats_reads_the_truth_fields() -> None:
+    stats = _load("suite_stats.py")
+    sigma = [0.01, 0.01, 0.02]
+    rows = [
+        {"grouping": {"scenario_family": "measurement", "error_cardinality": 1},
+         "audit": {"truth": {"true_measurement_errors": [{"channel": "Pt", "index": 2, "clean": 0.1, "observed": 0.4}]},
+                   "parameter_ranking": {"stratum": "not_applicable"}},
+         "execution": {"measurements": [1.0, 1.0, 1.0], "metadata": {"sigma_z": sigma}}},
+        {"grouping": {"scenario_family": "parameter", "error_cardinality": 1},
+         "audit": {"truth": {"true_parameter_errors": [{"r_factor": 1.0, "x_factor": 4.5}]},
+                   "parameter_ranking": {"stratum": "ambiguous", "dominance_ratio": 1.05, "true_line_rank": 1}},
+         "execution": {"measurements": [1.0, 1.0, 1.0],
+                       "metadata": {"sigma_z": sigma, "parameter_scans": {"sigma_z": sigma, "z_scans": [[1], [2], [3]]}}}},
+        {"grouping": {"scenario_family": "topology", "error_cardinality": 1},
+         "audit": {"truth": {"true_topology_errors": [{"physical_effect": "bus_split", "cb_name": "CB_4_N1_N2", "load_scale": 0.9,
+                                                      "operating_point": "ac_opf"}]},
+                   "parameter_ranking": {"stratum": "not_applicable"}},
+         "execution": {"measurements": [1.0, 1.0, 1.0], "metadata": {"substation_telemetry": {"nodes": []}}}},
+        {"grouping": {"scenario_family": "measurement+parameter", "error_cardinality": 2},
+         "audit": {"truth": {"true_measurement_errors": [{"index": 75, "clean": 0.0, "observed": 0.2}],
+                             "true_parameter_errors": [{"r_factor": 0.5, "x_factor": 2.0}]},
+                   "parameter_ranking": {"stratum": "dominant", "dominance_ratio": 2.0, "true_line_rank": 1}},
+         "execution": {"measurements": [1.0] * 122, "metadata": {"sigma_z": [0.01] * 122}}},
+    ]
+    described = stats.describe_rows(rows)
+    measurement = described["families"]["measurement"]
+    assert measurement["meter_error_sigma"]["median"] == pytest.approx(15.0) and measurement["meter_channels"] == {"Pt": 1}
+    parameter = described["families"]["parameter"]
+    assert parameter["x_factor"]["max"] == 4.5 and parameter["r_factor_unchanged"] == 1 and parameter["strata"] == {"ambiguous": 1}
+    assert parameter["roots_with_parameter_scans"] == 1 and parameter["scans_per_root"]["max"] == 3
+    topology = described["families"]["topology"]
+    assert topology["topology_effects"] == {"bus_split": 1} and topology["roots_with_substation_telemetry"] == 1
+    mixed = described["families"]["measurement+parameter"]
+    assert mixed["meter_channels"] == {"Qf": 1} and mixed["meter_error_sigma"]["max"] == pytest.approx(20.0)
+    assert "### measurement" in stats.markdown({"a": described, "b": described})
+
+
+def test_pooled_tables_join_two_root_disjoint_draws(tmp_path: Path) -> None:
+    pooled = _load("pooled_tables.py")
+
+    def rows(start: int) -> list[dict]:
+        return [{"grouping": {"physical_root_fingerprint": f"root{i}",
+                              "scenario_family": "multi_measurement" if i % 2 == 0 else "measurement"}, "audit": {}}
+                for i in range(start, start + 4)]
+
+    def episode(i: int, ok: bool, invalid: int = 0) -> dict:
+        return {"physical_root": f"root{i}", "truth_audited_task_success": ok, "invalid_action_count": invalid,
+                "false_commit_count": 0, "loop_detected": False, "steps": 7, "wls_calls": 2, "tool_counts": {},
+                "terminal": True}
+
+    def write(path: Path, payload: object) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def evaluation(start: int, failing: int = -1, invalid_on: int = -1) -> dict:
+        return {"suite_metrics": {"episodes": [episode(i, i != failing, int(i == invalid_on)) for i in range(start, start + 4)]}}
+
+    hashes = {"bc0": "a" * 64, "r1": "b" * 64, "r2": "c" * 64}
+
+    def identity(horizon: int, labels: dict) -> dict:
+        return {"max_steps": horizon, "seed": 1,
+                "policies": {slot: {"label": label, "tree_sha256": hashes[label]} for slot, label in labels.items()}}
+
+    out = tmp_path / "out"
+    collection = out / "r1" / "collection"
+    write(collection / "development_scenarios.json", rows(0))
+    write(collection / "evaluation" / "comparison.json", {"max_steps": 40})
+    write(collection / "evaluation" / "expert_eval.json", evaluation(0))
+    write(collection / "evaluation" / "bc0_eval.json", evaluation(0, failing=0, invalid_on=2))
+    write(collection / "evaluation" / "r1_eval.json", evaluation(0))
+    write(out / "r2" / "collection" / "evaluation" / "comparison.json", {"max_steps": 40})
+    write(out / "r2" / "collection" / "evaluation" / "r1_eval.json", evaluation(0, failing=2))
+    write(out / "bc0.done", {"adapter_tree_sha256": hashes["bc0"]})
+    write(out / "r1" / "training.done", {"candidate_tree_sha256": hashes["r1"]})
+    write(out / "r2" / "training.done", {"candidate_tree_sha256": hashes["r2"]})
+    extra = out / "extra" / "evaluations"
+    write(out / "extra" / "test_draw2" / "suite" / "development.json", rows(4))
+    for name, start, horizon in (("test2_40", 4, 40), ("test2_budget12", 4, 12), ("test_budget12", 0, 12)):
+        write(extra / name / "policies.json", identity(horizon, {"bc0": "bc0", "r1": "r1"}))
+        write(extra / name / "summary.json", {})
+        write(extra / name / "expert_eval.json", evaluation(start))
+        write(extra / name / "bc0_eval.json", evaluation(start, failing=start + 1, invalid_on=start))
+        write(extra / name / "r1_eval.json", evaluation(start, failing=start + 1))
+        write(extra / f"{name}_r2" / "policies.json", identity(horizon, {"bc0": "r2"}))
+        write(extra / f"{name}_r2" / "summary.json", {})
+        write(extra / f"{name}_r2" / "bc0_eval.json", evaluation(start))
+    result = pooled.build(tmp_path, "test_draw2", "test2", [12])
+    assert sorted(result["draws"]) == ["draw1", "draw2", "pooled"]
+    at40 = result["draws"]["pooled"]["40"]
+    assert at40["policies"]["expert"]["episodes"] == 8
+    assert at40["policies"]["bc0"]["successes"] == 6 and at40["policies"]["bc0"]["clean_successes"] == 4
+    assert at40["policies"]["r2"]["successes"] == 7
+    assert result["draws"]["pooled"]["12"]["policies"]["r1"]["successes"] == 6
+    # BC0 fails root0 (draw 1) and root5 (draw 2), R1 fails root5 only.
+    assert at40["paired"]["bc0_vs_r1"]["success_failures"] == {"paired_roots": 8, "only_first": 1, "only_second": 0, "p": 1.0}
+    assert at40["paired"]["r1_vs_r2"]["success_failures"]["only_first"] == 1
+    assert at40["paired"]["r1_vs_r2"]["success_failures"]["only_second"] == 1
+    assert result["draws"]["draw2"]["40"]["policies"]["bc0"]["by_cohort"]["multi_error"]["violation_episodes"] == 1
+    assert result["draw_differences_at_full_budget"]["bc0"]["successes"] == [3, 3]
+    assert result["draw_differences_at_full_budget"]["r2"]["successes"] == [3, 4]
+    assert result["identities"]["draw2"]["40:test2_40"]["adapters_match_receipts"] is True
+    assert result["identities"]["draw1"]["12:test_budget12_r2"]["adapters_match_receipts"] is True
+    episodes = result.pop("episodes")
+    assert len(episodes) == 2 * 2 * 4 * 4
+    assert {e["draw"] for e in episodes} == {"draw1", "draw2"} and {e["budget"] for e in episodes} == {12, 40}
+    record = next(e for e in episodes if e["draw"] == "draw2" and e["policy"] == "bc0" and e["budget"] == 40 and e["physical_root"] == "root4")
+    assert record["invalid_action_count"] == 1 and record["family"] == "multi_measurement" and record["success"] is True
+    text = pooled.markdown(result)
+    assert "### pooled (8 roots)" in text and "Draw 1 against draw 2" in text
+    with pytest.raises(ValueError):
+        pooled.pool({"a": {40: {"bc0": {"root0": {}}}}, "b": {40: {"bc0": {"root0": {}}}}})
 
 
 @pytest.mark.parametrize("name", CPU_STAGES)

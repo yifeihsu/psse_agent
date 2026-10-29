@@ -906,3 +906,98 @@ hold the two-meter roots only (the teacher solves 9 of 24), 20 actions about
 half (13) and 40 all 24; outside that family the budget costs only BC0,
 whose invalid actions and false commits spend the actions a meter + R/X or
 meter + breaker root needs.
+
+## 8. A second fresh test draw (2026-10-29): 192 more scenarios, pooled to 384
+
+Why. The manuscript's Table I reads the 192-root test set of this cell. A
+second draw of the same composition doubles the test set to 384 scenarios and
+replicates every row on roots that no policy, draw or earlier cell has
+touched (asked by the paper session on 2026-10-28 and approved by the user;
+the results are wanted by 5 November). Branch `claude/competent-haibt-e7b0ad`,
+the same cell; records under `out/extra/`. No file under `psse_env/` or
+`scripts/` differs from the cell's recorded source 01ac598; the commits since
+then change only `research/hpc/`, the tests and this note.
+
+### 8.1 Design (written before the runs)
+
+**The draw** (`stage_test_draw.sbatch`, receipt
+`out/extra/test_draw2/draw.done`). Three steps:
+
+1. `collect_reference_roots.py` gathers every physical root of every earlier
+   set into `out/extra/test_draw2/protected_roots.json` (report beside it,
+   per file: size, sha256, rows, roots, rows without a root): the expert
+   aggregate and the development and round suites of every cell under
+   `/scratch/yx3882/research_full_pipeline_*` (13 cells besides this one, the
+   IEEE 57 and IEEE 118 cells included although their roots cannot coincide),
+   this cell's aggregate, test set and round suites, the validation and hard
+   suites of section 6 and their two sources, the control's aggregate, the
+   2026-10-15 hard draw (development and training sets, both renderings) and
+   the local preflight's development-only roots (section 4).
+2. `build_suite.py` exactly as stage 0 drew the first suite (section 4): the
+   cell's round and development plans, two rounds, candidate multiplier 3,
+   training threshold 1.2, development threshold 1.0 with rank allowance 2,
+   the 10-sigma meter floor, the dangling-terminal and bus-split effects,
+   `recoverable` admission, `scada_only`, the same corpora and system, the
+   cell's D0 as `--d0-raw`, the frozen BC0 suite and the trace validation set
+   protected as in stage 0, and the collected roots protected on top, with
+   seed 20261029 (development stream 20261030; the first draw used 20261022
+   and 20261023, the control's aggregate 20261123). Output
+   `out/extra/test_draw2/suite/`. The round training files the builder writes
+   are a by-product of running the identical procedure and are not used.
+   Rule fixed now: if a family runs short of fresh candidates after the
+   exclusions (the builder stops with "Increase --candidate-multiplier"), the
+   draw is repeated once with multiplier 6. The candidates are the same
+   generator's identically distributed draws, so a larger pool changes which
+   are kept, not their distribution; the receipt records the multiplier used.
+3. `check_suite_exclusion.py`, the first draw's check: the new suites against
+   the cell's D0 and each other, and the new development set against every
+   reference file it can read and against the collected roots
+   (`disjointness_check.json`); then `suite_stats.py` on both draws
+   (`suite_stats.{json,md}`): meter errors per root, channels and magnitudes
+   in pu and in sigma; R and X factors; ranking strata, dominance ratios and
+   true-line ranks; topology effects, breakers, load scales and operating
+   points; parameter scans and substation telemetry per root.
+
+Composition, as in the first draw: 16 clean, 32 single-meter, 24 multi-meter,
+32 R/X, 32 breaker-status, 32 meter + R/X and 24 meter + breaker roots; the
+parameter strata are whatever the draw yields at the development threshold
+(the first draw: 18 dominant, 11 ambiguous and 3 misranked R/X roots; 26
+dominant and 6 ambiguous meter + R/X roots). The draw keeps the first draw's
+family-specific metadata (parameter scans on the R/X families, substation
+telemetry on the breaker families): the uniform-metadata convention decided
+on 2026-10-28 applies to suites built for new studies, and this draw
+replicates the conditions the policies were trained and tested under.
+
+**The evaluations** (`submit_test_draw2_20261029.sh`; specs `test2_40`,
+`test2_40_r2`, `test2_budget12`, `test2_budget12_r2`, `test2_budget20`,
+`test2_budget20_r2` under `out/extra/specs/`): BC0, R1 and the teacher, and R2
+alone, on the new draw at 40 actions after the draw, then at 12 and 20
+actions after the 40-action jobs, each with `evaluate_suite.py` under the
+cell's recorded environment options, model and teacher (`baseline_compare`,
+`scada_only`), seed 20260912, and 2 workers per policy on a GPU of 70 GB or
+more, as every evaluation of this cell. The adapters are the cell's
+(`out/bc0/lora`, `out/r1/training/lora`, `out/r2/training/lora`), checked by
+tree hash against the stage receipts. 16 actions is not in the manuscript's
+table and is not run.
+
+**Metrics, fixed now** (`pooled_tables.py`, output
+`out/extra/pooled_tables.{json,md}` and `pooled_tables_episodes.jsonl`). For
+the new draw alone and pooled with the first (384 roots; the draws are
+root-disjoint, so the pool is the union), at 40, 12 and 20 actions: successes,
+safety-clean successes (solved with no invalid action, false commit or loop; a
+false commit is a commit requested for a candidate the verifier had not
+accepted, which the gate refuses, so nothing is kept), violation episodes,
+episodes that ran to the budget, mean actions and WLS calls, per family and
+per error cohort (multi-error: multiple meters, meter + R/X, meter + breaker;
+the rest single-error and clean); exact two-sided McNemar tests BC0 vs R1,
+BC0 vs expert and R1 vs R2 (and the other pairs) on success, on safety-clean
+success and on violations; per family and policy, draw 1 against draw 2 at 40
+actions. Per-episode records in the schema of section 7 (`episodes.jsonl` in
+every evaluation directory; the pooled file adds the draw and the horizon to
+the same record).
+
+**Reading, fixed now.** The pooled rows are sums over the two draws. A family
+whose successes differ between the draws by more than two roots for the same
+policy, or whose strata, error magnitudes or effects differ in the suite
+statistics, is flagged for the manuscript to explain; nothing is redrawn or
+dropped after the evaluations.
