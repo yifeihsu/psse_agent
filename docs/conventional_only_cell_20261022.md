@@ -1022,3 +1022,472 @@ the WSL shell):
 ```bash
 MSYS_NO_PATHCONV=1 wsl -- ssh torch "/opt/slurm/bin/sacct -j 21305137,21305138,21305139,21305140,21305142,21305143,21305144 -X -o JobID%12,JobName%10,State%12,Elapsed%12,NodeList%10"
 ```
+
+### 8.2 The draw (fp-xdraw 21305137, 2026-10-29)
+
+The draw ran on cs648 from 02:12 to 03:42 UTC (1 h 30 min) from 8e07f94, whose
+`psse_env/` and `scripts/` are identical to the cell's recorded source 01ac598
+(`git diff --stat 01ac598 8e07f94 -- psse_env scripts` is empty). Receipt
+`out/extra/test_draw2/draw.done` (contract `conventional_only_test_draw_done_v1`;
+development set sha256 `b409fbec2f45a45ac3838f56e46f3a49a539f11356da81d5572fbb404f3b9288`).
+
+**References.** The collector read 61 files, none missing or unreadable, and
+found 8,122 distinct roots: 13 expert aggregates (the D0 of 14 cells, two of
+which, 20260908 and 20261013_ieee14_reverse, reuse another cell's file through
+a symlink, and the control's), 14 development suites, 27 round suites, this cell's
+validation and hard suites, the four renderings of the 2026-10-15 hard draw,
+and the local preflight's development-only roots, which add 42 roots no other
+file holds (the cancelled launch read 8,080 without them). 60 of the files are
+readable by the disjointness check as reference suites; the preflight file holds
+fingerprints only and enters the check through the collected-roots file.
+
+**The builder.** It protected 8,239 roots: the 8,122 collected and the 117 of
+the frozen BC0 suite and trace validation set that stage 0 protected (the
+first draw's builder protected those 117 only, besides the cell's D0). With
+multiplier 3 it stopped in the training allocation, which fills the two round
+files it writes as a by-product (24 R/X roots between them): "Scenario family
+'parameter' has 23 fresh roots; needs 24" (`build_m3.stderr`), that is, 49 of
+the 72 R/X candidates built for that stream were roots of earlier sets. By the
+rule fixed in 8.1 the draw was repeated once with multiplier 6, which built
+1,152 development and 888 training candidates (the first draw: 576 and 444)
+and completed. The development allocation shuffles each family's fresh
+candidates with a fixed seed and keeps the first 32, 24 or 16
+(`allocate_scenarios` in `scripts/run_dagger_research.py`; the development
+stratum plan is empty), so the larger pool changes which candidates are kept,
+not their kind.
+
+**Sampling frame.** Both draws build candidates from the same part of the
+tabular corpora: the 80% "train" partition of a sha256-modulo-5 split (494 R/X
+rows, 418 meter rows, 2,801 clean rows; the evaluation fifth is used by
+neither draw). The first draw excluded only this cell's D0 and stage 0's 117
+protected roots; the second excludes every root any earlier set used, so it
+samples the rows no earlier study touched. For R/X roots that remainder is
+about a third of the admissible rows.
+
+**Disjointness** (`disjointness_check.json`): passed. The development set (192
+roots) and the two by-product round files (74 each) share no root with each
+other or with the cell's D0 (370 roots), and the development set shares none
+with any of the 60 reference files or with the collected roots (61 checks, all
+zero).
+
+**Composition and suite statistics** (`suite_stats.md`, both draws side by
+side). The family counts are exactly the first draw's. Where the draws differ:
+
+| | Draw 1 | Draw 2 |
+| --- | --- | --- |
+| R/X roots: dominant / ambiguous / misranked | 18 / 11 / 3 | 21 / 9 / 2 |
+| R/X dominance ratio, median | 1.36 | 1.64 |
+| R/X roots with R unchanged / X unchanged | 9 / 9 | 14 / 6 |
+| Meter + R/X roots: dominant / ambiguous / misranked | 26 / 6 / 0 | 27 / 4 / 1 |
+| Breaker roots: bus split / dangling terminal | 7 / 25 | 12 / 20 |
+| Multi-meter roots on active-injection or voltage meters | 2 of 24 | 9 of 24 |
+| Multi-meter roots with 2 / 3 / 4 / 5 bad meters | 9 / 4 / 5 / 6 | 8 / 3 / 6 / 7 |
+
+Every multi-meter root puts all its bad meters on one kind of meter (all
+active injections, all voltage magnitudes, all from-end reactive flows, and so
+on), so the channel mix of that family is a count over 24 roots, not over the
+80 or 84 meter errors. The rest is alike: meter errors of 10.1 to 16.0 sigma
+(medians 12.2 to 12.9) on the single- and multi-meter roots and 11.0 to 29.8
+sigma (medians 17.5 to 19.9) on the mixed roots; on the breaker families,
+load scales 0.81 to 1.24 and every operating point an AC OPF; parameter scans
+(8 per root) on every R/X and meter + R/X root and substation telemetry on
+every breaker and meter + breaker root, as in the first draw. Exact two-sided
+Fisher tests, draw 1 against draw 2: R/X dominant 18 against 21 of 32, p =
+0.61; meter + R/X dominant 26 against 27, p = 1; bus splits 7 against 12 of
+32, p = 0.27; multi-meter roots on active-injection or voltage-magnitude
+meters 2 against 9 of 24, p = 0.036 (unadjusted, one of five comparisons; with
+the seven meter kinds equally likely about 7 of 24 are expected, so the first
+draw's 2 is the unusual count; counting reactive injections too, 6 against 13,
+p = 0.075); single-meter roots on active-injection or voltage-magnitude meters
+6 against 7 of 32, p = 1.
+
+**Recurring error locations.** "Fresh" means an unseen physical realization,
+not an unseen error location. The generator builds every meter root from a row
+of a fixed measurement-error corpus and every R/X root from a row of a fixed
+parameter corpus, and the corpora repeat locations at different operating
+points; IEEE 14 has 20 lines and a short breaker list. Of the second draw's
+roots, the error location (the bad-meter set, the line, the breaker, or both
+for a mixed root) also occurs in the first draw for 13 of 32 single-meter, 3 of
+24 multi-meter, 31 of 32 R/X, 17 of 32 breaker, 1 of 32 meter + R/X and 2 of 24
+meter + breaker roots. Each is a distinct root (its own operating point, noise
+and error values) and passes every disjointness check, as the first draw's
+roots did against the training sets.
+
+### 8.3 The evaluations (2026-10-29)
+
+The six evaluations completed with exit 0, each on an RTX 6000 node and none
+preempted (UTC, `sacct -D`):
+
+| Job | Evaluation | Node | Ran | Elapsed |
+| --- | --- | --- | --- | --- |
+| 21305138 | `test2_40`: teacher, BC0, R1 at 40 actions | gr103 | 03:48 to 05:38 | 1 h 50 min |
+| 21305139 | `test2_40_r2`: R2 at 40 actions | gr102 | 04:02 to 05:01 | 59 min |
+| 21305140 | `test2_budget12` | gr103 | 05:39 to 07:14 | 1 h 34 min |
+| 21305142 | `test2_budget12_r2` | gr102 | 05:02 to 05:53 | 51 min |
+| 21305143 | `test2_budget20` | gr106 | 05:41 to 07:24 | 1 h 43 min |
+| 21305144 | `test2_budget20_r2` | gr104 | 05:38 to 06:37 | 59 min |
+
+A seventh job, added at 04:10 UTC after the launch, re-ran the cell's own
+40-action evaluation of the first draw with `evaluate_suite.py` (fp-xeval
+21315029, spec `test_repro40`; section 8.8). The adapters of every evaluation
+match the stage receipts (`identities` in `pooled_tables.json`: the six new
+evaluations and the four first-draw budget evaluations, all
+`adapters_match_receipts: true`), and the rows evaluated are the receipt's
+development set. `pooled_tables.py` ran on the login node at 07:25 UTC (from
+`$PIPE/source` after `pipeline_environment`) and wrote
+`out/extra/pooled_tables.{json,md}` and `pooled_tables_episodes.jsonl`
+(4,608 records: two draws, three horizons, four policies, 192 roots).
+
+### 8.4 Results on the second draw (192 roots)
+
+At the cell's horizon (40 actions), every policy on the same roots and
+measurement realizations, seed 20260912; successes, with safety-clean
+successes in parentheses:
+
+| Cohort | N | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- | --- |
+| Single bad meter | 32 | 32 (32) | 32 (32) | 32 (32) | 32 (32) |
+| Two to five bad meters | 24 | 23 (23) | 23 (18) | 23 (23) | 23 (21) |
+| Line R/X error | 32 | 32 (32) | 32 (32) | 32 (32) | 31 (30) |
+| Breaker status error | 32 | 32 (32) | 32 (32) | 32 (32) | 32 (32) |
+| Meter + R/X error | 32 | 32 (32) | 32 (29) | 32 (32) | 32 (31) |
+| Meter + breaker status | 24 | 24 (24) | 24 (19) | 24 (24) | 23 (22) |
+| Clean controls | 16 | 16 (16) | 16 (16) | 16 (16) | 16 (16) |
+| **All test roots** | 192 | **191 (191)** | **191 (178)** | **191 (191)** | **189 (184)** |
+| Episodes with an invalid action (invalid actions) | | 0 (0) | 14 (22) | 0 (0) | 7 (19) |
+| Episodes with a false commit (false commits) | | 0 (0) | 3 (7) | 0 (0) | 2 (5) |
+| Loop episodes | | 0 | 1 | 0 | 1 |
+| Mean actions per episode | | 9.83 | 10.13 | 9.81 | 9.95 |
+| Mean WLS calls per episode | | 2.51 | 2.55 | 2.51 | 2.52 |
+| Bounded comparisons | | 22 | 24 | 16 | 16 |
+| Misranked parameter roots (3) | | 3 | 3 | 3 | 2 |
+| Ambiguous parameter roots (13) | | 13 | 13 | 13 | 13 |
+
+Per family, episodes with an invalid action / with a false commit / with a
+loop, and mean actions and WLS calls:
+
+| Cohort | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| Single bad meter | 0/0/0, 7.1, 2.00 | 0/0/0, 7.1, 2.00 | 0/0/0, 7.1, 2.00 | 0/0/0, 7.1, 2.00 |
+| Two to five bad meters | 0/0/0, 20.3, 4.38 | 6/0/1, 20.4, 4.38 | 0/0/0, 20.4, 4.38 | 3/0/0, 20.5, 4.38 |
+| Line R/X error | 0/0/0, 7.4, 2.00 | 0/0/0, 7.3, 2.00 | 0/0/0, 7.3, 2.00 | 1/1/0, 7.3, 2.00 |
+| Breaker status error | 0/0/0, 8.0, 2.00 | 0/0/0, 8.1, 2.00 | 0/0/0, 8.0, 2.00 | 0/0/0, 8.0, 2.00 |
+| Meter + R/X error | 0/0/0, 11.2, 3.00 | 3/3/0, 12.6, 3.22 | 0/0/0, 11.2, 3.00 | 1/1/0, 12.0, 3.12 |
+| Meter + breaker status | 0/0/0, 12.0, 3.00 | 5/0/0, 12.4, 3.04 | 0/0/0, 12.0, 3.00 | 2/0/1, 11.9, 2.92 |
+| Clean controls | 0/0/0, 2.0, 1.00 | 0/0/0, 2.0, 1.00 | 0/0/0, 2.0, 1.00 | 0/0/0, 2.0, 1.00 |
+
+**The root every policy fails** (r0_ae01c73aa1ff, two to five bad meters).
+Five bad voltage-magnitude meters, at buses 1, 6, 12, 13 and 14, each 0.011 to
+0.014 pu off (10 to 14 sigma). The teacher corrects bus 1 (J from 449 to 290)
+and bus 14 (J to 177; threshold 130), and the verifier accepts both as partial
+fixes. The other three errors, at buses 6, 12 and 13, are all low by 0.011 to
+0.012 pu, and the estimate absorbs most of them as a lower voltage profile in
+that area: the largest normalized residual falls to 4.33 against the
+threshold 4.0. The teacher escalates after 15 actions
+(`operator_escalation:recovery_options_exhausted`); its escalation audit lists
+no supported recovery target and no further evidence. R1 takes the same 15
+actions; BC0 and R2 escalate after 18 and 16 actions with one invalid action
+each. The teacher's residual procedure cannot identify the remaining three
+meters from this snapshot; the root stays in the test set and counts as a
+failure for every policy. It is one of the nine multi-meter roots on
+active-injection or voltage meters (8.2); the teacher solves the other eight,
+among them another root with five bad voltage meters (in 33 actions).
+
+**R2's other two failures.** A misranked R/X root (r0_d61da247b0a2): R2 does
+not compare; it corrects the ranking's top line (line 3), whose refit brings J
+from 683 to 103, under the threshold, so the verifier accepts the wrong line
+and R2 hands off after 7 actions. The teacher and R1 compare lines 3 and 6 and
+correct line 6 (8 actions). On the first draw every policy solved every
+misranked root with one comparison. A meter + breaker root (r0_d0c20d4b4c0b):
+R2 calls `correct_topology` with the breaker but without the line (the
+teacher passes both), is refused, repeats the identical call, and the
+evaluator stops the episode after 5 actions with a loop; its first-draw
+breaker failure (r0_b7a5d222a6fe) also ended in the loop rule after a refused
+`correct_topology`. R2 solves this root at 12 and 20 actions.
+
+**Violations.** BC0: 14 episodes (22 invalid actions; 7 false commits in 3
+episodes; 1 loop): five meter + breaker roots with one invalid action each,
+three meter + R/X roots with invalid actions and false commits (2, 1 and 4
+false commits), and six multi-meter roots (one with a loop, one the root every
+policy fails); all solved but that one. R2: 7 episodes (19 invalid actions; 5
+false commits in 2 episodes; 1 loop): three multi-meter roots (the shared
+failure among them), two meter + breaker roots (its failure among them), a
+meter + R/X root (11 invalid actions and 4 false commits, solved in 37
+actions) and an R/X root (one invalid action and one false commit, solved).
+R2 had no false commit on the first draw. The teacher and R1: none.
+
+**Under the action budget** (second draw): successes (safety-clean), then
+violation episodes (with an invalid action / a false commit / a loop) and the
+episodes that ran to the budget, then the 80 multi-error roots:
+
+| Budget | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| 12 | 176 (176) | 173 (166) | 176 (176) | 173 (170) |
+| 20 | 181 (181) | 180 (169) | 181 (181) | 179 (175) |
+| 40 | 191 (191) | 191 (178) | 191 (191) | 189 (184) |
+
+| Budget | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| 12 | 0; 51 | 10 (10/2/0); 60 | 0; 53 | 5 (5/3/0); 55 |
+| 20 | 0; 2 | 14 (14/3/1); 13 | 1 (1/0/1); 10 | 6 (6/2/0); 12 |
+| 40 | 0; 0 | 14 (14/3/1); 0 | 0; 0 | 7 (7/2/1); 0 |
+
+| Budget | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| 12 | 64 (64); 0 | 61 (54); 10 | 64 (64); 0 | 62 (60); 4 |
+| 20 | 69 (69); 0 | 68 (57); 14 | 69 (69); 1 | 68 (65); 5 |
+| 40 | 79 (79); 0 | 79 (66); 14 | 79 (79); 0 | 78 (74); 6 |
+
+The 112 single-error and clean roots are solved by every policy at every
+budget except R2's misranked R/X root (111), and safety-clean except one more
+R2 episode per budget (110). The roots not solved under a budget are
+multi-meter roots for every policy (16 of 24 at 12 actions; at 20, 11 for the
+teacher, R1 and R2 and 10 for BC0), for BC0 also meter + R/X roots (3 at 12
+actions, 2 at 20) and for R2 meter + R/X roots (2 and 1), the misranked R/X
+root and, at 40 actions only, the meter + breaker root above. Mean actions;
+mean WLS calls:
+
+| Budget | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| 12 | 8.76; 2.33 | 8.85; 2.35 | 8.76; 2.34 | 8.77; 2.35 |
+| 20 | 9.39; 2.43 | 9.68; 2.47 | 9.41; 2.43 | 9.49; 2.44 |
+| 40 | 9.83; 2.51 | 10.13; 2.55 | 9.81; 2.51 | 9.95; 2.52 |
+
+R1 equals the teacher on this draw at every horizon, root for root, in success
+and in safety-clean success. Its one violation episode is at 20 actions on
+the root every policy fails: after the teacher's first 14 actions it requests
+repeated measurement scans (not available under `scada_only`: an invalid
+action), asks for the topology and parameter contexts again (a loop), and
+escalates after 18 actions. At 40 actions it escalates directly, as the
+teacher does; the measurement context reports the remaining budget, so the
+two horizons give it different observations. It is R1's first process
+violation on any test root of this cell (the first draw: none at 12, 16, 20 or
+40 actions).
+
+### 8.5 Pooled over both draws (384 roots)
+
+At 40 actions; successes (safety-clean):
+
+| Cohort | N | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- | --- |
+| Single bad meter | 64 | 64 (64) | 64 (64) | 64 (64) | 64 (64) |
+| Two to five bad meters | 48 | 47 (47) | 46 (38) | 46 (46) | 46 (40) |
+| Line R/X error | 64 | 64 (64) | 64 (64) | 64 (64) | 63 (62) |
+| Breaker status error | 64 | 64 (64) | 64 (64) | 64 (64) | 63 (63) |
+| Meter + R/X error | 64 | 64 (64) | 63 (54) | 64 (64) | 64 (62) |
+| Meter + breaker status | 48 | 48 (48) | 47 (34) | 48 (48) | 47 (43) |
+| Clean controls | 32 | 32 (32) | 32 (32) | 32 (32) | 32 (32) |
+| **All test roots** | 384 | **383 (383)** | **380 (350)** | **382 (382)** | **379 (366)** |
+| Episodes with an invalid action (invalid actions) | | 0 (0) | 33 (61) | 0 (0) | 16 (34) |
+| Episodes with a false commit (false commits) | | 0 (0) | 6 (21) | 0 (0) | 2 (5) |
+| Loop episodes | | 0 | 3 | 0 | 3 |
+| Mean actions per episode | | 9.85 | 10.26 | 9.83 | 9.94 |
+| Mean WLS calls per episode | | 2.50 | 2.57 | 2.50 | 2.51 |
+| Bounded comparisons | | 47 | 46 | 36 | 37 |
+| Misranked parameter roots (6) | | 6 | 6 | 6 | 5 |
+| Ambiguous parameter roots (30) | | 30 | 30 | 30 | 30 |
+
+Per family, episodes with an invalid action / a false commit / a loop, mean
+actions and mean WLS calls:
+
+| Cohort | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| Single bad meter | 0/0/0, 7.0, 2.00 | 0/0/0, 7.1, 2.00 | 0/0/0, 7.0, 2.00 | 0/0/0, 7.0, 2.00 |
+| Two to five bad meters | 0/0/0, 20.5, 4.35 | 9/0/1, 20.4, 4.35 | 0/0/0, 20.5, 4.35 | 7/0/0, 20.7, 4.35 |
+| Line R/X error | 0/0/0, 7.5, 2.00 | 0/0/0, 7.4, 2.00 | 0/0/0, 7.4, 2.00 | 1/1/0, 7.4, 2.00 |
+| Breaker status error | 0/0/0, 8.0, 2.00 | 0/0/0, 8.2, 2.00 | 0/0/0, 8.0, 2.00 | 1/0/1, 8.0, 1.98 |
+| Meter + R/X error | 0/0/0, 11.2, 3.00 | 10/5/0, 12.8, 3.30 | 0/0/0, 11.2, 3.00 | 2/1/0, 11.6, 3.08 |
+| Meter + breaker status | 0/0/0, 12.0, 3.00 | 14/1/2, 13.0, 3.17 | 0/0/0, 12.0, 3.00 | 5/0/2, 12.1, 2.98 |
+| Clean controls | 0/0/0, 2.0, 1.00 | 0/0/0, 2.0, 1.00 | 0/0/0, 2.0, 1.00 | 0/0/0, 2.0, 1.00 |
+
+Under the budget (the 12- and 20-action rows): successes (safety-clean); then
+violation episodes (invalid / false commit / loop) and episodes that ran to
+the budget; then the 160 multi-error roots, successes (safety-clean) and
+violation episodes:
+
+| Budget | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| 12 | 353 (353) | 345 (327) | 352 (352) | 348 (341) |
+| 20 | 362 (362) | 359 (334) | 361 (361) | 358 (350) |
+| 40 | 383 (383) | 380 (350) | 382 (382) | 379 (366) |
+
+| Budget | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| 12 | 0; 104 | 23 (23/3/1); 117 | 0; 106 | 10 (10/4/1); 110 |
+| 20 | 0; 2 | 30 (30/6/2); 27 | 1 (1/0/1); 21 | 13 (13/2/2); 23 |
+| 40 | 0; 0 | 33 (33/6/3); 2 | 0; 0 | 16 (16/2/3); 0 |
+
+| Budget | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| 12 | 129 (129); 0 | 121 (104); 22 | 128 (128); 0 | 125 (120); 8 |
+| 20 | 138 (138); 0 | 135 (110); 30 | 137 (137); 1 | 136 (129); 11 |
+| 40 | 159 (159); 0 | 156 (126); 33 | 158 (158); 0 | 157 (145); 14 |
+
+The 224 single-error and clean roots: the teacher and R1 224 (224) with no
+violation at every horizon; BC0 224 (223) at 12 actions (one violation
+episode) and 224 (224) at 20 and 40; R2 223 (221) at 12 and 222 (221) at 20
+and 40, two violation episodes each. Mean actions; mean WLS calls:
+
+| Budget | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- |
+| 12 | 8.77; 2.33 | 8.84; 2.35 | 8.76; 2.34 | 8.78; 2.35 |
+| 20 | 9.37; 2.42 | 9.71; 2.48 | 9.40; 2.42 | 9.46; 2.43 |
+| 40 | 9.85; 2.50 | 10.26; 2.57 | 9.83; 2.50 | 9.94; 2.51 |
+
+### 8.6 Paired tests
+
+Exact two-sided McNemar tests on the roots one policy fails and the other
+solves (first policy only / second policy only; p). The second draw:
+
+| Budget | BC0 vs R1, success | BC0 vs R1, safety-clean | BC0 vs expert, success | BC0 vs expert, safety-clean | R1 vs R2, success | R1 vs R2, safety-clean |
+| --- | --- | --- | --- | --- | --- | --- |
+| 12 | 3/0 (0.25) | 10/0 (0.0020) | 3/0 (0.25) | 10/0 (0.0020) | 0/3 (0.25) | 0/6 (0.031) |
+| 20 | 2/1 (1) | 13/1 (0.0018) | 2/1 (1) | 13/1 (0.0018) | 0/2 (0.5) | 0/6 (0.031) |
+| 40 | 0/0 (1) | 13/0 (2.4e-4) | 0/0 (1) | 13/0 (2.4e-4) | 0/2 (0.5) | 0/7 (0.016) |
+
+Pooled (384 roots):
+
+| Budget | BC0 vs R1, success | BC0 vs R1, safety-clean | BC0 vs expert, success | BC0 vs expert, safety-clean | R1 vs R2, success | R1 vs R2, safety-clean |
+| --- | --- | --- | --- | --- | --- | --- |
+| 12 | 7/0 (0.016) | 25/0 (6.0e-8) | 8/0 (0.0078) | 26/0 (3.0e-8) | 0/4 (0.125) | 0/11 (9.8e-4) |
+| 20 | 5/3 (0.73) | 29/2 (4.6e-7) | 6/3 (0.51) | 30/2 (2.5e-7) | 0/3 (0.25) | 0/11 (9.8e-4) |
+| 40 | 2/0 (0.5) | 32/0 (4.7e-10) | 3/0 (0.25) | 33/0 (2.3e-10) | 0/3 (0.25) | 0/16 (3.1e-5) |
+
+The other pairs, pooled: R1 against the teacher 1/0 (p = 1) in success and in
+safety-clean success at every horizon (the first draw's multi-meter root every
+student misses); BC0 against R2 on safety-clean success 21/7 (p = 0.013),
+24/8 (0.0070) and 26/10 (0.011) at 12, 20 and 40 actions, on success 6/3, 5/6
+and 2/3; R2 against the teacher on safety-clean success 12/0 (4.9e-4), 12/0
+(4.9e-4) and 17/0 (1.5e-5), on success 5/0 (0.0625), 4/0 and 4/0 (0.125). On
+violations the pooled table has BC0 against R1 23/0, 29/0 and 33/0 episodes
+and R1 against R2 0/10, 0/12 and 0/16 (`pooled_tables.md` lists every pair,
+horizon and draw).
+
+With Holm's correction over the 18 requested pooled tests (three pairs, two
+endpoints, three horizons) all nine safety-clean tests stay significant (the
+largest p is 9.8e-4) and no success test does (the smallest is 0.0078, the
+tenth smallest p overall, against 0.05/9). On the second draw alone Holm keeps
+the six BC0 safety-clean tests; R1 against R2 (p 0.016 to 0.031) survives it
+only pooled. The 12-action success gap BC0 against R1 (7 to 0 pooled): four
+meter + R/X roots where BC0's invalid actions and false commits spend the
+actions R1 solves them in (11), two meter + breaker roots (one with an invalid
+action and a loop, one clean that runs to the budget) and one multi-meter root
+that runs to the budget; R1 solves each in 11 or 12 actions.
+
+### 8.7 Draw 1 against draw 2
+
+By the reading fixed in 8.1 no family is flagged on outcomes: per family and
+policy the two draws' successes differ by at most one root. Unpaired exact
+Fisher tests at 40 actions, draw 1 against draw 2: the teacher 192 against 191
+(p = 1); BC0 189 against 191 (p = 0.62), safety-clean 172 against 178 (p =
+0.37); R1 191 and 191, safety-clean 191 and 191; R2 190 against 189 (p = 1),
+safety-clean 182 against 184 (p = 0.81). The largest per-family differences
+in safety-clean success are BC0's: meter + R/X 25 against 29 of 32 (p =
+0.30), meter + breaker 15 against 19 of 24 (p = 0.34). Under the budgets the
+draws agree within two roots per policy (12 actions: teacher, BC0, R1, R2
+177, 172, 176, 175 against 176, 173, 176, 173; 20 actions: 181, 179, 180, 179
+against 181, 180, 181, 179). The differences in the suite statistics (8.2)
+are flagged in 8.9.
+
+### 8.8 Reproduction of the first draw's evaluation, and the GPU type
+
+Why. The pooled table reads the first draw from the cell's round evaluations
+(the DAgger runner) and the second from `evaluate_suite.py`. Job 21315029
+re-ran BC0, R1 and the teacher on the first draw at 40 actions with
+`evaluate_suite.py` and the same options, and
+`out/extra/test_repro40_check.txt` compares it with the round-1 evaluation
+root by root, through `followup_tables.records` (the record the tables read).
+
+Result. The teacher and R1 are identical on all 192 roots in every field
+(success, invalid action, false commit, loop, terminal outcome, actions, WLS
+calls, comparisons). BC0 solves the same 189 roots; 6 roots differ in their
+action count (by 1 to 6), and three of them in their violations: two lose
+their one invalid action (r0_0225ec5e7698, meter + breaker; r0_117831cda301,
+multi-meter) and one gains an invalid action and a false commit
+(r0_0808023d323b, meter + R/X, 11 actions to 17, still solved). BC0's
+safety-clean count is 173 instead of 172, its violation episodes 18 instead of
+19 (false-commit episodes 4 instead of 3).
+
+Where the differences come from. The job was preempted on an A100 node (ga011)
+after 36 minutes and resumed from its per-episode checkpoints on an RTX 6000
+node (gr105). BC0 ran 31 episodes on the A100 and 161 on the RTX 6000; all six
+differing roots are among the 31, none among the 161. The cell's round-1
+evaluation ran on an RTX 6000 (fp-r1e 20594224, gr103). R1 ran 32 episodes on
+the A100 and 160 on the RTX 6000 and matches on all 192. Greedy decoding
+reproduces on one GPU type; across GPU types BC0 takes a different action on
+some roots (6 of 31 here) and R1 does not (R1 also scored its round-1 numbers
+exactly in the round-2 evaluation, which finished on an H200).
+
+For the tables. Every evaluation of the second draw ran on RTX 6000 nodes, as
+did the first draw's 40-action evaluation of BC0, R1 and the teacher, its
+12-action evaluation and R2's 12- and 20-action evaluations. R2's first-draw
+40-action episodes come from two preempted RTX 6000 attempts and an H200
+(fp-r2e 20594227), and the first draw's 20-action episodes of BC0, R1 and the
+teacher from a preempted A100 attempt and an H200 (21070128). BC0's
+safety-clean counts therefore carry about one root of evaluation variation;
+no test above changes its conclusion by one root.
+
+### 8.9 For the manuscript: what differs and what the pool changes
+
+1. **The teacher fails one root.** The teacher column becomes 191 of 192 on
+   the second draw and 383 of 384 pooled: the five-voltage-meter root of 8.4,
+   which every policy fails. A statement that the teacher solves every test
+   scenario no longer holds; the root is one the teacher's residual procedure
+   cannot identify from one snapshot.
+2. **R1 equals the teacher on the second draw** at every horizon, root for
+   root, in success and safety-clean success (176, 181 and 191 at 12, 20 and
+   40 actions); pooled, it trails the teacher by the first draw's multi-meter
+   root at every horizon. R1 has one process violation in 1,152 pooled
+   episodes (384 roots at three horizons): at 20 actions, on the root the
+   teacher fails.
+3. **BC0 matches the teacher in success on the second draw** (191), so pooled
+   BC0 against R1 at 40 actions is 2 to 0 (p = 0.5) and the success gap stays
+   not significant. At 12 actions it is 7 to 0 (p = 0.016 unadjusted; not
+   significant under Holm over the 18 tests); five of the seven are BC0
+   episodes with an invalid action or a false commit, the other two run to
+   the budget, and R1 solves each in 11 or 12 actions.
+4. **The safety-clean gap replicates**: BC0 against R1 13 to 0 on the second
+   draw (p = 2.4e-4) and 32 to 0 pooled (p = 4.7e-10) at 40 actions, and
+   significant at 12 and 20 actions.
+5. **R2's regression replicates and widens**: R1 against R2 0 to 7 on the
+   second draw (p = 0.016) and 0 to 16 pooled (p = 3.1e-5) at 40 actions. R2
+   loses a misranked R/X root by skipping the comparison (pooled misranked
+   roots: R2 5 of 6, every other policy 6 of 6) and makes its first false
+   commits (2 episodes, 5 commits).
+6. **Composition.** Multi-meter roots on active-injection or voltage meters 9
+   against 2 of 24 (p = 0.036 unadjusted; the teacher's failure is one of
+   them); bus splits 12 against 7 of 32 (p = 0.27; every policy solves every
+   breaker-status root of the second draw); R/X strata 21/9/2 against 18/11/3
+   (p = 0.61), meter + R/X 27/4/1 against 26/6/0.
+7. **Sampling frame.** The second draw samples only corpus rows no earlier set
+   used (for R/X roots about a third of the admissible rows) and needed
+   candidate multiplier 6 (the rule fixed in 8.1). Error locations recur
+   across the draws by construction (fixed corpora, 20 lines, a short breaker
+   list); every root is a new physical realization, disjoint from every
+   earlier set.
+8. **Evaluation variation.** BC0's actions depend on the GPU type on a few
+   roots (8.8); its pooled safety-clean count carries about one root of that
+   variation. The second draw's evaluations ran on RTX 6000 GPUs only.
+
+### 8.10 Records
+
+On torch, under `out/extra/` of the cell: `test_draw2/` (the draw; the suite
+in `suite/development.json`, sha256 `b409fbec...`), `evaluations/test2_40/`,
+`test2_40_r2/`, `test2_budget12/`, `test2_budget12_r2/`, `test2_budget20/`,
+`test2_budget20_r2/` and `test_repro40/` (each with `<slot>_eval.json`,
+`summary.json`, `policies.json`, `comparison.json` and `episodes.jsonl`; the
+console receipts beside them, the specs under `specs/`),
+`pooled_tables.json` (sha256 `8bfcf67d...`), `pooled_tables.md`
+(`cc83795d...`), `pooled_tables_episodes.jsonl` (`2dd6c91a...`) and
+`test_repro40_check.txt`. Archive `/scratch/yx3882/test_draw2_records_20261029.tgz`
+(2,429,657 bytes, sha256
+`0ae2e56f928e611edd1df2e8873e200c02ad5cc27fb1bcbf511b277a3ec94ce4`): all of
+these except the `<slot>_eval.json` files (about 70 MB each, kept on torch).
+Copy of the archive and its extraction in the worktree, under
+`output/conventional_only_20261022/results/test_draw2_20261029/` (gitignored,
+as the section 7 copy). The per-episode records have the schema of section 7
+(`episodes.jsonl` in every evaluation directory: physical root, scenario,
+family, stratum, mimic, policy, success, invalid actions, false commits, loop,
+terminal outcome, actions, WLS calls, comparisons);
+`pooled_tables_episodes.jsonl` adds `draw` and `budget` to the same record,
+one line per draw, horizon, policy and root.
