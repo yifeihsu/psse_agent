@@ -57,6 +57,9 @@ COMPARE_TOOL = "compare_parameter_candidates"
 VERDICTS = ("ACCEPT_FINAL", "ACCEPT_PARTIAL", "REJECT", "INCONCLUSIVE", "refused", "undisposed")
 _WLS_KEYS = ("chi_square_statistic", "chi_square_threshold", "chi_square_ratio", "globally_resolved", "global_progress",
              "target_progress", "remaining_suspect_count", "max_normalized_residual", "chi_square_dof", "flow_at_noise_lines")
+#: What the trace keeps of each candidate a parameter comparison fitted: its fate, including a failed fit's error.
+_COMPARISON_CANDIDATE_KEYS = ("line_index", "execution_status", "stage", "error_code", "error_detail", "verification_verdict",
+                              "global_progress", "max_normalized_residual")
 #: The progress basis of a system's research cells: IEEE 14 keeps the environment's default.
 SYSTEM_PROGRESS_BASIS = {"case14": None}
 LARGE_SYSTEM_PROGRESS_BASIS = "chi_square_excess"
@@ -161,7 +164,14 @@ def slim_trace(steps: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
                               for a in metrics.get("supported_corrections") or []],
             }
         elif tool == COMPARE_TOOL:
-            record["comparison"] = {key: metrics.get(key) for key in ("best_line", "ranked_lines", "verdicts", "order") if key in metrics}
+            # The comparison's own record (TransactionalPSSEEnv._step_parameter_comparison): the ranking and every
+            # candidate's fate, so a fit that failed (compound note section 11.8) shows in the trace.
+            record["comparison"] = {
+                "ranked_lines": metrics.get("ranked_line_indices"),
+                "best_line": metrics.get("best_line_index"),
+                "candidates": [{key: item.get(key) for key in _COMPARISON_CANDIDATE_KEYS if key in item}
+                               for item in metrics.get("candidates") or [] if isinstance(item, Mapping)],
+            }
         out.append(record)
     return out
 
