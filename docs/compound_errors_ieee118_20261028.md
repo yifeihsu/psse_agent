@@ -931,6 +931,10 @@ overlap band of section 9.4.
   - it loses no root on either system;
   - it brings the 16-action IEEE 118 total within 2 roots of the deployed
     40-action total.
+- **In sample by root.** The threshold of 11 was read off these same two
+  suites (section 9.4, from `baseline_compare`'s own states).  The states the
+  rule decides in are new, but the roots are not.  A fresh draw would test the
+  threshold out of sample.
 - **What remains for a learned router is smaller:**
   1. The threshold band from 10.3 to 11: five meter controls at 16 actions.
   2. The first route on meter-on-line roots, before any commit.  The truth
