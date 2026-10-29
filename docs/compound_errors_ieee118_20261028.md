@@ -42,8 +42,8 @@ both systems.  At the deployed 40 actions the route-choice headroom is 10 of
 625 roots.
 
 Section 10 (2026-10-29) runs that threshold as a labelled rule, an opt-in
-option of the rule expert (`meter_route_residual=11`; `baseline_compare` is
-unchanged).  It gains 30 IEEE 118 roots at 16 actions (424 to 454) and 28 on
+option of the rule expert (`meter_route_residual=11`, now also the named
+variant `baseline_compare_meter_route`; `baseline_compare` is unchanged).  It gains 30 IEEE 118 roots at 16 actions (424 to 454) and 28 on
 the IEEE 14 control (328 to 356), all of them meter controls, and 5 and 1 at
 40 actions.  It loses no root on either system at either budget.  Its cost
 is a few more wrong meters committed on roots that fail under both teachers.
@@ -809,8 +809,10 @@ still on, the rule stays on the measurement route while the maximum
 normalized residual is at least 11.  This section runs it.  The rule is an
 opt-in option of the rule expert, `ExpertPolicyOracle(meter_route_residual=11)`,
 run as `rollout.py --expert baseline_compare --expert-option
-meter_route_residual=11`.  `baseline_compare` and every named variant are
-unchanged.  The rule acts in a state where two things hold: the latest
+meter_route_residual=11`, and since then also selectable as the named
+variant `baseline_compare_meter_route` (section 10.5).  `baseline_compare`
+and the earlier named variants are unchanged.  The rule acts in a state where
+two things hold: the latest
 committed correction is a meter correction, and the active state's solve
 reports a maximum normalized residual of at least 11.  There it changes two
 things:
@@ -938,8 +940,12 @@ overlap band of section 9.4.
   4. When to leave the meter route after a wrong meter commit, the rule's
      only cost.  This is the credit-assignment problem of hypothesis
      abandonment (RL watchlist item 1), not a threshold.
-- **Not decided here:** whether the rule becomes a named teacher variant, and
-  so a DAgger teacher for compound cells.  It is a research option.
+- **The named variant.** After this probe the rule was registered as the
+  teacher variant `baseline_compare_meter_route` (`psse_env/oracle/expert_variants.py`,
+  `baseline_compare` plus `meter_route_residual=11`).  The HPC pipeline's
+  `EXPERT_VARIANT` accepts it, so a cell or a DAgger collection can select it
+  by name.  `baseline_compare` is unchanged, and no existing cell names the
+  new variant.  No cell has run it yet.
 
 ### 10.6 Reproduction
 
@@ -954,3 +960,11 @@ The 16-action rollouts differ only in `--max-steps 16`, the output folder
 in section 9.6.  All four rollouts ran at once on 32 cores.  The IEEE 118
 runs took 29 min at 40 actions (11 workers) and 31 min at 16 (9 workers);
 the control's took 12 and 13 min (5 and 4 workers).
+
+With the named variant, `--expert baseline_compare_meter_route` replaces
+`--expert baseline_compare --expert-option meter_route_residual=11`.  As a
+check, the variant was rolled out at 16 actions on two subsets: the first six
+meter controls and six meter-on-line roots of IEEE 118, and the 275 control
+roots of the three classes with a bad meter.  Its trajectories match the
+option run's on all of them, action for action and correction for correction
+(`variant_check_16/` in both output folders).

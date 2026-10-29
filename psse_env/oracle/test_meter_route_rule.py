@@ -16,7 +16,14 @@ from psse_env.evidence_profile import AUXILIARY_EVIDENCE_PROFILE
 from psse_env.oracle import ExpertPolicyOracle, ProcessValidityOracle
 from psse_env.oracle.expert_policy import METER_ROUTE_EVIDENCE, _measurement_first_order, _structural_first_order
 from psse_env.oracle.expert_types import ExpertActionProposal
-from psse_env.oracle.expert_variants import expert_variant_options
+from psse_env.oracle.expert_variants import (
+    DEFAULT_EXPERT_VARIANT,
+    EXPERT_VARIANT_ENV,
+    EXPERT_VARIANTS,
+    METER_ROUTE_RESIDUAL,
+    current_expert_variant,
+    expert_variant_options,
+)
 from psse_env.oracle.measurement_expert import MeasurementExpert
 
 ACTIVE = "episode:s1"
@@ -94,6 +101,34 @@ class MeterRouteCueTests(unittest.TestCase):
             _committed(CORRECT_PARAMETERS, line_index=3), _committed(CORRECT_MEASUREMENTS, suspect_group=[8])])))
         self.assertFalse(expert._meter_route_for(_cue_state(successful=False)))
         self.assertFalse(expert._meter_route_for(_cue_state(bound_to="episode:s0")))
+
+
+class MeterRouteVariantTests(unittest.TestCase):
+    def test_the_named_variant_is_baseline_compare_with_the_rule(self) -> None:
+        self.assertIn("baseline_compare_meter_route", EXPERT_VARIANTS)
+        self.assertEqual(METER_ROUTE_RESIDUAL, 11.0)
+        self.assertEqual(expert_variant_options("baseline_compare_meter_route"),
+                         {**expert_variant_options("baseline_compare"), "meter_route_residual": METER_ROUTE_RESIDUAL})
+        expert = ExpertPolicyOracle(**expert_variant_options("baseline_compare_meter_route"))
+        self.assertTrue(expert.candidate_comparison)
+        self.assertEqual(expert.meter_route_residual, 11.0)
+        self.assertTrue(expert._meter_route_for(_cue_state()))
+        self.assertFalse(expert._meter_route_for(_cue_state(residual=10.9)))
+
+    def test_no_other_variant_carries_the_rule_and_the_default_stays_baseline(self) -> None:
+        for name in EXPERT_VARIANTS:
+            if name != "baseline_compare_meter_route":
+                self.assertNotIn("meter_route_residual", expert_variant_options(name))
+        self.assertEqual(expert_variant_options("baseline_compare"), {"candidate_comparison": True})
+        self.assertEqual(DEFAULT_EXPERT_VARIANT, "baseline")
+
+    def test_the_environment_selects_it_by_name(self) -> None:
+        import os
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {EXPERT_VARIANT_ENV: "baseline_compare_meter_route"}):
+            self.assertEqual(current_expert_variant(), "baseline_compare_meter_route")
+            self.assertEqual(expert_variant_options()["meter_route_residual"], METER_ROUTE_RESIDUAL)
 
 
 def _partial_meter_state(signatures: list[str], *, residual: float = 15.7) -> tuple[dict, dict]:
