@@ -4020,6 +4020,14 @@ def _active_physical_state(
     return None
 
 
+def _hypothesis_record(hypothesis: tuple[str, Any] | None) -> list[Any] | None:
+    """A (family, target) hypothesis as a JSON record; a meter target is the list of its indices."""
+    if hypothesis is None:
+        return None
+    family, target = hypothesis
+    return [family, list(target) if isinstance(target, tuple) else target]
+
+
 def update_revert_events(
     events: list[dict[str, Any]],
     *,
@@ -4045,7 +4053,7 @@ def update_revert_events(
             "step": int(step),
             "to_state_id": metrics.get("reverted_to_state_id"),
             "withdrawn_corrections": len(withdrawn),
-            "withdrawn_hypothesis": list(hypothesis) if hypothesis else None,
+            "withdrawn_hypothesis": _hypothesis_record(hypothesis),
             "next_hypothesis": None,
             "outcome": "no_further_correction",
         })
@@ -4054,8 +4062,8 @@ def update_revert_events(
     if tool not in CORRECTION_TOOLS or not events or events[-1]["next_hypothesis"] is not None or not executed:
         return False
     hypothesis = correction_hypothesis(action)
-    events[-1]["next_hypothesis"] = list(hypothesis) if hypothesis else None
-    if hypothesis is not None and events[-1]["withdrawn_hypothesis"] == list(hypothesis):
+    events[-1]["next_hypothesis"] = _hypothesis_record(hypothesis)
+    if hypothesis is not None and events[-1]["withdrawn_hypothesis"] == _hypothesis_record(hypothesis):
         events[-1]["outcome"] = "loop"
         return True
     events[-1]["outcome"] = "recovery"

@@ -316,17 +316,37 @@ _CORRECTION_HYPOTHESIS_FAMILY = {
 }
 
 
-def correction_hypothesis(action: Any) -> tuple[str, int | None] | None:
-    """The (family, line) a correction tests: the line for a branch correction, ``None`` for a meter edit."""
+def correction_hypothesis(action: Any) -> tuple[str, Any] | None:
+    """The (family, target) a correction tests.
+
+    The target is the line of a branch correction, the breaker of a breaker
+    flip that names no line (a bus split), and the sorted meter indices of a
+    meter edit, so a different meter is a different hypothesis.
+    """
     normalized = safe_normalize_action(action)
     family = _CORRECTION_HYPOTHESIS_FAMILY.get(normalized["tool"])
     if family is None:
         return None
     arguments = normalized["arguments"]
+    if family == "measurement":
+        indices: set[int] = set()
+        group = arguments.get("suspect_group")
+        for item in group if isinstance(group, (list, tuple)) else []:
+            if isinstance(item, int) and not isinstance(item, bool):
+                indices.add(int(item))
+        updates = arguments.get("measurement_updates")
+        for key in updates if isinstance(updates, Mapping) else []:
+            try:
+                indices.add(int(key))
+            except (TypeError, ValueError):
+                continue
+        return family, tuple(sorted(indices)) or None
     line = arguments.get("line_index", arguments.get("line_index1"))
-    if family == "measurement" or isinstance(line, bool) or not isinstance(line, int):
-        line = None
-    return family, line
+    if isinstance(line, int) and not isinstance(line, bool):
+        return family, int(line)
+    if family == "topology" and arguments.get("cb_name") is not None:
+        return family, str(arguments["cb_name"])
+    return family, None
 
 
 def revert_ledger_of(observation: Mapping[str, Any] | Any) -> Mapping[str, Any] | None:

@@ -301,9 +301,22 @@ class RevertAccountingTests(unittest.TestCase):
         self.assertTrue(update_revert_events(looped, step=6, action=again, status="success", output={"execution_status": "success"}))
         self.assertEqual(looped[0]["outcome"], "loop")
 
+    def test_a_different_meter_is_another_hypothesis(self) -> None:
+        revert = {"tool": REVERT_STATE, "arguments": {"to_state_id": "s0"}}
+        withdrawn = {"execution_status": "success", "tool_metrics": {"reverted_to_state_id": "s0", "reverted_corrections": [
+            {"candidate_state_id": "s1", "source_action": {"tool": "correct_measurements", "arguments": {"state_id": "s0", "suspect_group": [93]}}}]}}
+        for group, outcome in (([11], "recovery"), ([93], "loop")):
+            events: list = []
+            update_revert_events(events, step=5, action=revert, status="success", output=withdrawn)
+            update_revert_events(events, step=6, action={"tool": "correct_measurements", "arguments": {"state_id": "s0", "suspect_group": group}},
+                                 status="success", output={"execution_status": "success"})
+            self.assertEqual((events[0]["withdrawn_hypothesis"], events[0]["outcome"]), (["measurement", [93]], outcome))
+
     def test_hypotheses_are_family_and_line(self) -> None:
         self.assertEqual(correction_hypothesis({"tool": CORRECT_PARAMETERS, "arguments": {"line_index": 6}}), ("parameter", 6))
-        self.assertEqual(correction_hypothesis({"tool": "correct_measurements", "arguments": {"suspect_group": [4]}}), ("measurement", None))
+        self.assertEqual(correction_hypothesis({"tool": "correct_measurements", "arguments": {"suspect_group": [9, 4]}}), ("measurement", (4, 9)))
+        self.assertEqual(correction_hypothesis({"tool": CORRECT_TOPOLOGY, "arguments": {"cb_name": "CB_9_N2_B2", "status": 0}}),
+                         ("topology", "CB_9_N2_B2"))
         self.assertIsNone(correction_hypothesis({"tool": RUN_WLS, "arguments": {}}))
 
 
