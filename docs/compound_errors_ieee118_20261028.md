@@ -56,7 +56,11 @@ actions.  On IEEE 118 the threshold separates the fresh states as cleanly as
 the in-sample ones.  The no-loss result does not hold: on the control the rule
 loses one meter + two R/X root at both budgets, through the masking section
 10.3 named.  It commits a healthy voltage meter at a terminal of a bad line,
-and the line's true correction is then rejected.
+and the line's true correction is then rejected.  One `baseline_compare`
+trajectory of the fresh draw could not be reproduced.  Section 11.8 traces it
+to a Windows-only race between concurrent runs in the provider's
+derived-case cache.  Re-run in isolation, every other fresh episode and every
+in-sample episode checked reproduces, so no count changes.
 
 Branch `claude/pensive-darwin-33a0d8` (fast-forwarded from the compound
 branch at a52a7e5).  Commits: e8c7ddc (the bus-branch synthesizer, the pair
@@ -1210,9 +1214,9 @@ The rule's own decisions, in the view of section 10.4:
     `baseline_compare` run tries line 5 before line 3, the rule run line 3.
   - Run alone, `baseline_compare` takes line 3 three times out of three.
     So the difference is in the `baseline_compare` run, not in the rule.
-  - That episode ran as the 32nd root of a single-worker process (section
-    11.7), which points to state carried between roots in one process.
-  - Both teachers solve the root, so no count changes.  The cause is open.
+  - Both teachers solve the root, so no count changes.
+  - Section 11.8 finds the cause: a race between concurrent runs in the
+    provider's derived-case cache, not state carried between roots.
 
 ### 11.6 What this means
 
@@ -1240,10 +1244,12 @@ The rule's own decisions, in the view of section 10.4:
   the loss means refusing the partial meter candidate at the terminal of a
   line that may be bad.  Recovering from it means withdrawing a committed
   correction, the hypothesis-abandonment decision of RL watchlist item 1.
-- **Open: one trajectory is not reproducible.** The `baseline_compare` run
-  of `r0_a590aacb3bc1` cannot be reproduced alone (section 11.5).  Its cause
-  should be found before a cell or a DAgger collection relies on paired runs
-  being identical root by root.
+- **One trajectory was not reproducible.** Section 11.8 traces it to a
+  race between concurrent runs on Windows.  Re-run in isolation, every other
+  episode of the fresh draw reproduces, and so does every in-sample episode
+  where the rule fires.  So no count of sections 10 and 11 changes.  Until
+  the cache is fixed, concurrent runs on one suite on this machine are not
+  safe to compare root by root.
 
 ### 11.7 Reproduction
 
@@ -1288,3 +1294,72 @@ The tracked outputs are in `docs/compound_errors_ieee118_20261028/fresh_20261029
 joined run summaries `{ieee118,ieee14_busbranch}_{baseline_compare,meter_route}_{16,40}_summary.*`.
 The in-sample `meter_route_probe.*` in the folder above was regenerated to
 carry the probe's new tables; its earlier figures are unchanged.
+
+### 11.8 Why one trajectory was not reproducible
+
+On `r0_a590aacb3bc1` at 16 actions, the `baseline_compare` run tried line 5
+before line 3, and every rerun took line 3 (section 11.5).  The cause is a
+race between concurrent runs in the provider's derived-case cache.  State
+carried between roots is ruled out:
+
+- **Not history.** A replay of the first 32 roots of that run, in one
+  process and in the same order, reproduces roots 1 to 31.  On root 32 it
+  takes line 3.
+- **Not hashing.** Six standalone runs under different `PYTHONHASHSEED`
+  values all take line 3.
+- **Not a near tie.** Standalone, the comparison before that correction
+  ranks line 3 first by a wide margin.  It accepts line 3 as partial, with
+  global progress 0.92 and a maximum normalized residual of 4.0.  Line 5 is
+  rejected (progress 0.14), and line 6's correction fails.  For the run to
+  try line 5 first, its comparison must have reported line 3's fit as
+  failed, or as worse than line 5's.
+
+**The race:**
+
+1. Every correction writes the corrected case to a content-addressed file
+   (`MatpowerDeploymentProviders._derived_case`).  The folder,
+   `%TEMP%\psse_derived_cases`, is shared by every run on the machine.
+2. It writes a sibling file, then replaces the target with `os.replace`.
+3. On Windows that replace fails with `PermissionError` while another
+   process holds the target open.  A read can fail the same way while the
+   file is being replaced.
+4. A comparison records such an exception as a failed candidate
+   (`dispatch_error`), and the expert moves on to the next line.
+
+Stressing the real `_derived_case` from 2 and 4 processes that write the same
+new files raises `PermissionError` on 25% and 55% of the calls.  The two
+16-action control first parts were the most exposed setting.  Each ran on one
+worker, on the same roots in the same order, in lockstep (section 11.7).
+
+**Why the record did not show it.** The rollout's slim trace looks for the
+comparison under key names it does not use (`best_line`, `ranked_lines`,
+`verdicts`).  So no comparison verdict is recorded, failed or not.
+
+**What it changed.** Each run was re-run with a private temp folder, so no
+two runs share a derived-case file, and compared root by root with the
+recorded run:
+
+| re-run in isolation | episodes | trajectories that differ | outcomes that differ |
+| --- | --- | --- | --- |
+| fresh draw: all eight runs, all roots | 5,000 | 1 (`r0_a590aacb3bc1`, control, 16 actions, `baseline_compare`) | 0 |
+| in sample: both teachers at both budgets, on the roots where the rule fires in either teacher's episode | 430 | 0 | 0 |
+
+In sample, the roots where the rule never fires were already identical
+between the `baseline_compare` and rule runs, which ran a day apart.  That is
+2,285 paired episodes over both systems and budgets, section 11.5's check.
+So no count of sections 10 and 11 changes.
+
+**Exposure:**
+
+- **Windows only.** POSIX `os.replace` replaces an open file, so the HPC
+  runs are not exposed.
+- **On this machine,** the race can strike two runs on the same suite at
+  once.  It needs both to write a file that neither, nor any earlier run, has
+  written yet.  One run alone is safe, since its workers hold different roots.
+- **The fix,** not made here: accept a target that already holds the same
+  bytes, since the path is content-addressed, and retry a transient refusal.
+  The slim trace should also record the comparison's ranking and each
+  candidate's status.
+
+The isolated re-runs are `rerun_isolated/` in both fresh folders and
+`rerun_isolated_fired/` in both in-sample folders.
