@@ -1491,3 +1491,126 @@ family, stratum, mimic, policy, success, invalid actions, false commits, loop,
 terminal outcome, actions, WLS calls, comparisons);
 `pooled_tables_episodes.jsonl` adds `draw` and `budget` to the same record,
 one line per draw, horizon, policy and root.
+
+## 9. Round 2 rerun under the 2026-10-29 round recipe
+
+Why. The review in `docs/dagger_round2_regression_20261029.md` (sections 3
+and 4) reads the recorded R2's regression (sections 5, 7 and 8: R1 against R2
+0 to 16 on safety-clean success, pooled) as a consequence of the round
+recipe: round 2 mixed its 432 new rows 1:1 with a uniform draw from the pool
+of D0 and round 1's 437 rows, so most of round 1's rows were missing from R2's
+pass, and R2 continued R1. The revised recipe trains round 2 on the
+cumulative aggregate (`ROUND_AGGREGATE=cumulative`: every round-1 safe row
+beside round 2's own, against a D0 sample of the same size) from the BC0
+adapter (`ROUND_INIT=bc0`), and audits the mixture for exact label
+conflicts. The paper session asked (2026-10-29, at the user's request) for
+round 2 of this cell to be rerun under that recipe and for every R2 number
+behind Table I to be refreshed. The expert, BC0 and R1 are not re-run: their
+records stand (BC0's decoding varies with the GPU type, section 8.8).
+
+### 9.1 Port and checks (2026-10-29)
+
+**Merge.** origin/claude/eager-fermat-0ca9ms (43f9270: the recipe in
+`scripts/run_dagger_research.py`, `pipeline.env`, `stage_collect.sbatch` and
+`stage_train.sbatch`, its tests and the review) merged into this branch as
+e3a7c00. The one conflict, in `overrides/conventional_only_20261022.env`,
+keeps both appended blocks: the second test draw's settings, then the
+review's comment-only recipe block. 91 tests pass
+(`psse_env/dagger/test_research_dagger_minimal.py`,
+`research/test_hpc_full_pipeline.py`).
+
+**What the code does with round 1's rows.** `load_prior_onpolicy_rounds`
+reads the exported chat rows of the named round-1 collection
+(`d1.chat.jsonl`), requires each to be a row the round-1 ledger
+(`d1.all.jsonl`) marks `research_label_eligible`, and re-renders each from
+its ledger row under the current observation view, one row per exported row
+(the quarantined ledger rows are never read). Their roots are excluded from
+round 2's collection like D0's and checked against D0 and the protected
+suites; the mixture keeps every one of them, adds round 2's safe rows, and
+samples D0 to the same count (`D1_SHARE` 0.5); the exact label-conflict
+audit runs over the whole mixture. The runner does not itself compare round
+1's roots with the test, validation or hard roots, so the data were checked
+on torch before training: `out/r1/collection/d1.chat.jsonl` holds 437 rows,
+all marked eligible (of the ledger's 743), from 72 roots, every one of them
+in the 74-root round-1 training suite and none in the round-2 training suite
+(74 roots), the first test draw (192), the second (192), the validation
+suite (96), the hard draw (193) or D0 (370). (The matched cloning control's
+own aggregate, `out/extra/control_d0`, shares 4 roots with the round-1
+training suite; it is not part of R2's mixture, and the control is not
+re-run.)
+
+**Additions** (0ddbc13, 5f7a467; 94 tests pass).
+`submit_r2_rerun_20261029.sh` submits every R2 evaluation the cell recorded,
+under its recorded name, rows and horizon, R2 alone, afterok on the new
+training job, and refuses a name whose recorded directory, console receipt or
+spec is still in place (`stage_eval_suite.sbatch` skips an evaluation whose
+summary exists, so a record left in place would be read as the new R2's).
+`followup_tables.py` takes `--r2-evaluation` and `--control-evaluation`, so
+the round selection reads the new R2 from `{suite}_r2` and the control from
+the set-aside `{suite}_r2_control` pair. `r2rerun_tables.py` compares the new
+R2 with the recorded one and with the expert, BC0 and R1 on every set and
+horizon (section 9.6 onward). `r2rerun_20261029/gate_mixture.sbatch` and
+`finalize.sbatch` are the two cell-level jobs below, as deployed.
+
+### 9.2 Deploy and configuration (22:31 UTC)
+
+`deploy_cell_from_windows.sh` with BASE 8e07f94 (the cell source's HEAD),
+OVERRIDES `conventional_only_20261022.env`, SUBMIT=0, commit 0ddbc13; the
+dry-run prerequisites passed. The deployed `pipeline.env`, sourced as the
+stages source it, resolves `ROUND_AGGREGATE=cumulative` and
+`ROUND_INIT=bc0`; round 2 binds the collecting student to R1
+(`out/r1/training/lora`), the training initialization to BC0
+(`out/bc0/lora`), the pool to the D0 aggregate and the prior round to
+`out/r1/collection`; the collection arguments name R1 as the adapter,
+`out/r2/collection` as the output, `out/suite/r2_training.json` as the
+training roots, the first test draw as the development roots,
+`--d1-share 0.5` and `--prior-onpolicy-dir out/r1/collection`. What r2c, r2t
+and r2e write: `out/r2`, the logs and `out/pipeline_summary.json`; the
+round-2 pool build runs only under `pool`, and the training stage writes
+`out/bc0/validation.subset.jsonl` only when it is missing (it is present).
+A listing of `out/d0`, `out/bc0`, `out/r1` and `out/extra` (paths, sizes,
+modification times) taken before the deploy
+(`r2rerun_20261029/snapshot_predeploy_*.tsv` in the cell) is compared with
+one taken after the last job (9.12).
+
+### 9.3 Set aside and submitted (22:37 to 22:52 UTC)
+
+Moved, never deleted (`mv -n`, refusing an existing target):
+`out/r2` to `out/r2_pool_20261023`; `out/pipeline_summary.json` (r2e rewrites
+it) to `out/pipeline_summary_pool_20261023.json`; the eight recorded R2
+evaluations `test2_40_r2`, `test_budget12_r2`, `test_budget16_r2`,
+`test_budget20_r2`, `test2_budget12_r2`, `test2_budget20_r2`,
+`hard_r2_control` and `validation_r2_control`, each with its console receipt
+and spec, to the same names with `_pool_20261023`; and the tables built from
+them (`pooled_tables*`, `budget_tables*`, `followup_tables*` under
+`out/extra`) likewise.
+
+Jobs (`submitted_jobs.txt`): `FROM=r2c CHAIN='r2c r2t r2e'
+ALLOW_PARALLEL_CHAIN=1 submit_pipeline.sh` gave r2c 21369734; the cluster
+refused `scontrol hold` on the first r2t ("Unspecified error"), so that r2t
+and its r2e (21369736, 21369739, both still pending) were cancelled and
+resubmitted behind a gate: fp-r2gate 21369831 (CPU, afterok r2c;
+`gate_mixture.sbatch` exits 0 only if the mixture's contract is the
+cumulative one, `prior_onpolicy_selected` is 437,
+`prior_onpolicy_retained_fraction` is 1.0 and the label-conflict audit finds
+no conflicting observation or row), then r2t 21369832 (afterok gate) and r2e
+21369834 (afterok r2t). The eight evaluations of the new R2 alone
+(`submit_r2_rerun_20261029.sh`, afterok r2t, the recorded specs' rows,
+horizons and the cell's seed and worker rule): `test2_40_r2` 21369835,
+`test_budget12_r2` 21369837, `test_budget16_r2` 21369843, `test_budget20_r2`
+21369846, `test2_budget12_r2` 21369847, `test2_budget20_r2` 21369848,
+`validation_r2` 21369850 and `hard_r2` 21369851 (the first draw at 40
+actions is r2e itself). fp-r2final 21370357 (CPU, afterok r2e and the eight;
+`finalize.sbatch`) rebuilds the tables and archives the records.
+
+### 9.4 How many round-1 rows the recorded R2 trained on
+
+The review's count (section 4 of the review) on
+`out/r2_pool_20261023/collection/round1.train.jsonl`: **57** of the 864 rows
+of the recorded round-2 pass were round-1 rows (the review estimated 59).
+Cross-check by example id against round 1's 437 exported rows: 57 distinct.
+The recorded pass was 432 round-2 rows and 432 rows drawn uniformly from the
+3,184-row pool of D0's training view (2,747) and round 1 (437), whose
+expectation is 59.3; R2 trained 216 steps at 3e-5 from R1 and kept the final
+checkpoint, on an NVIDIA RTX PRO 6000 Blackwell (job 20594226). So 380 of
+round 1's 437 rows, 87%, were absent from R2's pass.
