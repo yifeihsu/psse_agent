@@ -13,6 +13,11 @@ Joins every policy's per-root outcome on each suite by physical root:
 * ``--extra-policy LABEL`` (2026-10-27): an adapter evaluated alone on the
   three suites by ``submit_extras_20261027.sh`` (``{suite}_LABEL``, its
   record in the evaluator's first adapter slot).
+* ``--r2-evaluation NAME`` and ``--control-evaluation NAME`` (2026-10-29):
+  read R2 on the hard and validation suites from ``{suite}_NAME``'s first
+  slot and the control from ``{suite}_NAME``'s second slot, for the round-2
+  rerun, whose R2 is evaluated alone (``{suite}_r2``) while the recorded
+  ``{suite}_r2_control`` is set aside.
 
 For each suite and policy: successes per family and per parameter-ranking
 stratum (and per mimic variant on the hard draw), safety-clean successes
@@ -179,7 +184,8 @@ def select_round(validation: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
             "order": ranked, "selected": ranked[0] if ranked else None}
 
 
-def suite_sources(cell: Path, extra: Sequence[str] = ()) -> dict[str, dict[str, tuple[Path, Path]]]:
+def suite_sources(cell: Path, extra: Sequence[str] = (), *, r2_evaluation: str = "r2_control",
+                  control_evaluation: str = "r2_control") -> dict[str, dict[str, tuple[Path, Path]]]:
     """suite -> policy -> (evaluation file, suite rows)."""
     out = cell / "out"
     extra_dir = out / "extra" / "evaluations"
@@ -199,8 +205,8 @@ def suite_sources(cell: Path, extra: Sequence[str] = ()) -> dict[str, dict[str, 
             "expert": (extra_dir / f"{suite}_bc0_r1" / "expert_eval.json", rows),
             "bc0": (extra_dir / f"{suite}_bc0_r1" / "bc0_eval.json", rows),
             "r1": (extra_dir / f"{suite}_bc0_r1" / "r1_eval.json", rows),
-            "r2": (extra_dir / f"{suite}_r2_control" / "bc0_eval.json", rows),
-            "control": (extra_dir / f"{suite}_r2_control" / "r1_eval.json", rows),
+            "r2": (extra_dir / f"{suite}_{r2_evaluation}" / "bc0_eval.json", rows),
+            "control": (extra_dir / f"{suite}_{control_evaluation}" / "r1_eval.json", rows),
         }
     for label in extra:
         if label in POLICIES or not label:
@@ -211,9 +217,11 @@ def suite_sources(cell: Path, extra: Sequence[str] = ()) -> dict[str, dict[str, 
     return sources
 
 
-def build(cell: Path, extra: Sequence[str] = ()) -> dict[str, Any]:
+def build(cell: Path, extra: Sequence[str] = (), *, r2_evaluation: str = "r2_control",
+          control_evaluation: str = "r2_control") -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for suite, policies in suite_sources(cell, extra).items():
+    sources = suite_sources(cell, extra, r2_evaluation=r2_evaluation, control_evaluation=control_evaluation)
+    for suite, policies in sources.items():
         outcomes: dict[str, dict[str, dict[str, Any]]] = {}
         for policy, (eval_path, rows_path) in policies.items():
             if eval_path.is_file() and rows_path.is_file():
@@ -280,9 +288,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--cell-dir", required=True, type=Path)
     parser.add_argument("--extra-policy", action="append", default=[], help="label of an adapter evaluated on the three suites")
+    parser.add_argument("--r2-evaluation", default="r2_control",
+                        help="R2 on the hard and validation suites from {suite}_NAME's first adapter slot")
+    parser.add_argument("--control-evaluation", default="r2_control",
+                        help="the control on the hard and validation suites from {suite}_NAME's second adapter slot")
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args(argv)
-    result = build(args.cell_dir, args.extra_policy)
+    result = build(args.cell_dir, args.extra_policy, r2_evaluation=args.r2_evaluation,
+                   control_evaluation=args.control_evaluation)
     text = markdown(result)
     print(text, end="")
     if args.output is not None:

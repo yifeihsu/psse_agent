@@ -31,7 +31,8 @@ printf '%s\n' "$HEAD" > "$PIPE/source_commit.txt"
 for name in pipeline.env prerequisites.sh build_suite.py summarize.py submit_pipeline.sh \
   status_pipeline.sh stage_d0.sbatch stage_bc0.sbatch stage_collect.sbatch stage_train.sbatch stage_eval.sbatch \
   stage_zeroshot.sbatch stage_extra_cpu.sbatch stage_control_train.sbatch stage_eval_suite.sbatch \
-  submit_extras_20261023.sh submit_extras_20261027.sh stage_test_draw.sbatch submit_test_draw2_20261029.sh; do
+  submit_extras_20261023.sh submit_extras_20261027.sh stage_test_draw.sbatch submit_test_draw2_20261029.sh \
+  submit_r2_rerun_20261029.sh; do
   sed "s#${SOURCE_PIPE}#${PIPE}#g" "$PIPE/source/$CELL/$name" > "$PIPE/$name"
 done
 if [[ -n "$OVERRIDES" ]]; then

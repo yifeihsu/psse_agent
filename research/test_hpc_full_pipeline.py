@@ -18,7 +18,8 @@ CPU_STAGES = ("stage_d0.sbatch",)
 # Follow-up stages of a finished cell (2026-10-23): CPU work outside stage 0.
 EXTRA_CPU_STAGES = ("stage_extra_cpu.sbatch", "stage_test_draw.sbatch")
 SHELL_FILES = ("prerequisites.sh", "submit_pipeline.sh", "status_pipeline.sh", "deploy_remote.sh",
-               "submit_extras_20261023.sh", "submit_extras_20261027.sh", "submit_test_draw2_20261029.sh")
+               "submit_extras_20261023.sh", "submit_extras_20261027.sh", "submit_test_draw2_20261029.sh",
+               "submit_r2_rerun_20261029.sh")
 PYTHON_FILES = ("build_suite.py", "summarize.py")
 
 
@@ -62,8 +63,23 @@ def test_extra_cpu_stages_request_no_gpu_and_are_deployed(name: str) -> None:
     assert "\r" not in text
     deploy = (CELL / "deploy_remote.sh").read_text(encoding="utf-8")
     for deployed in (name, "stage_control_train.sbatch", "stage_eval_suite.sbatch", "submit_extras_20261023.sh",
-                     "submit_extras_20261027.sh", "stage_test_draw.sbatch", "submit_test_draw2_20261029.sh"):
+                     "submit_extras_20261027.sh", "stage_test_draw.sbatch", "submit_test_draw2_20261029.sh",
+                     "submit_r2_rerun_20261029.sh"):
         assert deployed in deploy, deployed
+
+
+def test_round2_rerun_evaluations_reuse_the_recorded_names_and_refuse_a_record_left_in_place() -> None:
+    text = (CELL / "submit_r2_rerun_20261029.sh").read_text(encoding="utf-8")
+    plan = re.findall(r'^  "(\S+) (\S+) (\S+)"$', text, flags=re.MULTILINE)
+    assert [(name, horizon) for name, _, horizon in plan] == [
+        ("${TEST_DRAW_PREFIX}_${FULL}_r2", "$FULL"), ("test_budget12_r2", "12"), ("test_budget16_r2", "16"),
+        ("test_budget20_r2", "20"), ("${TEST_DRAW_PREFIX}_budget12_r2", "12"), ("${TEST_DRAW_PREFIX}_budget20_r2", "20"),
+        ("validation_r2", "$FULL"), ("hard_r2", "$FULL")]
+    # pooled_tables.py reads R2 from these names (draw 1: test_budget<b>_r2; draw 2: <prefix>_<b>_r2).
+    pooled = (CELL / "pooled_tables.py").read_text(encoding="utf-8")
+    assert 'f"test_budget{b}_r2"' in pooled and '_r2")' in pooled
+    assert 'set the recorded record aside first' in text and "--dependency=afterok:" in text
+    assert 'EVAL_EXPERT=0' in text and '"r2=$R2"' in text
 
 
 def test_control_mixture_replaces_each_collected_row_by_a_fresh_row_of_its_family() -> None:
@@ -152,6 +168,16 @@ def test_followup_tables_pair_by_root_and_apply_the_selection_rule(tmp_path: Pat
     # R1 and R2 tie on successes (4 each); R1 has fewer violations, so R1 is selected.
     assert result["round_selection"]["selected"] == "r1" and result["round_selection"]["order"] == ["r1", "r2", "bc0"]
     assert "### test" in tables.markdown(result)
+    # Round-2 rerun (2026-10-29): R2 alone in {suite}_r2, the control read from the set-aside pair.
+    for suite in ("hard", "validation"):
+        write(out / "extra" / "evaluations" / f"{suite}_r2" / "bc0_eval.json", ok)
+        write(out / "extra" / "evaluations" / f"{suite}_r2_control_pool" / "r1_eval.json", [episode(0, False)] + ok[1:])
+    rerun = tables.build(tmp_path, r2_evaluation="r2", control_evaluation="r2_control_pool")
+    assert rerun["validation"]["policies"]["r2"]["violation_episodes"] == 0
+    assert rerun["validation"]["policies"]["control"]["successes"] == 3
+    # R1 and the rerun R2 now tie on successes, violations and actions; the sort keeps R1 first.
+    assert rerun["round_selection"]["order"][:2] == ["r1", "r2"]
+    assert result["validation"]["policies"]["r2"]["violation_episodes"] == 1  # the default still reads the recorded pair
 
 
 def test_suite_evaluation_takes_one_or_two_labelled_adapters() -> None:
