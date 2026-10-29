@@ -2,8 +2,11 @@
 
     python -m research.compound_errors.audit --suite output/compound_errors_20261027/suite.json \\
         --episodes output/compound_errors_20261027/expert_baseline_compare/episodes.jsonl \\
-        --output-dir output/compound_errors_20261027/audit --profile scada_only --expert baseline_compare \\
+        --output-dir output/compound_errors_20261027/audit --profile scada_only \\
         --solved-per-class 10 --workers 14
+
+The teacher defaults to the compound study's (``COMPOUND_STUDY_EXPERT_VARIANT``,
+the user's decision of 2026-10-29); name ``--expert`` to audit another.
 
 Runs ``research.rl.decision_audit.audit_root`` (the reference trajectory, up
 to ``--max-states`` decision states with ``--max-alternatives`` menu
@@ -32,6 +35,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from research.rl import decision_audit as audit  # noqa: E402
+from psse_env.oracle.expert_variants import COMPOUND_STUDY_EXPERT_VARIANT  # noqa: E402
 
 AUDIT_CONTRACT = "compound_decision_audit_v1"
 
@@ -106,7 +110,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--episodes", required=True, type=Path, help="the rollout's episodes.jsonl (which roots the expert failed)")
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--profile", default="scada_only")
-    parser.add_argument("--expert", default="baseline_compare")
+    # The compound study's teacher (the user's decision of 2026-10-29).
+    parser.add_argument("--expert", default=COMPOUND_STUDY_EXPERT_VARIANT)
     parser.add_argument("--progress-basis", default=None)
     parser.add_argument("--solved-per-class", type=int, default=10)
     parser.add_argument("--failed-per-class", type=int, default=None, help="cap on audited failed roots per class (default: all)")

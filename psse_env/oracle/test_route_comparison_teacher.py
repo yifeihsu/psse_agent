@@ -14,7 +14,13 @@ from psse_env.actions import (
 )
 from psse_env.oracle.expert_policy import ExpertPolicyOracle
 from psse_env.oracle.expert_types import ExpertActionProposal
-from psse_env.oracle.expert_variants import EXPERT_VARIANTS, expert_variant_options, variant_environment_options
+from psse_env.oracle.expert_variants import (
+    COMPOUND_STUDY_EXPERT_VARIANT,
+    DEFAULT_EXPERT_VARIANT,
+    EXPERT_VARIANTS,
+    expert_variant_options,
+    variant_environment_options,
+)
 from psse_env.oracle.process_validity import ProcessValidityOracle
 
 
@@ -61,6 +67,13 @@ class RouteComparisonTeacherTests(unittest.TestCase):
         for name in EXPERT_VARIANTS:
             if name != "baseline_compare_guarded_routes":
                 self.assertNotIn("route_comparison", expert_variant_options(name))
+
+    def test_the_route_teacher_is_the_compound_study_teacher_and_only_there(self) -> None:
+        # The user's decision of 2026-10-29: the compound scripts default to it,
+        # every other path keeps baseline_compare.
+        self.assertEqual(COMPOUND_STUDY_EXPERT_VARIANT, "baseline_compare_guarded_routes")
+        self.assertIn(COMPOUND_STUDY_EXPERT_VARIANT, EXPERT_VARIANTS)
+        self.assertEqual(DEFAULT_EXPERT_VARIANT, "baseline_compare")
 
     def test_the_breaker_context_comes_first_then_the_parameter_context_then_the_comparison(self) -> None:
         self.assertIsNone(self.first(_observation(self.clear)))

@@ -67,6 +67,12 @@ EXPERT_VARIANT_ENV = "PSSE_EXPERT_VARIANT"
 #: The teacher of new work when none is named (2026-10-28); recorded cells
 #: name theirs.  Until then the default was ``baseline``.
 DEFAULT_EXPERT_VARIANT = "baseline_compare"
+#: The teacher of the compound-error study from here on (the user's decision
+#: of 2026-10-29, in their words: "Use baseline_compare_guarded_routes as the
+#: compound study's teacher from here on; baseline_compare stays the default
+#: everywhere else and the paper results stay as they are").  The compound
+#: scripts default to it; every other path keeps ``DEFAULT_EXPERT_VARIANT``.
+COMPOUND_STUDY_EXPERT_VARIANT = "baseline_compare_guarded_routes"
 EXPERT_VARIANTS = ("baseline", "ledger", "ledger_ranked", "ledger_ranked_compare", "baseline_compare",
                    "baseline_compare_topology_first", "baseline_compare_topology_guarded",
                    "baseline_compare_guarded_walk", "baseline_compare_guarded_routes")
@@ -145,6 +151,6 @@ def variant_environment_options(variant: str | None = None) -> dict[str, Any]:
     return dict(VARIANT_ENVIRONMENT_OPTIONS.get(current_expert_variant(variant), {}))
 
 
-__all__ = ["DEFAULT_EXPERT_VARIANT", "EXPERT_VARIANTS", "EXPERT_VARIANT_ENV", "REVERT_FRUITLESS_CYCLES",
+__all__ = ["COMPOUND_STUDY_EXPERT_VARIANT", "DEFAULT_EXPERT_VARIANT", "EXPERT_VARIANTS", "EXPERT_VARIANT_ENV", "REVERT_FRUITLESS_CYCLES",
            "VARIANT_ENVIRONMENT_OPTIONS", "VARIANT_PROVIDER_OPTIONS", "current_expert_variant",
            "expert_variant_options", "variant_environment_options", "variant_provider_options"]

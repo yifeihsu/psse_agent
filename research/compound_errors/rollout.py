@@ -1,8 +1,15 @@
 """Roll the rule expert out on a compound suite in parallel and summarize per class.
 
     python -m research.compound_errors.rollout --suite output/compound_errors_20261027/suite.json \\
-        --output-dir output/compound_errors_20261027/expert_baseline_compare \\
-        --profile scada_only --expert baseline_compare --workers 14
+        --output-dir output/compound_errors_20261027/expert_baseline_compare_guarded_routes \\
+        --profile scada_only --workers 14 --env-option pair_refit_adjacent=1 \\
+        --expert-option abstain_isolated_lines=1 --expert-option state_ambiguity=1
+
+The teacher defaults to the compound study's (``COMPOUND_STUDY_EXPERT_VARIANT``,
+``baseline_compare_guarded_routes`` since the user's decision of 2026-10-29);
+``--expert baseline_compare`` runs the default teacher of every other path.
+The three run options are the ones item 7 of the study measured with (the
+pair refit, the isolated-line abstention and the ambiguity statement).
 
 Each worker holds the decision audit's harness (the research environment of
 ``scripts/run_dagger_research.py`` under one evidence profile, the named
@@ -42,6 +49,7 @@ from psse_env.actions import (  # noqa: E402
 )
 from research.rl import decision_audit as audit  # noqa: E402
 from research.rl.decision_audit import parse_run_options  # noqa: E402
+from psse_env.oracle.expert_variants import COMPOUND_STUDY_EXPERT_VARIANT  # noqa: E402
 
 ROLLOUT_CONTRACT = "compound_expert_rollout_v1"
 COMPARE_TOOL = "compare_parameter_candidates"
@@ -360,7 +368,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--suite", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--profile", default="scada_only")
-    parser.add_argument("--expert", default="baseline_compare")
+    # The compound study's teacher (the user's decision of 2026-10-29).
+    parser.add_argument("--expert", default=COMPOUND_STUDY_EXPERT_VARIANT)
     parser.add_argument("--progress-basis", default=None)
     parser.add_argument("--max-steps", type=int, default=40)
     parser.add_argument("--seed", type=int, default=20261006)

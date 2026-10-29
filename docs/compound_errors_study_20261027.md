@@ -890,6 +890,20 @@ tree off by default.  The two recorded override envs that name no teacher
 before the teacher knob existed) pin `EXPERT_VARIANT=baseline` since the
 review, so they re-run as recorded under either default.
 
+On the teacher of the compound work, after item 7's step 7 (section 8.8),
+the user's decision of 2026-10-29, in their words: "Use
+baseline_compare_guarded_routes as the compound study's teacher from here
+on; baseline_compare stays the default everywhere else and the paper results
+stay as they are."  So `COMPOUND_STUDY_EXPERT_VARIANT` in
+`psse_env/oracle/expert_variants.py` names the route teacher and the
+compound scripts (`research/compound_errors/rollout.py` and `audit.py`)
+default to it, while `DEFAULT_EXPERT_VARIANT`, the pipeline default and every
+recorded cell stay on their teachers and `docs/papers` is untouched.  This is
+the user's choice for the compound work, not the adoption rule of section
+7.1: under that rule the route teacher, like the guarded one, is one root
+short of the baseline on the hard draw (the accepted lightly loaded
+ambiguity, section 8.5).
+
 ## 7. Stage 2: the tool repairs, one at a time (2026-10-28)
 
 The ground rules, from the request: the items of section 6.3 in order, one
@@ -2503,12 +2517,14 @@ family first there (bus splits: a true family on top for 31% of roots), so
 nothing asks for the breaker context; that is the confidence's blind spot,
 not a reason to look always.
 
-**Adoption.**  Not decided here.  By the adoption rule the user set for the
-guarded teacher (identical per-family success on the validation suite and
-the hard draw, no false commits) the route teacher matches the guarded
-teacher exactly, and both are one root short of the baseline on the hard
-draw (`r0_344bb11720e7`, the accepted lightly loaded ambiguity), so the rule
-as stated is not met against the baseline.
+**Adoption.**  By the adoption rule the user set for the guarded teacher
+(identical per-family success on the validation suite and the hard draw, no
+false commits) the route teacher matches the guarded teacher exactly, and
+both are one root short of the baseline on the hard draw (`r0_344bb11720e7`,
+the accepted lightly loaded ambiguity), so that rule is not met against the
+baseline.  The user then chose it for the compound work (2026-10-29,
+section 6.4): it is the compound study's teacher from here on, and
+`baseline_compare` stays the default everywhere else.
 
 **Commits.**  e7ed242 (the contract), f8be4bb (the teacher rule), 7ea2ebb
 (a test fix), and the commit that adds this section (branch
