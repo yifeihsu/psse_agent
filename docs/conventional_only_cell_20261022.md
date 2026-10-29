@@ -1614,3 +1614,30 @@ The recorded pass was 432 round-2 rows and 432 rows drawn uniformly from the
 expectation is 59.3; R2 trained 216 steps at 3e-5 from R1 and kept the final
 checkpoint, on an NVIDIA RTX PRO 6000 Blackwell (job 20594226). So 380 of
 round 1's 437 rows, 87%, were absent from R2's pass.
+
+### 9.5 The rerun's round-2 data and mixture
+
+**Collection** (r2c 21369734): preempted once on gr104 after 39 min
+(22:44 to 23:23 UTC), resumed from its completed-root ledger on gr103 and
+finished at 23:50 (6 min). R1 rolled out on the 74 round-2 roots and the
+collection is the recorded one exactly: 432 safe rows with the same example
+ids and the same rendered conversations (432 of 432), and the same metrics
+(743 states visited, 549 learner actions, 498 learner-induced states with an
+expert target, tool disagreement 1.6% and full-action disagreement 2.4%, 66
+quarantined learner-state labels, no invalid learner action; label yield
+0.867). So the new pass differs from the recorded one only by the recipe.
+
+**Mixture** (`out/r2/collection/mixture_report.json`, contract
+`research_dagger_cumulative_mixture_v2`): 1,738 rows, 432 round-2 rows, all
+437 round-1 rows (`prior_onpolicy_selected` 437,
+`prior_onpolicy_retained_fraction` 1.0; re-rendered under the current view
+with no row changed) and 869 rows sampled from D0's 2,747-row training view
+(seed 20260912), so the on-policy share is 0.5. The exact label-conflict
+audit over the 1,738 rows (1,598 distinct observations): no conflicting
+observation and no conflicting row. The gate (fp-r2gate 21369831, cs601,
+23:51 UTC) passed every check and released r2t.
+
+| Training pass | Round-2 rows | Round-1 rows | D0 rows | Rows | Initialization | Steps |
+| --- | --- | --- | --- | --- | --- | --- |
+| Recorded R2 (pool recipe) | 432 | 57 | 375 | 864 | R1 | 216 |
+| Rerun R2 (cumulative recipe) | 432 | 437 | 869 | 1,738 | BC0 | 435 |
