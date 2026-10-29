@@ -6,11 +6,16 @@
     "ieee14_control:40=output/compound_errors_ieee14_busbranch_20261028/expert_baseline_compare/episodes.jsonl,output/compound_errors_ieee14_busbranch_20261028/meter_route11_40/episodes.jsonl",
     "ieee14_control:16=output/compound_errors_ieee14_busbranch_20261028/budget_16/episodes.jsonl,output/compound_errors_ieee14_busbranch_20261028/meter_route11_16/episodes.jsonl"
   ],
+  "reference": null,
   "summary": {
     "ieee118": {
       "16": {
         "classes": {
           "all": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 580
+            },
             "baseline_solved": 424,
             "budget_handoffs": {
               "baseline": 303,
@@ -513,6 +518,10 @@
             "n": 625,
             "rule_fired_episodes": 45,
             "rule_solved": 454,
+            "trajectories_changed": {
+              "action_change": -52,
+              "roots": 44
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 5,
@@ -527,6 +536,10 @@
             }
           },
           "control_meter": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 17
+            },
             "baseline_solved": 19,
             "budget_handoffs": {
               "baseline": 33,
@@ -1029,12 +1042,20 @@
             "n": 50,
             "rule_fired_episodes": 33,
             "rule_solved": 49,
+            "trajectories_changed": {
+              "action_change": -53,
+              "roots": 33
+            },
             "wrong_commits": {
               "baseline": {},
               "rule": {}
             }
           },
           "control_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 50
+            },
             "baseline_solved": 45,
             "budget_handoffs": {
               "baseline": 2,
@@ -1056,6 +1077,10 @@
             "n": 50,
             "rule_fired_episodes": 0,
             "rule_solved": 45,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_parameters": 2
@@ -1066,6 +1091,10 @@
             }
           },
           "meter_on_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 66
+            },
             "baseline_solved": 4,
             "budget_handoffs": {
               "baseline": 60,
@@ -1087,6 +1116,10 @@
             "n": 75,
             "rule_fired_episodes": 9,
             "rule_solved": 4,
+            "trajectories_changed": {
+              "action_change": 1,
+              "roots": 8
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 4,
@@ -1101,6 +1134,10 @@
             }
           },
           "meter_rx2": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 147
+            },
             "baseline_solved": 129,
             "budget_handoffs": {
               "baseline": 146,
@@ -1122,6 +1159,10 @@
             "n": 150,
             "rule_fired_episodes": 3,
             "rule_solved": 129,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 3
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_parameters": 10,
@@ -1134,6 +1175,10 @@
             }
           },
           "rx2_adjacent": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 150
+            },
             "baseline_solved": 97,
             "budget_handoffs": {
               "baseline": 49,
@@ -1155,6 +1200,10 @@
             "n": 150,
             "rule_fired_episodes": 0,
             "rule_solved": 97,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_parameters": 15,
@@ -1167,6 +1216,10 @@
             }
           },
           "rx2_distant": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 150
+            },
             "baseline_solved": 130,
             "budget_handoffs": {
               "baseline": 13,
@@ -1188,6 +1241,10 @@
             "n": 150,
             "rule_fired_episodes": 0,
             "rule_solved": 130,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 1,
@@ -1223,11 +1280,89 @@
               "none": 14
             }
           }
+        },
+        "cue_by_commit": {
+          "baseline": {
+            "healthy": {
+              "fires": {
+                "none": 4
+              },
+              "quiet": {}
+            },
+            "true": {
+              "fires": {
+                "line": 4,
+                "meter": 2,
+                "none": 36
+              },
+              "quiet": {
+                "line": 36,
+                "none": 12
+              }
+            }
+          },
+          "rule": {
+            "healthy": {
+              "fires": {
+                "none": 4
+              },
+              "quiet": {
+                "none": 1
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 4,
+                "meter": 50,
+                "none": 5
+              },
+              "quiet": {
+                "line": 36,
+                "none": 13
+              }
+            }
+          }
+        },
+        "separation": {
+          "line -> line": {
+            "at_least_threshold": 233,
+            "median": 14.552604244581737,
+            "n": 344
+          },
+          "line -> meter": {
+            "at_least_threshold": 39,
+            "median": 19.801569674050366,
+            "n": 39
+          },
+          "line -> none": {
+            "at_least_threshold": 23,
+            "median": 12.164809834556447,
+            "n": 41
+          },
+          "meter -> line": {
+            "at_least_threshold": 1,
+            "median": 9.71538392818224,
+            "n": 10
+          },
+          "meter -> meter": {
+            "at_least_threshold": 1,
+            "median": 19.414903386287982,
+            "n": 1
+          },
+          "meter -> none": {
+            "at_least_threshold": 36,
+            "median": 16.815121251195137,
+            "n": 42
+          }
         }
       },
       "40": {
         "classes": {
           "all": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 563
+            },
             "baseline_solved": 456,
             "budget_handoffs": {
               "baseline": 22,
@@ -1330,6 +1465,10 @@
             "n": 625,
             "rule_fired_episodes": 62,
             "rule_solved": 461,
+            "trajectories_changed": {
+              "action_change": -582,
+              "roots": 59
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 48,
@@ -1344,6 +1483,10 @@
             }
           },
           "control_meter": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 17
+            },
             "baseline_solved": 45,
             "budget_handoffs": {
               "baseline": 7,
@@ -1446,12 +1589,20 @@
             "n": 50,
             "rule_fired_episodes": 33,
             "rule_solved": 50,
+            "trajectories_changed": {
+              "action_change": -522,
+              "roots": 33
+            },
             "wrong_commits": {
               "baseline": {},
               "rule": {}
             }
           },
           "control_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 50
+            },
             "baseline_solved": 45,
             "budget_handoffs": {
               "baseline": 0,
@@ -1473,6 +1624,10 @@
             "n": 50,
             "rule_fired_episodes": 0,
             "rule_solved": 45,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 1,
@@ -1485,6 +1640,10 @@
             }
           },
           "meter_on_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 54
+            },
             "baseline_solved": 11,
             "budget_handoffs": {
               "baseline": 8,
@@ -1506,6 +1665,10 @@
             "n": 75,
             "rule_fired_episodes": 21,
             "rule_solved": 11,
+            "trajectories_changed": {
+              "action_change": -51,
+              "roots": 18
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 25,
@@ -1520,6 +1683,10 @@
             }
           },
           "meter_rx2": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 146
+            },
             "baseline_solved": 130,
             "budget_handoffs": {
               "baseline": 2,
@@ -1541,6 +1708,10 @@
             "n": 150,
             "rule_fired_episodes": 4,
             "rule_solved": 130,
+            "trajectories_changed": {
+              "action_change": -2,
+              "roots": 4
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 3,
@@ -1555,6 +1726,10 @@
             }
           },
           "rx2_adjacent": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 146
+            },
             "baseline_solved": 95,
             "budget_handoffs": {
               "baseline": 4,
@@ -1576,6 +1751,10 @@
             "n": 150,
             "rule_fired_episodes": 4,
             "rule_solved": 95,
+            "trajectories_changed": {
+              "action_change": -7,
+              "roots": 4
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 10,
@@ -1590,6 +1769,10 @@
             }
           },
           "rx2_distant": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 150
+            },
             "baseline_solved": 130,
             "budget_handoffs": {
               "baseline": 1,
@@ -1611,6 +1794,10 @@
             "n": 150,
             "rule_fired_episodes": 0,
             "rule_solved": 130,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 9,
@@ -1650,6 +1837,86 @@
               "none": 27
             }
           }
+        },
+        "cue_by_commit": {
+          "baseline": {
+            "healthy": {
+              "fires": {
+                "meter": 1,
+                "none": 22
+              },
+              "quiet": {
+                "none": 9
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 7,
+                "meter": 45,
+                "none": 9
+              },
+              "quiet": {
+                "line": 43,
+                "meter": 1,
+                "none": 16
+              }
+            }
+          },
+          "rule": {
+            "healthy": {
+              "fires": {
+                "meter": 6,
+                "none": 22
+              },
+              "quiet": {
+                "none": 10
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 7,
+                "meter": 50,
+                "none": 4
+              },
+              "quiet": {
+                "line": 43,
+                "meter": 1,
+                "none": 17
+              }
+            }
+          }
+        },
+        "separation": {
+          "line -> line": {
+            "at_least_threshold": 234,
+            "median": 14.479136522146321,
+            "n": 347
+          },
+          "line -> meter": {
+            "at_least_threshold": 44,
+            "median": 19.801569674050366,
+            "n": 44
+          },
+          "line -> none": {
+            "at_least_threshold": 17,
+            "median": 11.528784456581958,
+            "n": 33
+          },
+          "meter -> line": {
+            "at_least_threshold": 4,
+            "median": 9.585946786049867,
+            "n": 19
+          },
+          "meter -> meter": {
+            "at_least_threshold": 32,
+            "median": 19.414903386287982,
+            "n": 32
+          },
+          "meter -> none": {
+            "at_least_threshold": 4,
+            "median": 11.364485062112145,
+            "n": 8
+          }
         }
       }
     },
@@ -1657,6 +1924,10 @@
       "16": {
         "classes": {
           "all": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 580
+            },
             "baseline_solved": 328,
             "budget_handoffs": {
               "baseline": 298,
@@ -2127,6 +2398,10 @@
             "n": 625,
             "rule_fired_episodes": 45,
             "rule_solved": 356,
+            "trajectories_changed": {
+              "action_change": -56,
+              "roots": 42
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 9,
@@ -2141,6 +2416,10 @@
             }
           },
           "control_meter": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 14
+            },
             "baseline_solved": 18,
             "budget_handoffs": {
               "baseline": 36,
@@ -2611,12 +2890,20 @@
             "n": 50,
             "rule_fired_episodes": 36,
             "rule_solved": 46,
+            "trajectories_changed": {
+              "action_change": -57,
+              "roots": 33
+            },
             "wrong_commits": {
               "baseline": {},
               "rule": {}
             }
           },
           "control_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 50
+            },
             "baseline_solved": 48,
             "budget_handoffs": {
               "baseline": 1,
@@ -2638,6 +2925,10 @@
             "n": 50,
             "rule_fired_episodes": 0,
             "rule_solved": 48,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_parameters": 3
@@ -2648,6 +2939,10 @@
             }
           },
           "meter_on_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 74
+            },
             "baseline_solved": 11,
             "budget_handoffs": {
               "baseline": 41,
@@ -2669,6 +2964,10 @@
             "n": 75,
             "rule_fired_episodes": 1,
             "rule_solved": 11,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 1
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 2,
@@ -2683,6 +2982,10 @@
             }
           },
           "meter_rx2": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 144
+            },
             "baseline_solved": 77,
             "budget_handoffs": {
               "baseline": 126,
@@ -2704,6 +3007,10 @@
             "n": 150,
             "rule_fired_episodes": 6,
             "rule_solved": 77,
+            "trajectories_changed": {
+              "action_change": 1,
+              "roots": 6
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 2,
@@ -2718,6 +3025,10 @@
             }
           },
           "rx2_adjacent": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 149
+            },
             "baseline_solved": 59,
             "budget_handoffs": {
               "baseline": 80,
@@ -2739,6 +3050,10 @@
             "n": 150,
             "rule_fired_episodes": 1,
             "rule_solved": 59,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 1
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 4,
@@ -2753,6 +3068,10 @@
             }
           },
           "rx2_distant": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 149
+            },
             "baseline_solved": 115,
             "budget_handoffs": {
               "baseline": 14,
@@ -2774,6 +3093,10 @@
             "n": 150,
             "rule_fired_episodes": 1,
             "rule_solved": 115,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 1
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 1,
@@ -2813,11 +3136,96 @@
               "none": 37
             }
           }
+        },
+        "cue_by_commit": {
+          "baseline": {
+            "healthy": {
+              "fires": {
+                "none": 4
+              },
+              "quiet": {
+                "line": 1,
+                "none": 3
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 3,
+                "meter": 5,
+                "none": 33
+              },
+              "quiet": {
+                "line": 80,
+                "meter": 2,
+                "none": 30
+              }
+            }
+          },
+          "rule": {
+            "healthy": {
+              "fires": {
+                "meter": 2,
+                "none": 3
+              },
+              "quiet": {
+                "line": 1,
+                "none": 3
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 3,
+                "meter": 47,
+                "none": 2
+              },
+              "quiet": {
+                "line": 80,
+                "meter": 3,
+                "none": 34
+              }
+            }
+          }
+        },
+        "separation": {
+          "line -> line": {
+            "at_least_threshold": 126,
+            "median": 9.45124985660025,
+            "n": 282
+          },
+          "line -> meter": {
+            "at_least_threshold": 49,
+            "median": 17.563534355917696,
+            "n": 59
+          },
+          "line -> none": {
+            "at_least_threshold": 18,
+            "median": 9.579614074140197,
+            "n": 47
+          },
+          "meter -> line": {
+            "at_least_threshold": 3,
+            "median": 7.381263971997399,
+            "n": 34
+          },
+          "meter -> meter": {
+            "at_least_threshold": 5,
+            "median": 12.75771304219767,
+            "n": 5
+          },
+          "meter -> none": {
+            "at_least_threshold": 33,
+            "median": 15.170258730488527,
+            "n": 44
+          }
         }
       },
       "40": {
         "classes": {
           "all": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 562
+            },
             "baseline_solved": 374,
             "budget_handoffs": {
               "baseline": 32,
@@ -2856,6 +3264,10 @@
             "n": 625,
             "rule_fired_episodes": 63,
             "rule_solved": 375,
+            "trajectories_changed": {
+              "action_change": -490,
+              "roots": 56
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 49,
@@ -2870,6 +3282,10 @@
             }
           },
           "control_meter": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 14
+            },
             "baseline_solved": 49,
             "budget_handoffs": {
               "baseline": 7,
@@ -2908,12 +3324,20 @@
             "n": 50,
             "rule_fired_episodes": 36,
             "rule_solved": 50,
+            "trajectories_changed": {
+              "action_change": -460,
+              "roots": 33
+            },
             "wrong_commits": {
               "baseline": {},
               "rule": {}
             }
           },
           "control_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 50
+            },
             "baseline_solved": 48,
             "budget_handoffs": {
               "baseline": 0,
@@ -2935,6 +3359,10 @@
             "n": 50,
             "rule_fired_episodes": 0,
             "rule_solved": 48,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_parameters": 4
@@ -2945,6 +3373,10 @@
             }
           },
           "meter_on_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 61
+            },
             "baseline_solved": 13,
             "budget_handoffs": {
               "baseline": 8,
@@ -2966,6 +3398,10 @@
             "n": 75,
             "rule_fired_episodes": 14,
             "rule_solved": 13,
+            "trajectories_changed": {
+              "action_change": -15,
+              "roots": 11
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 25,
@@ -2980,6 +3416,10 @@
             }
           },
           "meter_rx2": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 142
+            },
             "baseline_solved": 88,
             "budget_handoffs": {
               "baseline": 9,
@@ -3001,6 +3441,10 @@
             "n": 150,
             "rule_fired_episodes": 8,
             "rule_solved": 88,
+            "trajectories_changed": {
+              "action_change": -7,
+              "roots": 8
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 5,
@@ -3015,6 +3459,10 @@
             }
           },
           "rx2_adjacent": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 146
+            },
             "baseline_solved": 61,
             "budget_handoffs": {
               "baseline": 8,
@@ -3036,6 +3484,10 @@
             "n": 150,
             "rule_fired_episodes": 4,
             "rule_solved": 61,
+            "trajectories_changed": {
+              "action_change": -6,
+              "roots": 3
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 17,
@@ -3050,6 +3502,10 @@
             }
           },
           "rx2_distant": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 149
+            },
             "baseline_solved": 115,
             "budget_handoffs": {
               "baseline": 0,
@@ -3071,6 +3527,10 @@
             "n": 150,
             "rule_fired_episodes": 1,
             "rule_solved": 115,
+            "trajectories_changed": {
+              "action_change": -2,
+              "roots": 1
+            },
             "wrong_commits": {
               "baseline": {
                 "correct_measurements": 2,
@@ -3109,6 +3569,88 @@
               "meter": 9,
               "none": 38
             }
+          }
+        },
+        "cue_by_commit": {
+          "baseline": {
+            "healthy": {
+              "fires": {
+                "meter": 3,
+                "none": 25
+              },
+              "quiet": {
+                "line": 1,
+                "none": 16
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 4,
+                "meter": 46,
+                "none": 6
+              },
+              "quiet": {
+                "line": 104,
+                "meter": 9,
+                "none": 17
+              }
+            }
+          },
+          "rule": {
+            "healthy": {
+              "fires": {
+                "meter": 5,
+                "none": 26
+              },
+              "quiet": {
+                "line": 1,
+                "none": 21
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 4,
+                "meter": 47,
+                "none": 6
+              },
+              "quiet": {
+                "line": 104,
+                "meter": 9,
+                "none": 17
+              }
+            }
+          }
+        },
+        "separation": {
+          "line -> line": {
+            "at_least_threshold": 130,
+            "median": 9.474765713181364,
+            "n": 287
+          },
+          "line -> meter": {
+            "at_least_threshold": 54,
+            "median": 17.255869959604865,
+            "n": 64
+          },
+          "line -> none": {
+            "at_least_threshold": 9,
+            "median": 7.2284893197365125,
+            "n": 37
+          },
+          "meter -> line": {
+            "at_least_threshold": 4,
+            "median": 7.381263971997399,
+            "n": 36
+          },
+          "meter -> meter": {
+            "at_least_threshold": 37,
+            "median": 15.47079169863793,
+            "n": 39
+          },
+          "meter -> none": {
+            "at_least_threshold": 2,
+            "median": 7.455856155178431,
+            "n": 12
           }
         }
       }

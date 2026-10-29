@@ -18,7 +18,14 @@ healthy target (a committed wrong meter is the masking the lifted guard
 risks).  Per run: every committed meter correction with the alarm still on,
 whether the rule fires on its verifying solve, and the next true correction
 the episode committed after it (meter, line or none), which is how often the
-cue was right in the states the rule acted on.
+cue was right in the states the rule acted on, split by whether the
+committed meter was itself true.  Per pair, too: the trajectories the rule
+changes, with the check that no root changes whose ``baseline_compare``
+episode never reaches a firing state; and section 9.4's separation on
+``baseline_compare``'s own first commits (the residual after the first
+committed correction, by the next true correction).  ``--reference`` sets an
+earlier probe's per-class counts beside this one's, as for a fresh draw
+against the in-sample probe.
 """
 from __future__ import annotations
 
@@ -33,7 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from research.compound_errors.budget_headroom import BUDGET_HANDOFF, CLASSES, load_jsonl  # noqa: E402
+from research.compound_errors.budget_headroom import BUDGET_HANDOFF, CLASSES, _quantiles, load_jsonl, post_commit_cue  # noqa: E402
 
 CONTRACT = "compound_meter_route_probe_v1"
 METER = "correct_measurements"
@@ -98,10 +105,36 @@ def cue_outcomes(episodes: Sequence[Mapping[str, Any]], threshold: float, *, com
         for commit in meter_commits(episode, threshold):
             if committed_true is not None and commit["true"] is not committed_true:
                 continue
-            following = commit["next_true"]
-            kind = "meter" if following == METER else "line" if following in LINE_TOOLS else "none"
-            table["fires" if commit["fires"] else "quiet"][kind] += 1
+            table["fires" if commit["fires"] else "quiet"][_kind(commit["next_true"])] += 1
     return {key: dict(counter) for key, counter in table.items()}
+
+
+def _kind(tool: str | None) -> str:
+    return "meter" if tool == METER else "line" if tool in LINE_TOOLS else "none"
+
+
+def separation(episodes: Sequence[Mapping[str, Any]], threshold: float) -> dict[str, Any]:
+    """Section 9.4's view of one run: the max normalized residual after the first committed correction (alarm on).
+
+    Grouped by the committed correction (meter or line) and the next true
+    correction the episode committed (meter, line or none), with the count at
+    or above the threshold: on ``baseline_compare``'s own states, how well the
+    rule's test separates another bad meter from a bad line.
+    """
+    groups: dict[str, list[float]] = defaultdict(list)
+    for episode in episodes:
+        cue = post_commit_cue(episode)
+        if cue and cue["max_normalized_residual"] is not None and cue["committed"] in (METER, "correct_parameters"):
+            groups[f"{_kind(cue['committed'])} -> {_kind(cue['next_true'])}"].append(float(cue["max_normalized_residual"]))
+    return {key: {"n": len(values), "median": _quantiles(values)["median"], "at_least_threshold": sum(v >= threshold for v in values)}
+            for key, values in sorted(groups.items())}
+
+
+def trajectory(episode: Mapping[str, Any]) -> tuple:
+    """What two runs of a root are compared on: the outcome, the tools and every correction with its verdict and fate."""
+    return (bool(episode.get("success")), list(episode.get("tools") or []),
+            [(c.get("tool"), json.dumps(c.get("arguments"), sort_keys=True), c.get("verdict"), c.get("error_code"), c.get("lifecycle"))
+             for c in episode.get("corrections") or []])
 
 
 def _mean(values: Sequence[float]) -> float | None:
@@ -126,6 +159,8 @@ def compare(baseline: Mapping[str, Mapping[str, Any]], rule: Mapping[str, Mappin
         for i in ids:
             base_wrong.update(wrong_commits(baseline[i]))
             rule_wrong.update(wrong_commits(rule[i]))
+        changed = [i for i in ids if trajectory(baseline[i]) != trajectory(rule[i])]
+        quiet = [i for i in ids if not any(c["fires"] for c in meter_commits(baseline[i], threshold))]
         cells[name] = {
             "n": len(ids),
             "baseline_solved": sum(1 for i in ids if baseline[i].get("success")),
@@ -140,6 +175,10 @@ def compare(baseline: Mapping[str, Mapping[str, Any]], rule: Mapping[str, Mappin
             "episodes_with_wrong_meter_commit": {"baseline": sum(1 for i in ids if wrong_commits(baseline[i]).get(METER)),
                                                  "rule": sum(1 for i in ids if wrong_commits(rule[i]).get(METER))},
             "rule_fired_episodes": sum(1 for i in ids if any(c["fires"] for c in meter_commits(rule[i], threshold))),
+            # Section 10's check: a root whose baseline_compare episode never reaches a firing state should not change.
+            "trajectories_changed": {"roots": len(changed),
+                                     "action_change": sum(int(rule[i].get("steps") or 0) - int(baseline[i].get("steps") or 0) for i in changed)},
+            "baseline_never_fires": {"roots": len(quiet), "changed": sorted(set(quiet) & set(changed))},
             "gained_roots": {i: {"baseline": _root_note(baseline[i]), "rule": _root_note(rule[i])} for i in gained},
             "lost_roots": {i: {"baseline": _root_note(baseline[i]), "rule": _root_note(rule[i])} for i in lost},
         }
@@ -160,6 +199,7 @@ def summarize(pairs: Mapping[str, Mapping[int, tuple[Path, Path]]], threshold: f
                 "cue_by_commit": {run: {"true": cue_outcomes(episodes, threshold, committed_true=True),
                                         "healthy": cue_outcomes(episodes, threshold, committed_true=False)}
                                   for run, episodes in runs.items()},
+                "separation": separation(runs["baseline"], threshold),
             }
         out[system] = system_out
     return out
@@ -208,6 +248,18 @@ def markdown(summary: Mapping[str, Any], threshold: float, reference: Mapping[st
                              f"{fmt(both['baseline'])} / {fmt(both['rule'])} | {count(cell['wrong_commits']['baseline'])} | "
                              f"{count(cell['wrong_commits']['rule'])} | {cell['budget_handoffs']['baseline']} / {cell['budget_handoffs']['rule']} | "
                              f"{cell['rule_fired_episodes']} |")
+            everything = entry["classes"]["all"]
+            changed = ", ".join(f"{name} {cell['trajectories_changed']['roots']} ({cell['trajectories_changed']['action_change']:+d} actions)"
+                                for name, cell in entry["classes"].items() if name != "all" and cell["trajectories_changed"]["roots"])
+            quiet = everything["baseline_never_fires"]
+            lines += ["", f"Trajectories the rule changes: {changed or 'none'}.  Roots where baseline_compare never reaches a "
+                          f"firing state: {quiet['roots']}, of them changed: {len(quiet['changed'])}"
+                          + (f" ({', '.join(quiet['changed'])})" if quiet["changed"] else "") + "."]
+            if entry.get("separation"):
+                lines += ["", "baseline_compare's first committed correction with the alarm on, by the next true correction (section 9.4):", "",
+                          f"| committed -> next true | n | median max normalized residual | at least {threshold:g} |", "| --- | --- | --- | --- |"]
+                for key, cell in entry["separation"].items():
+                    lines.append(f"| {key} | {cell['n']} | {cell['median']:.1f} | {cell['at_least_threshold']} |")
             lines += ["", "Next true correction after each committed meter correction with the alarm on:", "",
                       "| run | rule fires: meter / line / none | rule quiet: meter / line / none |", "| --- | --- | --- |"]
             for run, cue in entry["cue"].items():

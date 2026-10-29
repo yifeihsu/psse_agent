@@ -12,12 +12,29 @@
 | control_meter | 50 | 19 | 49 | 30 | 0 | 7.9 / 7.4 | 0 | 0 | 33 / 18 | 33 |
 | all | 625 | 424 | 454 | 30 | 0 | 12.8 / 12.8 | correct_measurements 5, correct_parameters 43, correct_topology 15 | correct_measurements 6, correct_parameters 43, correct_topology 15 | 303 / 288 | 45 |
 
+Trajectories the rule changes: meter_rx2 3 (+0 actions), meter_on_rx 8 (+1 actions), control_meter 33 (-53 actions).  Roots where baseline_compare never reaches a firing state: 580, of them changed: 0.
+
+baseline_compare's first committed correction with the alarm on, by the next true correction (section 9.4):
+
+| committed -> next true | n | median max normalized residual | at least 11 |
+| --- | --- | --- | --- |
+| line -> line | 344 | 14.6 | 233 |
+| line -> meter | 39 | 19.8 | 39 |
+| line -> none | 41 | 12.2 | 23 |
+| meter -> line | 10 | 9.7 | 1 |
+| meter -> meter | 1 | 19.4 | 1 |
+| meter -> none | 42 | 16.8 | 36 |
+
 Next true correction after each committed meter correction with the alarm on:
 
 | run | rule fires: meter / line / none | rule quiet: meter / line / none |
 | --- | --- | --- |
 | baseline | 2 / 4 / 40 | 0 / 36 / 12 |
+| baseline, after a true meter commit | 2 / 4 / 36 | 0 / 36 / 12 |
+| baseline, after a healthy meter commit | 0 / 0 / 4 | 0 / 0 / 0 |
 | rule | 50 / 4 / 9 | 0 / 36 / 14 |
+| rule, after a true meter commit | 50 / 4 / 5 | 0 / 36 / 13 |
+| rule, after a healthy meter commit | 0 / 0 / 4 | 0 / 0 / 1 |
 
 ## ieee118, 40 actions
 
@@ -31,12 +48,29 @@ Next true correction after each committed meter correction with the alarm on:
 | control_meter | 50 | 45 | 50 | 5 | 0 | 19.8 / 10.8 | 0 | 0 | 7 / 0 | 33 |
 | all | 625 | 456 | 461 | 5 | 0 | 14.1 / 13.2 | correct_measurements 48, correct_parameters 55, correct_topology 32 | correct_measurements 54, correct_parameters 55, correct_topology 32 | 22 / 12 | 62 |
 
+Trajectories the rule changes: rx2_adjacent 4 (-7 actions), meter_rx2 4 (-2 actions), meter_on_rx 18 (-51 actions), control_meter 33 (-522 actions).  Roots where baseline_compare never reaches a firing state: 563, of them changed: 0.
+
+baseline_compare's first committed correction with the alarm on, by the next true correction (section 9.4):
+
+| committed -> next true | n | median max normalized residual | at least 11 |
+| --- | --- | --- | --- |
+| line -> line | 347 | 14.5 | 234 |
+| line -> meter | 44 | 19.8 | 44 |
+| line -> none | 33 | 11.5 | 17 |
+| meter -> line | 19 | 9.6 | 4 |
+| meter -> meter | 32 | 19.4 | 32 |
+| meter -> none | 8 | 11.4 | 4 |
+
 Next true correction after each committed meter correction with the alarm on:
 
 | run | rule fires: meter / line / none | rule quiet: meter / line / none |
 | --- | --- | --- |
 | baseline | 46 / 7 / 31 | 1 / 43 / 25 |
+| baseline, after a true meter commit | 45 / 7 / 9 | 1 / 43 / 16 |
+| baseline, after a healthy meter commit | 1 / 0 / 22 | 0 / 0 / 9 |
 | rule | 56 / 7 / 26 | 1 / 43 / 27 |
+| rule, after a true meter commit | 50 / 7 / 4 | 1 / 43 / 17 |
+| rule, after a healthy meter commit | 6 / 0 / 22 | 0 / 0 / 10 |
 
 ## ieee14_control, 16 actions
 
@@ -50,12 +84,29 @@ Next true correction after each committed meter correction with the alarm on:
 | control_meter | 50 | 18 | 46 | 28 | 0 | 9.1 / 8.6 | 0 | 0 | 36 / 18 | 36 |
 | all | 625 | 328 | 356 | 28 | 0 | 12.3 / 12.3 | correct_measurements 9, correct_parameters 46, correct_topology 19 | correct_measurements 10, correct_parameters 46, correct_topology 19 | 298 / 280 | 45 |
 
+Trajectories the rule changes: rx2_adjacent 1 (+0 actions), rx2_distant 1 (+0 actions), meter_rx2 6 (+1 actions), meter_on_rx 1 (+0 actions), control_meter 33 (-57 actions).  Roots where baseline_compare never reaches a firing state: 580, of them changed: 0.
+
+baseline_compare's first committed correction with the alarm on, by the next true correction (section 9.4):
+
+| committed -> next true | n | median max normalized residual | at least 11 |
+| --- | --- | --- | --- |
+| line -> line | 282 | 9.5 | 126 |
+| line -> meter | 59 | 17.6 | 49 |
+| line -> none | 47 | 9.6 | 18 |
+| meter -> line | 34 | 7.4 | 3 |
+| meter -> meter | 5 | 12.8 | 5 |
+| meter -> none | 44 | 15.2 | 33 |
+
 Next true correction after each committed meter correction with the alarm on:
 
 | run | rule fires: meter / line / none | rule quiet: meter / line / none |
 | --- | --- | --- |
 | baseline | 5 / 3 / 37 | 2 / 81 / 33 |
+| baseline, after a true meter commit | 5 / 3 / 33 | 2 / 80 / 30 |
+| baseline, after a healthy meter commit | 0 / 0 / 4 | 0 / 1 / 3 |
 | rule | 49 / 3 / 5 | 3 / 81 / 37 |
+| rule, after a true meter commit | 47 / 3 / 2 | 3 / 80 / 34 |
+| rule, after a healthy meter commit | 2 / 0 / 3 | 0 / 1 / 3 |
 
 ## ieee14_control, 40 actions
 
@@ -69,10 +120,27 @@ Next true correction after each committed meter correction with the alarm on:
 | control_meter | 50 | 49 | 50 | 1 | 0 | 21.3 / 12.4 | 0 | 0 | 7 / 1 | 36 |
 | all | 625 | 374 | 375 | 1 | 0 | 14.5 / 13.3 | correct_measurements 49, correct_parameters 63, correct_topology 38 | correct_measurements 57, correct_parameters 63, correct_topology 38 | 32 / 21 | 63 |
 
+Trajectories the rule changes: rx2_adjacent 3 (-6 actions), rx2_distant 1 (-2 actions), meter_rx2 8 (-7 actions), meter_on_rx 11 (-15 actions), control_meter 33 (-460 actions).  Roots where baseline_compare never reaches a firing state: 562, of them changed: 0.
+
+baseline_compare's first committed correction with the alarm on, by the next true correction (section 9.4):
+
+| committed -> next true | n | median max normalized residual | at least 11 |
+| --- | --- | --- | --- |
+| line -> line | 287 | 9.5 | 130 |
+| line -> meter | 64 | 17.3 | 54 |
+| line -> none | 37 | 7.2 | 9 |
+| meter -> line | 36 | 7.4 | 4 |
+| meter -> meter | 39 | 15.5 | 37 |
+| meter -> none | 12 | 7.5 | 2 |
+
 Next true correction after each committed meter correction with the alarm on:
 
 | run | rule fires: meter / line / none | rule quiet: meter / line / none |
 | --- | --- | --- |
 | baseline | 49 / 4 / 31 | 9 / 105 / 33 |
+| baseline, after a true meter commit | 46 / 4 / 6 | 9 / 104 / 17 |
+| baseline, after a healthy meter commit | 3 / 0 / 25 | 0 / 1 / 16 |
 | rule | 52 / 4 / 32 | 9 / 105 / 38 |
+| rule, after a true meter commit | 47 / 4 / 6 | 9 / 104 / 17 |
+| rule, after a healthy meter commit | 5 / 0 / 26 | 0 / 1 / 21 |
 

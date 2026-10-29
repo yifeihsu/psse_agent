@@ -3,7 +3,14 @@ from __future__ import annotations
 
 import unittest
 
-from research.compound_errors.meter_route_probe import against_reference, compare, cue_outcomes, meter_commits, wrong_commits
+from research.compound_errors.meter_route_probe import (
+    against_reference,
+    compare,
+    cue_outcomes,
+    meter_commits,
+    separation,
+    wrong_commits,
+)
 
 
 def _trace() -> list[dict]:
@@ -56,6 +63,34 @@ class MeterRouteProbeTests(unittest.TestCase):
         self.assertEqual(cell["rule_fired_episodes"], 3)
         self.assertEqual(sorted(cell["lost_roots"]), ["r1"])
         self.assertEqual(cell["lost_roots"]["r1"]["rule"]["wrong_commits"], {"correct_measurements": 1})
+
+    def test_changed_trajectories_and_the_quiet_root_check(self) -> None:
+        def quiet(episode: dict) -> dict:
+            episode["trace"][1]["metrics"] = {"max_normalized_residual": 9.5, "globally_resolved": False}
+            return episode
+
+        def other_meter(episode: dict) -> dict:  # what the agent did differs, not only the truth of it
+            episode["corrections"][2]["arguments"] = {"suspect_group": [9]}
+            return episode
+
+        baseline = {"r0": _episode("r0", True), "r1": quiet(_episode("r1", True)), "r2": quiet(_episode("r2", True))}
+        rule = {"r0": other_meter(_episode("r0", True)), "r1": quiet(_episode("r1", True, wrong_meter=True)),
+                "r2": other_meter(quiet(_episode("r2", True, steps=12)))}
+        cell = compare(baseline, rule, 11.0)["meter_rx2"]
+        self.assertEqual(cell["trajectories_changed"], {"roots": 2, "action_change": -2})
+        # r2 changed although baseline_compare never reached a firing state there: the check names it.
+        self.assertEqual(cell["baseline_never_fires"], {"roots": 2, "changed": ["r2"]})
+
+    def test_separation_reads_the_first_commit_with_the_alarm_on(self) -> None:
+        episode = _episode("r0", True)
+        episode["trace"][1]["metrics"]["chi_square_ratio"] = 3.2
+        line_first = _episode("r1", True)
+        line_first["trace"][1]["metrics"].update(chi_square_ratio=2.0, max_normalized_residual=8.0)
+        line_first["trace"][0]["tool"] = "correct_parameters"
+        self.assertEqual(separation([episode, line_first], 11.0), {
+            "line -> meter": {"n": 1, "median": 8.0, "at_least_threshold": 0},
+            "meter -> meter": {"n": 1, "median": 15.7, "at_least_threshold": 1},
+        })
 
     def test_a_fresh_draw_is_set_beside_the_reference_probe(self) -> None:
         here = {"meter_rx2": {"n": 3, "baseline_solved": 2, "rule_solved": 2, "gained": 1, "lost": 1}}
