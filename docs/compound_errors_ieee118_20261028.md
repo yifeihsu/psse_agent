@@ -60,7 +60,8 @@ and the line's true correction is then rejected.  One `baseline_compare`
 trajectory of the fresh draw could not be reproduced.  Section 11.8 traces it
 to a Windows-only race between concurrent runs in the provider's
 derived-case cache.  Re-run in isolation, every other fresh episode and every
-in-sample episode checked reproduces, so no count changes.
+in-sample episode checked reproduces, so no count changes.  The cache has since
+been fixed.
 
 Branch `claude/pensive-darwin-33a0d8` (fast-forwarded from the compound
 branch at a52a7e5).  Commits: e8c7ddc (the bus-branch synthesizer, the pair
@@ -1247,9 +1248,8 @@ The rule's own decisions, in the view of section 10.4:
 - **One trajectory was not reproducible.** Section 11.8 traces it to a
   race between concurrent runs on Windows.  Re-run in isolation, every other
   episode of the fresh draw reproduces, and so does every in-sample episode
-  where the rule fires.  So no count of sections 10 and 11 changes.  Until
-  the cache is fixed, concurrent runs on one suite on this machine are not
-  safe to compare root by root.
+  where the rule fires.  So no count of sections 10 and 11 changes.  The
+  cache has since been fixed (section 11.8).
 
 ### 11.7 Reproduction
 
@@ -1356,10 +1356,24 @@ So no count of sections 10 and 11 changes.
 - **On this machine,** the race can strike two runs on the same suite at
   once.  It needs both to write a file that neither, nor any earlier run, has
   written yet.  One run alone is safe, since its workers hold different roots.
-- **The fix,** not made here: accept a target that already holds the same
-  bytes, since the path is content-addressed, and retry a transient refusal.
-  The slim trace should also record the comparison's ranking and each
-  candidate's status.
+- **The fix** came after this section's measurements, so they ran on the
+  old cache.  `_derived_case` now accepts a target that already holds the
+  same bytes, since the path is content-addressed.  It publishes a new case
+  with `os.rename`, which on Windows fails on an existing target instead of
+  replacing a file another process may be reading.  Only stale bytes are
+  replaced.  A sharing refusal of the read or the publish is retried for up
+  to about 3 s.
+- **What the fix removes.** Under the stress test, failures fall from 25%
+  and 55% of the calls (2 and 4 writers) to none with 2, 4 and 8 writers,
+  readers included.  A four-process test (`DerivedCaseConcurrencyTests` in
+  `psse_env/providers/test_matpower_providers.py`) fails on the old writer
+  and passes on the new one.
+- **The exposed setting, re-checked.** Four single-worker runs, two per
+  teacher at 16 actions, ran in lockstep on the first 40 control roots,
+  sharing one fresh temp folder (155 new case files).  All four reproduce
+  the isolated re-runs on every root, `r0_a590aacb3bc1` included.
+- **The trace.** The rollout's slim trace now records the comparison's
+  ranking and each candidate's status and error.
 
 The isolated re-runs are `rerun_isolated/` in both fresh folders and
 `rerun_isolated_fired/` in both in-sample folders.
