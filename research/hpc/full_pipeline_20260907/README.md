@@ -247,10 +247,12 @@ and results: `docs/conventional_only_cell_20261022.md`.
 
 ## Round recipe revision (2026-10-29)
 
-Why: in two of the six recorded cells round 2 scored below round 1 (2026-09-08:
-R1 147, R2 146, two measurement+parameter roots lost to the commit-rollback
-loop R1 had removed from BC0; 2026-10-01: R1 158, R2 156), and never above
-it by more than a root. The pool recipe gave round 2 only about one in seven
+Why: in three of the seven recorded cells round 2 scored below round 1
+(2026-09-08: R1 147, R2 146, two measurement+parameter roots lost to the
+commit-rollback loop R1 had removed from BC0; 2026-10-01: R1 158, R2 156;
+the conventional-only cell above: R1 191, R2 190 of 192, with 9 invalid-action
+and 2 loop episodes where R1 has none, 8 of them on the multi-error cohorts
+BC0's 19 fell on), and never above it by more than a root. The pool recipe gave round 2 only about one in seven
 of round 1's rows (D1 competed with D0 for the uniformly sampled replay
 slots), continued the student with a restarted schedule, and kept the final
 checkpoint, so R2 was a small unselected perturbation of a policy at the
@@ -288,9 +290,13 @@ What changed (`pipeline.env`, `stage_collect.sbatch`, `stage_train.sbatch`,
 
 Cost: a 122-root round 2 trains on about 2,200 rows instead of 1,070 (about
 550 optimizer steps, roughly five hours at the measured 2.5 hours per 285
-steps). A cell deployed before 2026-10-29 that is resumed with this code
+steps); the conventional-only cell's 74-root round 2 on about 1,740 instead
+of 864. A cell deployed before 2026-10-29 that is resumed with this code
 keeps its recorded configuration only under `ROUND_AGGREGATE=pool
-ROUND_INIT=previous`; a cumulative round 2 must start from a fresh `out/r2`.
+ROUND_INIT=previous`; a cumulative round 2 must start from a fresh `out/r2`
+(set the recorded one aside and resubmit `FROM=r2c CHAIN="r2c r2t r2e"`; the
+exact commands for the conventional-only cell are in the analysis note,
+section 4).
 
 ## Ambiguity design (ranked testing with escalation fallback)
 

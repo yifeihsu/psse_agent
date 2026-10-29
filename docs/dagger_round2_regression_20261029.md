@@ -20,14 +20,17 @@ noted), with the expert rolled out on the same roots as the ceiling:
 | 2026-09-24 WLS-gated | 156 | 157 | 157 | 158 | parity |
 | 2026-10-01 ranked screen cell | 152 | 158 | 156 | 160 | R2 gains the topology root R1 missed and loses three roots, all at the step after balanced phasors on a voltage-meter suspicion (`docs/hypothesis_ranking_step5_20261001.md`) |
 | 2026-10-07 classifier-gated cell | 153 | 159 | 159 | 159 | parity with fewer invalid actions and false commits |
+| 2026-10-22 conventional-only cell (the paper's; 192 fresh roots) | 189 | 191 | 190 | 192 | R2 loses one breaker root and has 9 invalid-action and 2 loop episodes where R1 has none (section 4) |
 
-So R2 scored below R1 in two of the six cells, by one and two roots, and
-never by more. The two regressions have a recognisable signature rather
-than random loss: in the 2026-09-08 cell R2 re-acquired a failure mode that
-R1 had removed from BC0 (the parameter commit-rollback loop; BC0 22/25, R1
-25/25, R2 23/25 on the dominant stratum), and in the 2026-10-01 cell R2
-flipped at a decision where the teacher's own label is not a function of
-the observation. Both are what the round recipe below predicts.
+So R2 scored below R1 in three of the seven cells, by one or two roots, and
+never above it by more than a root. The regressions have a recognisable
+signature rather than random loss: in the 2026-09-08 cell R2 re-acquired a
+failure mode that R1 had removed from BC0 (the parameter commit-rollback
+loop; BC0 22/25, R1 25/25, R2 23/25 on the dominant stratum), in the paper's
+cell R2's violations fall on the multi-error cohorts where BC0's did and R1's
+did not (section 4), and in the 2026-10-01 cell R2 flipped at a decision
+where the teacher's own label is not a function of the observation. All
+three are what the round recipe below predicts.
 
 ## 2. How the rounds were built (through 2026-10-28)
 
@@ -128,7 +131,104 @@ revision (2026-10-29)" has the operational details.
 - The 2026-09-07 recipe stays reproducible with
   `ROUND_AGGREGATE=pool ROUND_INIT=previous`.
 
-## 4. What the recipe does not change, and what to do about it
+## 4. The paper's cell: the conventional-only confirmation (2026-10-22)
+
+`docs/conventional_only_cell_20261022.md` is the cell whose tables the PES GM
+2027 manuscript reads (Section VI): the seven conventional families only,
+`scada_only`, the `baseline_compare` teacher, a fresh 192-root test set, the
+same round recipe as above (pool mixture, student continued, final
+checkpoint).
+
+| | Expert | BC0 | R1 | R2 |
+| --- | ---: | ---: | ---: | ---: |
+| Test set, 192 fresh roots | 192 | 189 | 191 | 190 |
+| Episodes with an invalid action (invalid actions) | 0 (0) | 19 (39) | 0 (0) | 9 (15) |
+| Episodes with a false commit / loop episodes | 0 / 0 | 3 / 2 | 0 / 0 | 0 / 2 |
+| Mean actions per episode | 9.87 | 10.38 | 9.85 | 9.93 |
+| Hard-draw stress roots, 193 (process-violation episodes) | 185 (0) | 182 (22) | 183 (1) | 182 (5) |
+| Validation roots, 96 (process-violation episodes) | 96 (0) | 96 (6) | 96 (1) | 96 (4) |
+
+The round selection on the validation roots picks R1. The success
+differences between R1 and R2 are within the paired noise (one discordant
+root each way, p = 1); the difference in process violations on the test set
+(9 episodes against 0, p = 0.004) is not.
+
+**The arithmetic of round 2 in this cell.** D0's training view has 2,747
+rows. Round 1 collected 437 safe rows with BC0 as the student (3.2% tool
+disagreement) and trained R1 for 219 steps on 437 + 437. Round 2 collected
+432 safe rows with R1 as the student (1.6% tool disagreement, no invalid
+student action during collection) and trained R2 for 216 steps on 432 D2
+rows plus 432 rows drawn uniformly from the 3,184-row pool of D0 and D1. The
+expected number of round-1 rows in that draw is 432 x 437 / 3,184 = 59, so
+about 86 percent of D1 was absent from R2's pass, and the pass was roughly
+43 percent D0 rows R1 had not been trained on, 50 percent D2 rows at states
+R1 already handled like the teacher, and 7 percent D1. To count it exactly
+on the cluster (round-2 rows carry the `d1` mixture tag; round-1 rows that
+survived the pool draw carry `d0` with a `dagger_iter1_` example id):
+
+```bash
+cd /scratch/yx3882/research_full_pipeline_20261022_conventional
+python3 - <<'EOF'
+import json
+rows = [json.loads(l) for l in open("out/r2/collection/round1.train.jsonl") if l.strip()]
+d1 = [r for r in rows if r.get("research_mixture_source") == "d0"
+      and str(r.get("example_id", "")).startswith("dagger_iter1_")]
+print(len(rows), "rows in the round-2 pass;", len(d1), "of them round-1 rows")
+EOF
+```
+
+**What D1 taught and what R2 lost.** The 437 round-1 rows are 190 context
+requests, 88 commits, 88 solves, 47 handoffs, 19 corrections and one
+comparison, collected at the states BC0 reached on the round-1 roots: the
+process discipline BC0 lacked on the multi-error roots, where all 19 of its
+violation episodes fell (correction, commit and rollback cycles on
+meter + R/X, repeated context requests and meter edits on meter + breaker).
+R1 learned it and has no violation on any set. R2's nine violation episodes
+are four multi-meter roots, three meter + breaker roots (a second
+`correct_topology` before verifying the first), one meter + R/X root and the
+breaker root it lost (a context request, then `correct_topology` again with
+its candidate open, both refused): eight of the nine on the same multi-error
+cohorts as BC0's nineteen, and all of the kind D1 corrected. That is the
+pool recipe's signature, a partial return of BC0's behaviour where D1's rows
+were dropped, rather than a new failure class. The matched cloning control
+of the same note (BC0 continued on R1's mixture with the 437 collected rows
+replaced by fresh expert-distribution rows: 183 successes, 8 violation
+episodes, 7 false-commit episodes) shows the direction a pass weighted
+toward expert-distribution rows takes; R2's pass moved part of the way in
+that direction.
+
+**Rerunning round 2 of this cell under the 2026-10-29 recipe.** The
+override is unchanged (the recipe settings default to `cumulative` and
+`bc0`); redeploy this commit into the cell so `pipeline.env` and the stage
+scripts are refreshed, set the recorded pool-recipe round 2 aside (its
+receipts are write-once), and resubmit from the round-2 collection. From
+the Windows checkout, with the SSH master up:
+
+```bash
+PIPE=/scratch/yx3882/research_full_pipeline_20261022_conventional \
+SOURCE_CELL=/scratch/yx3882/research_full_pipeline_20261021_compare \
+BASE=$(wsl -- ssh torch "git -C /scratch/yx3882/research_full_pipeline_20261022_conventional/source rev-parse HEAD") \
+BRANCH=claude/eager-fermat-0ca9ms OVERRIDES=conventional_only_20261022.env SUBMIT=0 \
+bash research/hpc/full_pipeline_20260907/deploy_cell_from_windows.sh $(git rev-parse claude/eager-fermat-0ca9ms)
+```
+
+```bash
+wsl -- ssh torch "cd /scratch/yx3882/research_full_pipeline_20261022_conventional && mv out/r2 out/r2_pool_20261023 && FROM=r2c CHAIN='r2c r2t r2e' ALLOW_PARALLEL_CHAIN=1 bash submit_pipeline.sh"
+```
+
+Round 2 then collects with R1 as before (so `out/r2/collection/` is the
+same on-policy draw, re-collected), mixes D2 with all 437 round-1 rows
+against a D0 sample of the same size (about 1,738 rows, 435 steps), trains
+from the BC0 adapter, and the paired evaluation again scores R2 against R1
+on the 192 test roots. `out/r2/collection/mixture_report.json` records
+`prior_onpolicy_selected` (437), `prior_onpolicy_retained_fraction` (1.0)
+and `label_conflicts`. For the follow-up tables, set
+`out/extra/evaluations/hard_r2_control` and `validation_r2_control` aside
+and resubmit them (`ONLY="hard_r2_control validation_r2_control" bash
+submit_extras_20261023.sh`); the control and the BC0/R1 evaluations are
+unchanged, and `followup_tables.py` then re-applies the round selection.
+
+## 5. What the recipe does not change, and what to do about it
 
 - **Round selection.** The pipeline still reports the last round's
   adapter. DAgger returns the best policy over rounds on held-out data;
