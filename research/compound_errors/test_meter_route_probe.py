@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from research.compound_errors.meter_route_probe import compare, cue_outcomes, meter_commits, wrong_commits
+from research.compound_errors.meter_route_probe import against_reference, compare, cue_outcomes, meter_commits, wrong_commits
 
 
 def _trace() -> list[dict]:
@@ -33,10 +33,15 @@ class MeterRouteProbeTests(unittest.TestCase):
     def test_each_alarm_on_meter_commit_is_read_with_the_next_true_correction(self) -> None:
         commits = meter_commits(_episode("r0", True), 11.0)
         self.assertEqual(commits, [
-            {"step": 2, "max_normalized_residual": 15.7, "fires": True, "next_true": "correct_measurements"},
-            {"step": 10, "max_normalized_residual": 9.0, "fires": False, "next_true": "correct_parameters"},
+            {"step": 2, "max_normalized_residual": 15.7, "fires": True, "next_true": "correct_measurements", "true": True},
+            {"step": 10, "max_normalized_residual": 9.0, "fires": False, "next_true": "correct_parameters", "true": True},
         ])
         self.assertEqual(cue_outcomes([_episode("r0", True)], 11.0), {"fires": {"meter": 1}, "quiet": {"line": 1}})
+        # Split by the committed meter itself: the first commit of this episode is on a healthy meter.
+        wrong_first = [_episode("r0", True, wrong_meter=True)]
+        self.assertEqual(meter_commits(wrong_first[0], 11.0)[0]["true"], False)
+        self.assertEqual(cue_outcomes(wrong_first, 11.0, committed_true=False), {"fires": {"meter": 1}, "quiet": {}})
+        self.assertEqual(cue_outcomes(wrong_first, 11.0, committed_true=True), {"fires": {}, "quiet": {"line": 1}})
         # A rolled-back line is not a wrong commit; a committed healthy meter is.
         self.assertEqual(wrong_commits(_episode("r0", True)), {})
         self.assertEqual(wrong_commits(_episode("r0", True, wrong_meter=True)), {"correct_measurements": 1})
@@ -51,6 +56,15 @@ class MeterRouteProbeTests(unittest.TestCase):
         self.assertEqual(cell["rule_fired_episodes"], 3)
         self.assertEqual(sorted(cell["lost_roots"]), ["r1"])
         self.assertEqual(cell["lost_roots"]["r1"]["rule"]["wrong_commits"], {"correct_measurements": 1})
+
+    def test_a_fresh_draw_is_set_beside_the_reference_probe(self) -> None:
+        here = {"meter_rx2": {"n": 3, "baseline_solved": 2, "rule_solved": 2, "gained": 1, "lost": 1}}
+        there = {"meter_rx2": {"n": 4, "baseline_solved": 1, "rule_solved": 3, "gained": 2, "lost": 0}}
+        lines = against_reference({"ieee118": {"16": {"classes": here}}}, {"ieee118": {"16": {"classes": there}, "40": {"classes": there}}})
+        self.assertIn("| class | 16 actions, reference | 16 actions, this draw |", lines)
+        self.assertIn("| meter_rx2 (3) | 1 / 3 of 4 (+2, -0) | 2 / 2 (+1, -1) |", lines)
+        self.assertEqual(against_reference({"ieee14_control": {"16": {"classes": here}}}, {"ieee118": {"16": {"classes": there}}}),
+                         ["## Against the reference probe", ""])
 
 
 if __name__ == "__main__":

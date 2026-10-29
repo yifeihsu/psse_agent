@@ -56,25 +56,29 @@ def meter_commits(episode: Mapping[str, Any], threshold: float) -> list[dict[str
 
     The reading is the last ``run_wls`` before the ``commit_state``; ``fires``
     is the rule's test on it, ``next_true`` the tool of the first true
-    correction the episode committed afterwards (None if none).
+    correction the episode committed afterwards (None if none), ``true``
+    whether the committed meter correction itself was on a true target.
     """
     trace = list(episode.get("trace") or [])
     committed = [c for c in episode.get("corrections") or [] if c.get("lifecycle") == "commit_state"]
     out = []
     metrics: Mapping[str, Any] | None = None
     last_correction = None
+    last_correction_step = None
     for index, step in enumerate(trace):
         tool = str(step.get("tool"))
         if tool == "run_wls" and step.get("metrics"):
             metrics = step["metrics"]
         elif tool.startswith("correct_"):
-            last_correction = tool
+            last_correction, last_correction_step = tool, index
         elif tool == "commit_state" and step.get("status") == "success":
             if last_correction == METER and metrics and not metrics.get("globally_resolved"):
                 residual = metrics.get("max_normalized_residual")
                 following = next((str(c.get("tool")) for c in committed if int(c.get("step", -1)) > index and c.get("target_is_true")), None)
+                own = next((c for c in committed if int(c.get("step", -1)) == last_correction_step), None)
                 out.append({"step": index, "max_normalized_residual": residual,
-                            "fires": residual is not None and float(residual) >= threshold, "next_true": following})
+                            "fires": residual is not None and float(residual) >= threshold, "next_true": following,
+                            "true": None if own is None else bool(own.get("target_is_true"))})
     return out
 
 
@@ -84,11 +88,16 @@ def wrong_commits(episode: Mapping[str, Any]) -> Counter:
                    if c.get("lifecycle") == "commit_state" and c.get("target_is_true") is False)
 
 
-def cue_outcomes(episodes: Sequence[Mapping[str, Any]], threshold: float) -> dict[str, Any]:
-    """Next true correction after each alarm-on meter commit, split by whether the rule fires."""
+def cue_outcomes(episodes: Sequence[Mapping[str, Any]], threshold: float, *, committed_true: bool | None = None) -> dict[str, Any]:
+    """Next true correction after each alarm-on meter commit, split by whether the rule fires.
+
+    ``committed_true`` keeps only the commits of a true meter (True) or of a healthy one (False).
+    """
     table: dict[str, Counter] = {"fires": Counter(), "quiet": Counter()}
     for episode in episodes:
         for commit in meter_commits(episode, threshold):
+            if committed_true is not None and commit["true"] is not committed_true:
+                continue
             following = commit["next_true"]
             kind = "meter" if following == METER else "line" if following in LINE_TOOLS else "none"
             table["fires" if commit["fires"] else "quiet"][kind] += 1
@@ -144,15 +153,46 @@ def summarize(pairs: Mapping[str, Mapping[int, tuple[Path, Path]]], threshold: f
         for budget, (base_path, rule_path) in sorted(by_budget.items()):
             baseline = {str(r["scenario_id"]): r for r in load_jsonl(base_path)}
             rule = {str(r["scenario_id"]): r for r in load_jsonl(rule_path)}
+            runs = {"baseline": list(baseline.values()), "rule": list(rule.values())}
             system_out[str(budget)] = {
                 "classes": compare(baseline, rule, threshold),
-                "cue": {"baseline": cue_outcomes(list(baseline.values()), threshold), "rule": cue_outcomes(list(rule.values()), threshold)},
+                "cue": {run: cue_outcomes(episodes, threshold) for run, episodes in runs.items()},
+                "cue_by_commit": {run: {"true": cue_outcomes(episodes, threshold, committed_true=True),
+                                        "healthy": cue_outcomes(episodes, threshold, committed_true=False)}
+                                  for run, episodes in runs.items()},
             }
         out[system] = system_out
     return out
 
 
-def markdown(summary: Mapping[str, Any], threshold: float) -> str:
+def _solved(cell: Mapping[str, Any] | None, n: int | None = None) -> str:
+    if not cell:
+        return ""
+    size = "" if n is None or cell["n"] == n else f" of {cell['n']}"
+    return f"{cell['baseline_solved']} / {cell['rule_solved']}{size} (+{cell['gained']}, -{cell['lost']})"
+
+
+def against_reference(summary: Mapping[str, Any], reference: Mapping[str, Any]) -> list[str]:
+    """Per system: each class's solved counts (baseline_compare / rule, gained, lost), reference probe beside this one."""
+    lines = ["## Against the reference probe", ""]
+    for system, by_budget in summary.items():
+        budgets = [b for b in by_budget if b in (reference.get(system) or {})]
+        if not budgets:
+            continue
+        header = " | ".join(f"{b} actions, reference | {b} actions, this draw" for b in budgets)
+        lines += [f"### {system}", "", f"| class | {header} |", "| --- |" + " --- |" * (2 * len(budgets))]
+        for name in (*CLASSES, "all"):
+            here = {b: by_budget[b]["classes"].get(name) for b in budgets}
+            n = next((cell["n"] for cell in here.values() if cell), None)
+            if n is None:
+                continue
+            cells = [text for b in budgets for text in (_solved(reference[system][b]["classes"].get(name), n), _solved(here[b], n))]
+            lines.append(f"| {name} ({n}) | " + " | ".join(cells) + " |")
+        lines.append("")
+    return lines
+
+
+def markdown(summary: Mapping[str, Any], threshold: float, reference: Mapping[str, Any] | None = None) -> str:
     fmt = lambda v: "" if v is None else f"{v:.1f}"  # noqa: E731
     count = lambda c: ", ".join(f"{k} {v}" for k, v in sorted(c.items())) or "0"  # noqa: E731
     lines = [f"# Meter-route rule (max normalized residual >= {threshold:g}) against baseline_compare", ""]
@@ -171,9 +211,16 @@ def markdown(summary: Mapping[str, Any], threshold: float) -> str:
             lines += ["", "Next true correction after each committed meter correction with the alarm on:", "",
                       "| run | rule fires: meter / line / none | rule quiet: meter / line / none |", "| --- | --- | --- |"]
             for run, cue in entry["cue"].items():
-                cells = [f"{cue[k].get('meter', 0)} / {cue[k].get('line', 0)} / {cue[k].get('none', 0)}" for k in ("fires", "quiet")]
-                lines.append(f"| {run} | {cells[0]} | {cells[1]} |")
+                split = (entry.get("cue_by_commit") or {}).get(run) or {}
+                for label, table in ((run, cue), (f"{run}, after a true meter commit", split.get("true")),
+                                     (f"{run}, after a healthy meter commit", split.get("healthy"))):
+                    if table is None:
+                        continue
+                    cells = [f"{table[k].get('meter', 0)} / {table[k].get('line', 0)} / {table[k].get('none', 0)}" for k in ("fires", "quiet")]
+                    lines.append(f"| {label} | {cells[0]} | {cells[1]} |")
             lines.append("")
+    if reference:
+        lines += against_reference(summary, reference)
     return "\n".join(lines)
 
 
@@ -182,13 +229,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--pair", action="append", required=True, metavar="SYSTEM:BUDGET=BASELINE,RULE")
     parser.add_argument("--threshold", type=float, default=11.0)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--reference", type=Path, default=None,
+                        help="an earlier probe's meter_route_probe.json to set beside this one (a fresh draw against the in-sample probe)")
     args = parser.parse_args(argv)
     summary = summarize(parse_pairs(args.pair), args.threshold)
+    reference = json.loads(args.reference.read_text(encoding="utf-8"))["summary"] if args.reference else None
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
-    report = {"contract": CONTRACT, "threshold": args.threshold, "pairs": args.pair, "summary": summary}
+    report = {"contract": CONTRACT, "threshold": args.threshold, "pairs": args.pair, "summary": summary,
+              "reference": None if args.reference is None else str(args.reference)}
     (out / "meter_route_probe.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    text = markdown(summary, args.threshold)
+    text = markdown(summary, args.threshold, reference)
     (out / "meter_route_probe.md").write_text(text + "\n", encoding="utf-8")
     print(text)
     return 0
