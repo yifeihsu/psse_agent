@@ -48,6 +48,16 @@ the IEEE 14 control (328 to 356), all of them meter controls, and 5 and 1 at
 40 actions.  It loses no root on either system at either budget.  Its cost
 is a few more wrong meters committed on roots that fail under both teachers.
 
+Section 11 (2026-10-29) repeats section 10 on a fresh draw of both suites
+(suite seed 20261029, disjoint from the first draw), with the threshold left
+at 11.  The gains hold: 32 IEEE 118 roots at 16 actions (405 to 437) and 22
+on the control (341 to 362), all of them meter controls, and 4 and 1 at 40
+actions.  On IEEE 118 the threshold separates the fresh states as cleanly as
+the in-sample ones.  The no-loss result does not hold: on the control the rule
+loses one meter + two R/X root at both budgets, through the masking section
+10.3 named.  It commits a healthy voltage meter at a terminal of a bad line,
+and the line's true correction is then rejected.
+
 Branch `claude/pensive-darwin-33a0d8` (fast-forwarded from the compound
 branch at a52a7e5).  Commits: e8c7ddc (the bus-branch synthesizer, the pair
 metrics, the scripts' system switch, tests), d148464 (the comparison script,
@@ -891,8 +901,8 @@ overlap band of section 9.4.
 
 - **Actions.** On the meter controls both teachers solve with 40 actions,
   the mean falls from 19.8 to 10.8 actions on IEEE 118 and from 21.3 to 12.4
-  on the control.  Budget handoffs at 40 fall from 22 to 12 and from 32 to
-  21.
+  on the control.  Over all classes, budget handoffs at 40 fall from 22 to 12
+  and from 32 to 21; on the meter controls, from 7 to 0 and from 7 to 1.
 - **Other classes.** Outside the meter controls the rule changes 26 IEEE 118
   and 23 control trajectories at 40 actions: adjacent pairs, the two
   meter-and-line classes, and one distant pair on the control.  No outcome
@@ -933,8 +943,8 @@ overlap band of section 9.4.
     40-action total.
 - **In sample by root.** The threshold of 11 was read off these same two
   suites (section 9.4, from `baseline_compare`'s own states).  The states the
-  rule decides in are new, but the roots are not.  A fresh draw would test the
-  threshold out of sample.
+  rule decides in are new, but the roots are not.  Section 11 tests the
+  threshold on a fresh draw: the gains hold, and the rule loses one root.
 - **What remains for a learned router is smaller:**
   1. The threshold band from 10.3 to 11: five meter controls at 16 actions.
   2. The first route on meter-on-line roots, before any commit.  The truth
@@ -972,3 +982,309 @@ meter controls and six meter-on-line roots of IEEE 118, and the 275 control
 roots of the three classes with a bad meter.  Its trajectories match the
 option run's on all of them, action for action and correction for correction
 (`variant_check_16/` in both output folders).
+
+## 11. The meter-route rule on a fresh draw (2026-10-29)
+
+Section 10.5 left the threshold in sample by root: 11 was read off the suites
+the rule was then scored on.  This section draws both suites again and
+repeats section 10's pairing, with nothing else changed:
+
+- **The draw.** Section 8's two `build_suite.py` commands with suite seed
+  20261029 instead of 20261027.
+- **The runs.** `baseline_compare` and the named variant
+  `baseline_compare_meter_route` (threshold 11), `scada_only`, 16 and 40
+  actions, rollout seed 20261006, the IEEE 118 runs with the sparse guard.
+  The variant reproduces the option runs action for action (section 10.6).
+- **Nothing tuned.** Nothing was tuned on the fresh draw.
+
+`meter_route_probe.py` pairs the roots as before.  It now also reports three
+more things:
+
+- whether each committed meter correction was true;
+- section 9.4's separation on `baseline_compare`'s own states;
+- the check that the rule changes no root whose `baseline_compare` episode
+  never reaches a firing state.
+
+With `--reference`, it sets the in-sample probe's counts beside the fresh
+ones.
+
+### 11.1 The fresh draw
+
+Each class shard's generator is seeded from a hash of the suite seed, the
+class name and the shard, so the two draws share no generator stream.
+`draw_overlap.py` confirms it class by class: on neither system do they share
+a generator seed, a scenario id or a root (every atom and the load scale).
+
+Repeated targets at other magnitudes are common only where targets are few:
+
+- **IEEE 118:** 86 of the 625 fresh roots repeat an in-sample root's lines
+  and meters, 57 of them adjacent pairs.
+- **IEEE 14 control:** 409 of 625 do, since the control has only 20
+  branches.
+- **Meter controls**, where every in-sample gain was: 0 of 50 IEEE 118 roots
+  and 3 of 50 control roots repeat an in-sample meter set.
+
+The fresh suites took 1,195 draws on IEEE 118 (1,325 in sample) and 1,007 on
+the control (1,052).  Section 2's profile changes little:
+
+- the strata of the deployed ranking move by at most 17 roots in a class:
+  the IEEE 118 meter + two R/X class has 90 dominant and 49 ambiguous
+  rankings, against 104 and 32 in sample;
+- no IEEE 118 root has a silent atom;
+- 5 control roots have one, against 6 in sample.
+
+The composition of the meter controls changes more:
+
+| meter controls with 1 / 2 / 3 bad meters | in sample | fresh |
+| --- | --- | --- |
+| IEEE 118 | 17 / 15 / 18 | 16 / 17 / 17 |
+| IEEE 14 control | 13 / 19 / 18 | 18 / 22 / 10 |
+
+### 11.2 Success, against section 10.1
+
+Each cell is `baseline_compare` / rule, with the roots gained and lost where
+there are any.
+
+| IEEE 118 | 16 actions, in sample | 16 actions, fresh | 40 actions, in sample | 40 actions, fresh |
+| --- | --- | --- | --- | --- |
+| two R/X lines, adjacent (150) | 97 / 97 | 99 / 99 | 95 / 95 | 101 / 101 |
+| two R/X lines, distant (150) | 130 / 130 | 125 / 125 | 130 / 130 | 125 / 125 |
+| meter + two R/X (150) | 129 / 129 | 114 / 114 | 130 / 130 | 117 / 117 |
+| meter on the faulted line + R/X (75) | 4 / 4 | 5 / 5 | 11 / 11 | 8 / 8 |
+| control: one R/X line (50) | 45 / 45 | 44 / 44 | 45 / 45 | 44 / 44 |
+| control: 1 to 3 meters (50) | 19 / 49 (+30) | 18 / 50 (+32) | 45 / 50 (+5) | 46 / 50 (+4) |
+| all (625) | 424 / 454 (+30, -0) | 405 / 437 (+32, -0) | 456 / 461 (+5, -0) | 441 / 445 (+4, -0) |
+
+| IEEE 14 control | 16 actions, in sample | 16 actions, fresh | 40 actions, in sample | 40 actions, fresh |
+| --- | --- | --- | --- | --- |
+| two R/X lines, adjacent (150) | 59 / 59 | 56 / 56 | 61 / 61 | 60 / 60 |
+| two R/X lines, distant (150) | 115 / 115 | 117 / 117 | 115 / 115 | 117 / 117 |
+| meter + two R/X (150) | 77 / 77 | 77 / 76 (-1) | 88 / 88 | 88 / 87 (-1) |
+| meter on the faulted line + R/X (75) | 11 / 11 | 16 / 16 | 13 / 13 | 17 / 17 |
+| control: one R/X line (50) | 48 / 48 | 48 / 48 | 48 / 48 | 48 / 48 |
+| control: 1 to 3 meters (50) | 18 / 46 (+28) | 27 / 49 (+22) | 49 / 50 (+1) | 49 / 50 (+1) |
+| all (625) | 328 / 356 (+28, -0) | 341 / 362 (+22, -1) | 374 / 375 (+1, -0) | 379 / 379 (+1, -1) |
+
+| meter controls at 16 actions, n: `baseline_compare` / rule | 1 meter | 2 meters | 3 meters |
+| --- | --- | --- | --- |
+| IEEE 118, in sample | 17: 17 / 17 | 15: 2 / 15 | 18: 0 / 17 |
+| IEEE 118, fresh | 16: 16 / 16 | 17: 2 / 17 | 17: 0 / 17 |
+| IEEE 14 control, in sample | 13: 13 / 13 | 19: 3 / 19 | 18: 2 / 14 |
+| IEEE 14 control, fresh | 18: 18 / 18 | 22: 9 / 21 | 10: 0 / 10 |
+
+- **The gains hold.** At 16 actions the rule gains 32 IEEE 118 roots (30 in
+  sample) and 22 control roots (28).  At 40 actions it gains 4 and 1 (5 and
+  1).  Every gain is a meter control.  On IEEE 118 the rule solves all 50
+  meter controls at both budgets.  Its 16-action IEEE 118 total (437) is 4
+  roots short of `baseline_compare`'s at 40 actions (441); in sample it was 2
+  short.
+- **Per multi-meter root, the rule does as well as in sample.** Both
+  teachers solve the one-meter controls.  On the controls with two or three
+  bad meters, at 16 actions, the rule solves 34 of 34 on IEEE 118
+  (`baseline_compare` 2) and 31 of 32 on the control (`baseline_compare` 9).
+  In sample it solved 32 of 33 (2) and 33 of 37 (5).  The control gains
+  fewer roots than in sample for two reasons.  Its fresh draw has 10
+  three-meter controls against 18.  And `baseline_compare` already solves 9
+  of the 22 two-meter roots, against 3 of 19 in sample.
+- **One root lost.** On the control, the meter + two R/X root
+  `r0_038f9574c00a` is solved by `baseline_compare` and lost by the rule, at
+  both budgets.  That is 2 losses in the 2,500 fresh paired episodes, against
+  none in the 2,500 in-sample ones.  Section 11.3 follows it.
+- **The one meter control still failed.** The rule fails one fresh control
+  meter control at 16 actions.  Its residual is 10.6 after a true meter
+  commit, the threshold band of section 10.2.
+- **`baseline_compare` itself.** It solves 441 fresh IEEE 118 roots at 40
+  actions, against 456 in sample.  Most of the gap is the meter + two R/X
+  class (117 against 130), whose dominant and ambiguous rankings both solve
+  less often, and the distant pairs (125 against 130).  This was not
+  examined further.  The
+  pairing compares the two teachers root by root, so it does not enter the
+  gains.
+
+### 11.3 The root the rule loses
+
+`r0_038f9574c00a` has three errors:
+
+- R/X errors on line 1 (buses 1 to 2) and line 17 (buses 9 to 14), two hops
+  apart;
+- a reactive-flow meter on line 18, 25.9 sigma off.
+
+Both teachers start the same way:
+
+1. They correct line 1 and the meter and commit each, partially accepted.
+2. After the meter commit, the solve reports a maximum normalized residual
+   of 14.8.  The rule fires, although the remaining error is a line.  Section
+   9.4 found this case, a meter-then-line state above the threshold, after 4
+   of 36 first commits on the in-sample control.  Here the meter commit is
+   the episode's second.
+
+Then they part:
+
+- **`baseline_compare`** takes the parameter route.  It corrects line 17 and
+  resolves the state with its 13th action.
+- **The rule** takes the measurement route.
+  1. The context offers the voltage meter at bus 14, a terminal of line 17.
+     The synthesizer perturbs only P and Q meters, so in these suites a
+     voltage meter is never a true target.
+  2. The verifier accepts that correction as partial: the chi-square ratio
+     falls from 3.60 to 1.91, the maximum normalized residual to 6.8.  It is
+     committed.
+  3. The edit absorbs part of line 17's signature.  The true correction of
+     line 17 is then rejected (residual 10.8 against 6.8), and so is the next
+     candidate, line 20.
+  4. The episode hands off with a healthy meter edited, after 15 actions at
+     16 and after 24 at 40.
+
+Run alone, each teacher repeats its trajectory at both budgets.  This is the
+masking section 10.3 named, a healthy meter edit that hides a bad line.  In
+sample it fell only on roots both teachers fail; here it costs a root.  The
+healthy meter is a voltage meter at a terminal of the bad line, the
+neighborhood of section 5.2's same-line meter problem.
+
+### 11.4 The cue out of sample
+
+Section 9.4's separation is the residual after `baseline_compare`'s first
+committed correction, at 40 actions.  On the fresh draw:
+
+| first commit, then next true correction: n / median / at least 11 | IEEE 118, in sample | IEEE 118, fresh | IEEE 14 control, in sample | IEEE 14 control, fresh |
+| --- | --- | --- | --- | --- |
+| meter, then meter | 32 / 19.4 / 32 | 34 / 19.0 / 34 | 39 / 15.5 / 37 | 33 / 13.8 / 28 |
+| meter, then line | 19 / 9.6 / 4 | 28 / 7.5 / 3 | 36 / 7.4 / 4 | 52 / 7.0 / 5 |
+
+- **IEEE 118.** The threshold separates the fresh states as cleanly as the
+  in-sample ones.  All 34 meter-then-meter states reach 11, and 3 of 28
+  meter-then-line states do (4 of 19 in sample).
+- **IEEE 14 control.** It admits as few line-next states (5 of 52) but
+  catches fewer meter-next ones: 28 of 33, against 37 of 39 in sample.
+  - The five below 11 are all two-meter controls.  The fresh two-meter
+    controls sit lower after the first commit (median 13.3 against 15.2).
+  - Below the threshold, `baseline_compare`'s own route still finishes four
+    of the five within 16 actions.
+  - The fifth, at 10.6, is the meter control of section 11.2 that both
+    teachers fail.
+
+The rule's own decisions, in the view of section 10.4:
+
+| rule decisions, by the meter commit before them: next true correction meter / line / none | IEEE 118, 16 actions: in sample, fresh | IEEE 118, 40 actions | IEEE 14 control, 16 actions | IEEE 14 control, 40 actions |
+| --- | --- | --- | --- | --- |
+| after a true meter commit | 50 / 4 / 5, 51 / 1 / 5 | 50 / 7 / 4, 51 / 6 / 7 | 47 / 3 / 2, 35 / 6 / 3 | 47 / 4 / 6, 35 / 7 / 7 |
+| after a healthy meter commit | 0 / 0 / 4, 0 / 0 / 6 | 6 / 0 / 22, 1 / 0 / 30 | 2 / 0 / 3, 1 / 0 / 9 | 5 / 0 / 26, 2 / 2 / 24 |
+
+- **After a true meter commit, IEEE 118.** The next true correction is a
+  meter in 51 of 57 and 51 of 64 fresh decisions (50 of 59 and 50 of 61 in
+  sample).
+- **After a true meter commit, IEEE 14 control.** It is a meter in 35 of 44
+  and 35 of 49 fresh decisions, against 47 of 52 and 47 of 57 in sample.
+  The control's fresh draw offers fewer meter-after-meter states (it has
+  fewer three-meter roots) and a few more line-after-meter ones (6 and 7,
+  against 3 and 4).
+- **When a line came next** in the rule's own episode, the root was not
+  lost: the line route resumed after the measurement context, as in sample.
+  The lost root is a "none" decision: after its fired meter commit, the
+  rule's episode commits no further true correction.
+
+### 11.5 What the rule costs
+
+- **Actions.** On the meter controls both teachers solve at 40 actions, the
+  mean falls from 20.4 to 10.7 actions on IEEE 118 (19.8 to 10.8 in sample)
+  and from 16.7 to 10.8 on the control (21.3 to 12.4).  Over all classes,
+  budget handoffs at 40 actions fall from 31 to 17 and from 17 to 13; on the
+  meter controls, from 9 to 0 and from 2 to 0.
+- **Other classes.** At 40 actions the rule changes 27 IEEE 118 trajectories
+  outside the meter controls: 21 meter-on-line roots, 5 meter + two R/X roots
+  and 1 distant pair, 33 actions fewer in total.  On the control it changes
+  29: 13 meter-on-line roots, 8 meter + two R/X roots and 8 adjacent pairs,
+  54 actions fewer.  In sample the counts were 26 and 23.  The only outcome
+  that changes is the lost root.
+- **Committed wrong meters.** At 40 actions they rise from 52 to 58 on IEEE
+  118 (on 5 roots) and from 59 to 65 on the control (5 roots).  At 16 they
+  rise from 11 to 12 (1 root) and from 18 to 23 (4 roots).  Except the lost
+  root, every one of these roots fails under both teachers.
+- **The same-trajectory check.** Take the roots where `baseline_compare`
+  never reaches a state the rule fires in (559 to 581 per run).  In three of
+  the four fresh pairings the rule's trajectories on them are identical.
+  The exception is the control at 16 actions, on the adjacent pair
+  `r0_a590aacb3bc1`, where no meter is ever committed, so the rule cannot
+  fire:
+  - The two runs part at the second line correction: the
+    `baseline_compare` run tries line 5 before line 3, the rule run line 3.
+  - Run alone, `baseline_compare` takes line 3 three times out of three.
+    So the difference is in the `baseline_compare` run, not in the rule.
+  - That episode ran as the 32nd root of a single-worker process (section
+    11.7), which points to state carried between roots in one process.
+  - Both teachers solve the root, so no count changes.  The cause is open.
+
+### 11.6 What this means
+
+- **The gain holds out of sample.** The threshold of 11, read off the
+  20261027 suites, recovers the same kind of root on a disjoint draw.  At 16
+  actions it gains 32 on IEEE 118 and 22 on the control (30 and 28 in
+  sample).  Every gain is a meter control with two or three bad meters, and
+  on IEEE 118 the fresh states separate as cleanly as the in-sample ones.
+- **The no-loss result does not.** On a fresh control root, the rule commits
+  a healthy meter at a terminal of a bad line.  `baseline_compare` would
+  correct the line there.  Over both draws and both budgets, the rule wins
+  123 of the 5,000 paired episodes and loses 2.
+- **For the named variant.** `baseline_compare_meter_route` is still the
+  better teacher on these classes, but not a strict improvement.  A DAgger
+  collection under it would also teach that step.
+- **For RL.** The residue of section 10.5 stands:
+  1. the threshold band, which leaves one fresh control meter control at
+     10.6;
+  2. the first route on meter-on-line roots;
+  3. the adjacent pairs' order.
+
+  Item 4, the rule's cost, now loses a root.  On that root the rule leaves
+  the meter route by itself: the residual falls to 6.8 after the healthy
+  meter commit.  But the committed edit stays and masks line 17.  Avoiding
+  the loss means refusing the partial meter candidate at the terminal of a
+  line that may be bad.  Recovering from it means withdrawing a committed
+  correction, the hypothesis-abandonment decision of RL watchlist item 1.
+- **Open: one trajectory is not reproducible.** The `baseline_compare` run
+  of `r0_a590aacb3bc1` cannot be reproduced alone (section 11.5).  Its cause
+  should be found before a cell or a DAgger collection relies on paired runs
+  being identical root by root.
+
+### 11.7 Reproduction
+
+```
+python -m research.compound_errors.build_suite --system case118 --output-dir output/compound_errors_ieee118_20261029 --seed 20261029 --shards 10 --workers 26
+python -m research.compound_errors.build_suite --system case14 --physics bus_branch --distant-hops 2 --output-dir output/compound_errors_ieee14_busbranch_20261029 --seed 20261029 --shards 10 --workers 4
+python -m research.compound_errors.draw_overlap --pair ieee118=<F>,<D> --pair ieee14_control=<G>,<C> --output-dir <F>/draw_overlap
+PSSE_MULTI_SCAN_RCOND=sparse_symmetric python -m research.compound_errors.rollout --suite <F>/suite.json --output-dir <F>/baseline_compare_40 --system case118 --expert baseline_compare --max-steps 40 --workers 7
+PSSE_MULTI_SCAN_RCOND=sparse_symmetric python -m research.compound_errors.rollout --suite <F>/suite.json --output-dir <F>/meter_route_40 --system case118 --expert baseline_compare_meter_route --max-steps 40 --workers 7
+python -m research.compound_errors.rollout --suite <G>/suite.json --output-dir <G>/baseline_compare_40 --expert baseline_compare --max-steps 40 --workers 3
+python -m research.compound_errors.join_runs --suite <F>/suite.json --part <F>/meter_route_16/episodes_head.jsonl --part <F>/meter_route_16_rest/episodes.jsonl --metadata <F>/meter_route_16_rest/summary.json --output-dir <F>/meter_route_16
+python -m research.compound_errors.meter_route_probe --threshold 11 --pair ieee118:40=<F>/baseline_compare_40/episodes.jsonl,<F>/meter_route_40/episodes.jsonl --pair ieee118:16=<F>/baseline_compare_16/episodes.jsonl,<F>/meter_route_16/episodes.jsonl --pair ieee14_control:40=<G>/baseline_compare_40/episodes.jsonl,<G>/meter_route_40/episodes.jsonl --pair ieee14_control:16=<G>/baseline_compare_16/episodes.jsonl,<G>/meter_route_16/episodes.jsonl --reference docs/compound_errors_ieee118_20261028/meter_route_probe.json --output-dir <F>/meter_route_probe
+```
+
+`<F>` is `output/compound_errors_ieee118_20261029` and `<G>` is
+`output/compound_errors_ieee14_busbranch_20261029`; `<D>` and `<C>` are as in
+section 9.6.  The other rollouts differ from those shown only in the expert,
+`--max-steps 16` and the folder (`baseline_compare_16/`, `meter_route_16/`),
+with 6 workers for the IEEE 118 16-action runs.
+
+Every rollout ran in two parts:
+
+- **IEEE 14 control.** The four runs started on one worker each and were
+  stopped after 93 to 118 roots.  `rollout.py --roots` ran the rest on three
+  workers (`*_rest/`).
+- **IEEE 118.** A restart of the machine stopped the four runs after 471 to
+  506 roots, and the rest ran on six workers.
+
+`join_runs.py` joins each run's first part, kept as `episodes_head.jsonl`,
+with its rest into the run's `episodes.jsonl`, in suite order.  It also
+rebuilds `summary.{json,md}` over all 625 episodes.
+
+Run times:
+
+- the two suites, built at once: 21 min (IEEE 118) and 10 min (control);
+- the control's first parts: 20 min; its rests: 16 to 20 min;
+- the IEEE 118 first parts: 50 min, beside the control's; their rests: 8 to
+  17 min.
+
+The tracked outputs are in `docs/compound_errors_ieee118_20261028/fresh_20261029/`:
+`draw_overlap.*`, `meter_route_probe.*`, the two suite manifests, and the eight
+joined run summaries `{ieee118,ieee14_busbranch}_{baseline_compare,meter_route}_{16,40}_summary.*`.
+The in-sample `meter_route_probe.*` in the folder above was regenerated to
+carry the probe's new tables; its earlier figures are unchanged.

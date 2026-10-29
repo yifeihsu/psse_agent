@@ -1,0 +1,1895 @@
+{
+  "class_results": [
+    {
+      "attempts": 20,
+      "built": 15,
+      "class": "rx2_adjacent",
+      "floor_rejections": {
+        "below_parameter": 5,
+        "joint_alarm": 5,
+        "physically_admissible": 5,
+        "total": 5
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 3599420444
+      },
+      "requested": 15,
+      "seconds": 45.6,
+      "seed": 3599420444,
+      "shard": 0,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 5
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 25,
+      "built": 15,
+      "class": "rx2_adjacent",
+      "floor_rejections": {
+        "below_parameter": 8,
+        "joint_alarm": 8,
+        "physically_admissible": 7,
+        "total": 8
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 3684719898
+      },
+      "requested": 15,
+      "seconds": 58.1,
+      "seed": 3684719898,
+      "shard": 1,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 8,
+        "compound_true_model_not_clean": 2
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 27,
+      "built": 15,
+      "class": "rx2_adjacent",
+      "floor_rejections": {
+        "below_parameter": 13,
+        "joint_alarm": 11,
+        "physically_admissible": 10,
+        "total": 12
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2148312510
+      },
+      "requested": 15,
+      "seconds": 61.9,
+      "seed": 2148312510,
+      "shard": 2,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 12
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 20,
+      "built": 15,
+      "class": "rx2_adjacent",
+      "floor_rejections": {
+        "below_parameter": 6,
+        "joint_alarm": 4,
+        "physically_admissible": 3,
+        "total": 5
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2852877701
+      },
+      "requested": 15,
+      "seconds": 44.6,
+      "seed": 2852877701,
+      "shard": 3,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 5
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 19,
+      "built": 15,
+      "class": "rx2_adjacent",
+      "floor_rejections": {
+        "below_parameter": 4,
+        "joint_alarm": 3,
+        "physically_admissible": 3,
+        "total": 3
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1928328468
+      },
+      "requested": 15,
+      "seconds": 42.3,
+      "seed": 1928328468,
+      "shard": 4,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 3,
+        "compound_true_model_not_clean": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 16,
+      "built": 15,
+      "class": "rx2_adjacent",
+      "floor_rejections": {
+        "below_parameter": 1,
+        "joint_alarm": 1,
+        "physically_admissible": 1,
+        "total": 1
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1697566169
+      },
+      "requested": 15,
+      "seconds": 38.8,
+      "seed": 1697566169,
+      "shard": 5,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 22,
+      "built": 15,
+      "class": "rx2_adjacent",
+      "floor_rejections": {
+        "below_parameter": 7,
+        "joint_alarm": 6,
+        "physically_admissible": 6,
+        "total": 6
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1175298837
+      },
+      "requested": 15,
+      "seconds": 51.3,
+      "seed": 1175298837,
+      "shard": 6,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 6,
+        "compound_true_model_not_clean": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 20,
+      "built": 15,
+      "class": "rx2_adjacent",
+      "floor_rejections": {
+        "below_parameter": 7,
+        "joint_alarm": 4,
+        "physically_admissible": 4,
+        "total": 5
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 786368700
+      },
+      "requested": 15,
+      "seconds": 45.9,
+      "seed": 786368700,
+      "shard": 7,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 5
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 26,
+      "built": 15,
+      "class": "rx2_adjacent",
+      "floor_rejections": {
+        "below_parameter": 13,
+        "joint_alarm": 11,
+        "physically_admissible": 11,
+        "total": 11
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1408542856
+      },
+      "requested": 15,
+      "seconds": 55.9,
+      "seed": 1408542856,
+      "shard": 8,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 11
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 23,
+      "built": 15,
+      "class": "rx2_adjacent",
+      "floor_rejections": {
+        "below_parameter": 10,
+        "joint_alarm": 8,
+        "physically_admissible": 8,
+        "total": 8
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2586875409
+      },
+      "requested": 15,
+      "seconds": 49.3,
+      "seed": 2586875409,
+      "shard": 9,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 8
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 38,
+      "built": 15,
+      "class": "rx2_distant",
+      "floor_rejections": {
+        "below_parameter": 23,
+        "joint_alarm": 23,
+        "physically_admissible": 23,
+        "total": 23
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 630981715
+      },
+      "requested": 15,
+      "seconds": 79.0,
+      "seed": 630981715,
+      "shard": 0,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 23
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 33,
+      "built": 15,
+      "class": "rx2_distant",
+      "floor_rejections": {
+        "below_parameter": 20,
+        "joint_alarm": 17,
+        "physically_admissible": 16,
+        "total": 18
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2211279554
+      },
+      "requested": 15,
+      "seconds": 69.6,
+      "seed": 2211279554,
+      "shard": 1,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 18
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 32,
+      "built": 15,
+      "class": "rx2_distant",
+      "floor_rejections": {
+        "below_parameter": 17,
+        "joint_alarm": 16,
+        "physically_admissible": 15,
+        "total": 16
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 3795184417
+      },
+      "requested": 15,
+      "seconds": 67.6,
+      "seed": 3795184417,
+      "shard": 2,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 16,
+        "compound_true_model_not_clean": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 23,
+      "built": 15,
+      "class": "rx2_distant",
+      "floor_rejections": {
+        "below_parameter": 8,
+        "joint_alarm": 8,
+        "physically_admissible": 7,
+        "total": 8
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1927031851
+      },
+      "requested": 15,
+      "seconds": 49.7,
+      "seed": 1927031851,
+      "shard": 3,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 8
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 39,
+      "built": 15,
+      "class": "rx2_distant",
+      "floor_rejections": {
+        "below_parameter": 27,
+        "joint_alarm": 22,
+        "physically_admissible": 20,
+        "total": 23
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1984945594
+      },
+      "requested": 15,
+      "seconds": 84.6,
+      "seed": 1984945594,
+      "shard": 4,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 23,
+        "compound_true_model_not_clean": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 29,
+      "built": 15,
+      "class": "rx2_distant",
+      "floor_rejections": {
+        "below_parameter": 20,
+        "joint_alarm": 10,
+        "physically_admissible": 10,
+        "total": 14
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1990076309
+      },
+      "requested": 15,
+      "seconds": 64.4,
+      "seed": 1990076309,
+      "shard": 5,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 14
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 31,
+      "built": 15,
+      "class": "rx2_distant",
+      "floor_rejections": {
+        "below_parameter": 16,
+        "joint_alarm": 16,
+        "physically_admissible": 16,
+        "total": 16
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 54012545
+      },
+      "requested": 15,
+      "seconds": 68.1,
+      "seed": 54012545,
+      "shard": 6,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 16
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 24,
+      "built": 15,
+      "class": "rx2_distant",
+      "floor_rejections": {
+        "below_parameter": 12,
+        "joint_alarm": 7,
+        "physically_admissible": 7,
+        "total": 9
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 4114626365
+      },
+      "requested": 15,
+      "seconds": 51.1,
+      "seed": 4114626365,
+      "shard": 7,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 9
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 27,
+      "built": 15,
+      "class": "rx2_distant",
+      "floor_rejections": {
+        "below_parameter": 12,
+        "joint_alarm": 12,
+        "physically_admissible": 12,
+        "total": 12
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 3956277644
+      },
+      "requested": 15,
+      "seconds": 55.9,
+      "seed": 3956277644,
+      "shard": 8,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 12
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 42,
+      "built": 15,
+      "class": "rx2_distant",
+      "floor_rejections": {
+        "below_parameter": 31,
+        "joint_alarm": 22,
+        "physically_admissible": 22,
+        "total": 27
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2483442569
+      },
+      "requested": 15,
+      "seconds": 85.0,
+      "seed": 2483442569,
+      "shard": 9,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 27
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 21,
+      "built": 15,
+      "class": "meter_rx2",
+      "floor_rejections": {
+        "below_parameter": 7,
+        "joint_alarm": 6,
+        "physically_admissible": 5,
+        "total": 6
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 455974002
+      },
+      "requested": 15,
+      "seconds": 57.9,
+      "seed": 455974002,
+      "shard": 0,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 6
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 25,
+      "built": 15,
+      "class": "meter_rx2",
+      "floor_rejections": {
+        "below_parameter": 10,
+        "joint_alarm": 9,
+        "physically_admissible": 9,
+        "total": 9
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 4134291455
+      },
+      "requested": 15,
+      "seconds": 68.4,
+      "seed": 4134291455,
+      "shard": 1,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 9,
+        "compound_true_model_not_clean": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 27,
+      "built": 15,
+      "class": "meter_rx2",
+      "floor_rejections": {
+        "below_parameter": 14,
+        "joint_alarm": 12,
+        "physically_admissible": 12,
+        "total": 12
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1892926529
+      },
+      "requested": 15,
+      "seconds": 73.6,
+      "seed": 1892926529,
+      "shard": 2,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 12
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 23,
+      "built": 15,
+      "class": "meter_rx2",
+      "floor_rejections": {
+        "below_parameter": 8,
+        "joint_alarm": 8,
+        "physically_admissible": 7,
+        "total": 8
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2934405031
+      },
+      "requested": 15,
+      "seconds": 63.8,
+      "seed": 2934405031,
+      "shard": 3,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 8
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 19,
+      "built": 15,
+      "class": "meter_rx2",
+      "floor_rejections": {
+        "below_parameter": 4,
+        "joint_alarm": 4,
+        "physically_admissible": 4,
+        "total": 4
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2859148731
+      },
+      "requested": 15,
+      "seconds": 54.2,
+      "seed": 2859148731,
+      "shard": 4,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 4
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 24,
+      "built": 15,
+      "class": "meter_rx2",
+      "floor_rejections": {
+        "below_parameter": 9,
+        "joint_alarm": 8,
+        "physically_admissible": 8,
+        "total": 8
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 3827747166
+      },
+      "requested": 15,
+      "seconds": 67.0,
+      "seed": 3827747166,
+      "shard": 5,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 8,
+        "compound_true_model_not_clean": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 34,
+      "built": 15,
+      "class": "meter_rx2",
+      "floor_rejections": {
+        "below_parameter": 22,
+        "joint_alarm": 19,
+        "physically_admissible": 19,
+        "total": 19
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2371023429
+      },
+      "requested": 15,
+      "seconds": 95.9,
+      "seed": 2371023429,
+      "shard": 6,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 19
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 22,
+      "built": 15,
+      "class": "meter_rx2",
+      "floor_rejections": {
+        "below_parameter": 9,
+        "joint_alarm": 7,
+        "physically_admissible": 7,
+        "total": 7
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2165173500
+      },
+      "requested": 15,
+      "seconds": 62.9,
+      "seed": 2165173500,
+      "shard": 7,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 7
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 30,
+      "built": 15,
+      "class": "meter_rx2",
+      "floor_rejections": {
+        "below_parameter": 18,
+        "joint_alarm": 15,
+        "physically_admissible": 15,
+        "total": 15
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2100271458
+      },
+      "requested": 15,
+      "seconds": 85.0,
+      "seed": 2100271458,
+      "shard": 8,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 15
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 34,
+      "built": 15,
+      "class": "meter_rx2",
+      "floor_rejections": {
+        "below_parameter": 20,
+        "joint_alarm": 18,
+        "physically_admissible": 18,
+        "total": 18
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2431596294
+      },
+      "requested": 15,
+      "seconds": 92.7,
+      "seed": 2431596294,
+      "shard": 9,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 18,
+        "compound_true_model_not_clean": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 8,
+      "built": 8,
+      "class": "meter_on_rx",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 469090264
+      },
+      "requested": 8,
+      "seconds": 17.4,
+      "seed": 469090264,
+      "shard": 0,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 11,
+      "built": 8,
+      "class": "meter_on_rx",
+      "floor_rejections": {
+        "below_parameter": 3,
+        "joint_alarm": 3,
+        "physically_admissible": 3,
+        "total": 3
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 137818995
+      },
+      "requested": 8,
+      "seconds": 23.9,
+      "seed": 137818995,
+      "shard": 1,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 3
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 11,
+      "built": 8,
+      "class": "meter_on_rx",
+      "floor_rejections": {
+        "below_parameter": 3,
+        "joint_alarm": 3,
+        "physically_admissible": 3,
+        "total": 3
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2015815567
+      },
+      "requested": 8,
+      "seconds": 23.6,
+      "seed": 2015815567,
+      "shard": 2,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 3
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 15,
+      "built": 8,
+      "class": "meter_on_rx",
+      "floor_rejections": {
+        "below_parameter": 7,
+        "joint_alarm": 7,
+        "physically_admissible": 7,
+        "total": 7
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2744952997
+      },
+      "requested": 8,
+      "seconds": 31.5,
+      "seed": 2744952997,
+      "shard": 3,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 7
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 8,
+      "built": 8,
+      "class": "meter_on_rx",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1951254784
+      },
+      "requested": 8,
+      "seconds": 17.2,
+      "seed": 1951254784,
+      "shard": 4,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 8,
+      "built": 7,
+      "class": "meter_on_rx",
+      "floor_rejections": {
+        "below_parameter": 1,
+        "joint_alarm": 1,
+        "physically_admissible": 1,
+        "total": 1
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 3052654103
+      },
+      "requested": 7,
+      "seconds": 16.6,
+      "seed": 3052654103,
+      "shard": 5,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 9,
+      "built": 7,
+      "class": "meter_on_rx",
+      "floor_rejections": {
+        "below_parameter": 2,
+        "joint_alarm": 2,
+        "physically_admissible": 2,
+        "total": 2
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 3808434815
+      },
+      "requested": 7,
+      "seconds": 18.2,
+      "seed": 3808434815,
+      "shard": 6,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 2
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 9,
+      "built": 7,
+      "class": "meter_on_rx",
+      "floor_rejections": {
+        "below_parameter": 2,
+        "joint_alarm": 2,
+        "physically_admissible": 1,
+        "total": 2
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 111393600
+      },
+      "requested": 7,
+      "seconds": 18.5,
+      "seed": 111393600,
+      "shard": 7,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 2
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 7,
+      "built": 7,
+      "class": "meter_on_rx",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 924419801
+      },
+      "requested": 7,
+      "seconds": 14.7,
+      "seed": 924419801,
+      "shard": 8,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 9,
+      "built": 7,
+      "class": "meter_on_rx",
+      "floor_rejections": {
+        "below_parameter": 2,
+        "joint_alarm": 2,
+        "physically_admissible": 2,
+        "total": 2
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 599045201
+      },
+      "requested": 7,
+      "seconds": 18.3,
+      "seed": 599045201,
+      "shard": 9,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 2
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 5,
+      "built": 5,
+      "class": "control_rx",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2775338377
+      },
+      "requested": 5,
+      "seconds": 7.3,
+      "seed": 2775338377,
+      "shard": 0,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 5,
+      "built": 5,
+      "class": "control_rx",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1846763334
+      },
+      "requested": 5,
+      "seconds": 7.1,
+      "seed": 1846763334,
+      "shard": 1,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 8,
+      "built": 5,
+      "class": "control_rx",
+      "floor_rejections": {
+        "below_parameter": 3,
+        "joint_alarm": 0,
+        "physically_admissible": 0,
+        "total": 3
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 3273692667
+      },
+      "requested": 5,
+      "seconds": 11.1,
+      "seed": 3273692667,
+      "shard": 2,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 3
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 6,
+      "built": 5,
+      "class": "control_rx",
+      "floor_rejections": {
+        "below_parameter": 1,
+        "joint_alarm": 0,
+        "physically_admissible": 0,
+        "total": 1
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1744570197
+      },
+      "requested": 5,
+      "seconds": 8.6,
+      "seed": 1744570197,
+      "shard": 3,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 5,
+      "built": 5,
+      "class": "control_rx",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 3438423896
+      },
+      "requested": 5,
+      "seconds": 7.2,
+      "seed": 3438423896,
+      "shard": 4,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 7,
+      "built": 5,
+      "class": "control_rx",
+      "floor_rejections": {
+        "below_parameter": 2,
+        "joint_alarm": 1,
+        "physically_admissible": 1,
+        "total": 2
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2103973338
+      },
+      "requested": 5,
+      "seconds": 9.7,
+      "seed": 2103973338,
+      "shard": 5,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 2
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 8,
+      "built": 5,
+      "class": "control_rx",
+      "floor_rejections": {
+        "below_parameter": 2,
+        "joint_alarm": 1,
+        "physically_admissible": 0,
+        "total": 2
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 678998774
+      },
+      "requested": 5,
+      "seconds": 10.8,
+      "seed": 678998774,
+      "shard": 6,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 2,
+        "compound_true_model_not_clean": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 9,
+      "built": 5,
+      "class": "control_rx",
+      "floor_rejections": {
+        "below_parameter": 4,
+        "joint_alarm": 2,
+        "physically_admissible": 2,
+        "total": 4
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1433254260
+      },
+      "requested": 5,
+      "seconds": 12.2,
+      "seed": 1433254260,
+      "shard": 7,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 4
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 5,
+      "built": 5,
+      "class": "control_rx",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2136166926
+      },
+      "requested": 5,
+      "seconds": 7.0,
+      "seed": 2136166926,
+      "shard": 8,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 7,
+      "built": 5,
+      "class": "control_rx",
+      "floor_rejections": {
+        "below_parameter": 1,
+        "joint_alarm": 0,
+        "physically_admissible": 0,
+        "total": 1
+      },
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 22253941
+      },
+      "requested": 5,
+      "seconds": 10.0,
+      "seed": 22253941,
+      "shard": 9,
+      "skipped_by_reason": {
+        "compound_atom_below_effect_floor": 1,
+        "compound_true_model_not_clean": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 6,
+      "built": 5,
+      "class": "control_meter",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1232794846
+      },
+      "requested": 5,
+      "seconds": 5.0,
+      "seed": 1232794846,
+      "shard": 0,
+      "skipped_by_reason": {
+        "compound_true_model_not_clean": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 6,
+      "built": 5,
+      "class": "control_meter",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 3007123939
+      },
+      "requested": 5,
+      "seconds": 5.0,
+      "seed": 3007123939,
+      "shard": 1,
+      "skipped_by_reason": {
+        "compound_true_model_not_clean": 1
+      },
+      "system": "case14"
+    },
+    {
+      "attempts": 5,
+      "built": 5,
+      "class": "control_meter",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 1442327676
+      },
+      "requested": 5,
+      "seconds": 4.2,
+      "seed": 1442327676,
+      "shard": 2,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 5,
+      "built": 5,
+      "class": "control_meter",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2869958896
+      },
+      "requested": 5,
+      "seconds": 3.9,
+      "seed": 2869958896,
+      "shard": 3,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 5,
+      "built": 5,
+      "class": "control_meter",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 3155903724
+      },
+      "requested": 5,
+      "seconds": 4.7,
+      "seed": 3155903724,
+      "shard": 4,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 5,
+      "built": 5,
+      "class": "control_meter",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2175930193
+      },
+      "requested": 5,
+      "seconds": 4.0,
+      "seed": 2175930193,
+      "shard": 5,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 5,
+      "built": 5,
+      "class": "control_meter",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 508426835
+      },
+      "requested": 5,
+      "seconds": 4.1,
+      "seed": 508426835,
+      "shard": 6,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 5,
+      "built": 5,
+      "class": "control_meter",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2600253710
+      },
+      "requested": 5,
+      "seconds": 4.2,
+      "seed": 2600253710,
+      "shard": 7,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 5,
+      "built": 5,
+      "class": "control_meter",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 2749220400
+      },
+      "requested": 5,
+      "seconds": 4.2,
+      "seed": 2749220400,
+      "shard": 8,
+      "skipped_by_reason": {},
+      "system": "case14"
+    },
+    {
+      "attempts": 5,
+      "built": 5,
+      "class": "control_meter",
+      "floor_rejections": {},
+      "generator": {
+        "admission_mode": "physical",
+        "anomaly_detection_rule": "chi_square_or_normalized_residual",
+        "chi2_alpha": 0.01,
+        "compound_effect_floor": 1.5,
+        "compound_physics": "bus_branch",
+        "compound_solo_effects": true,
+        "evidence_profile": "scada_only",
+        "measurement_error_floor_sigma": 10.0,
+        "normalized_residual_threshold": 4.0,
+        "seed": 487760904
+      },
+      "requested": 5,
+      "seconds": 4.1,
+      "seed": 487760904,
+      "shard": 9,
+      "skipped_by_reason": {},
+      "system": "case14"
+    }
+  ],
+  "classes": [
+    {
+      "breaker_effects": [
+        "dangling_line_terminal",
+        "bus_split"
+      ],
+      "breaker_pair": "any",
+      "breaker_placement": "any",
+      "breakers": 0,
+      "meter_placement": "random",
+      "meters": 0,
+      "name": "rx2_adjacent",
+      "parameter_placement": "adjacent",
+      "parameters": 2
+    },
+    {
+      "breaker_effects": [
+        "dangling_line_terminal",
+        "bus_split"
+      ],
+      "breaker_pair": "any",
+      "breaker_placement": "any",
+      "breakers": 0,
+      "meter_placement": "random",
+      "meters": 0,
+      "name": "rx2_distant",
+      "parameter_placement": "distant",
+      "parameters": 2
+    },
+    {
+      "breaker_effects": [
+        "dangling_line_terminal",
+        "bus_split"
+      ],
+      "breaker_pair": "any",
+      "breaker_placement": "any",
+      "breakers": 0,
+      "meter_placement": "random",
+      "meters": 1,
+      "name": "meter_rx2",
+      "parameter_placement": "any",
+      "parameters": 2
+    },
+    {
+      "breaker_effects": [
+        "dangling_line_terminal",
+        "bus_split"
+      ],
+      "breaker_pair": "any",
+      "breaker_placement": "any",
+      "breakers": 0,
+      "meter_placement": "on_fault",
+      "meters": 1,
+      "name": "meter_on_rx",
+      "parameter_placement": "any",
+      "parameters": 1
+    },
+    {
+      "breaker_effects": [
+        "dangling_line_terminal",
+        "bus_split"
+      ],
+      "breaker_pair": "any",
+      "breaker_placement": "any",
+      "breakers": 0,
+      "meter_placement": "random",
+      "meters": 0,
+      "name": "control_rx",
+      "parameter_placement": "any",
+      "parameters": 1
+    },
+    {
+      "breaker_effects": [
+        "dangling_line_terminal",
+        "bus_split"
+      ],
+      "breaker_pair": "any",
+      "breaker_placement": "any",
+      "breakers": 0,
+      "meter_placement": "random",
+      "meters": [
+        1,
+        3
+      ],
+      "name": "control_meter",
+      "parameter_placement": "any",
+      "parameters": 0
+    }
+  ],
+  "command": "python -m research.compound_errors.build_suite --system case14 --physics bus_branch --distant-hops 2 --output-dir output/compound_errors_ieee14_busbranch_20261029 --seed 20261029 --shards 10 --workers 4",
+  "contract": "compound_errors_suite_v1",
+  "derived_case_dir": "output\\compound_errors_ieee14_busbranch_20261029\\derived_cases",
+  "effect_floor": 1.5,
+  "floor_rejections": {
+    "below_parameter": 414,
+    "joint_alarm": 344,
+    "physically_admissible": 332,
+    "total": 369
+  },
+  "generator_options": {
+    "admission_mode": "physical",
+    "evidence_profile": "scada_only",
+    "min_measurement_error_sigma": 10.0,
+    "normalized_residual_threshold": 4.0,
+    "validate": true
+  },
+  "physics": "bus_branch",
+  "plan": {
+    "control_meter": 50,
+    "control_rx": 50,
+    "meter_on_rx": 75,
+    "meter_rx2": 150,
+    "rx2_adjacent": 150,
+    "rx2_distant": 150
+  },
+  "roots": 625,
+  "roots_by_class": {
+    "control_meter": 50,
+    "control_rx": 50,
+    "meter_on_rx": 75,
+    "meter_rx2": 150,
+    "rx2_adjacent": 150,
+    "rx2_distant": 150
+  },
+  "seed": 20261029,
+  "shards": 10,
+  "solo_effects": true,
+  "source_commit": "44a0dd80923e6ceb3934dfdb8b0c64032a42f7ea",
+  "stratum_dominance_threshold": 1.2,
+  "suite": {
+    "path": "output\\compound_errors_ieee14_busbranch_20261029\\suite.json",
+    "sha256": "96dc4a7afc0e4b033f2662667ca7fec91bce7ac312ea539af4f18338cb606601"
+  },
+  "system": "case14",
+  "total_seconds": 574.7,
+  "unique_physical_roots": 625
+}

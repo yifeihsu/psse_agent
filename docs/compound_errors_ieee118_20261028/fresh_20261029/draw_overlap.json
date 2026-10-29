@@ -1,0 +1,125 @@
+{
+  "contract": "compound_draw_overlap_v1",
+  "pairs": [
+    "ieee118=output/compound_errors_ieee118_20261029,output/compound_errors_ieee118_20261028",
+    "ieee14_control=output/compound_errors_ieee14_busbranch_20261029,output/compound_errors_ieee14_busbranch_20261028"
+  ],
+  "report": {
+    "ieee118": {
+      "all": {
+        "identical_roots": 0,
+        "n": 625,
+        "same_targets": 86,
+        "shared_ids": 0,
+        "shared_seeds": 0
+      },
+      "classes": {
+        "control_meter": {
+          "identical_roots": 0,
+          "n": 50,
+          "same_targets": 0,
+          "shared_ids": 0,
+          "shared_seeds": 0
+        },
+        "control_rx": {
+          "identical_roots": 0,
+          "n": 50,
+          "same_targets": 15,
+          "shared_ids": 0,
+          "shared_seeds": 0
+        },
+        "meter_on_rx": {
+          "identical_roots": 0,
+          "n": 75,
+          "same_targets": 11,
+          "shared_ids": 0,
+          "shared_seeds": 0
+        },
+        "meter_rx2": {
+          "identical_roots": 0,
+          "n": 150,
+          "same_targets": 0,
+          "shared_ids": 0,
+          "shared_seeds": 0
+        },
+        "rx2_adjacent": {
+          "identical_roots": 0,
+          "n": 150,
+          "same_targets": 57,
+          "shared_ids": 0,
+          "shared_seeds": 0
+        },
+        "rx2_distant": {
+          "identical_roots": 0,
+          "n": 150,
+          "same_targets": 3,
+          "shared_ids": 0,
+          "shared_seeds": 0
+        }
+      },
+      "disjoint": true,
+      "seeds": {
+        "fresh": 20261029,
+        "reference": 20261027
+      }
+    },
+    "ieee14_control": {
+      "all": {
+        "identical_roots": 0,
+        "n": 625,
+        "same_targets": 409,
+        "shared_ids": 0,
+        "shared_seeds": 0
+      },
+      "classes": {
+        "control_meter": {
+          "identical_roots": 0,
+          "n": 50,
+          "same_targets": 3,
+          "shared_ids": 0,
+          "shared_seeds": 0
+        },
+        "control_rx": {
+          "identical_roots": 0,
+          "n": 50,
+          "same_targets": 48,
+          "shared_ids": 0,
+          "shared_seeds": 0
+        },
+        "meter_on_rx": {
+          "identical_roots": 0,
+          "n": 75,
+          "same_targets": 59,
+          "shared_ids": 0,
+          "shared_seeds": 0
+        },
+        "meter_rx2": {
+          "identical_roots": 0,
+          "n": 150,
+          "same_targets": 4,
+          "shared_ids": 0,
+          "shared_seeds": 0
+        },
+        "rx2_adjacent": {
+          "identical_roots": 0,
+          "n": 150,
+          "same_targets": 149,
+          "shared_ids": 0,
+          "shared_seeds": 0
+        },
+        "rx2_distant": {
+          "identical_roots": 0,
+          "n": 150,
+          "same_targets": 146,
+          "shared_ids": 0,
+          "shared_seeds": 0
+        }
+      },
+      "disjoint": true,
+      "seeds": {
+        "fresh": 20261029,
+        "reference": 20261027
+      }
+    }
+  }
+}

@@ -1,0 +1,3574 @@
+{
+  "contract": "compound_meter_route_probe_v1",
+  "pairs": [
+    "ieee118:40=output/compound_errors_ieee118_20261029/baseline_compare_40/episodes.jsonl,output/compound_errors_ieee118_20261029/meter_route_40/episodes.jsonl",
+    "ieee118:16=output/compound_errors_ieee118_20261029/baseline_compare_16/episodes.jsonl,output/compound_errors_ieee118_20261029/meter_route_16/episodes.jsonl",
+    "ieee14_control:40=output/compound_errors_ieee14_busbranch_20261029/baseline_compare_40/episodes.jsonl,output/compound_errors_ieee14_busbranch_20261029/meter_route_40/episodes.jsonl",
+    "ieee14_control:16=output/compound_errors_ieee14_busbranch_20261029/baseline_compare_16/episodes.jsonl,output/compound_errors_ieee14_busbranch_20261029/meter_route_16/episodes.jsonl"
+  ],
+  "reference": "docs\\compound_errors_ieee118_20261028\\meter_route_probe.json",
+  "summary": {
+    "ieee118": {
+      "16": {
+        "classes": {
+          "all": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 580
+            },
+            "baseline_solved": 405,
+            "budget_handoffs": {
+              "baseline": 290,
+              "rule": 273
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 10,
+              "rule": 10
+            },
+            "gained": 32,
+            "gained_roots": {
+              "r0_0c8311b1249e": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_0faff3467c9f": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_1b1ef05f9927": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_29bf2289f477": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_31601624dd92": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_3339956b08b7": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_344fc99fc149": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_3f784716c525": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_46b395f83426": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_4a0070be2d2c": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_552f0362b71e": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_5db62974e6fb": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_610f18f5c411": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_621a2536eb3a": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_649331b23583": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_677a9d3cfd81": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_6ebb32d48d38": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_70980ab43dcc": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_8b079ed6d236": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_8f3818fab612": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_94d7e152b20d": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_a96e0f28787c": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_bf9d2b290496": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_c08b17d8980d": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_d98b68fc7368": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_e2c243d7ba78": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_e470a97a4ad2": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_e59383480ac8": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_e7de2d35c37b": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_fca575fdd012": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_fdf5e6e433e2": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_ff97172ef1b0": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              }
+            },
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 12.62716049382716,
+              "roots": 405,
+              "rule": 12.602469135802469
+            },
+            "n": 625,
+            "rule_fired_episodes": 45,
+            "rule_solved": 437,
+            "trajectories_changed": {
+              "action_change": -64,
+              "roots": 44
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 11,
+                "correct_parameters": 47,
+                "correct_topology": 6
+              },
+              "rule": {
+                "correct_measurements": 12,
+                "correct_parameters": 47,
+                "correct_topology": 6
+              }
+            }
+          },
+          "control_meter": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 16
+            },
+            "baseline_solved": 18,
+            "budget_handoffs": {
+              "baseline": 34,
+              "rule": 17
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 0,
+              "rule": 0
+            },
+            "gained": 32,
+            "gained_roots": {
+              "r0_0c8311b1249e": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_0faff3467c9f": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_1b1ef05f9927": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_29bf2289f477": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_31601624dd92": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_3339956b08b7": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_344fc99fc149": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_3f784716c525": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_46b395f83426": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_4a0070be2d2c": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_552f0362b71e": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_5db62974e6fb": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_610f18f5c411": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_621a2536eb3a": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_649331b23583": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_677a9d3cfd81": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_6ebb32d48d38": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_70980ab43dcc": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_8b079ed6d236": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_8f3818fab612": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_94d7e152b20d": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_a96e0f28787c": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_bf9d2b290496": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_c08b17d8980d": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_d98b68fc7368": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_e2c243d7ba78": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_e470a97a4ad2": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_e59383480ac8": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_e7de2d35c37b": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_fca575fdd012": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_fdf5e6e433e2": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_ff97172ef1b0": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              }
+            },
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 8.0,
+              "roots": 18,
+              "rule": 7.444444444444445
+            },
+            "n": 50,
+            "rule_fired_episodes": 34,
+            "rule_solved": 50,
+            "trajectories_changed": {
+              "action_change": -63,
+              "roots": 34
+            },
+            "wrong_commits": {
+              "baseline": {},
+              "rule": {}
+            }
+          },
+          "control_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 50
+            },
+            "baseline_solved": 44,
+            "budget_handoffs": {
+              "baseline": 2,
+              "rule": 2
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 1,
+              "rule": 1
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 7.545454545454546,
+              "roots": 44,
+              "rule": 7.545454545454546
+            },
+            "n": 50,
+            "rule_fired_episodes": 0,
+            "rule_solved": 44,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 1,
+                "correct_parameters": 3
+              },
+              "rule": {
+                "correct_measurements": 1,
+                "correct_parameters": 3
+              }
+            }
+          },
+          "meter_on_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 66
+            },
+            "baseline_solved": 5,
+            "budget_handoffs": {
+              "baseline": 55,
+              "rule": 55
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 5,
+              "rule": 5
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 11.8,
+              "roots": 5,
+              "rule": 11.8
+            },
+            "n": 75,
+            "rule_fired_episodes": 9,
+            "rule_solved": 5,
+            "trajectories_changed": {
+              "action_change": -1,
+              "roots": 8
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 6,
+                "correct_parameters": 9,
+                "correct_topology": 5
+              },
+              "rule": {
+                "correct_measurements": 7,
+                "correct_parameters": 9,
+                "correct_topology": 5
+              }
+            }
+          },
+          "meter_rx2": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 148
+            },
+            "baseline_solved": 114,
+            "budget_handoffs": {
+              "baseline": 145,
+              "rule": 145
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 0,
+              "rule": 0
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 15.868421052631579,
+              "roots": 114,
+              "rule": 15.868421052631579
+            },
+            "n": 150,
+            "rule_fired_episodes": 2,
+            "rule_solved": 114,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 2
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_parameters": 10,
+                "correct_topology": 1
+              },
+              "rule": {
+                "correct_parameters": 10,
+                "correct_topology": 1
+              }
+            }
+          },
+          "rx2_adjacent": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 150
+            },
+            "baseline_solved": 99,
+            "budget_handoffs": {
+              "baseline": 43,
+              "rule": 43
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 2,
+              "rule": 2
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 12.535353535353535,
+              "roots": 99,
+              "rule": 12.535353535353535
+            },
+            "n": 150,
+            "rule_fired_episodes": 0,
+            "rule_solved": 99,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 2,
+                "correct_parameters": 15
+              },
+              "rule": {
+                "correct_measurements": 2,
+                "correct_parameters": 15
+              }
+            }
+          },
+          "rx2_distant": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 150
+            },
+            "baseline_solved": 125,
+            "budget_handoffs": {
+              "baseline": 11,
+              "rule": 11
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 2,
+              "rule": 2
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 12.232,
+              "roots": 125,
+              "rule": 12.232
+            },
+            "n": 150,
+            "rule_fired_episodes": 0,
+            "rule_solved": 125,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 2,
+                "correct_parameters": 10
+              },
+              "rule": {
+                "correct_measurements": 2,
+                "correct_parameters": 10
+              }
+            }
+          }
+        },
+        "cue": {
+          "baseline": {
+            "fires": {
+              "line": 1,
+              "meter": 2,
+              "none": 43
+            },
+            "quiet": {
+              "line": 48,
+              "none": 17
+            }
+          },
+          "rule": {
+            "fires": {
+              "line": 1,
+              "meter": 51,
+              "none": 11
+            },
+            "quiet": {
+              "line": 48,
+              "none": 18
+            }
+          }
+        },
+        "cue_by_commit": {
+          "baseline": {
+            "healthy": {
+              "fires": {
+                "none": 6
+              },
+              "quiet": {
+                "none": 1
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 1,
+                "meter": 2,
+                "none": 37
+              },
+              "quiet": {
+                "line": 48,
+                "none": 16
+              }
+            }
+          },
+          "rule": {
+            "healthy": {
+              "fires": {
+                "none": 6
+              },
+              "quiet": {
+                "none": 2
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 1,
+                "meter": 51,
+                "none": 5
+              },
+              "quiet": {
+                "line": 48,
+                "none": 16
+              }
+            }
+          }
+        },
+        "separation": {
+          "line -> line": {
+            "at_least_threshold": 221,
+            "median": 14.534356308964785,
+            "n": 324
+          },
+          "line -> meter": {
+            "at_least_threshold": 36,
+            "median": 22.844537357448257,
+            "n": 36
+          },
+          "line -> none": {
+            "at_least_threshold": 39,
+            "median": 14.560401174075631,
+            "n": 53
+          },
+          "meter -> line": {
+            "at_least_threshold": 0,
+            "median": 7.3187908800404475,
+            "n": 21
+          },
+          "meter -> meter": {
+            "at_least_threshold": 2,
+            "median": 15.827134796715422,
+            "n": 2
+          },
+          "meter -> none": {
+            "at_least_threshold": 38,
+            "median": 16.68586057028282,
+            "n": 47
+          }
+        }
+      },
+      "40": {
+        "classes": {
+          "all": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 559
+            },
+            "baseline_solved": 441,
+            "budget_handoffs": {
+              "baseline": 31,
+              "rule": 17
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 38,
+              "rule": 38
+            },
+            "gained": 4,
+            "gained_roots": {
+              "r0_29bf2289f477": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 39,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_5db62974e6fb": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 38,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_fca575fdd012": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 40,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_fdf5e6e433e2": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 40,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              }
+            },
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 14.063492063492063,
+              "roots": 441,
+              "rule": 13.052154195011338
+            },
+            "n": 625,
+            "rule_fired_episodes": 66,
+            "rule_solved": 445,
+            "trajectories_changed": {
+              "action_change": -576,
+              "roots": 61
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 52,
+                "correct_parameters": 63,
+                "correct_topology": 23
+              },
+              "rule": {
+                "correct_measurements": 58,
+                "correct_parameters": 62,
+                "correct_topology": 23
+              }
+            }
+          },
+          "control_meter": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 16
+            },
+            "baseline_solved": 46,
+            "budget_handoffs": {
+              "baseline": 9,
+              "rule": 0
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 0,
+              "rule": 0
+            },
+            "gained": 4,
+            "gained_roots": {
+              "r0_29bf2289f477": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 39,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_5db62974e6fb": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 38,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_fca575fdd012": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 40,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_fdf5e6e433e2": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 40,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              }
+            },
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 20.434782608695652,
+              "roots": 46,
+              "rule": 10.73913043478261
+            },
+            "n": 50,
+            "rule_fired_episodes": 34,
+            "rule_solved": 50,
+            "trajectories_changed": {
+              "action_change": -543,
+              "roots": 34
+            },
+            "wrong_commits": {
+              "baseline": {},
+              "rule": {}
+            }
+          },
+          "control_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 50
+            },
+            "baseline_solved": 44,
+            "budget_handoffs": {
+              "baseline": 0,
+              "rule": 0
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 2,
+              "rule": 2
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 7.545454545454546,
+              "roots": 44,
+              "rule": 7.545454545454546
+            },
+            "n": 50,
+            "rule_fired_episodes": 0,
+            "rule_solved": 44,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 2,
+                "correct_parameters": 3
+              },
+              "rule": {
+                "correct_measurements": 2,
+                "correct_parameters": 3
+              }
+            }
+          },
+          "meter_on_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 51
+            },
+            "baseline_solved": 8,
+            "budget_handoffs": {
+              "baseline": 13,
+              "rule": 8
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 22,
+              "rule": 22
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 16.125,
+              "roots": 8,
+              "rule": 16.125
+            },
+            "n": 75,
+            "rule_fired_episodes": 24,
+            "rule_solved": 8,
+            "trajectories_changed": {
+              "action_change": -31,
+              "roots": 21
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 34,
+                "correct_parameters": 12,
+                "correct_topology": 16
+              },
+              "rule": {
+                "correct_measurements": 39,
+                "correct_parameters": 11,
+                "correct_topology": 16
+              }
+            }
+          },
+          "meter_rx2": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 144
+            },
+            "baseline_solved": 117,
+            "budget_handoffs": {
+              "baseline": 4,
+              "rule": 4
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 3,
+              "rule": 3
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 16.692307692307693,
+              "roots": 117,
+              "rule": 16.692307692307693
+            },
+            "n": 150,
+            "rule_fired_episodes": 6,
+            "rule_solved": 117,
+            "trajectories_changed": {
+              "action_change": -2,
+              "roots": 5
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 3,
+                "correct_parameters": 12,
+                "correct_topology": 4
+              },
+              "rule": {
+                "correct_measurements": 3,
+                "correct_parameters": 12,
+                "correct_topology": 4
+              }
+            }
+          },
+          "rx2_adjacent": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 150
+            },
+            "baseline_solved": 101,
+            "budget_handoffs": {
+              "baseline": 3,
+              "rule": 3
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 7,
+              "rule": 7
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 13.05940594059406,
+              "roots": 101,
+              "rule": 13.05940594059406
+            },
+            "n": 150,
+            "rule_fired_episodes": 0,
+            "rule_solved": 101,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 8,
+                "correct_parameters": 23,
+                "correct_topology": 2
+              },
+              "rule": {
+                "correct_measurements": 8,
+                "correct_parameters": 23,
+                "correct_topology": 2
+              }
+            }
+          },
+          "rx2_distant": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 148
+            },
+            "baseline_solved": 125,
+            "budget_handoffs": {
+              "baseline": 2,
+              "rule": 2
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 4,
+              "rule": 4
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 12.232,
+              "roots": 125,
+              "rule": 12.232
+            },
+            "n": 150,
+            "rule_fired_episodes": 2,
+            "rule_solved": 125,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 1
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 5,
+                "correct_parameters": 13,
+                "correct_topology": 1
+              },
+              "rule": {
+                "correct_measurements": 6,
+                "correct_parameters": 13,
+                "correct_topology": 1
+              }
+            }
+          }
+        },
+        "cue": {
+          "baseline": {
+            "fires": {
+              "line": 7,
+              "meter": 48,
+              "none": 38
+            },
+            "quiet": {
+              "line": 55,
+              "none": 33
+            }
+          },
+          "rule": {
+            "fires": {
+              "line": 6,
+              "meter": 52,
+              "none": 37
+            },
+            "quiet": {
+              "line": 55,
+              "none": 35
+            }
+          }
+        },
+        "cue_by_commit": {
+          "baseline": {
+            "healthy": {
+              "fires": {
+                "meter": 1,
+                "none": 28
+              },
+              "quiet": {
+                "none": 15
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 7,
+                "meter": 47,
+                "none": 10
+              },
+              "quiet": {
+                "line": 55,
+                "none": 18
+              }
+            }
+          },
+          "rule": {
+            "healthy": {
+              "fires": {
+                "meter": 1,
+                "none": 30
+              },
+              "quiet": {
+                "none": 17
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 6,
+                "meter": 51,
+                "none": 7
+              },
+              "quiet": {
+                "line": 55,
+                "none": 18
+              }
+            }
+          }
+        },
+        "separation": {
+          "line -> line": {
+            "at_least_threshold": 224,
+            "median": 14.534356308964785,
+            "n": 327
+          },
+          "line -> meter": {
+            "at_least_threshold": 45,
+            "median": 22.844537357448257,
+            "n": 45
+          },
+          "line -> none": {
+            "at_least_threshold": 27,
+            "median": 13.699228648778668,
+            "n": 41
+          },
+          "meter -> line": {
+            "at_least_threshold": 3,
+            "median": 7.537059353530748,
+            "n": 28
+          },
+          "meter -> meter": {
+            "at_least_threshold": 34,
+            "median": 18.996474441636522,
+            "n": 34
+          },
+          "meter -> none": {
+            "at_least_threshold": 8,
+            "median": 11.220475613907388,
+            "n": 15
+          }
+        }
+      }
+    },
+    "ieee14_control": {
+      "16": {
+        "classes": {
+          "all": {
+            "baseline_never_fires": {
+              "changed": [
+                "r0_a590aacb3bc1"
+              ],
+              "roots": 581
+            },
+            "baseline_solved": 341,
+            "budget_handoffs": {
+              "baseline": 285,
+              "rule": 268
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 18,
+              "rule": 20
+            },
+            "gained": 22,
+            "gained_roots": {
+              "r0_0ab4639e41ab": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_12b6257fe7b7": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_14021f910552": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_16e79c1a77f4": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_1960d255933d": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_3d30ec105c38": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_46688f800e6f": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_4cb166111c51": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_522389de069a": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_55fcb7bbc724": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_57f1afcb7717": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_60b3b0d9f69c": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_6e0ad45a2110": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_8d5954a4b7b8": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_90f4581d3294": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_99021b32ff3c": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_9a3cb5a77868": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_a6bc2a7fd61d": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_b0ffb7a0a8a1": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_b3bcbad28207": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_c36d35683f38": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_c8373b49416e": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              }
+            },
+            "lost": 1,
+            "lost_roots": {
+              "r0_038f9574c00a": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {
+                    "correct_measurements": 1
+                  }
+                }
+              }
+            },
+            "mean_actions_both_solved": {
+              "baseline": 12.179411764705883,
+              "roots": 340,
+              "rule": 12.102941176470589
+            },
+            "n": 625,
+            "rule_fired_episodes": 44,
+            "rule_solved": 362,
+            "trajectories_changed": {
+              "action_change": -62,
+              "roots": 44
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 18,
+                "correct_parameters": 38,
+                "correct_topology": 9
+              },
+              "rule": {
+                "correct_measurements": 23,
+                "correct_parameters": 38,
+                "correct_topology": 9
+              }
+            }
+          },
+          "control_meter": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 23
+            },
+            "baseline_solved": 27,
+            "budget_handoffs": {
+              "baseline": 30,
+              "rule": 13
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 0,
+              "rule": 0
+            },
+            "gained": 22,
+            "gained_roots": {
+              "r0_0ab4639e41ab": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_12b6257fe7b7": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_14021f910552": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_16e79c1a77f4": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_1960d255933d": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_3d30ec105c38": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_46688f800e6f": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_4cb166111c51": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_522389de069a": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_55fcb7bbc724": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_57f1afcb7717": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_60b3b0d9f69c": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_6e0ad45a2110": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_8d5954a4b7b8": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_90f4581d3294": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_99021b32ff3c": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_9a3cb5a77868": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_a6bc2a7fd61d": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_b0ffb7a0a8a1": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_b3bcbad28207": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_c36d35683f38": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 14,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              },
+              "r0_c8373b49416e": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 16,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 1,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 11,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                }
+              }
+            },
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 9.592592592592593,
+              "roots": 27,
+              "rule": 8.703703703703704
+            },
+            "n": 50,
+            "rule_fired_episodes": 27,
+            "rule_solved": 49,
+            "trajectories_changed": {
+              "action_change": -62,
+              "roots": 27
+            },
+            "wrong_commits": {
+              "baseline": {},
+              "rule": {}
+            }
+          },
+          "control_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 50
+            },
+            "baseline_solved": 48,
+            "budget_handoffs": {
+              "baseline": 0,
+              "rule": 0
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 0,
+              "rule": 0
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 7.375,
+              "roots": 48,
+              "rule": 7.375
+            },
+            "n": 50,
+            "rule_fired_episodes": 0,
+            "rule_solved": 48,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
+            "wrong_commits": {
+              "baseline": {},
+              "rule": {}
+            }
+          },
+          "meter_on_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 70
+            },
+            "baseline_solved": 16,
+            "budget_handoffs": {
+              "baseline": 39,
+              "rule": 39
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 4,
+              "rule": 4
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 11.3125,
+              "roots": 16,
+              "rule": 11.3125
+            },
+            "n": 75,
+            "rule_fired_episodes": 5,
+            "rule_solved": 16,
+            "trajectories_changed": {
+              "action_change": -1,
+              "roots": 4
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 4,
+                "correct_parameters": 4,
+                "correct_topology": 1
+              },
+              "rule": {
+                "correct_measurements": 6,
+                "correct_parameters": 4,
+                "correct_topology": 1
+              }
+            }
+          },
+          "meter_rx2": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 143
+            },
+            "baseline_solved": 77,
+            "budget_handoffs": {
+              "baseline": 127,
+              "rule": 127
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 1,
+              "rule": 3
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 1,
+            "lost_roots": {
+              "r0_038f9574c00a": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {
+                    "correct_measurements": 1
+                  }
+                }
+              }
+            },
+            "mean_actions_both_solved": {
+              "baseline": 15.671052631578947,
+              "roots": 76,
+              "rule": 15.671052631578947
+            },
+            "n": 150,
+            "rule_fired_episodes": 7,
+            "rule_solved": 76,
+            "trajectories_changed": {
+              "action_change": 2,
+              "roots": 7
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 1,
+                "correct_parameters": 5,
+                "correct_topology": 2
+              },
+              "rule": {
+                "correct_measurements": 3,
+                "correct_parameters": 5,
+                "correct_topology": 2
+              }
+            }
+          },
+          "rx2_adjacent": {
+            "baseline_never_fires": {
+              "changed": [
+                "r0_a590aacb3bc1"
+              ],
+              "roots": 145
+            },
+            "baseline_solved": 56,
+            "budget_handoffs": {
+              "baseline": 80,
+              "rule": 80
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 13,
+              "rule": 13
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 13.928571428571429,
+              "roots": 56,
+              "rule": 13.892857142857142
+            },
+            "n": 150,
+            "rule_fired_episodes": 5,
+            "rule_solved": 56,
+            "trajectories_changed": {
+              "action_change": -1,
+              "roots": 6
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 13,
+                "correct_parameters": 26,
+                "correct_topology": 5
+              },
+              "rule": {
+                "correct_measurements": 14,
+                "correct_parameters": 26,
+                "correct_topology": 5
+              }
+            }
+          },
+          "rx2_distant": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 150
+            },
+            "baseline_solved": 117,
+            "budget_handoffs": {
+              "baseline": 9,
+              "rule": 9
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 0,
+              "rule": 0
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 11.760683760683762,
+              "roots": 117,
+              "rule": 11.760683760683762
+            },
+            "n": 150,
+            "rule_fired_episodes": 0,
+            "rule_solved": 117,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_parameters": 3,
+                "correct_topology": 1
+              },
+              "rule": {
+                "correct_parameters": 3,
+                "correct_topology": 1
+              }
+            }
+          }
+        },
+        "cue": {
+          "baseline": {
+            "fires": {
+              "line": 8,
+              "meter": 6,
+              "none": 30
+            },
+            "quiet": {
+              "line": 81,
+              "meter": 4,
+              "none": 41
+            }
+          },
+          "rule": {
+            "fires": {
+              "line": 6,
+              "meter": 36,
+              "none": 12
+            },
+            "quiet": {
+              "line": 81,
+              "meter": 6,
+              "none": 44
+            }
+          }
+        },
+        "cue_by_commit": {
+          "baseline": {
+            "healthy": {
+              "fires": {
+                "none": 8
+              },
+              "quiet": {
+                "line": 1,
+                "none": 6
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 8,
+                "meter": 6,
+                "none": 22
+              },
+              "quiet": {
+                "line": 80,
+                "meter": 4,
+                "none": 35
+              }
+            }
+          },
+          "rule": {
+            "healthy": {
+              "fires": {
+                "meter": 1,
+                "none": 9
+              },
+              "quiet": {
+                "line": 1,
+                "none": 9
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 6,
+                "meter": 35,
+                "none": 3
+              },
+              "quiet": {
+                "line": 80,
+                "meter": 6,
+                "none": 35
+              }
+            }
+          }
+        },
+        "separation": {
+          "line -> line": {
+            "at_least_threshold": 126,
+            "median": 9.352862987061078,
+            "n": 296
+          },
+          "line -> meter": {
+            "at_least_threshold": 48,
+            "median": 19.388868867538392,
+            "n": 51
+          },
+          "line -> none": {
+            "at_least_threshold": 20,
+            "median": 12.710482330798806,
+            "n": 40
+          },
+          "meter -> line": {
+            "at_least_threshold": 4,
+            "median": 6.842233824326793,
+            "n": 46
+          },
+          "meter -> meter": {
+            "at_least_threshold": 6,
+            "median": 12.69963057541189,
+            "n": 10
+          },
+          "meter -> none": {
+            "at_least_threshold": 24,
+            "median": 13.343207911884544,
+            "n": 38
+          }
+        }
+      },
+      "40": {
+        "classes": {
+          "all": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 564
+            },
+            "baseline_solved": 379,
+            "budget_handoffs": {
+              "baseline": 17,
+              "rule": 13
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 45,
+              "rule": 46
+            },
+            "gained": 1,
+            "gained_roots": {
+              "r0_55fcb7bbc724": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 38,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              }
+            },
+            "lost": 1,
+            "lost_roots": {
+              "r0_038f9574c00a": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 24,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {
+                    "correct_measurements": 1
+                  }
+                }
+              }
+            },
+            "mean_actions_both_solved": {
+              "baseline": 13.756613756613756,
+              "roots": 378,
+              "rule": 12.989417989417989
+            },
+            "n": 625,
+            "rule_fired_episodes": 61,
+            "rule_solved": 379,
+            "trajectories_changed": {
+              "action_change": -367,
+              "roots": 56
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 59,
+                "correct_parameters": 57,
+                "correct_topology": 25
+              },
+              "rule": {
+                "correct_measurements": 65,
+                "correct_parameters": 56,
+                "correct_topology": 25
+              }
+            }
+          },
+          "control_meter": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 23
+            },
+            "baseline_solved": 49,
+            "budget_handoffs": {
+              "baseline": 2,
+              "rule": 0
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 0,
+              "rule": 0
+            },
+            "gained": 1,
+            "gained_roots": {
+              "r0_55fcb7bbc724": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_budget_exhausted",
+                  "steps": 38,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                }
+              }
+            },
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 16.6734693877551,
+              "roots": 49,
+              "rule": 10.755102040816327
+            },
+            "n": 50,
+            "rule_fired_episodes": 27,
+            "rule_solved": 50,
+            "trajectories_changed": {
+              "action_change": -313,
+              "roots": 27
+            },
+            "wrong_commits": {
+              "baseline": {},
+              "rule": {}
+            }
+          },
+          "control_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 50
+            },
+            "baseline_solved": 48,
+            "budget_handoffs": {
+              "baseline": 0,
+              "rule": 0
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 0,
+              "rule": 0
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 7.375,
+              "roots": 48,
+              "rule": 7.375
+            },
+            "n": 50,
+            "rule_fired_episodes": 0,
+            "rule_solved": 48,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
+            "wrong_commits": {
+              "baseline": {},
+              "rule": {}
+            }
+          },
+          "meter_on_rx": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 59
+            },
+            "baseline_solved": 17,
+            "budget_handoffs": {
+              "baseline": 6,
+              "rule": 6
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 15,
+              "rule": 15
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 11.941176470588236,
+              "roots": 17,
+              "rule": 11.941176470588236
+            },
+            "n": 75,
+            "rule_fired_episodes": 16,
+            "rule_solved": 17,
+            "trajectories_changed": {
+              "action_change": -25,
+              "roots": 13
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 24,
+                "correct_parameters": 5,
+                "correct_topology": 6
+              },
+              "rule": {
+                "correct_measurements": 27,
+                "correct_parameters": 4,
+                "correct_topology": 6
+              }
+            }
+          },
+          "meter_rx2": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 142
+            },
+            "baseline_solved": 88,
+            "budget_handoffs": {
+              "baseline": 3,
+              "rule": 3
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 4,
+              "rule": 5
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 1,
+            "lost_roots": {
+              "r0_038f9574c00a": {
+                "baseline": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 15,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 3,
+                  "wrong_commits": {}
+                },
+                "rule": {
+                  "escalation_request": "operator_escalation:recovery_options_exhausted",
+                  "steps": 24,
+                  "terminal_outcome": "operator_escalation",
+                  "true_commits": 2,
+                  "wrong_commits": {
+                    "correct_measurements": 1
+                  }
+                }
+              }
+            },
+            "mean_actions_both_solved": {
+              "baseline": 17.229885057471265,
+              "roots": 87,
+              "rule": 17.229885057471265
+            },
+            "n": 150,
+            "rule_fired_episodes": 8,
+            "rule_solved": 87,
+            "trajectories_changed": {
+              "action_change": 2,
+              "roots": 8
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 5,
+                "correct_parameters": 9,
+                "correct_topology": 4
+              },
+              "rule": {
+                "correct_measurements": 7,
+                "correct_parameters": 9,
+                "correct_topology": 4
+              }
+            }
+          },
+          "rx2_adjacent": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 140
+            },
+            "baseline_solved": 60,
+            "budget_handoffs": {
+              "baseline": 6,
+              "rule": 4
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 21,
+              "rule": 21
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 15.85,
+              "roots": 60,
+              "rule": 15.85
+            },
+            "n": 150,
+            "rule_fired_episodes": 10,
+            "rule_solved": 60,
+            "trajectories_changed": {
+              "action_change": -31,
+              "roots": 8
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 25,
+                "correct_parameters": 40,
+                "correct_topology": 7
+              },
+              "rule": {
+                "correct_measurements": 26,
+                "correct_parameters": 40,
+                "correct_topology": 7
+              }
+            }
+          },
+          "rx2_distant": {
+            "baseline_never_fires": {
+              "changed": [],
+              "roots": 150
+            },
+            "baseline_solved": 117,
+            "budget_handoffs": {
+              "baseline": 0,
+              "rule": 0
+            },
+            "episodes_with_wrong_meter_commit": {
+              "baseline": 5,
+              "rule": 5
+            },
+            "gained": 0,
+            "gained_roots": {},
+            "lost": 0,
+            "lost_roots": {},
+            "mean_actions_both_solved": {
+              "baseline": 11.760683760683762,
+              "roots": 117,
+              "rule": 11.760683760683762
+            },
+            "n": 150,
+            "rule_fired_episodes": 0,
+            "rule_solved": 117,
+            "trajectories_changed": {
+              "action_change": 0,
+              "roots": 0
+            },
+            "wrong_commits": {
+              "baseline": {
+                "correct_measurements": 5,
+                "correct_parameters": 3,
+                "correct_topology": 8
+              },
+              "rule": {
+                "correct_measurements": 5,
+                "correct_parameters": 3,
+                "correct_topology": 8
+              }
+            }
+          }
+        },
+        "cue": {
+          "baseline": {
+            "fires": {
+              "line": 12,
+              "meter": 36,
+              "none": 27
+            },
+            "quiet": {
+              "line": 100,
+              "meter": 8,
+              "none": 46
+            }
+          },
+          "rule": {
+            "fires": {
+              "line": 9,
+              "meter": 37,
+              "none": 31
+            },
+            "quiet": {
+              "line": 100,
+              "meter": 8,
+              "none": 50
+            }
+          }
+        },
+        "cue_by_commit": {
+          "baseline": {
+            "healthy": {
+              "fires": {
+                "line": 2,
+                "meter": 2,
+                "none": 22
+              },
+              "quiet": {
+                "line": 3,
+                "meter": 1,
+                "none": 21
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 10,
+                "meter": 34,
+                "none": 5
+              },
+              "quiet": {
+                "line": 97,
+                "meter": 7,
+                "none": 25
+              }
+            }
+          },
+          "rule": {
+            "healthy": {
+              "fires": {
+                "line": 2,
+                "meter": 2,
+                "none": 24
+              },
+              "quiet": {
+                "line": 3,
+                "meter": 1,
+                "none": 25
+              }
+            },
+            "true": {
+              "fires": {
+                "line": 7,
+                "meter": 35,
+                "none": 7
+              },
+              "quiet": {
+                "line": 97,
+                "meter": 7,
+                "none": 25
+              }
+            }
+          }
+        },
+        "separation": {
+          "line -> line": {
+            "at_least_threshold": 130,
+            "median": 9.382217286820248,
+            "n": 303
+          },
+          "line -> meter": {
+            "at_least_threshold": 51,
+            "median": 19.41139058351319,
+            "n": 54
+          },
+          "line -> none": {
+            "at_least_threshold": 13,
+            "median": 8.471983000867425,
+            "n": 30
+          },
+          "meter -> line": {
+            "at_least_threshold": 5,
+            "median": 6.996252806951006,
+            "n": 52
+          },
+          "meter -> meter": {
+            "at_least_threshold": 28,
+            "median": 13.789497913342466,
+            "n": 33
+          },
+          "meter -> none": {
+            "at_least_threshold": 5,
+            "median": 8.233886862682127,
+            "n": 17
+          }
+        }
+      }
+    }
+  },
+  "threshold": 11.0
+}
