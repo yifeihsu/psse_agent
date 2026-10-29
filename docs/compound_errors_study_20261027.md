@@ -2368,7 +2368,8 @@ fixed as part of the environment contract.
    two routes on isolated clones before committing (the third shape of
    section 8.4, `compare_parameter_candidates` widened to a breaker flip
    against an impedance edit on the leading line).  It costs one action and
-   the clone solves the agent asked for, so it is not a screen.  Not built.
+   the clone solves the agent asked for, so it is not a screen.  Built and
+   measured as step 7 (section 8.8), at the user's request.
 3. *A live start handoff* needs one more escalation request in the contract
    (today's handoffs require the same-state routes exhausted).  The derived
    arm above suggests it is not worth building for the teacher.
@@ -2377,3 +2378,140 @@ fixed as part of the environment contract.
 (the loop label), and the commit that adds this section (branch
 `claude/nostalgic-kalam-be5f7a`, 2026-10-28).  Outputs (gitignored):
 `output/item7_step6/` (compound and conventional runs, logs, the test logs).
+
+### 8.8 Step 7: comparing the routes before committing
+
+The user asked for the second open question of section 8.7 ("Build it
+here": on the leading line, fit the breaker flip and the impedance edit on
+isolated clones in one action, commit only what verifies, measure it like
+step 6).
+
+**The contract (`compare_routes`).**  `compare_routes(state_id,
+parameter_line, topology_line)` fits the parameter context's supported
+correction on the parameter line and the topology context's supported
+breaker flips on the topology line (at most two), each on its own clone of
+the active state with the verification solve `run_wls` would run, ranks the
+verdicts as the parameter comparison does (accepted before inconclusive
+before rejected, then global progress, then the smaller statistic, then the
+request order) and records them under
+`fresh_context_evidence["route_comparison"]`.  One action; no candidate
+opens and nothing on the live state changes, so "commit only what
+verifies" is the ordinary lifecycle afterwards: the real verification of a
+compared correction is the same solve.  The two lines are the hypotheses'
+own targets (the vector's parameter line and topology line), which coincide
+on the leading line when one line carries both hypotheses.  Like the revert,
+the tool exists only in an environment built with `route_comparison=True`,
+which lists it in the observation's `research_tools`; it stays out of the
+macro vocabulary and the student's tool surface, and an observation without
+it serializes as before.  The gate needs no open candidate, a current WLS,
+both branch contexts fresh and supporting the named lines, and no
+comparison of the same lines on the state.  The clone fit is the parameter
+comparison's, factored out unchanged.  Files: `psse_env/actions.py`
+(`COMPARE_ROUTES`, `route_comparison_evidence`, `route_comparison_best_family`),
+`psse_env/oracle/process_validity.py` (`route_comparison_targets`,
+`_route_comparison_refusal`), `psse_env/transactional_env.py`
+(`_fit_on_branch`, `_step_route_comparison`); tests in
+`psse_env/test_route_comparison.py`.
+
+**The teacher (`baseline_compare_guarded_routes`).**  The guarded teacher
+with `route_comparison`: where the solve's confidence has a branch family
+leading and the other one competing (step 3's 3:1 band on the open-terminal
+confidence), it fetches the breaker context first, since its multipliers
+refine that confidence (step 2) and may settle the question; if the two
+still compete it fetches the parameter context and compares the routes on
+the hypotheses' lines, once per state and before either route was tried
+there; a verified best route then leads the structural tier and the compared
+corrections follow the verdict order.  Tests in
+`psse_env/oracle/test_route_comparison_teacher.py`.
+
+**Measured** (the settings of step 5; the conventional suites through the
+end-to-end runner, the validation suite and the hard draw being the torch
+files):
+
+| class (roots) | baseline | guarded | walk (step 6) | routes | always-look (reference) | routes against guarded, won / lost |
+| --- | --- | --- | --- | --- | --- | --- |
+| two R/X, adjacent (150) | 76 | 76 | 76 | 76 | 65 | +0 / -0 |
+| two R/X, distant (150) | 72 | 72 | 72 | 72 | 63 | +0 / -0 |
+| R/X + breaker, same line (75) | 47 | 71 | 71 | 74 | 75 | +3 / -0 |
+| R/X + breaker, shared bus (75) | 31 | 45 | 45 | 46 | 43 | +1 / -0 |
+| R/X + breaker, distant (150) | 73 | 111 | 111 | 115 | 109 | +4 / -0 |
+| meter + two R/X (150) | 66 | 66 | 66 | 66 | 54 | +0 / -0 |
+| meter on the R/X line (75) | 14 | 14 | 14 | 14 | 14 | +0 / -0 |
+| R/X + breaker + meter (150) | 59 | 97 | 97 | 98 | 97 | +1 / -0 |
+| two breakers, dangling (60) | 16 | 46 | 46 | 52 | 53 | +6 / -0 |
+| two breakers, mixed (45) | 20 | 30 | 30 | 30 | 43 | +0 / -0 |
+| two breakers, bus splits (45) | 22 | 27 | 28 | 27 | 39 | +0 / -0 |
+| control: one R/X (50) | 43 | 43 | 43 | 43 | 37 | +0 / -0 |
+| control: one breaker (50) | 31 | 44 | 44 | 44 | 50 | +0 / -0 |
+| control: one meter (50) | 47 | 47 | 47 | 47 | 47 | +0 / -0 |
+| all (1,275) | 617 | 789 | 790 | 804 | 789 | +15 / -0 |
+
+| suite | baseline | guarded | routes | always-look (reference) |
+| --- | --- | --- | --- | --- |
+| conventional test suite (192) | 192 | 192 | 192 | 178 |
+| validation (96) | 96 | 96 | 96 | 89 |
+| hard draw (193) | 185 | 184 | 184 | 163 |
+
+Mean actions on the compound suite: 17.3 (baseline), 13.8 (guarded), 13.5
+(routes); no false commit under any teacher on any suite.  The baseline
+reproduces step 5 root for root on the three conventional suites again (192,
+96, 193), with its observation identical to d056b35 (0 of 172 steps on 14
+conventional roots).  The route teacher equals the guarded teacher on every
+conventional family (trajectories identical on 187 of 192, 92 of 96 and 186
+of 193 roots; the hard draw's `r0_344bb11720e7` stays lost, its confidence
+of 0.854 being outside the band, so nothing competes there).
+
+**Where the gain comes from.**  The route teacher changed 243 compound
+trajectories against the guarded teacher; on 242 of them the comparison
+never ran.  Fetching the breaker context first was enough: its refinement
+either raised the open-terminal confidence above the band (a flip on the
+line lowers the substation objective) or showed no flip on the line, so the
+competition ended before a comparison was needed.  Those 243 trajectories
+went from 15 failures to successes, none the other way, and took 1.35
+actions fewer on average.  Across the suite the committed corrections
+change from 696 to 715 true breaker flips, from 133 to 117 wrong impedance
+edits and from 76 to 74 wrong meter edits, with the wrong flips unchanged
+(20); the guarded failures with a wrong commit fall from 129 to 115.  The
+wins are breaker roots where the guarded order (parameter first at a
+confidence of 0.5 or less) let an impedance edit mask the open terminal:
+the same-line class (the isolated line's impedance edit committed, the
+breaker left), dangling breakers, and breaker-plus-impedance pairs.
+
+**The comparison itself** ran on 1 compound root and 2 conventional roots.
+On both conventional roots (a measurement+parameter and a parameter root of
+the test suite) it ranked the true impedance edit first (final against the
+breaker flip's partial) and the root was solved, at two actions more than
+the guarded teacher.  On the compound root (`r0_ca814be57a8b`, two distant
+R/X errors, failed by the guarded teacher too) the impedance fit on the line
+failed numerically on its clone and the breaker flip verified as final on a
+healthy line: the verifier's own limit (an opened healthy line can quiet the
+solve), which the comparison inherits rather than fixes.
+
+**Reading.**  Comparing the routes is cheap and sound, but on this suite the
+competition it is meant to settle is almost always settled earlier by the
+breaker context's own evidence, once the teacher asks for that context
+first.  The rule that matters is the ordering: where the solve cannot tell
+an impedance error from an open terminal, look at the breakers before
+editing an impedance.  The route teacher solves 804 of 1,275 compound roots
+(+15 on the guarded teacher, +187 on the baseline), more than the
+always-look reference (789) while keeping the conventional suites intact,
+which the always-look order does not (178 / 89 / 163).  The remaining gap to
+the always-look reference is on breaker roots whose first solve shows no
+competition at all (two breakers mixed 30 against 43, bus splits 27 against
+39, the one-breaker control 44 against 50): the vector ranks the parameter
+family first there (bus splits: a true family on top for 31% of roots), so
+nothing asks for the breaker context; that is the confidence's blind spot,
+not a reason to look always.
+
+**Adoption.**  Not decided here.  By the adoption rule the user set for the
+guarded teacher (identical per-family success on the validation suite and
+the hard draw, no false commits) the route teacher matches the guarded
+teacher exactly, and both are one root short of the baseline on the hard
+draw (`r0_344bb11720e7`, the accepted lightly loaded ambiguity), so the rule
+as stated is not met against the baseline.
+
+**Commits.**  e7ed242 (the contract), f8be4bb (the teacher rule), 7ea2ebb
+(a test fix), and the commit that adds this section (branch
+`claude/nostalgic-kalam-be5f7a`, 2026-10-28).  Outputs (gitignored):
+`output/item7_step7/` (compound and conventional runs, logs, report.txt).
+
