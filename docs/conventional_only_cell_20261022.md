@@ -1669,7 +1669,7 @@ checkpoint is chosen by validation loss. The pass changed all 656 LoRA
 tensors (L2 norm of the change from BC0 2.51; the recorded R2 moved 2.01 from
 R1, and R1 moved 1.90 from BC0), and the reload check passed (the reloaded
 adapter reproduces its canary action). Validation loss ended at 1.3e-4 (BC0
-5.9e-3, R1 1.1e-3, recorded R2 7.9e-4), but it moves up to 30-fold between
+5.9e-3, R1 1.1e-3, recorded R2 7.9e-4), but it moves up to 45-fold between
 consecutive evaluations of one pass (3.4e-3 at step 144, 7.5e-5 at step 160),
 so it does not rank the adapters.
 
@@ -2168,3 +2168,45 @@ re-score of R1 equal to R1's record on all 192 roots; and the detours of the
 9.13 table (14/55, 11/55, 18/55, 14/55, 17/55, 14/54, 14/55, 5/26, 5/15),
 with R1 against it 0 to 25 (p = 6.0e-8) and BC0 against it 10 to 17
 (p = 0.25).
+
+### 10.3 The training pass from R1
+
+**Training** (r2t 21447607, receipt `out/r2/training.done`): one pass on
+gr101 (RTX PRO 6000 Blackwell) from 19:06 to 22:28 UTC, never preempted, so
+no step ran twice and every step ran on one GPU (the BC0-start pass ran steps
+1 to 416 on three RTX PRO 6000 Blackwell nodes and 417 to 435 on an A100;
+9.6). The 435 steps took 3 h 19 min of training, 27.4 s per step. The
+settings in `out/r2/training/research_run.json` equal the BC0-start pass's in
+every field but two: the initial adapter (`out/r1/training/lora` instead of
+`out/bc0/lora`) and the BC0-start pass's resume checkpoint. So: the same
+1,738 rows and seed, learning rate 3e-5 decaying linearly to 6.9e-8, 4-step
+accumulation, LoRA rank 16, alpha 16, no dropout, Gemma 4 12B in 4-bit at the
+same revision, a validation evaluation and a checkpoint every 16 steps on
+BC0's 128-row validation subset, and the final adapter kept (step 435). The
+pass attached R1's adapter as a warm start and changed all 656 LoRA tensors
+(L2 norm of the change from R1 2.46; the BC0-start pass moved 2.51 from BC0,
+the recorded R2 2.01 from R1). The one-step optimizer check passed (finite
+gradients, parameters changed; its row's loss was 1.5e-6 under R1 already
+and did not move), and the reload check passed (the reloaded adapter
+reproduces its canary action, `wls_from_path`).
+
+**Losses.** The mean training loss over the 435 steps was 4.5e-3, against
+4.9e-3 for the BC0-start pass (both from the step logs; the BC0-start pass's
+own summary covers only its last attempt), and 6.9e-3 against 6.6e-3 over the
+first 109 steps: the start from R1 did not make the mixture easier to fit
+early in the pass. The validation loss started lower (4.8e-4 at step 16,
+against 7.0e-3) and ended at 1.7e-4 (BC0-start pass 1.3e-4), and it moves up
+to 43-fold between consecutive evaluations (the BC0-start pass up to 45-fold,
+3.4e-3 at step 144 and 7.5e-5 at step 160; 9.6 first said 30-fold, corrected
+there), so as before it does not rank the adapters.
+
+**Gate** (fp-r2wgate 21447703, cs606, 22:31 UTC; `logs/r2wgate-21447703.out`):
+all ten checks passed. The receipt names R1's adapter as both the
+initialization and the collecting student, with R1's tree hash (3cca6008...),
+the cumulative aggregate with `round_init` previous, 1,738 rows and 435
+steps, the BC0-start pass's mixture hash and a passed research run, and the
+new adapter's tree (083db267...) differs from the BC0-start R2's.
+
+**Evaluations.** r2e 21447704 and `test2_40_r2` 21447836 started at 22:32
+UTC and `test_budget12_r2` 21447838 at 22:37, all on gr103 (RTX PRO 6000
+Blackwell); the other six wait on the per-user GPU limit.
