@@ -1703,6 +1703,7 @@ safety-clean successes in parentheses:
 | Clean controls (16) | 16 (16) | 16 (16) | 32 (32) | 32 (32) | 32 (32) | 32 (32) | 32 (32) |
 | **All** | **191 (190)** | **191 (188)** | **382 (378)** | 379 (366) | 382 (382) | 380 (350) | 383 (383) |
 | Violation episodes (invalid action / false commit / loop) | 1 (1/0/0) | 3 (3/0/0) | 4 (4/0/0) | 16 (16/2/3) | 0 | 33 (33/6/3) | 0 |
+| Invalid actions; false commits | 1; 0 | 3; 0 | 4; 0 | 34; 5 | 0; 0 | 61; 21 | 0; 0 |
 | Mean actions; mean WLS calls | 9.86; 2.50 | 9.86; 2.51 | 9.86; 2.50 | 9.94; 2.51 | 9.83; 2.50 | 10.26; 2.57 | 9.85; 2.50 |
 | Bounded comparisons | 19 | 16 | 35 | 37 | 36 | 46 | 47 |
 
@@ -1731,7 +1732,9 @@ Pooled, except 16 actions (first draw only, as recorded):
 | 40 | 383 (383); 0; 0 | 380 (350); 33; 2 | 382 (382); 0; 0 | 382 (378); 4; 0 | 379 (366); 16; 0 |
 
 The new R2 by draw: 174 (173) and 176 (174) at 12 actions, 180 (180) and
-181 (179) at 20. On the multi-error roots it solves 127 (125) at 12 actions
+181 (179) at 20. Its invalid actions, pooled: 6 at 12 actions and 2 at 20,
+with no false commit (the recorded R2: 12 and 19 invalid actions, 4 and 3
+false commits). On the multi-error roots it solves 127 (125) at 12 actions
 and 137 (135) at 20 (R1 128 (128) and 137 (137)); on the single-error and
 clean roots 223 (222) and 224 (224).
 
