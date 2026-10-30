@@ -1508,6 +1508,17 @@ round 2 of this cell to be rerun under that recipe and for every R2 number
 behind Table I to be refreshed. The expert, BC0 and R1 are not re-run: their
 records stand (BC0's decoding varies with the GPU type, section 8.8).
 
+**Result (2026-10-30).** Under the cumulative recipe round 2 no longer
+regresses. Pooled over the two draws at 40 actions the new R2 solves 382 of
+384 scenarios, as R1 does (the recorded R2 379), 378 of them safety-clean (R1
+382, the recorded R2 366). Its 4 violation episodes (1 on the first draw, 3 on
+the second) are each one refused action in a solved episode, with no false
+commit and no loop; the recorded R2 had 16. None of the 18 pre-stated tests
+separates R1 from the new R2 (safety-clean 0 to 4 at 40 actions, p = 0.125);
+BC0's safety-clean gap stays (31 to 3 against the new R2, Holm-adjusted
+p = 1.4e-5). On the validation roots R1 and the new R2 tie on every key of the
+selection rule. Sections 9.7 to 9.12.
+
 ### 9.1 Port and checks (2026-10-29)
 
 **Merge.** origin/claude/eager-fermat-0ca9ms (43f9270: the recipe in
@@ -1674,3 +1685,229 @@ So steps 1 to 416 of the kept adapter ran on RTX PRO 6000 Blackwell GPUs and
 steps 417 to 435 on an A100; the recorded R2 trained on one RTX PRO 6000
 Blackwell (9.4). The attempts ran 3 h 51 min of the 5 h 10 min between the
 first start and the receipt; r2e and the first evaluations started at 05:25.
+
+### 9.7 Results at 40 actions (384 scenarios)
+
+Every policy on the same roots and measurement realizations (seed 20260912);
+the expert, BC0 and R1 are their recorded evaluations. Successes, with
+safety-clean successes in parentheses:
+
+| Cohort (roots per draw) | New R2, draw 1 | New R2, draw 2 | New R2, pooled | Recorded R2, pooled | R1, pooled | BC0, pooled | Expert, pooled |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Single bad meter (32) | 32 (32) | 32 (32) | 64 (64) | 64 (64) | 64 (64) | 64 (64) | 64 (64) |
+| Two to five bad meters (24) | 23 (23) | 23 (22) | 46 (45) | 46 (40) | 46 (46) | 46 (38) | 47 (47) |
+| Line R/X error (32) | 32 (32) | 32 (32) | 64 (64) | 63 (62) | 64 (64) | 64 (64) | 64 (64) |
+| Breaker status error (32) | 32 (32) | 32 (32) | 64 (64) | 63 (63) | 64 (64) | 64 (64) | 64 (64) |
+| Meter + R/X error (32) | 32 (32) | 32 (32) | 64 (64) | 64 (62) | 64 (64) | 63 (54) | 64 (64) |
+| Meter + breaker status (24) | 24 (23) | 24 (22) | 48 (45) | 47 (43) | 48 (48) | 47 (34) | 48 (48) |
+| Clean controls (16) | 16 (16) | 16 (16) | 32 (32) | 32 (32) | 32 (32) | 32 (32) | 32 (32) |
+| **All** | **191 (190)** | **191 (188)** | **382 (378)** | 379 (366) | 382 (382) | 380 (350) | 383 (383) |
+| Violation episodes (invalid action / false commit / loop) | 1 (1/0/0) | 3 (3/0/0) | 4 (4/0/0) | 16 (16/2/3) | 0 | 33 (33/6/3) | 0 |
+| Mean actions; mean WLS calls | 9.86; 2.50 | 9.86; 2.51 | 9.86; 2.50 | 9.94; 2.51 | 9.83; 2.50 | 10.26; 2.57 | 9.85; 2.50 |
+| Bounded comparisons | 19 | 16 | 35 | 37 | 36 | 46 | 47 |
+
+Violation episodes by draw (first / second): expert 0 / 0, BC0 19 / 14, R1
+0 / 0, new R2 1 / 3, recorded R2 9 / 7.
+
+The two cohorts of Table I, pooled; successes (safety-clean); mean actions:
+
+| Cohort | Expert | BC0 | R1 | New R2 | Recorded R2 |
+| --- | --- | --- | --- | --- | --- |
+| Multi-error roots (160) | 159 (159); 14.23 | 156 (126); 15.16 | 158 (158); 14.23 | 158 (154); 14.23 | 157 (145); 14.49 |
+| Single-error and clean roots (224) | 224 (224); 6.72 | 224 (224); 6.75 | 224 (224); 6.69 | 224 (224); 6.74 | 222 (221); 6.68 |
+
+All four of the new R2's violation episodes are on multi-error roots.
+
+### 9.8 Under the action budget
+
+Successes (safety-clean); violation episodes; episodes that reach the budget.
+Pooled, except 16 actions (first draw only, as recorded):
+
+| Budget | Expert | BC0 | R1 | New R2 | Recorded R2 |
+| --- | --- | --- | --- | --- | --- |
+| 12 | 353 (353); 0; 104 | 345 (327); 23; 117 | 352 (352); 0; 106 | 350 (347); 4; 108 | 348 (341); 10; 110 |
+| 16 (first draw) | 178 (178); 0; 1 | 174 (164); 13; 19 | 177 (177); 0; 14 | 178 (178); 1; 14 | 177 (172); 6; 15 |
+| 20 | 362 (362); 0; 2 | 359 (334); 30; 27 | 361 (361); 1; 21 | 361 (359); 2; 21 | 358 (350); 13; 23 |
+| 40 | 383 (383); 0; 0 | 380 (350); 33; 2 | 382 (382); 0; 0 | 382 (378); 4; 0 | 379 (366); 16; 0 |
+
+The new R2 by draw: 174 (173) and 176 (174) at 12 actions, 180 (180) and
+181 (179) at 20. On the multi-error roots it solves 127 (125) at 12 actions
+and 137 (135) at 20 (R1 128 (128) and 137 (137)); on the single-error and
+clean roots 223 (222) and 224 (224).
+
+### 9.9 Paired tests
+
+Exact two-sided McNemar tests, pooled, on the roots one policy fails and the
+other solves (first policy only / second policy only; p). The 18 tests stated
+in 8.6, with the new R2:
+
+| Budget | BC0 vs R1, success | BC0 vs R1, safety-clean | BC0 vs expert, success | BC0 vs expert, safety-clean | R1 vs R2, success | R1 vs R2, safety-clean |
+| --- | --- | --- | --- | --- | --- | --- |
+| 12 | 7/0 (0.016) | 25/0 (6.0e-8) | 8/0 (0.0078) | 26/0 (3.0e-8) | 0/2 (0.5) | 0/5 (0.0625) |
+| 20 | 5/3 (0.73) | 29/2 (4.6e-7) | 6/3 (0.51) | 30/2 (2.5e-7) | 0/0 (1) | 0/2 (0.5) |
+| 40 | 2/0 (0.5) | 32/0 (4.7e-10) | 3/0 (0.25) | 33/0 (2.3e-10) | 0/0 (1) | 0/4 (0.125) |
+
+Holm's correction over these 18 rejects the six BC0 safety-clean tests
+(adjusted p 4.2e-9 to 6.0e-6) and nothing else: the next smallest p, BC0
+against the expert on success at 12 actions, adjusts to 0.094, and every R1
+against R2 test to 0.625 or more. With the recorded R2 the same family also
+rejected R1 against R2 on safety-clean success at every horizon (0/11, 0/11
+and 0/16).
+
+The expert, BC0 and R1 against the new R2 (the second family of 18):
+
+| Budget | Expert vs R2, success | Expert vs R2, safety-clean | BC0 vs R2, success | BC0 vs R2, safety-clean | R1 vs R2, success | R1 vs R2, safety-clean |
+| --- | --- | --- | --- | --- | --- | --- |
+| 12 | 0/3 (0.25) | 0/6 (0.031) | 6/1 (0.125) | 23/3 (8.8e-5) | 0/2 (0.5) | 0/5 (0.0625) |
+| 20 | 0/1 (1) | 0/3 (0.25) | 5/3 (0.73) | 28/3 (4.7e-6) | 0/0 (1) | 0/2 (0.5) |
+| 40 | 0/1 (1) | 0/5 (0.0625) | 2/0 (0.5) | 31/3 (7.7e-7) | 0/0 (1) | 0/4 (0.125) |
+
+Holm rejects BC0 against the new R2 on safety-clean success at the three
+horizons (adjusted p 1.4e-3, 7.9e-5 and 1.4e-5) and nothing else; the
+expert against the new R2 on safety-clean success at 12 actions (p = 0.031)
+adjusts to 0.47. Outside both families, the recorded R2 against the new one:
+on safety-clean success the recorded R2 alone fails 11, 10 and 15 roots and
+the new R2 alone 5, 1 and 3 (p = 0.21, 0.012 and 0.0075 at 12, 20 and 40
+actions); on success 4/2, 3/0 and 3/0.
+
+### 9.10 The new R2's failures and violations
+
+At 40 actions its two unsolved roots are the two R1 fails, and it fails them
+the same way:
+
+- r0_f5eefea5a905 (first draw, two bad meters): it hands off after two meter
+  repairs in 11 actions, as R1, BC0 and the recorded R2 do (section 5); the
+  teacher solves it in 11.
+- r0_ae01c73aa1ff (second draw, five bad voltage meters): it escalates after
+  15 actions, as the teacher and R1 do (8.4).
+
+Its four violation episodes are each one refused action in an episode it
+solves:
+
+- Three meter + breaker roots (r0_0e223cc250b5 on the first draw,
+  r0_ef3e33429bae and r0_ff6f856b91f9 on the second). After the parameter and
+  measurement contexts it calls `correct_measurements` on a five-meter suspect
+  group before reading the topology context, and the tool refuses
+  (`correction_not_supported_by_current_context`). It then reads the topology
+  context, opens the breaker, repairs the one bad meter and finishes in 14
+  actions, against 12 for the teacher and R1. BC0 and the recorded R2 also
+  violate on r0_ef3e33429bae.
+- One multi-meter root (r0_2891b821e696, second draw). After its first meter
+  repair it asks for `repeated_measurement_scans`, an operator request the
+  profile does not support (refused, `operator_escalation_request_unsupported`).
+  It then repairs the second meter and finishes in 14 actions, against 13.
+
+Under the budgets, the multi-meter roots that run into the budget fail for
+every policy. Beyond those, the new R2 fails a meter + breaker root
+(r0_c253469c06d3) at 12 actions, which the teacher, R1 and the recorded R2
+solve in 12. It also fails a breaker root (r0_777a8fc0e99a) at 12 and 16
+actions, where refused calls and the loop rule end the episode after 7
+actions; every other policy solves that root in 8. It solves both roots at 20
+and 40 actions. Its other budget violations are refused actions in solved
+episodes: three at 12 actions (r0_e8acd8a60f40, r0_9eb45b4ce8a4,
+r0_0014845d0a3e) and, at 20, the two second-draw meter + breaker roots above.
+
+Ranking strata (parameter and meter + R/X roots), pooled at 40 actions;
+successes (safety-clean), bounded comparisons used:
+
+| Stratum | Expert | BC0 | R1 | New R2 | Recorded R2 |
+| --- | --- | --- | --- | --- | --- |
+| Misranked (6) | 6 (6), 6 | 6 (6), 6 | 6 (6), 6 | 6 (6), 6 | 5 (5), 5 |
+| Ambiguous (30) | 30 (30), 30 | 30 (30), 31 | 30 (30), 30 | 30 (30), 29 | 30 (29), 30 |
+| Dominant (92) | 92 (92), 11 | 91 (82), 9 | 92 (92), 0 | 92 (92), 0 | 92 (90), 2 |
+
+Like R1, the new R2 compares on the misranked roots and never on a dominant
+one. On the ambiguous roots it makes 29 comparisons against R1's 30 and still
+solves all 30 cleanly.
+
+### 9.11 R1's re-score, the validation and hard roots, and the round selection
+
+**R1's re-score.** r2e rolls R1 out again on the 192 first-draw roots beside
+the new R2. The result matches R1's recorded evaluation root for root: 192
+paired roots, none differing in success, invalid action, false commit, loop,
+terminal outcome, actions, WLS calls or comparisons (191 successes each). The
+job ran on an A100 and then on two RTX PRO 6000 Blackwell nodes (9.12), so
+this agrees with R1's decoding not varying across GPU types (8.8). The
+recorded r2e's re-score also matched root for root.
+
+**Validation (96 roots) and hard draw (193)**; successes (safety-clean);
+violation episodes; mean actions:
+
+| Set | Expert | BC0 | R1 | New R2 | Recorded R2 |
+| --- | --- | --- | --- | --- | --- |
+| Validation (96) | 96 (96); 0; 10.01 | 96 (90); 6; 10.07 | 96 (95); 1; 10.05 | 96 (95); 1; 10.05 | 96 (92); 4; 10.07 |
+| Hard draw (193) | 185 (185); 0; 11.30 | 182 (161); 22; 11.39 | 183 (182); 1; 11.31 | 183 (182); 1; 11.09 | 182 (177); 5; 11.42 |
+
+On the validation roots the new R2's one violation is a breaker root
+(r0_89c474e2d455), with the same refused five-meter correction before the
+topology context (solved in 10 actions against 8). On the hard draw the new
+R2 and R1 solve the same number of roots (183). The new R2's ten failures are
+the eight multi-meter roots that every policy, the teacher included, fails,
+and two misranked roots (r0_3ad37c833dc5, meter + R/X; r0_8013605195d2, R/X).
+On those two it corrects the ranking's top line without a comparison and the
+verifier accepts it; the teacher compares and solves both, and BC0, R1 and
+the recorded R2 fail both. Its one hard-draw violation (r0_098e749ba7ac,
+meter + R/X, solved) is an operator escalation refused twice after a partial
+commit, which the evaluator ends with the loop rule after 13 actions. BC0, R1
+and the recorded R2 also violate on that root (26, 27 and 40 actions).
+
+**Round selection** (section 6's rule on the validation roots: most
+successes, then fewest violation episodes, then fewest mean actions). BC0, R1
+and the new R2 tie at 96 successes. R1 and the new R2 tie at one violation
+episode, against BC0's 6, and they tie on mean actions too, at 965 actions
+each (10.052). The rule as written has no further tie-break, so it does not
+separate R1 from the new R2. `followup_tables.py` keeps the listed order on a
+full tie and prints R1. With the recorded R2 the rule selected R1 on violation
+episodes (1 against 4).
+
+### 9.12 Jobs, snapshot check and records
+
+Evaluation jobs (UTC, 30 October). A preempted attempt keeps its finished
+episodes, so one set's R2 episodes can come from two or three GPU types:
+
+| Job | Set | Attempts (node, GPU, time) |
+| --- | --- | --- |
+| r2e 21369834 | first draw at 40 actions, and R1's re-score | ga002 A100 05:25 to 05:55; gr101 RTX PRO 6000 06:05 to 07:19; gr106 RTX PRO 6000 07:22 to 07:41 |
+| 21369835 | second draw, 40 | ga006 A100 05:25 to 06:18; gr104 RTX PRO 6000 06:22 to 06:48 |
+| 21369837 | first draw, 12 | ga015 A100 05:25 to 05:57; gh003 H100 06:05 to 06:35; gr105 RTX PRO 6000 06:42 to 06:48 |
+| 21369843 | first draw, 16 | gr101 RTX PRO 6000 05:25 to 06:20 |
+| 21369846 | first draw, 20 | gr104 RTX PRO 6000 05:37 to 06:20; ga029 A100 06:25 to 06:49 |
+| 21369847 | second draw, 12 | gr106 RTX PRO 6000 05:50 to 06:20; gr105 RTX PRO 6000 06:24 to 06:46 |
+| 21369848 | second draw, 20 | gr105 RTX PRO 6000 06:00 to 06:36; gr104 RTX PRO 6000 06:49 to 07:12 |
+| 21369850 | validation | gr105 RTX PRO 6000 06:10 to 06:39 |
+| 21369851 | hard draw | gr106 RTX PRO 6000 06:16 to 07:21 |
+| fp-r2final 21370357 | tables, snapshot, archive | cs607 (CPU) 07:42 to 07:44 |
+
+**Snapshot check** (`r2rerun_20261029/snapshot_check.txt`, written by
+fp-r2final). `out/d0`, `out/bc0` and `out/r1` are identical to the listing
+taken before the deploy: no file added, removed or changed. `out/extra` has 89
+entries added, 58 changed and 18 removed, all of them set-aside or new
+records. The check flagged the 18 removals as unexpected because its list of
+moved names left out the two control evaluations, `hard_r2_control` and
+`validation_r2_control` (with their console receipts and specs). Checked on
+torch afterwards, all 18 are present under their `_pool_20261023` names with
+their pre-deploy sizes. So the rerun wrote only `out/r2`, the logs,
+`out/pipeline_summary.json`, the new R2 evaluations and the rebuilt tables,
+as 9.2 expected.
+
+**Records.** `/scratch/yx3882/r2rerun_records_20261029.tgz` (665,801 bytes,
+sha256 915d9dfce7e40a5f1525f192a6ec8264acf191b0936678d7835d1a63fcd58ae7) was
+downloaded, checked and extracted to
+`output/conventional_only_20261022/results/r2rerun_20261029/` (gitignored).
+It holds:
+
+- the eight evaluations' summaries, comparisons, episode lists, policies and
+  specs;
+- round 2's receipts and reports (collection, mixture, training, round
+  summary, research run);
+- the rebuilt `pooled_tables`, `budget_tables` and `followup_tables` (in
+  `out/extra`, with the pooled per-episode records
+  `pooled_tables_episodes.jsonl`);
+- `r2rerun_tables.json` and `.md` (every number in 9.7 to 9.11, with compact
+  traces of R2's failed or violating episodes on the 40-action sets);
+- `jobs.txt`, and the logs of r2c, the gate, r2t, r2e and fp-r2final.
+
+The archive's `snapshot_*` exclusion also left out `snapshot_check.txt`,
+which stays in the cell beside the snapshots. The evaluation files with full
+traces (`*_eval.json`, 36 to 85 MB each) stay on torch, as do the recorded R2
+records under their `_pool_20261023` names.
