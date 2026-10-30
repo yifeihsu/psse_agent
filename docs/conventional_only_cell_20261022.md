@@ -1641,3 +1641,36 @@ observation and no conflicting row. The gate (fp-r2gate 21369831, cs601,
 | --- | --- | --- | --- | --- | --- | --- |
 | Recorded R2 (pool recipe) | 432 | 57 | 375 | 864 | R1 | 216 |
 | Rerun R2 (cumulative recipe) | 432 | 437 | 869 | 1,738 | BC0 | 435 |
+
+### 9.6 The rerun's training pass
+
+**Training** (r2t 21369832, receipt `out/r2/training.done`, contract
+`research_full_pipeline_training_done_v2`): one pass over the 1,738-row
+mixture from the BC0 adapter (warm start from `out/bc0/lora`), 435 optimizer
+steps (micro-batch 1, 4-step accumulation), learning rate 3e-5 decaying
+linearly to 6.9e-8 at the last step, LoRA rank 16, alpha 16, no dropout, on
+Gemma 4 12B loaded in 4-bit, with a validation evaluation and a checkpoint
+every 16 steps on BC0's 128-row D0 validation subset. The kept adapter is the
+final one (step 435, `out/r2/training/lora`); as in the recorded pass, no
+checkpoint is chosen by validation loss. The pass changed all 656 LoRA
+tensors (L2 norm of the change from BC0 2.51; the recorded R2 moved 2.01 from
+R1, and R1 moved 1.90 from BC0), and the reload check passed (the reloaded
+adapter reproduces its canary action). Validation loss ended at 1.3e-4 (BC0
+5.9e-3, R1 1.1e-3, recorded R2 7.9e-4), but it moves up to 30-fold between
+consecutive evaluations of one pass (3.4e-3 at step 144, 7.5e-5 at step 160),
+so it does not rank the adapters.
+
+The pass was preempted three times. Each restart resumed from the newest
+complete checkpoint, so 32 steps were run twice:
+
+| Attempt | Node, GPU | UTC, 30 Oct | Steps run | Steps kept | Resumed from |
+| --- | --- | --- | --- | --- | --- |
+| 1 | gr106, RTX PRO 6000 Blackwell | 00:13 to 01:40 | 1 to 185 | 1 to 176 | |
+| 2 | gr105, RTX PRO 6000 Blackwell | 01:54 to 02:45 | 177 to 279 | 177 to 272 | checkpoint 176 |
+| 3 | gr103, RTX PRO 6000 Blackwell | 03:48 to 05:02 | 273 to 432 (preempted while evaluating at 432) | 273 to 416 | checkpoint 272 |
+| 4 | ga002, A100-SXM4-80GB | 05:05 to 05:23 | 417 to 435 | 417 to 435 | checkpoint 416 |
+
+So steps 1 to 416 of the kept adapter ran on RTX PRO 6000 Blackwell GPUs and
+steps 417 to 435 on an A100; the recorded R2 trained on one RTX PRO 6000
+Blackwell (9.4). The attempts ran 3 h 51 min of the 5 h 10 min between the
+first start and the receipt; r2e and the first evaluations started at 05:25.
