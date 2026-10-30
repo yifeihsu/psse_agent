@@ -2108,3 +2108,63 @@ draws would be selection on the test set, and anything taken from them into
 the manuscript would have to say so. There is one pass per initialization;
 the GPU type can differ between the passes, and a preempted pass resumes from
 its newest checkpoint and re-runs up to 16 steps.
+
+### 10.2 Set aside, copied and submitted (19:00 to 19:30 UTC)
+
+**Set aside** (`mv -n`, every target checked free first, after a listing of
+`out/d0`, `out/bc0`, `out/r1` and `out/extra` saved as
+`r2warm_20261030/snapshot_preset_*.tsv` in the cell): `out/r2` to
+`out/r2_bc0init_20261030`, `out/pipeline_summary.json` to
+`out/pipeline_summary_bc0init_20261030.json`, the eight evaluations of 9.3
+with their console receipts and specs, and the `pooled_tables*`,
+`budget_tables*` and `followup_tables*` files in `out/extra`, each under the
+same name with `_bc0init_20261030`.
+
+**Copied.** The fresh `out/r2` holds the BC0-start pass's `collection.done`,
+`collection_console.json` and every file of its `collection/` except two
+that r2e wrote: `evaluation/` (the BC0-start R2's paired evaluation) and
+`research_run_report.json` (rewritten by r2e with that evaluation in it).
+The 87 copied files have the same sha256 as their sources
+(`r2warm_20261030/collection_source.sha256` and `collection_copy.sha256`),
+and the mixture matches its receipt: 1,738 rows, sha256 b9ba213e...6e1216,
+contract `research_dagger_cumulative_mixture_v2`, all 437 round-1 rows
+(retained fraction 1.0), no conflicting row. r2e runs the round's collection
+script again before it evaluates, which re-exports the round-2 rows and the
+mixture from the ledger and rollouts (it did so in section 9 without changing
+a byte); the finalize job checks that the re-export equals the copy.
+
+**Jobs** (`submitted_jobs.txt`). r2t 21447607: `ROUND_INIT=previous`
+exported to `submit_pipeline.sh` with `FROM=r2t CHAIN=r2t` (the stages read
+`ROUND_INIT=${ROUND_INIT:-bc0}`, so the job carries it through a requeue);
+its log reads "aggregate cumulative; initialization previous
+(.../out/r1/training/lora)" and "mixture rows 1738 -> 435 optimizer steps",
+and it started on gr101 at 19:06 UTC. fp-r2wgate 21447703
+(`r2warm_20261030/gate_init.sbatch`, afterok r2t) exits 0 only if the
+training receipt names R1's adapter as the initialization with R1's tree
+hash, the cumulative aggregate, 1,738 rows and 435 steps, the mixture hash
+equals the BC0-start pass's, and the new adapter differs from the BC0-start
+R2. Behind the gate: r2e 21447704 and the eight evaluations of the new R2
+alone (`submit_r2_rerun_20261029.sh`, DEPEND = the gate): `test2_40_r2`
+21447836, `test_budget12_r2` 21447838, `test_budget16_r2` 21447839,
+`test_budget20_r2` 21447841, `test2_budget12_r2` 21447842,
+`test2_budget20_r2` 21447843, `validation_r2` 21447844 and `hard_r2`
+21447845. (A `| head -1` in the first submission call stopped that script
+with SIGPIPE after r2e; the eight went in from a second call two minutes
+later, at 19:08.) fp-r2wfinal 21449776 (`r2warm_20261030/finalize.sbatch`,
+afterok r2e and the eight) rebuilds the pooled, budget and follow-up tables
+with the new R2, runs `r2rerun_tables.py --bc0init-suffix _bc0init_20261030`
+and `context_order_audit.py`, checks the re-exported round-2 data against the
+copy, compares the snapshot and archives the records as
+`/scratch/yx3882/r2warm_records_20261030.tgz`.
+
+**Dry run** (fp-r2wdry 21449150, 19:21 UTC, before any record of the new R2
+existed). The deployed `r2rerun_tables.py` and `context_order_audit.py`
+(sha256 equal to this commit's), reading the BC0-start R2 back from its
+`_bc0init_20261030` names as `r2_bc0init`, reproduce sections 9.7 to 9.13:
+382 (378) of 384 pooled at 40 actions with 4 violation episodes, 350 (347) at
+12, 361 (359) at 20, 178 (178) on the first draw at 16, 96 (95) on the
+validation roots with 965 actions and 183 (182) on the hard draw; r2e's
+re-score of R1 equal to R1's record on all 192 roots; and the detours of the
+9.13 table (14/55, 11/55, 18/55, 14/55, 17/55, 14/54, 14/55, 5/26, 5/15),
+with R1 against it 0 to 25 (p = 6.0e-8) and BC0 against it 10 to 17
+(p = 0.25).
