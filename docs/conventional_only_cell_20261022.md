@@ -1517,7 +1517,9 @@ commit and no loop; the recorded R2 had 16. None of the 18 pre-stated tests
 separates R1 from the new R2 (safety-clean 0 to 4 at 40 actions, p = 0.125);
 BC0's safety-clean gap stays (31 to 3 against the new R2, Holm-adjusted
 p = 1.4e-5). On the validation roots R1 and the new R2 tie on every key of the
-selection rule. Sections 9.7 to 9.12.
+selection rule. Sections 9.7 to 9.12. Section 9.13 traces the remaining gap to
+one context-order decision on the breaker roots, where the new R2 detours as
+BC0 does and no training row of any round shows the detour.
 
 ### 9.1 Port and checks (2026-10-29)
 
@@ -1914,3 +1916,135 @@ The archive's `snapshot_*` exclusion also left out `snapshot_check.txt`,
 which stays in the cell beside the snapshots. The evaluation files with full
 traces (`*_eval.json`, 36 to 85 MB each) stay on torch, as do the recorded R2
 records under their `_pool_20261023` names.
+
+### 9.13 Why the new R2 still trails R1 (2026-10-30)
+
+The user asked why R2 still trails R1 on safety-clean success now that it
+trains on every on-policy label. `context_order_audit.py` (records below)
+reads every recorded trace, training view and round ledger of the cell.
+
+**Three of the four violations come from one earlier decision.** On a root
+with a breaker-status error (the topology and meter + breaker families) the
+teacher runs the estimator, reads the parameter context (route unavailable:
+the findings need repeated scans) and reads the topology context next. On
+r0_ef3e33429bae (second draw):
+
+| Step | Teacher and R1 | New R2 |
+| --- | --- | --- |
+| 0, 1 | `run_wls`, `get_parameter_context` | the same |
+| 2 | `get_topology_context` | `get_measurement_context` |
+| 3 | `correct_topology` (CB_9_B1_N1, line 17) | `correct_measurements` on the five listed findings (13, 55, 58, 98, 41): refused |
+| 4 | `run_wls` | `get_topology_context`, then as the teacher from its step 3 |
+
+The measurement context it read lists no supported correction and marks the
+measurement route as blocked by branch dominance, so the tool refuses the
+group (`correction_not_supported_by_current_context`). The other two meter +
+breaker violations of 9.10 and the validation violation (9.11) follow the
+same path; the fourth violation at 40 actions (r0_2891b821e696, the
+unsupported `repeated_measurement_scans` request) is unrelated.
+
+Breaker roots on which a policy reads the measurement context right after
+the parameter context, of the episodes that read the parameter context
+first:
+
+| Set | Expert | BC0 | R1 | Recorded R2 | New R2 |
+| --- | --- | --- | --- | --- | --- |
+| First draw, 40 actions | 0/55 | 11/55 | 0/55 | 0/55 | 14/55 |
+| Second draw, 40 | 0/56 | 7/56 | 0/56 | 0/56 | 11/55 |
+| First draw, 12 | 0/55 | 12/55 | 0/55 | 0/55 | 18/55 |
+| Second draw, 12 | 0/56 | 8/55 | 0/56 | 0/56 | 14/55 |
+| First draw, 16 | 0/55 | 13/55 | 0/55 | 0/55 | 17/55 |
+| First draw, 20 | 0/55 | 15/54 | 0/55 | 0/55 | 14/54 |
+| Second draw, 20 | 0/56 | 7/56 | 0/56 | 0/56 | 14/55 |
+| Validation | 0/27 | 4/27 | 0/26 | 0/27 | 5/26 |
+| Hard draw | 0/15 | 3/16 | 0/15 | 0/15 | 5/15 |
+
+The matched control never detours either (0/26 validation, 0/16 hard).
+Paired over the two draws at 40 actions (roots only the first policy detours
+on / only the second; exact McNemar): R1 against the new R2 0 to 25
+(p = 6.0e-8), and the same for the recorded R2 and the teacher; BC0 against
+the new R2 10 to 17 with 8 roots in common (p = 0.25); BC0 against R1 18 to 0
+(p = 7.6e-6). On this decision the new R2 is at BC0's rate, not R1's.
+
+Most detours cost one action. From the state with the parameter and
+measurement contexts fresh and no topology context, the new R2 reads the
+topology context next in 23 of its 26 entries at 40 actions (both draws) and
+calls the refused correction in 3; in the budget runs, validation and the
+hard draw 0 to 2 entries per set end in a refusal. So the 4-root
+safety-clean gap is the visible part of a 25-root difference in behavior.
+The detours lean to roots with weaker evidence. On the topology roots the
+median chi-square ratio is 12.5 where the new R2 detours and 22.6 where it
+reads the topology context first; on the meter + breaker roots, 15.4 and
+27.9 (largest |lambda| 39.0 and 46.4, 40.9 and 55.5; a voltage-magnitude
+outlier on 67% and 53%, 62% and 47%).
+
+**No training row shows the detour.** At the decision on breaker roots
+(first stage, parameter context just read, neither the measurement nor the
+topology context), every training row of every view is labeled
+`get_topology_context`, and no view has a row at the detour state (parameter
+and measurement contexts, no topology context) for any family:
+
+| Training view | Rows | At the decision on breaker roots | At the detour state |
+| --- | --- | --- | --- |
+| BC0: D0's training view | 2,747 | 45 | 0 |
+| R1: round-1 mixture | 874 | 28 (11 D0, 17 round 1) | 0 |
+| Recorded R2: pool mixture | 864 | 25 (8 pool sample, 17 round 2) | 0 |
+| New R2: cumulative mixture | 1,738 | 50 (16 D0, 17 round 1, 17 round 2) | 0 |
+
+The only rows that read the measurement context after the parameter context
+are four round-1 rows on roots without a breaker error (three multi-meter,
+one meter + R/X), in R1's and the new R2's mixtures alike.
+
+The round ledgers show why collection never added the detour. BC0,
+collecting round 1, reached the decision on 22 round-1 training roots and
+read the topology context on all 22 (17 rows kept, 5 dropped as states the
+teacher's executed actions reached); R1, collecting round 2, did so on 21 of
+21 (17 kept). A round labels only the collector's own states, so neither
+round saw the detour or the state after it. The training roots are not
+easier at this decision: the chi-square ratio there (quartiles 7.5, 19.7,
+37.2 in round 1's ledger and 12.4, 23.5, 37.0 in round 2's) is like that of
+the 112 test breaker roots (9.0, 20.3, 50.5); the new R2's 25 detour roots
+sit lower (9.9, 14.4, 38.7). At BC0's test rate (18 of 111), 0 of 22 has a
+probability of about 2%.
+
+**What carried R1's context order.** R1, trained from BC0 with 28 rows at the
+decision, does not detour; the recorded R2 continued R1 and kept that; the
+new R2 restarted from BC0 with 50 such rows and is back at BC0's rate. As no
+row at the decision contrasts the detour, the data do not fix how a
+retrained adapter generalizes this decision to new roots: R1's training pass
+happened to generalize it, the rerun's did not, and with one pass per recipe
+the restart from BC0 cannot be separated from run-to-run variation. The
+training loss cannot see it, since every row at the decision is fit
+(validation loss 1.3e-4, 9.6).
+
+**What could close the gap (not run).**
+
+1. Round 3, collected with the new R2. It detours on about a fifth of the
+   breaker roots, so its collection would put the teacher's label on the
+   detour and on the state after it. It needs a fresh round-3 training suite,
+   disjoint from every other set.
+2. Round 2 again, warm-started from R1 on the same cumulative mixture
+   (`ROUND_AGGREGATE=cumulative ROUND_INIT=previous`, which the recipe
+   supports; it needs a fresh `out/r2`, so the rerun's R2 would be set aside
+   first). It keeps R1's context order and still replays every label: one
+   training pass and the 40-action and validation evaluations.
+3. A process measure in the round selection: the teacher's disagreement with
+   the student along the student's own validation trajectories (the teacher
+   can label every state the student visits, as in collection). On the
+   validation roots it separates R1 (0 of 26 breaker roots detoured) from the
+   new R2 (5 of 26), where the outcome rule ties (9.11). It would have to be
+   stated before the next test evaluation.
+
+Beyond R2: R1 already matches the teacher except on one root
+(r0_f5eefea5a905, where every student hands off after two meter repairs and
+the teacher goes on), and the teacher's own failure (r0_ae01c73aa1ff) and the
+roots that run into the budget for the teacher too bound what further
+imitation rounds can gain.
+
+**Records.** `research/hpc/full_pipeline_20260907/context_order_audit.py`,
+run in the cell from `r2rerun_20261029/` (beside its copy of
+`followup_tables.py`) as `python3 r2rerun_20261029/context_order_audit.py
+--cell-dir PIPE --output r2rerun_20261029/context_order_audit.json`, with the
+markdown summary on stdout saved as `context_order_audit.md`. The script,
+JSON and markdown are copied to
+`output/conventional_only_20261022/results/r2rerun_20261029/extracted/r2rerun_20261029/`.
