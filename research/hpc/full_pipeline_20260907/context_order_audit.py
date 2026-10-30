@@ -17,11 +17,13 @@ at them in the two round ledgers (BC0 collecting round 1, R1 round 2), with
 the chi-square ratio at the decision on the training states and on the test
 roots (both draws at 40 actions, and the new R2's detours among them).
 
-Policies: ``expert``, ``bc0``, ``r1``, ``r2`` (the rerun's R2), ``r2_pool``
-(the recorded R2, set aside under ``_pool_20261023``) and ``control`` (the
-matched cloning control).  Evaluation slots are mapped to policies by their
-adapter path in each ``policies.json``; the round evaluations of the first
-draw at 40 actions have none and are named here.
+Policies: ``expert``, ``bc0``, ``r1``, ``r2`` (the R2 in ``out/r2``), ``r2_pool``
+(the recorded R2, set aside under ``_pool_20261023``), ``r2_bc0init`` (the
+rerun's R2 trained from BC0, set aside under ``_bc0init_20261030`` when round 2
+was trained again from R1, note section 10; ``r2`` is then the R1-start R2) and
+``control`` (the matched cloning control).  Evaluation slots are mapped to
+policies by their adapter path in each ``policies.json``; the round evaluations
+of the first draw at 40 actions have none and are named here.
 """
 from __future__ import annotations
 
@@ -36,12 +38,16 @@ from typing import Any, Mapping
 HERE = Path(__file__).resolve().parent
 BREAKER = ("topology", "measurement+topology")
 POOL = "_pool_20261023"
+BC0INIT = "_bc0init_20261030"
 REFUSED = "correction_not_supported_by_current_context"
-POLICIES = ("expert", "bc0", "r1", "r2_pool", "r2", "control")
-PAIRS = (("r1", "r2"), ("bc0", "r2"), ("r2_pool", "r2"), ("expert", "r2"), ("bc0", "r1"))
+POLICIES = ("expert", "bc0", "r1", "r2_pool", "r2_bc0init", "r2", "control")
+PAIRS = (("r1", "r2"), ("bc0", "r2"), ("r2_pool", "r2"), ("r2_bc0init", "r2"), ("expert", "r2"), ("bc0", "r1"),
+         ("r1", "r2_bc0init"), ("bc0", "r2_bc0init"))
+DETOURING = ("r2_bc0init", "r2")
 MIXTURES = (("bc0", "d0/aggregate.train_view.jsonl"),
             ("r1", "r1/collection/round1.train.jsonl"),
             ("r2_pool", f"r2{POOL}/collection/round1.train.jsonl"),
+            ("r2_bc0init", f"r2{BC0INIT}/collection/round1.train.jsonl"),
             ("r2", "r2/collection/round1.train.jsonl"))
 LEDGERS = (("round 1, BC0 collecting", "r1/collection/d1.all.jsonl"),
            ("round 2, R1 collecting", "r2/collection/d1.all.jsonl"))
@@ -72,7 +78,7 @@ def _policy(adapter: str, directory: str) -> str:
     if adapter.endswith("/r1/training/lora"):
         return "r1"
     if adapter.endswith("/r2/training/lora"):
-        return "r2_pool" if POOL in directory else "r2"
+        return "r2_pool" if POOL in directory else "r2_bc0init" if BC0INIT in directory else "r2"
     if adapter.endswith("/control/training/lora"):
         return "control"
     return adapter
@@ -92,7 +98,9 @@ def evaluation_files(out: Path) -> list[tuple[str, str, Path]]:
              ("draw1@40", "bc0", out / "r1/collection/evaluation/bc0_eval.json"),
              ("draw1@40", "r1", out / "r1/collection/evaluation/r1_eval.json"),
              ("draw1@40", "r2", out / "r2/collection/evaluation/r1_eval.json"),
-             ("draw1@40", "r2_pool", out / f"r2{POOL}/collection/evaluation/r1_eval.json")]
+             ("draw1@40", "r2_pool", out / f"r2{POOL}/collection/evaluation/r1_eval.json"),
+             ("draw1@40", "r2_bc0init", out / f"r2{BC0INIT}/collection/evaluation/r1_eval.json")]
+    files = [entry for entry in files if entry[2].is_file()]
     root = out / "extra" / "evaluations"
     for directory in sorted(p for p in root.iterdir() if p.is_dir()):
         if directory.name.startswith(("test_control", "test_repro")):
@@ -201,23 +209,25 @@ def evaluations(out: Path) -> dict[str, Any]:
             pairs[f"{scope}: {a} vs {b}"] = {"only_first": only_a, "only_second": only_b, "both": both,
                                             "p": tables.mcnemar(only_a, only_b)}
     split: dict[str, Any] = {}
-    for family in BREAKER:
-        for label, wanted in (("detour", "measurement"), ("topology", "topology")):
-            sids = [sid for set_name in ("draw1@40", "draw2@40") for sid, per_policy in choices[set_name].items()
-                    if features[sid]["family"] == family and per_policy.get("r2") == wanted]
-            values = [features[sid] for sid in sids]
-            ratios = [v["chi_square_ratio"] for v in values if v["chi_square_ratio"] is not None]
-            lambdas = [v["top_abs_lambda"] for v in values if v["top_abs_lambda"] is not None]
-            split[f"{family}: r2 {label}"] = {
-                "roots": len(values),
-                "median_chi_square_ratio": round(median(ratios), 2) if ratios else None,
-                "median_top_abs_lambda": round(median(lambdas), 2) if lambdas else None,
-                "vm_outlier_share": round(sum(v["vm_outlier"] for v in values) / len(values), 2) if values else None}
+    for policy in DETOURING:
+        for family in BREAKER:
+            for label, wanted in (("detour", "measurement"), ("topology", "topology")):
+                sids = [sid for set_name in ("draw1@40", "draw2@40") for sid, per_policy in choices[set_name].items()
+                        if features[sid]["family"] == family and per_policy.get(policy) == wanted]
+                values = [features[sid] for sid in sids]
+                ratios = [v["chi_square_ratio"] for v in values if v["chi_square_ratio"] is not None]
+                lambdas = [v["top_abs_lambda"] for v in values if v["top_abs_lambda"] is not None]
+                split[f"{family}: {policy} {label}"] = {
+                    "roots": len(values),
+                    "median_chi_square_ratio": round(median(ratios), 2) if ratios else None,
+                    "median_top_abs_lambda": round(median(lambdas), 2) if lambdas else None,
+                    "vm_outlier_share": round(sum(v["vm_outlier"] for v in values) / len(values), 2) if values else None}
     draws = [choices[s] for s in ("draw1@40", "draw2@40")]
-    signal = {"test breaker roots, both draws": _spread([features[sid]["chi_square_ratio"] for d in draws for sid in d]),
-              "of which the new R2 detours": _spread([features[sid]["chi_square_ratio"] for d in draws
-                                                      for sid, per_policy in d.items()
-                                                      if per_policy.get("r2") == "measurement"])}
+    signal = {"test breaker roots, both draws": _spread([features[sid]["chi_square_ratio"] for d in draws for sid in d])}
+    for policy in DETOURING:
+        signal[f"of which {policy} detours"] = _spread([features[sid]["chi_square_ratio"] for d in draws
+                                                        for sid, per_policy in d.items()
+                                                        if per_policy.get(policy) == "measurement"])
     return {"counts": {f"{s}|{p}": dict(c) for (s, p), c in counts.items()},
             "from_parameter_and_measurement": {f"{s}|{p}": dict(c) for (s, p), c in from_pm.items()},
             "detour_pairs": pairs, "r2_detour_features": split, "signal": signal,
@@ -304,7 +314,7 @@ def markdown(result: Mapping[str, Any]) -> str:
     lines += ["", "Paired detours (roots where only the first / only the second detours, both; exact McNemar p):", ""]
     for key, v in ev["detour_pairs"].items():
         lines.append(f"- {key}: {v['only_first']} / {v['only_second']}, both {v['both']}; p = {v['p']:.2g}")
-    lines += ["", "The new R2's detour roots against its topology-first roots (both draws at 40 actions):", ""]
+    lines += ["", "Each R2's detour roots against its topology-first roots (both draws at 40 actions):", ""]
     for key, v in ev["r2_detour_features"].items():
         lines.append(f"- {key}: {v}")
     lines += ["", "Training rows at the two decision states (state | family group | label | source: rows):", ""]

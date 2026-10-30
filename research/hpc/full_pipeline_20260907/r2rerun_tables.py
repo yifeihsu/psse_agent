@@ -2,11 +2,14 @@
 """Round-2 rerun of the conventional-only cell (2026-10-29; note section 9).
 
     r2rerun_tables.py --cell-dir PIPE [--new-suffix ""] [--old-suffix _pool_20261023]
-                      [--traces N] [--output OUT.json]
+                      [--bc0init-suffix _bc0init_20261030] [--traces N] [--output OUT.json]
 
 Reads the rerun's R2 (``out/r2`` and the evaluations ``submit_r2_rerun_20261029.sh``
 writes) beside the recorded pool-recipe R2 (the same records set aside under
-``--old-suffix``) and the expert, BC0 and R1 records, which are not re-run:
+``--old-suffix``) and the expert, BC0 and R1 records, which are not re-run.
+With ``--bc0init-suffix`` (note section 10) it also reads the cumulative-recipe
+R2 trained from BC0, set aside under that suffix when round 2 was trained again
+from R1, as the policy ``r2_bc0init``; ``r2`` is then the R1-start R2:
 
 * every set and horizon: the first draw at 12, 16, 20 and 40 actions, the
   second draw at 12, 20 and 40, the two draws pooled at 12, 20 and 40, the
@@ -16,7 +19,8 @@ writes) beside the recorded pool-recipe R2 (the same records set aside under
   cohort (the multi-error roots and the single-error and clean roots, with
   mean actions) and per parameter-ranking stratum (with the comparisons used);
 * exact McNemar tests (``followup_tables.mcnemar``) of the expert, BC0 and R1
-  against the new R2 and of the new R2 against the recorded one, and Holm's
+  against the new R2 and of the new R2 against the recorded one (and against
+  ``r2_bc0init`` when it is read), and Holm's
   correction over the 18 pre-stated pooled tests of section 8.6 (BC0 vs R1,
   BC0 vs expert, R1 vs R2 on success and safety-clean success at 12, 20 and
   40 actions) and over the 18 tests of the expert, BC0 and R1 against R2;
@@ -41,7 +45,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 HERE = Path(__file__).resolve().parent
-POLICIES = ("expert", "bc0", "r1", "r2", "r2_pool")
+POLICIES = ("expert", "bc0", "r1", "r2", "r2_bc0init", "r2_pool")
 MULTI_ERROR = ("multi_measurement", "measurement+parameter", "measurement+topology")
 FAMILIES = ("measurement", "multi_measurement", "parameter", "topology", "measurement+parameter",
             "measurement+topology", "no_error")
@@ -66,7 +70,7 @@ def _read(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def sources(cell: Path, new: str, old: str) -> dict[str, dict[str, Any]]:
+def sources(cell: Path, new: str, old: str, bc0init: str | None = None) -> dict[str, dict[str, Any]]:
     """set name -> rows, horizon and policy -> evaluation file."""
     out = cell / "out"
     ev = out / "extra" / "evaluations"
@@ -96,13 +100,18 @@ def sources(cell: Path, new: str, old: str) -> dict[str, dict[str, Any]]:
             "expert": ev / f"{suite}_bc0_r1" / "expert_eval.json", "bc0": ev / f"{suite}_bc0_r1" / "bc0_eval.json",
             "r1": ev / f"{suite}_bc0_r1" / "r1_eval.json", "r2": ev / f"{suite}_r2{new}" / "bc0_eval.json",
             "r2_pool": ev / f"{suite}_r2_control{old}" / "bc0_eval.json"}}
+    if bc0init is not None:
+        # Set aside under the same names as the new R2's, so its paths follow the new R2's.
+        new_files = sources(cell, bc0init, old)
+        for name, spec in result.items():
+            spec["files"]["r2_bc0init"] = new_files[name]["files"]["r2"]
     return result
 
 
-def load(cell: Path, new: str, old: str) -> dict[str, dict[str, dict[str, dict[str, Any]]]]:
+def load(cell: Path, new: str, old: str, bc0init: str | None = None) -> dict[str, dict[str, dict[str, dict[str, Any]]]]:
     """set -> policy -> root -> record (followup_tables.records, with the scenario id)."""
     loaded: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
-    for name, spec in sources(cell, new, old).items():
+    for name, spec in sources(cell, new, old, bc0init).items():
         rows = _read(spec["rows"])
         roots = tables.describe_roots(rows)
         scenario = {tables._root(row): str((row.get("grouping") or {}).get("root_scenario_id") or "") for row in rows}
@@ -183,7 +192,7 @@ def failures(loaded: Mapping[str, Any], set_name: str) -> list[dict[str, Any]]:
         if item["success"] and not item["violation"]:
             continue
         others = {p: (block[p][root]["success"], block[p][root]["violation"], block[p][root]["steps"])
-                  for p in ("expert", "bc0", "r1", "r2_pool") if p in block and root in block[p]}
+                  for p in ("expert", "bc0", "r1", "r2_bc0init", "r2_pool") if p in block and root in block[p]}
         rows.append({"root": root, "scenario_id": item.get("scenario_id"), "family": item.get("family"),
                      "stratum": item.get("stratum"), "success": item["success"], "invalid": item["invalid"],
                      "false_commit": item["false_commit"], "loop": item["loop"], "steps": item["steps"],
@@ -219,13 +228,14 @@ def compact_traces(path: Path, scenario_ids: Iterable[str], limit: int) -> dict[
     return result
 
 
-def rescore(cell: Path, new: str, old: str) -> dict[str, Any]:
+def rescore(cell: Path, new: str, old: str, bc0init: str | None = None) -> dict[str, Any]:
     """r2e's re-score of R1 (its first slot) against R1's recorded round-1 evaluation, root by root."""
     out = cell / "out"
     roots = tables.describe_roots(_read(out / "r1" / "collection" / "development_scenarios.json"))
     recorded = tables.records(out / "r1" / "collection" / "evaluation" / "r1_eval.json", roots)
     result = {}
-    for label, suffix in (("rerun_r2e", new), ("recorded_r2e", old)):
+    runs = (("rerun_r2e", new), ("recorded_r2e", old)) + ((("bc0init_r2e", bc0init),) if bc0init is not None else ())
+    for label, suffix in runs:
         path = out / f"r2{suffix}" / "collection" / "evaluation" / "bc0_eval.json"
         if not path.is_file():
             continue
@@ -290,13 +300,13 @@ def markdown(result: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build(cell: Path, new: str, old: str, traces: int) -> dict[str, Any]:
-    loaded = load(cell, new, old)
+def build(cell: Path, new: str, old: str, traces: int, bc0init: str | None = None) -> dict[str, Any]:
+    loaded = load(cell, new, old, bc0init)
     result: dict[str, Any] = {"sets": {}, "holm": {}, "failures": {}, "traces": {}}
     for name, block in loaded.items():
         horizon = int(name.split("@")[1])
         tests = {}
-        for a, b in PRESTATED + AGAINST_R2[:2] + (("r2_pool", "r2"),):
+        for a, b in PRESTATED + AGAINST_R2[:2] + (("r2_pool", "r2"), ("r2_bc0init", "r2")):
             if a in block and b in block:
                 for field in ("success", "clean", "violation"):
                     if field == "violation":
@@ -323,7 +333,7 @@ def build(cell: Path, new: str, old: str, traces: int) -> dict[str, Any]:
         if name.endswith("@40") and traces:
             result["traces"][name] = compact_traces(files[name]["files"]["r2"], [r["scenario_id"] for r in rows if not r["success"]] +
                                                     [r["scenario_id"] for r in rows if r["success"]], traces)
-    result["r1_rescore"] = rescore(cell, new, old)
+    result["r1_rescore"] = rescore(cell, new, old, bc0init)
     result["training"] = training(cell, new)
     return result
 
@@ -333,10 +343,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cell-dir", required=True, type=Path)
     parser.add_argument("--new-suffix", default="")
     parser.add_argument("--old-suffix", default="_pool_20261023")
+    parser.add_argument("--bc0init-suffix", default=None)
     parser.add_argument("--traces", type=int, default=12)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args(argv)
-    result = build(args.cell_dir, args.new_suffix, args.old_suffix, args.traces)
+    result = build(args.cell_dir, args.new_suffix, args.old_suffix, args.traces, args.bc0init_suffix)
     text = markdown(result)
     print(text, end="")
     if args.output is not None:

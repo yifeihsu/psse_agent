@@ -86,6 +86,31 @@ def test_round2_rerun_tables_holm_pairs_and_sources(tmp_path: Path) -> None:
     assert names["hard@40"]["files"]["r2"] == evaluations / "hard_r2" / "bc0_eval.json"
     assert names["validation@40"]["files"]["r2_pool"] == evaluations / "validation_r2_control_pool_20261023" / "bc0_eval.json"
     assert names["draw1@40"]["files"]["r2"] == tmp_path / "out" / "r2" / "collection" / "evaluation" / "r1_eval.json"
+    assert all("r2_bc0init" not in spec["files"] for spec in names.values())
+    # The BC0-start R2, set aside under the new R2's names plus a suffix (note section 10).
+    names = rerun.sources(tmp_path, "", "_pool_20261023", "_bc0init_20261030")
+    assert names["draw1@40"]["files"]["r2_bc0init"] == (
+        tmp_path / "out" / "r2_bc0init_20261030" / "collection" / "evaluation" / "r1_eval.json")
+    assert names["validation@40"]["files"]["r2_bc0init"] == evaluations / "validation_r2_bc0init_20261030" / "bc0_eval.json"
+    assert names["draw2@12"]["files"]["r2_bc0init"] == evaluations / "test2_budget12_r2_bc0init_20261030" / "bc0_eval.json"
+    assert names["draw2@40"]["files"]["r2"] == evaluations / "test2_40_r2" / "bc0_eval.json"
+
+
+def test_context_order_audit_names_the_three_round2_record_sets() -> None:
+    audit = _load("context_order_audit.py")
+    adapter = "/scratch/cell/out/r2/training/lora"
+    assert audit._policy(adapter, "test2_40_r2") == "r2"
+    assert audit._policy(adapter, "test2_40_r2_pool_20261023") == "r2_pool"
+    assert audit._policy(adapter, "validation_r2_bc0init_20261030") == "r2_bc0init"
+    assert audit._policy("/scratch/cell/out/r1/training/lora", "validation_bc0_r1") == "r1"
+    assert audit._set_name("test2_budget12_r2_bc0init_20261030") == "draw2@12"
+    assert audit._set_name("validation_r2_bc0init_20261030") == "validation"
+    assert audit._set_name("test2_40_r2") == "draw2@40"
+    steps = (("run_wls", None), ("get_parameter_context", None), ("get_measurement_context", None),
+             ("correct_measurements", audit.REFUSED), ("get_topology_context", None))
+    order = audit.context_order({"trace": [{"action": {"tool": tool}, "error_code": error} for tool, error in steps]})
+    assert order == {"after_parameter_context": "measurement",
+                     "from_parameter_and_measurement": "correct_measurements refused", "refused": 1}
 
 
 def test_round2_rerun_evaluations_reuse_the_recorded_names_and_refuse_a_record_left_in_place() -> None:

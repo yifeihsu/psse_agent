@@ -2048,3 +2048,63 @@ run in the cell from `r2rerun_20261029/` (beside its copy of
 markdown summary on stdout saved as `context_order_audit.md`. The script,
 JSON and markdown are copied to
 `output/conventional_only_20261022/results/r2rerun_20261029/extracted/r2rerun_20261029/`.
+
+## 10. Round 2 again, from R1, on the cumulative mixture (2026-10-30)
+
+Why. Option 2 of 9.13, run at the user's request on 2026-10-30. The R2 of
+section 9 (from here on the BC0-start R2) trained on every round-1 and
+round-2 label from the BC0 adapter, and on the breaker roots it reads the
+measurement context before the topology context at BC0's rate; R1 and the
+recorded R2, which continued R1, never do. Section 9.13 could not tell
+whether the restart from BC0 or run-to-run variation lost R1's order. This
+pass trains round 2 once more on the same cumulative mixture, starting from
+R1's adapter.
+
+### 10.1 Design (written before the results)
+
+**What changes.** Only the adapter round 2's training pass starts from: R1's
+(`out/r1/training/lora`, `ROUND_INIT=previous`, which the recipe supports)
+instead of BC0's. The mixture is the BC0-start pass's 1,738 rows byte for
+byte: its round-2 collection products are copied into a fresh `out/r2`, not
+collected again (10.2). The training seed (20260912) and therefore the row
+order, the 435 optimizer steps, the learning rate (3e-5 decaying linearly),
+LoRA rank 16 and alpha 16, the 16-step checkpoints and the rule of keeping
+the final adapter are the BC0-start pass's. Nothing else is re-run: the
+expert, BC0, R1, the BC0-start R2 and the recorded R2 keep their records,
+which are set aside under `_bc0init_20261030` and `_pool_20261023` names.
+
+**Evaluations.** As in section 9: r2e (the first draw at 40 actions, beside
+R1's re-score) and the eight evaluations of the new R2 alone, under the
+recorded names, rows, horizons, seed and worker rule
+(`submit_r2_rerun_20261029.sh`): the second draw at 40 actions, the first
+draw at 12, 16 and 20, the second at 12 and 20, the validation roots (96)
+and the hard draw (193).
+
+**Reading, fixed now.**
+
+1. The process measure first. `context_order_audit.py` counts, on every set,
+   the breaker roots on which each policy reads the measurement context right
+   after the parameter context. The question is answered on the two draws at
+   40 actions (110 or 111 breaker roots that read the parameter context
+   first) by exact two-sided McNemar tests of the R1-start R2 against the
+   BC0-start R2 (25 detours of 110) and against R1 (0 of 111). If the
+   R1-start R2 detours significantly less than the BC0-start R2 (p < 0.05),
+   starting from R1 kept R1's order for this pass; if it detours at about the
+   BC0-start R2's rate, the initialization does not explain the gap.
+2. Outcomes as in section 9: successes and safety-clean successes, violation
+   episodes, episodes at the budget and mean actions, pooled over the two
+   draws at 12, 20 and 40 actions, the first draw at 16, the validation roots
+   and the hard draw, per family and cohort, with exact McNemar tests against
+   R1 and the BC0-start R2 (`r2rerun_tables.py`, which now also reads the
+   BC0-start R2 as `r2_bc0init`).
+3. Section 6's selection rule on the validation roots, with the validation
+   detours reported beside it.
+
+**What the result can and cannot carry.** This pass was chosen after the
+test results of section 9 had been read (9.13), so its test numbers are
+exploratory. They can show whether the starting adapter moves the context
+order; choosing between the two R2s, or between an R2 and R1, by these test
+draws would be selection on the test set, and anything taken from them into
+the manuscript would have to say so. There is one pass per initialization;
+the GPU type can differ between the passes, and a preempted pass resumes from
+its newest checkpoint and re-runs up to 16 steps.
