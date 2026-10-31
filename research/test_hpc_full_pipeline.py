@@ -118,6 +118,36 @@ def test_base_tables_name_the_base_evaluations_and_test_against_the_base(tmp_pat
         "Generated output must contain exactly one tool call; found <n>"
 
 
+def test_base_episode_audit_reads_endings_suggestions_and_the_loop_after_the_fix(tmp_path: Path) -> None:
+    audit = _load("base_prompted_20261031/episode_audit.py")
+    ok = lambda tool, mutated=False: {"action": {"tool": tool}, "execution_status": "success", "state_mutated": mutated}
+    refused = lambda tool, hint: {"action": {"tool": tool}, "execution_status": "failure",
+                                  "error_code": "terminal_condition_not_met",
+                                  "policy_tool_output": {"valid_next_actions": [{"tool": hint}]}}
+    unparsed = {"action": {"tool": audit.INVALID_ACTION, "arguments": {"error_detail": "Generated tool 'run_wls'"}},
+                "execution_status": "failure", "error_code": "policy_exception"}
+    looping = [ok("run_wls"), ok("correct_measurements", True), ok("commit_state", True),
+               refused("finalize_diagnosis", "run_wls"), ok("run_wls"), unparsed]
+    episodes = [
+        {"trace": looping, "truth_audited_task_success": True, "terminal": False, "family": "measurement",
+         "audit": {"truth_audited_task_assessment": {"basis": "counterfactual_resolution"}}},
+        {"trace": [ok("run_wls"), ok("ask_for_more_evidence")], "truth_audited_task_success": False,
+         "terminal": True, "terminal_outcome": "operator_escalation", "family": "topology",
+         "audit": {"truth_audited_task_assessment": {"reasons": ["resolved_episode_has_remaining_true_faults"]}}},
+    ]
+    path = tmp_path / "bc0_eval.json"
+    path.write_text(json.dumps({"suite_metrics": {"episodes": episodes}}), encoding="utf-8")
+    result = audit.audit(path, horizon=6)
+    assert result["steps"] == 8 and result["refused_steps"] == 2
+    assert result["unparsed_outputs"] == {"Generated tool 'run_wls'": 1}
+    assert result["successes_by_ending_and_basis"] == {"budget | counterfactual_resolution": 1}
+    assert result["failures_by_family_and_ending"] == {"topology | terminal operator_escalation": 1}
+    assert result["next_action_after_a_refusal_with_a_suggestion"] == {"finalize_diagnosis | followed": 1}
+    budget = result["budget_successes"]
+    assert budget["episodes"] == 1 and budget["actions_after_last_state_change_mean"] == 3
+    assert budget["closing"] == {"tried finalize_diagnosis": 1}
+
+
 def test_context_order_audit_names_the_three_round2_record_sets() -> None:
     audit = _load("context_order_audit.py")
     adapter = "/scratch/cell/out/r2/training/lora"

@@ -2607,9 +2607,11 @@ Blackwell; spec `out/extra/specs/validation_dryrun_base_prompted.env`, suite
 the cache with no adapter (`policies.json`: adapter `BASE_MODEL_NO_ADAPTER`,
 no tree hash), and every episode ran to its end without an exception. Of its
 182 actions, 180 parsed into a registered tool call. The other 2 named the
-environment's internal tool `run_wls` instead of the registered
-`wls_from_path`; they were recorded as invalid actions (`policy_exception`)
-and the episodes went on. As fixed in 11.1, its outcomes are not reported, and
+controller's internal tools `run_wls` and `correct_topology` instead of the
+registered `wls_from_path` and `correct_topology_from_path` (corrected after
+the results; this sentence first said both named `run_wls`, see 11.3); they
+were recorded as invalid actions (`policy_exception`) and the episodes went
+on. As fixed in 11.1, its outcomes are not reported, and
 nothing was changed after it.
 
 **Submitted** at 19:51 UTC (`submitted_jobs.txt`,
@@ -2626,3 +2628,266 @@ nothing was changed after it.
 
 Copies of the final job, `base_tables.py` and the submit script, as run, are
 in `base_prompted_20261031/`.
+
+### 11.3 Jobs and checks (19:53 to 22:07 UTC)
+
+All seven evaluations completed (sacct, converted to UTC):
+
+| Set | Job | GPU (node) | UTC |
+| --- | --- | --- | --- |
+| Draw 1, 40 actions | 21540503 | H200 (gh118) | 19:55 to 21:57 |
+| Draw 2, 40 actions | 21540504 | H100 (gh011), preempted; RTX PRO 6000 (gr101) | 19:53 to 20:23; 20:28 to 22:05 |
+| Draw 1, 12 actions | 21540505 | A100 (ga031), preempted; RTX PRO 6000 (gr104) | 19:55 to 20:27; 20:42 to 21:16 |
+| Draw 1, 16 actions | 21540506 | A100 (ga036), preempted; RTX PRO 6000 (gr106) | 19:55 to 20:25; 20:41 to 21:27 |
+| Draw 1, 20 actions | 21540507 | RTX PRO 6000 (gr103) | 19:55 to 21:08 |
+| Draw 2, 12 actions | 21540508 | RTX PRO 6000 (gr103) | 19:55 to 20:44 |
+| Draw 2, 20 actions | 21540509 | RTX PRO 6000 (gr102) | 19:56 to 21:11 |
+
+About 9.8 GPU-hours. The three preempted jobs were requeued after 30 to 32
+minutes and resumed from their per-episode checkpoints, so those three sets
+mix GPU types, as 11.1 allowed. fp-basefinal 21540510 ran on cs632 from
+22:06:33 to 22:07:05. The SSH control socket to torch lapsed at about 20:27
+and came back with a new login at 21:25; the jobs do not use it.
+
+**Snapshot check** (`snapshot_check.txt`): `out/d0`, `out/bc0`, `out/r1`,
+`out/r2`, `out/r2_bc0init_20261030` and `out/r2_pool_20261023` are
+unchanged; `out/extra` gained 64 entries (the eight new evaluations, each a
+directory, five files, a console receipt and a spec) and 2 changed (the
+`evaluations` and `specs` directories' own entries), none outside the new
+records. The expert, BC0, R1 and R2 records the tables read are those of the
+earlier sections.
+
+**Correction to 11.2.** The dry run's two unparsed outputs named `run_wls`
+and `correct_topology` (`episode_audit.json`, set `dryrun@40`), not
+`run_wls` twice: the first reading took the one example kept for a masked
+message for both. 11.2 is corrected; nothing else about the dry run is
+reported, as fixed in 11.1.
+
+### 11.4 Results
+
+**At 40 actions** (384 scenarios). Successes, with safety-clean successes in
+parentheses; the expert, BC0, R1 and R2 (Table I's, section 9's) are their
+recorded evaluations on the same roots and measurement realizations:
+
+| Cohort (roots per draw) | Base, draw 1 | Base, draw 2 | Base, pooled | R2, pooled | R1, pooled | BC0, pooled | Expert, pooled |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Single bad meter (32) | 32 (0) | 32 (0) | 64 (0) | 64 (64) | 64 (64) | 64 (64) | 64 (64) |
+| Two to five bad meters (24) | 23 (0) | 23 (0) | 46 (0) | 46 (45) | 46 (46) | 46 (38) | 47 (47) |
+| Line R/X error (32) | 31 (0) | 29 (0) | 60 (0) | 64 (64) | 64 (64) | 64 (64) | 64 (64) |
+| Breaker status error (32) | 12 (0) | 14 (0) | 26 (0) | 64 (64) | 64 (64) | 64 (64) | 64 (64) |
+| Meter + R/X error (32) | 32 (0) | 31 (0) | 63 (0) | 64 (64) | 64 (64) | 63 (54) | 64 (64) |
+| Meter + breaker status (24) | 6 (0) | 7 (0) | 13 (0) | 48 (45) | 48 (48) | 47 (34) | 48 (48) |
+| Clean controls (16) | 13 (13) | 10 (10) | 23 (23) | 32 (32) | 32 (32) | 32 (32) | 32 (32) |
+| **All** | **149 (13)** | **146 (10)** | **295 (23)** | 382 (378) | 382 (382) | 380 (350) | 383 (383) |
+| Violation episodes (invalid action / false commit / loop) | 179 (179/0/145) | 182 (182/2/148) | 361 (361/2/293) | 4 (4/0/0) | 0 | 33 (33/6/3) | 0 |
+| Invalid actions; false commits | 1,614; 0 | 1,445; 3 | 3,059; 3 | 4; 0 | 0; 0 | 61; 21 | 0; 0 |
+| Mean actions; mean WLS calls | 30.62; 12.61 | 29.58; 12.21 | 30.10; 12.41 | 9.86; 2.50 | 9.83; 2.50 | 10.26; 2.57 | 9.85; 2.50 |
+| Episodes at the budget | 127 | 118 | 245 | 0 | 0 | 2 | 0 |
+| Bounded comparisons | 624 | 502 | 1,126 | 35 | 36 | 46 | 47 |
+
+The base model's bounded comparisons are its `compare_parameter_candidates`
+calls, most of them refused (11.6). The two cohorts of Table I, pooled:
+multi-error roots (160) 122 (0) in 33.47 actions on average, single-error and
+clean roots (224) 173 (23) in 27.69 (the trained policies and the teacher
+156 to 159 and 224; 9.7). The R1-start R2 of section 10, for reference:
+383 (381) at 40 actions (`base_tables.json`).
+
+**Under the action budget.** Successes (safety-clean); violation episodes;
+episodes that reach the budget. Pooled, except 16 actions (first draw only,
+as recorded):
+
+| Budget | Base | Expert | BC0 | R1 | R2 |
+| --- | --- | --- | --- | --- | --- |
+| 12 | 193 (23); 361; 309 | 353 (353); 0; 104 | 345 (327); 23; 117 | 352 (352); 0; 106 | 350 (347); 4; 108 |
+| 16 (first draw) | 130 (13); 179; 150 | 178 (178); 0; 1 | 174 (164); 13; 19 | 177 (177); 0; 14 | 178 (178); 1; 14 |
+| 20 | 266 (23); 361; 261 | 362 (362); 0; 2 | 359 (334); 30; 27 | 361 (361); 1; 21 | 361 (359); 2; 21 |
+| 40 | 295 (23); 361; 245 | 383 (383); 0; 0 | 380 (350); 33; 2 | 382 (382); 0; 0 | 382 (378); 4; 0 |
+
+The base model by draw: 97 (13) and 96 (10) at 12 actions, 132 (13) and
+134 (10) at 20; its violation episodes are 179 and 182 at every budget
+(pooled: 361 (361/3/189) at 12 actions, 179 (179/2/119) at 16 and
+361 (361/2/271) at 20, invalid action / false commit / loop), and its mean
+actions 11.05, 14.20 and 17.03. Pooled, by cohort row of the 40-action table:
+at 12 actions 64, 16, 60, 22, 8, 0 and 23; at 20 actions 64, 23, 60, 23, 61,
+12 and 23. Its safety-clean successes are clean controls at every budget.
+
+### 11.5 Paired tests (not among the 18 pre-stated)
+
+Exact two-sided McNemar tests, unadjusted, on the roots one policy fails and
+the other solves: the named policy only / the base model only (p). Pooled,
+except 16 actions (first draw):
+
+| Budget | BC0 vs base | Expert vs base | R1 vs base | R2 vs base |
+| --- | --- | --- | --- | --- |
+| Success, 12 | 3/155 (3.6e-42) | 0/160 (1.4e-48) | 0/159 (2.7e-48) | 1/158 (4.4e-46) |
+| Success, 16 | 3/47 (3.7e-11) | 0/48 (7.1e-15) | 0/47 (1.4e-14) | 0/48 (7.1e-15) |
+| Success, 20 | 4/97 (3.4e-24) | 0/96 (2.5e-29) | 0/95 (5.1e-29) | 0/95 (5.1e-29) |
+| Success, 40 | 1/86 (1.1e-24) | 0/88 (6.5e-27) | 0/87 (1.3e-26) | 0/87 (1.3e-26) |
+| Safety-clean, 12 | 0/304 (6.1e-92) | 0/330 (9.1e-100) | 0/329 (1.8e-99) | 0/324 (5.9e-98) |
+| Safety-clean, 16 | 0/151 (7.0e-46) | 0/165 (4.3e-50) | 0/164 (8.6e-50) | 0/165 (4.3e-50) |
+| Safety-clean, 20 | 0/311 (4.8e-94) | 0/339 (1.8e-102) | 0/338 (3.6e-102) | 0/336 (1.4e-101) |
+| Safety-clean, 40 | 0/327 (7.3e-99) | 0/360 (8.5e-109) | 0/359 (1.7e-108) | 0/355 (2.7e-107) |
+| Violation episode, 12 | 0/338 (3.6e-102) | 0/361 (4.3e-109) | 0/361 (4.3e-109) | 0/357 (6.8e-108) |
+| Violation episode, 16 | 0/166 (2.1e-50) | 0/179 (2.6e-54) | 0/179 (2.6e-54) | 0/178 (5.2e-54) |
+| Violation episode, 20 | 0/331 (4.6e-100) | 0/361 (4.3e-109) | 0/360 (8.5e-109) | 0/359 (1.7e-108) |
+| Violation episode, 40 | 0/328 (3.7e-99) | 0/361 (4.3e-109) | 0/361 (4.3e-109) | 0/357 (6.8e-108) |
+
+For violations the counts are the roots with a violation episode under the
+named policy only / under the base model only. Per draw at 40 actions, on
+success: draw 1 BC0 1/41 (p = 2.0e-11), expert 0/43 (2.3e-13), R1 and R2
+0/42 (4.6e-13); draw 2 all four 0/45 (5.7e-14). On safety-clean success:
+draw 1 0/159 (2.7e-48), 0/179 (2.6e-54), 0/178 (5.2e-54) and 0/177
+(1.0e-53); draw 2 0/168 (5.4e-51), 0/181 (6.5e-55), 0/181 (6.5e-55) and
+0/178 (5.2e-54). Of the 120 tests in `base_tables.json` (four policies, three
+endpoints, seven sets and three pools) the largest p is 3.7e-11 (BC0 on
+success at 16 actions), so a Bonferroni correction over all of them leaves
+every p below 5e-9. The only roots a trained policy fails and the base model
+solves: at 40 actions one (BC0's first-draw meter + R/X failure,
+r0_3386c1ad8700); at 12 actions three for BC0 and one for R2; at 16 three and
+at 20 four, all BC0's.
+
+### 11.6 How the base model's episodes go
+
+From `base_tables.json` and `episode_audit.json` (11.8); the 40-action sets,
+both draws, unless stated.
+
+**Opening.** All 1,344 of its episodes (seven sets) open with a WLS run, as
+the teacher's do.
+
+**Closing.** In this harness an accepted correction is never finalized: once
+a correction is committed, the process oracle refuses `finalize_diagnosis`
+(`terminal_condition_not_met`; accepted corrections do not certify the
+corrected state as final), and the episode closes with the post-correction
+handoff (`ask_for_more_evidence`, terminal outcome `operator_escalation`); a
+clean root closes with `finalize_diagnosis` (`resolved`). At 40 actions the
+expert, R1 and R2 close every faulted root by the handoff and every clean
+root by `finalize_diagnosis`, BC0 all but three faulted roots. The base
+model closes 72 of the 352 faulted roots by the handoff (71 solved) and
+leaves 280 open. The truth audit counts 201 of those 280 as solved, because
+it scores the final state whatever the ending (the audit of every column):
+198 ran to the budget and 3 ended in a circuit breaker; the other 79 are
+failures. On the 32 clean roots it finalizes 23 (all solved and safety-clean,
+in 2.3 actions on average), hands off on 1 and leaves 8 open. Every one of
+its successes passes as a counterfactual resolution of the final state (none
+counts through the bounded-localization or unexplained-discrepancy handoff
+rules).
+
+**The loop after the fix.** In the 198 successes that ran to the budget, the
+last state change came 28.6 actions before the end on average (7 to 35).
+After it the model called `wls_from_path` 2,756 times,
+`get_measurement_context` 1,848 times and `finalize_diagnosis` 1,051 times,
+every finalize refused; 158 of the 198 tried to finalize at least once. Each
+refusal carries the oracle's `valid_next_actions`, which after a refused
+`finalize_diagnosis` is a WLS run on the active state. The model takes the
+suggested action next after 1,103 of the 1,114 refused finalize calls that
+carry one (99%), and so cycles WLS, context and finalize until the budget.
+Over all refusals that carry a suggestion it follows 2,522 of 2,937 (86%).
+
+**Refused and unparsed actions.** 3,059 of its 11,558 actions (26.5%) are
+refused or unparsed; every faulted episode and 9 clean ones have at least
+one. The most frequent, both draws: `finalize_diagnosis` before the terminal
+condition 1,141; `compare_parameter_candidates` without the parameter
+context it requires (`missing_precondition`) 952; a WLS run on the wrong
+state (`state_reference_mismatch`) 365; `correct_measurements` refused as
+unsupported by the current context 142, as a lifecycle violation 85 and for
+a missing post-correction confirmation 72; `get_parameter_context` with a
+candidate open 64; schema errors in `compare_parameter_candidates` 39. 43
+outputs did not parse, every one a tool name outside the model-visible
+registry: `correct_topology` 24 and `run_wls` 19, the controller's internal
+names for `correct_topology_from_path` and `wls_from_path`. The observation
+shows those internal names in its history window and tried-action
+signatures, and a refused finalize's `valid_next_actions` names `run_wls`;
+the base model sometimes copies them, the students never do. Across the
+budget sets it also named `verify_snapshot` (4 times, for
+`get_verification_snapshot`) and once gave `correct_topology_from_path` an
+argument it does not take (`line_index`).
+
+**Breaker-status errors.** It solves 26 of the 64 breaker-status roots and
+13 of the 48 meter + breaker roots. Of its 73 failures there, 35 end in the
+repeated-failure circuit breaker and 38 at the budget; the audit's first
+reason is an uncorrected true fault in 72 (the 73rd is the healthy-meter
+correction below). On these 112 roots it calls the
+line-parameter comparison 965 times (8.6 per episode; at least 853 of them
+refused): it pursues line-parameter hypotheses on breaker errors.
+
+**Failures elsewhere.** Line R/X: 4 of 64, all ended by the circuit breaker;
+meter + R/X: 1, ended by the breaker; two to five meters: 2 (a handoff with a
+meter still outside tolerance, and one at the budget). Clean controls: 9 of
+32 fail, all the same way. The model corrects a healthy meter, the verifier
+accepts the candidate and the controller commits it (an accepted candidate,
+so not a false commit), and the audit then finds a healthy measurement
+modified; on 8 it loops to the budget, on 1 it hands off. The same happened
+on one breaker-bearing root of the first draw. The expert and the trained
+policies never correct a meter on a clean root.
+
+**False commits and loops.** 3 false commits in 2 episodes, both on the
+second draw: a line R/X root ended by the circuit breaker after 6 actions
+(2) and a meter + R/X root it solved at the budget (1); the gate refused
+each, so nothing was kept. The evaluator's loop signature fires in 293 of
+the 384 episodes.
+
+### 11.7 What this shows and what it does not
+
+The prompted, untuned base model, in the students' harness, is scored as
+solving 295 of the 384 test scenarios at 40 actions (76.8%; BC0, R1, R2 and
+the teacher 380 to 383), 23 of them safety-clean (350 to 383). The success
+count overstates what it does. The gates refuse unsupported or out-of-order
+actions, the commit gate keeps only candidates the verifier accepted, and
+the truth audit scores the final state whatever the ending, so a model that
+applies a supported correction early and then cycles until the budget counts
+as solved; the base model did that on 198 of its 272 faulted-root successes.
+It completes no faulted scenario without a violation (0 of 352), closes 72
+of 352 the way the harness closes them, takes three times the actions (30.1
+against 9.8 to 10.3), solves 39 of the 112 breaker-bearing roots, and
+corrects a healthy meter on 9 of 32 clean controls. Under the budget the gap
+widens: 193 of 384 at 12 actions against 345 to 353.
+
+Read from the differences, the training adds the harness's closing (the
+handoff after an accepted correction), the breaker-status route, leaving
+clean roots alone, and economy. The safety-clean column separates the base
+model from the trained policies by 304 to 359 roots pooled and from the
+teacher by 330 to 360 (151 to 165 on the first draw at 16 actions).
+
+What it does not show is how a prompted model would do with a prompt written
+for it. The rules excluded prompt engineering: this is the students' prompt,
+tool schemas and observation, one greedy decode, no examples and nothing
+stating the closing protocol. The observation's internal tool names (in the
+history and in the refusals' suggestions) cost the base model 43 unparsed
+outputs at 40 actions; that is the harness the students were trained in, and
+it was not changed here.
+
+For Table I: the base-model column at 40 actions is 295 (23) pooled,
+149 (13) and 146 (10) by draw, with 361 violation episodes (361/2/293) and
+245 episodes at the budget; the budget rows are 193 (23) at 12 actions,
+130 (13) at 16 (first draw) and 266 (23) at 20. Wherever the column appears,
+it should say that success is the truth-audited final state, which counts
+201 base-model episodes that never closed.
+
+### 11.8 Records
+
+Local, `output/conventional_only_20261022/results/base_prompted_20261031/`:
+
+- `base_prompted_records_20261031.tgz` (sha256
+  6a68b1b2dd4d7d34318a00e6c30240b437186e5f3a8172f615058483a471dd30,
+  838,645 bytes, 88 files, all relative; `listing.txt`), extracted under
+  `extracted/`:
+  - `base_prompted_20261031/`: `base_tables.json` and `.md`,
+    `base_tables_episodes.jsonl` (one record per set, policy and root), the
+    console output, `jobs.txt`, the dry-run suite, copies of the final job,
+    `base_tables.py` and the submit script, and the submission receipts;
+  - each evaluation's spec, console receipt, `summary.json`,
+    `policies.json`, `episodes.jsonl` and `comparison.json`;
+  - the evaluation and final-job logs.
+- `snapshot_check.txt`: the archive's exclude pattern for the snapshot
+  listings also left out the check itself, so it was copied separately.
+- `episode_audit/episode_audit.json` (sha256
+  f512bf6d0f14ed33fc3be6137ab5a3d9fcfd1143bbd5dcd553b166364e3499f0), written
+  on torch at 22:21 UTC by
+  `research/hpc/full_pipeline_20260907/base_prompted_20261031/episode_audit.py`
+  (sha256 63ecc9006aa94c89e7c014bc824a0d694f4bec79bea6d7152a6290b2e920a9a7,
+  run as `$P/base_prompted_20261031/episode_audit.py`). It also covers the
+  dry run, which is used only for the correction in 11.3.
+
+On torch: the archive at `/scratch/yx3882/base_prompted_records_20261031.tgz`.
+The full records with traces (`bc0_eval.json`, up to 173 MB per set) stay in
+`$P/out/extra/evaluations/*_base_prompted/`.
