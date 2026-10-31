@@ -2496,3 +2496,92 @@ records under their `_bc0init_20261030` and `_pool_20261023` names.
   BC0-start R2 and R1 without saying so; section 9's R2 remains the rerun
   designed before its results. The validation rule's preference (three
   actions in 96 episodes) is too thin to lean on either way.
+
+## 11. The prompted, untuned base model on the test draws (2026-10-31)
+
+Why. The paper session asked on 2026-10-31, with the user's approval ("Yes,
+run it"), for one more Table I column: the instruction-tuned checkpoint the
+students' LoRA adapters sit on, prompted through the students' harness with
+no adapter. Reviewers of fine-tuned agent papers ask what the training adds
+over a prompted model; this is arm B1 of the October literature review's
+matrix. The result is reported whatever it is.
+
+### 11.1 Design (written before the results)
+
+**Policy.** google/gemma-4-12B-it at revision
+707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7, the cell's recorded model
+(`MODEL_ID` in `pipeline.env`), loaded from the offline cache
+(`local_files_only`, `HF_HUB_OFFLINE=1`) with no adapter. The adapter
+argument `research_policy_factory.NO_ADAPTER` (`BASE_MODEL_NO_ADAPTER`) loads
+the named base through the students' loader and skips only the PEFT wrapper;
+the identity records `adapter: none` and no tree hash. Everything else is the
+students' harness, unchanged:
+
+- loading: `AutoModelForMultimodalLM` (Gemma4UnifiedForConditionalGeneration)
+  in 4-bit NF4 with double quantization and bfloat16 compute, `device_map`
+  auto, and the processor from the same snapshot (the students' adapters
+  carry no processor files, so they use it too);
+- prompt (profile `native`): the system message is
+  `CANONICAL_DAGGER_SYSTEM_PROMPT` with the `scada_only` paragraph
+  (`system_prompt_for_observation`), the user message is the JSON of the
+  policy observation, and the tools are the canonical tool schemas visible
+  for that observation, rendered by the processor's chat template with
+  thinking disabled;
+- decoding: greedy (`do_sample` false), at most 256 new tokens and 32,768
+  input tokens (`RESEARCH_MAX_NEW_TOKENS` and `RESEARCH_MAX_INPUT_TOKENS` in
+  `pipeline.env`), the processor's stop and pad tokens, and the one-token
+  prefill pad of the SDPA workaround;
+- the side input `mm_token_type_ids` is filled with zeros, as for the
+  adapters (the base model's forward takes no other token-type input; checked
+  on torch with transformers 5.10.4 and peft 0.19.1);
+- the evaluation: `evaluate_suite.py` (the runner's
+  `evaluate_paired_adapters` with its parallel workers, two per policy on a
+  GPU of 70 GB or more) under the environment options, evidence profile
+  (`scada_only`), gate, verifier and transaction controller of the cell's
+  round-1 report, seed 20260912, the 40-action horizon and the 12-, 16- and
+  20-action budgets.
+
+**Invalid outputs.** An output that is not exactly one registered tool call
+with schema-valid arguments raises in the policy. The evaluator records an
+invalid action (`policy_exception`, with the message) and hands it to the
+environment as a failed step, as for any student. The same circuit breakers
+apply (a repeated non-advancing failure ends the episode), and the budget
+ends any episode. Nothing retries, reprompts or repairs an output.
+
+**Scenarios and names.** The two 192-root test draws that Table I pools, at
+40 actions (`test_40_base_prompted`, `test2_40_base_prompted`), the first
+draw at 12, 16 and 20 actions (`test_budget{12,16,20}_base_prompted`) and the
+second at 12 and 20 (`test2_budget{12,20}_base_prompted`): the rows, horizons
+and seed of the other policies' records. The expert, BC0, R1 and R2 are not
+re-run. R2 here is Table I's R2, section 9's, read from its
+`_bc0init_20261030` names; the R1-start R2 of section 10 is listed beside it
+for reference only. Jobs run in the big-GPU pool (A100, H100, H200 or RTX PRO
+6000, no single type) with preemption and requeue, and a requeued job resumes
+from its per-episode checkpoints, so one set's episodes can mix GPU types.
+
+**Dry run.** One evaluation of the first validation root of each family
+(seven roots, 40 actions, `validation_dryrun_base_prompted`) checks that the
+base model loads and that the harness parses its outputs or records them as
+invalid. It is a crash and parse check: its numbers are not a result, and
+nothing changes after it except a fix for a crash, which would be recorded
+here.
+
+**Reading, fixed now** (`base_tables.py`):
+
+1. Per draw and pooled at 12, 20 and 40 actions, and on the first draw at
+   16: successes, safety-clean successes, violation episodes (invalid
+   action, false commit, loop), episodes at the budget and mean actions, per
+   family and error cohort.
+2. Exact McNemar tests of BC0, the expert, R1 and R2 against the base model
+   on success, safety-clean success and violation episodes, unadjusted. None
+   is among the 18 pre-stated tests.
+3. How the base model's episodes go: how they end (a terminal state, the
+   budget, a circuit breaker), terminal outcomes, refused or invalid actions
+   by tool and error code, unparsed outputs by message, the tools it calls
+   and its first actions, with compact traces of its first failures at 40
+   actions. One record per set, policy and root goes to
+   `base_tables_episodes.jsonl`.
+
+**Rules.** No prompt engineering, no decoding change and no second attempt
+after any result. If the base weights or anything else blocks the run, that
+is reported instead of a change of model or settings.

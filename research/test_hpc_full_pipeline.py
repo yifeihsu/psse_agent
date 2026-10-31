@@ -96,6 +96,28 @@ def test_round2_rerun_tables_holm_pairs_and_sources(tmp_path: Path) -> None:
     assert names["draw2@40"]["files"]["r2"] == evaluations / "test2_40_r2" / "bc0_eval.json"
 
 
+def test_base_tables_name_the_base_evaluations_and_test_against_the_base(tmp_path: Path) -> None:
+    base = _load("base_tables.py")
+    evaluations = tmp_path / "out" / "extra" / "evaluations"
+    files = base.base_files(tmp_path, "base_prompted")
+    assert files["draw1@40"] == evaluations / "test_40_base_prompted" / "bc0_eval.json"
+    assert files["draw2@40"] == evaluations / "test2_40_base_prompted" / "bc0_eval.json"
+    assert files["draw1@16"] == evaluations / "test_budget16_base_prompted" / "bc0_eval.json"
+    assert set(files) == set(base.TEST_SETS)
+    record = lambda success, violation: {"success": success, "clean": success and not violation, "violation": violation}
+    block = {"bc0": {"x": record(True, True), "y": record(True, False)},
+             "base": {"x": record(False, True), "y": record(True, True)}}
+    tests = base.against_base(block)
+    assert tests["bc0_vs_base:success"]["fails_only_second"] == 1  # x: only the base fails
+    assert tests["bc0_vs_base:clean"]["fails_only_first"] == 0 and tests["bc0_vs_base:clean"]["fails_only_second"] == 1
+    assert tests["bc0_vs_base:violation"]["fails_only_second"] == 1  # y: only the base violates
+    assert "expert_vs_base:success" not in tests
+    assert base.mask("Generated tool 'x_y' has unsupported arguments: ['a']") == \
+        "Generated tool <q> has unsupported arguments: [<q>]"
+    assert base.mask("Generated output must contain exactly one tool call; found 2") == \
+        "Generated output must contain exactly one tool call; found <n>"
+
+
 def test_context_order_audit_names_the_three_round2_record_sets() -> None:
     audit = _load("context_order_audit.py")
     adapter = "/scratch/cell/out/r2/training/lora"
@@ -228,6 +250,13 @@ def test_followup_tables_pair_by_root_and_apply_the_selection_rule(tmp_path: Pat
 def test_suite_evaluation_takes_one_or_two_labelled_adapters() -> None:
     evaluate = _load("evaluate_suite.py")
     assert evaluate.parse_policies(["bc0=/x/a", "r1=/x/b"]) == [("bc0", Path("/x/a")), ("r1", Path("/x/b"))]
+    # The base model alone: the sentinel stays a plain name for the policy factory.
+    from psse_env.dagger.research_policy_factory import is_no_adapter
+
+    [(label, path)] = evaluate.parse_policies(["base_prompted=BASE_MODEL_NO_ADAPTER"])
+    assert label == "base_prompted" and is_no_adapter(path)
+    stage = (CELL / "stage_eval_suite.sbatch").read_text(encoding="utf-8")
+    assert '"$adapter" == BASE_MODEL_NO_ADAPTER ||' in stage
     for bad in (["a"], ["a=/x", "a=/y"], ["expert=/x"], ["a=/x", "b=/y", "c=/z"], []):
         with pytest.raises(ValueError):
             evaluate.parse_policies(bad)

@@ -5,6 +5,9 @@
         --policy LABEL=ADAPTER [--policy LABEL=ADAPTER] [--expert] --seed N \\
         [--max-steps 40] [--workers-per-policy N]
 
+ADAPTER ``BASE_MODEL_NO_ADAPTER`` rolls out the cell's base model with no
+adapter (the prompted, untuned arm, 2026-10-31).
+
 The DAgger runner evaluates a round's student and candidate on the round's
 development suite after resuming its collection.  The conventional-only cell's
 follow-ups (2026-10-23) evaluate other adapters on other suites: the matched
@@ -146,7 +149,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     factory = research.resolve_environment_factory(profile["hif_search_profile"], profile["evidence_profile"])
     model = report["model_selection"]
     rows, suite_info = research.load_scenario_suite(args.suite)
-    adapters = [(label, path.expanduser().resolve(strict=True)) for label, path in policies]
+    # ADAPTER may be loaders.NO_ADAPTER: the base model alone (2026-10-31).
+    adapters = [(label, path if loaders.is_no_adapter(path) else path.expanduser().resolve(strict=True))
+                for label, path in policies]
     labels = {slot: label for slot, (label, _) in zip(SLOTS, adapters)}
     if args.expert:
         labels["expert"] = "expert"
@@ -159,7 +164,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "seed": int(args.seed),
         "max_steps": int(args.max_steps),
         "policies": {
-            slot: {"label": label, "adapter": str(path), "tree_sha256": checkpoint_tree_sha256(path)}
+            slot: {"label": label, "adapter": str(path),
+                   "tree_sha256": None if loaders.is_no_adapter(path) else checkpoint_tree_sha256(path)}
             for slot, (label, path) in zip(SLOTS, adapters)
         },
         "expert": variant if args.expert else None,

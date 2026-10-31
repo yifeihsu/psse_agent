@@ -58,6 +58,17 @@ E2B_BASE_MODEL_REVISION = GEMMA4_E2B_LEGACY.revision
 _PROMPT_PROFILES = SUPPORTED_RESEARCH_PROMPT_PROFILES
 _RESEARCH_BUNDLE_CACHE: dict[tuple[Any, ...], tuple[_ModelBundle, dict[str, Any]]] = {}
 _RESEARCH_BUNDLE_LOCK = threading.Lock()
+#: The adapter argument that evaluates the base model itself, with no LoRA:
+#: the prompted, untuned arm of the conventional-only cell (2026-10-31).  The
+#: base must then be named through ``base_model``; nothing else falls back to
+#: the raw base.
+NO_ADAPTER = "BASE_MODEL_NO_ADAPTER"
+
+
+def is_no_adapter(adapter_path: str | Path | None) -> bool:
+    """Whether ``adapter_path`` is the explicit no-adapter sentinel."""
+
+    return adapter_path is not None and str(adapter_path) == NO_ADAPTER
 
 
 @dataclass(frozen=True)
@@ -399,8 +410,13 @@ def _load_research_bundle(
     use_cache: bool,
     architecture: str | None = None,
 ) -> tuple[_ModelBundle, dict[str, Any]]:
-    adapter, adapter_config = _validate_adapter_directory(adapter_path)
-    recorded_base = str(adapter_config.get("base_model_name_or_path") or "").strip()
+    if is_no_adapter(adapter_path):
+        if not str(base_model or "").strip():
+            raise GateError("The no-adapter base-model policy needs an explicit base_model")
+        adapter, adapter_config, recorded_base = None, {}, ""
+    else:
+        adapter, adapter_config = _validate_adapter_directory(adapter_path)
+        recorded_base = str(adapter_config.get("base_model_name_or_path") or "").strip()
     resolved_base_model, loader_revision, descriptive_revision = _resolve_base(
         recorded_base=recorded_base,
         base_model=base_model,
@@ -419,17 +435,18 @@ def _load_research_bundle(
         recorded_base=recorded_base,
         adapter=adapter,
     )
-    processor_source = str(adapter) if _adapter_has_processor_assets(adapter) else resolved_base_model
-    processor_revision = None if processor_source == str(adapter) else loader_revision
+    adapter_processor = adapter is not None and _adapter_has_processor_assets(adapter)
+    processor_source = str(adapter) if adapter_processor else resolved_base_model
+    processor_revision = None if adapter_processor else loader_revision
     adapter_stamp = tuple(
         sorted(
             (item.name, item.stat().st_size, item.stat().st_mtime_ns)
             for item in adapter.iterdir()
             if item.is_file()
         )
-    )
+    ) if adapter is not None else ()
     cache_key = (
-        str(adapter),
+        str(adapter) if adapter is not None else NO_ADAPTER,
         adapter_stamp,
         resolved_base_model,
         loader_revision or "",
@@ -486,7 +503,7 @@ def _load_research_bundle(
 
 def _load_research_bundle_uncached(
     *,
-    adapter: Path,
+    adapter: Path | None,
     adapter_config: Mapping[str, Any],
     recorded_base: str,
     resolved_base_model: str,
@@ -580,21 +597,25 @@ def _load_research_bundle_uncached(
             "Research base model lacks required capabilities: " + ", ".join(missing)
         )
 
-    try:
-        model = PeftModel.from_pretrained(
-            base,
-            str(adapter),
-            is_trainable=False,
-            local_files_only=bool(local_files_only),
-        )
-    except Exception as exc:  # pragma: no cover - live adapter state.
-        raise GateError(
-            "Research LoRA adapter failed to load on the selected base: "
-            f"{type(exc).__name__}: {exc}"
-        ) from exc
-    peft_config = getattr(model, "peft_config", None)
-    if not isinstance(peft_config, Mapping) or not peft_config:
-        raise GateError("PEFT returned a model with no active adapter configuration")
+    if adapter is None:
+        # The no-adapter sentinel asked for the untuned base itself.
+        model = base
+    else:
+        try:
+            model = PeftModel.from_pretrained(
+                base,
+                str(adapter),
+                is_trainable=False,
+                local_files_only=bool(local_files_only),
+            )
+        except Exception as exc:  # pragma: no cover - live adapter state.
+            raise GateError(
+                "Research LoRA adapter failed to load on the selected base: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        peft_config = getattr(model, "peft_config", None)
+        if not isinstance(peft_config, Mapping) or not peft_config:
+            raise GateError("PEFT returned a model with no active adapter configuration")
     model.eval()
 
     bundle = _ModelBundle(
@@ -602,13 +623,14 @@ def _load_research_bundle_uncached(
         processor=processor,
         model_id=resolved_base_model,
         model_revision=descriptive_revision or "local-snapshot",
-        adapter_snapshot_path=str(adapter),
+        adapter_snapshot_path=None if adapter is None else str(adapter),
     )
     identity = {
         "base_model": resolved_base_model,
         "base_revision": descriptive_revision,
         "base_loader_revision": loader_revision,
-        "adapter_path": str(adapter),
+        "adapter": "none" if adapter is None else "lora",
+        "adapter_path": None if adapter is None else str(adapter),
         "adapter_recorded_base": recorded_base or None,
         "processor_source": processor_source,
         "prompt_profile": prompt_profile,
@@ -931,7 +953,7 @@ def _canonical_research_policy(
             _E2BBundle(
                 model=bundle.model,
                 processor=bundle.processor,
-                model_id=str(identity["adapter_path"]),
+                model_id=str(identity.get("adapter_path") or identity["base_model"]),
                 model_revision=str(identity.get("base_revision") or "local-snapshot"),
                 base_model_path=str(identity["base_model"]),
             )
@@ -1016,6 +1038,8 @@ def research_gemma_policy_factory(
 ) -> ResearchGemmaPolicy:
     """Load a research LoRA directly, without source/tree/hash qualification.
 
+    ``adapter_path`` :data:`NO_ADAPTER` loads ``base_model`` alone, untuned,
+    through the same processor, prompt profile and decoding.
     ``generation`` selects the decoding; the default is greedy.  The bundle
     cache is keyed on the adapter and base, so a sampling policy and a greedy
     one share the loaded weights.
@@ -1040,11 +1064,13 @@ def research_gemma_policy_factory(
 
 __all__ = [
     "GenerationOptions",
+    "NO_ADAPTER",
     "PROMPT_PROFILE_E2B",
     "PROMPT_PROFILE_NATIVE",
     "PROMPT_PROFILE_RELEASE",
     "PROMPT_PROFILE_SMALL_FORCED",
     "ResearchGemmaPolicy",
     "clear_research_policy_cache",
+    "is_no_adapter",
     "research_gemma_policy_factory",
 ]

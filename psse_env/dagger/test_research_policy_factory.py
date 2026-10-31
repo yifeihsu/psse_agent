@@ -65,6 +65,9 @@ class ResearchPolicyFactoryTests(unittest.TestCase):
         class Base:
             config = types.SimpleNamespace(model_type=model_type)
 
+            def eval(self):
+                return self
+
             def generate(self, *_args, **_kwargs):
                 return None
 
@@ -294,6 +297,45 @@ class ResearchPolicyFactoryTests(unittest.TestCase):
         )
         self.assertEqual(identity["architecture"], "gemma4_unified")
         self.assertEqual(identity["prompt_profile"], "native")
+
+    def test_no_adapter_sentinel_loads_the_named_base_alone(self) -> None:
+        calls, modules = self._fake_loaders(model_type="gemma4_unified")
+        with patch.dict(sys.modules, modules):
+            bundle, identity = factory._load_research_bundle(
+                adapter_path=Path(factory.NO_ADAPTER),
+                base_model="google/gemma-4-12B-it",
+                base_revision=None,
+                load_in_4bit=False,
+                local_files_only=True,
+                trust_remote_code=False,
+                prompt_profile=None,
+                use_cache=False,
+            )
+            with self.assertRaisesRegex(GateError, "explicit base_model"):
+                factory._load_research_bundle(
+                    adapter_path=factory.NO_ADAPTER,
+                    base_model=None,
+                    base_revision=None,
+                    load_in_4bit=False,
+                    local_files_only=True,
+                    trust_remote_code=False,
+                    prompt_profile=None,
+                    use_cache=False,
+                )
+        self.assertEqual(calls["peft"], [])
+        self.assertEqual(len(calls["model"]), 1)
+        self.assertEqual(calls["model"][0][0], "google/gemma-4-12B-it")
+        self.assertEqual(
+            calls["model"][0][1]["revision"],
+            "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+        )
+        self.assertEqual(calls["processor"][0][0], "google/gemma-4-12B-it")
+        self.assertEqual(identity["adapter"], "none")
+        self.assertIsNone(identity["adapter_path"])
+        self.assertEqual(identity["prompt_profile"], "native")
+        self.assertEqual(identity["architecture"], "gemma4_unified")
+        self.assertIsNone(bundle.adapter_snapshot_path)
+        self.assertFalse(factory.is_no_adapter(Path("adapter")))
 
     def test_cross_model_adapter_mismatch_fails_before_model_load(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

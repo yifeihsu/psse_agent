@@ -56,7 +56,8 @@ if [[ ! -s "$EVAL_OUT/$EVAL_NAME/summary.json" ]]; then
   policy_args=()
   for policy in $EVAL_POLICIES; do
     adapter=${policy#*=}
-    [[ -s "$adapter/adapter_model.safetensors" ]] || { echo "adapter missing: $adapter" >&2; exit 2; }
+    # BASE_MODEL_NO_ADAPTER: the base model alone (research_policy_factory.NO_ADAPTER).
+    [[ "$adapter" == BASE_MODEL_NO_ADAPTER || -s "$adapter/adapter_model.safetensors" ]] || { echo "adapter missing: $adapter" >&2; exit 2; }
     policy_args+=(--policy "$policy")
   done
   expert_args=()
