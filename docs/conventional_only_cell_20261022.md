@@ -2060,6 +2060,29 @@ whether the restart from BC0 or run-to-run variation lost R1's order. This
 pass trains round 2 once more on the same cumulative mixture, starting from
 R1's adapter.
 
+**Result (2026-10-31).** Starting from R1 kept R1's context order. On the
+breaker roots of the two test draws at 40 actions the R1-start R2 never reads
+the measurement context right after the parameter context (0 of 109), where
+the BC0-start R2 does on 25 of 110 and R1 on 0 of 111 (BC0-start against
+R1-start R2, exact McNemar 25 to 0, p = 6.0e-8); it never does on any other
+set either (10.4). On the test draws it solves the teacher's roots exactly,
+root for root, at every budget: 383 of 384 pooled at 40 actions (R1 382, the
+BC0-start R2 382), 353 at 12, 362 at 20 and 178 on the first draw at 16,
+including the first-draw root every earlier student handed off. Safety-clean
+it solves 381 at 40 actions (R1 382, BC0-start R2 378, the teacher 383), and
+none of the pre-stated tests separates it from R1 or the teacher (10.5). It
+is not cleaner everywhere: on the hard draw it has 9 violation episodes
+against R1's 1 (safety-clean 173 against 182 of 193; 9 to 0, p = 0.0039, a
+test not stated in advance). Most of its violations come from one step the
+teacher never takes and no training row shows: after a correction it checks
+the open candidate with `verify_candidate` instead of a WLS run and commits;
+the closing escalation is then refused, and asking again ends the episode by
+the loop rule (11 episodes over all sets, all solved; BC0 calls
+`verify_candidate` in 9 episodes, R1 and the BC0-start R2 never; 10.6). On the
+validation roots section 6's rule selects the R1-start R2 over R1 on its last
+key, 962 against 965 actions (10.7). These test results are exploratory
+(10.1). Sections 10.3 to 10.8.
+
 ### 10.1 Design (written before the results)
 
 **What changes.** Only the adapter round 2's training pass starts from: R1's
@@ -2210,3 +2233,266 @@ new adapter's tree (083db267...) differs from the BC0-start R2's.
 **Evaluations.** r2e 21447704 and `test2_40_r2` 21447836 started at 22:32
 UTC and `test_budget12_r2` 21447838 at 22:37, all on gr103 (RTX PRO 6000
 Blackwell); the other six wait on the per-user GPU limit.
+
+### 10.4 Context order (the pre-stated reading)
+
+Breaker roots on which a policy reads the measurement context right after
+the parameter context, of the episodes that read the parameter context first
+(`context_order_audit.py`, `r2warm_20261030/context_order_audit.md`):
+
+| Set | Expert | BC0 | R1 | Recorded R2 | BC0-start R2 | R1-start R2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| First draw, 40 actions | 0/55 | 11/55 | 0/55 | 0/55 | 14/55 | 0/54 |
+| Second draw, 40 | 0/56 | 7/56 | 0/56 | 0/56 | 11/55 | 0/55 |
+| First draw, 12 | 0/55 | 12/55 | 0/55 | 0/55 | 18/55 | 0/54 |
+| Second draw, 12 | 0/56 | 8/55 | 0/56 | 0/56 | 14/55 | 0/56 |
+| First draw, 16 | 0/55 | 13/55 | 0/55 | 0/55 | 17/55 | 0/54 |
+| First draw, 20 | 0/55 | 15/54 | 0/55 | 0/55 | 14/54 | 0/55 |
+| Second draw, 20 | 0/56 | 7/56 | 0/56 | 0/56 | 14/55 | 0/56 |
+| Validation | 0/27 | 4/27 | 0/26 | 0/27 | 5/26 | 0/25 |
+| Hard draw | 0/15 | 3/16 | 0/15 | 0/15 | 5/15 | 0/14 |
+
+The pre-stated tests, paired by root over the two draws at 40 actions (roots
+only the first policy detours on / only the second; exact McNemar): the
+BC0-start R2 against the R1-start R2 25 to 0 (p = 6.0e-8), R1 against it 0 to
+0 (p = 1). By the reading fixed in 10.1, starting from R1 kept R1's order in
+this pass. BC0 against the R1-start R2 is 17 to 0 (p = 1.5e-5); on the
+validation roots the BC0-start R2 against it is 5 to 0 (p = 0.062), on the
+hard draw 4 to 0 (p = 0.12).
+
+The R1-start R2 reads the parameter context first on 109 of the 112 test
+breaker roots. No policy does on one of them (r0_c6ecc2c1de85, 9.13). On the
+other two (r0_ae094a03e446 on the first draw, r0_a8864571120b on the second)
+it reads the measurement context first, then the parameter and topology
+contexts, and solves the root in 9 actions where the teacher takes 8, with no
+refused action. It never reaches the refused five-meter correction that
+followed the BC0-start R2's detours: from the state with the parameter and
+measurement contexts and no topology context it always reads the topology
+context next (five entries over all sets), and none of its corrections is
+refused for lack of context (`correction_not_supported_by_current_context`:
+0 on every set, against 0 to 3 per set for the BC0-start R2).
+
+The two passes trained on the same 1,738 rows, in the same order, for the
+same 435 steps. The BC0-start R2 detours at about BC0's rate (25 against
+BC0's 18; BC0 against it 10 to 17, p = 0.25), the R1-start R2 at R1's
+(never). In
+these two passes the starting adapter, not the round's data, set this
+decision on new roots. That fits 9.13: every training row at the decision
+carries the topology label, which both adapters fit, and no row contrasts the
+detour, so how the decision carries over to new roots depends on where the
+pass starts. There is one pass per start, so the spread between passes from
+the same start is not measured.
+
+### 10.5 Outcomes
+
+Every policy on the same roots and measurement realizations (seed 20260912).
+The expert, BC0, R1 and the recorded R2 are their recorded evaluations, the
+BC0-start R2 is section 9's. Successes (safety-clean); violation episodes
+(an invalid action, a false commit or a loop); mean actions at 40:
+
+| Set | Expert | BC0 | R1 | Recorded R2 | BC0-start R2 | R1-start R2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| First draw, 40 (192) | 192 (192); 0; 9.87 | 189 (172); 19; 10.38 | 191 (191); 0; 9.85 | 190 (182); 9; 9.93 | 191 (190); 1; 9.86 | **192 (192); 0; 9.85** |
+| Second draw, 40 (192) | 191 (191); 0; 9.83 | 191 (178); 14; 10.13 | 191 (191); 0; 9.81 | 189 (184); 7; 9.95 | 191 (188); 3; 9.86 | **191 (189); 3; 9.92** |
+| Pooled, 40 (384) | 383 (383); 0; 9.85 | 380 (350); 33; 10.26 | 382 (382); 0; 9.83 | 379 (366); 16; 9.94 | 382 (378); 4; 9.86 | **383 (381); 3; 9.88** |
+| Pooled, 12 | 353 (353); 0 | 345 (327); 23 | 352 (352); 0 | 348 (341); 10 | 350 (347); 4 | **353 (352); 1** |
+| First draw, 16 | 178 (178); 0 | 174 (164); 13 | 177 (177); 0 | 177 (172); 6 | 178 (178); 1 | **178 (176); 2** |
+| Pooled, 20 | 362 (362); 0 | 359 (334); 30 | 361 (361); 1 | 358 (350); 13 | 361 (359); 2 | **362 (360); 3** |
+| Validation (96) | 96 (96); 0; 10.01 | 96 (90); 6; 10.07 | 96 (95); 1; 10.05 | 96 (92); 4; 10.07 | 96 (95); 1; 10.05 | **96 (95); 1; 10.02** |
+| Hard draw (193) | 185 (185); 0; 11.30 | 182 (161); 22; 11.39 | 183 (182); 1; 11.31 | 182 (177); 5; 11.42 | 183 (182); 1; 11.09 | **182 (173); 9; 11.28** |
+
+The R1-start R2 by draw: 177 (177) and 176 (175) at 12 actions, 181 (180)
+and 181 (180) at 20. On the test draws it fails exactly the roots the teacher
+fails, at every budget (expert against it on success 0 to 0 at 12, 16, 20
+and 40 actions). That includes r0_f5eefea5a905 (first draw, two bad meters),
+where BC0, R1 and both earlier R2s hand off after two meter repairs (9.10);
+it solves the root in 11 actions, as the teacher does, at 12, 20 and 40
+actions. Pooled at 40 actions it solves 159 (158) of the 160 multi-error
+roots (teacher 159 (159), R1 158 (158), BC0-start R2 158 (154)) and 224 (223)
+of the 224 single-error and clean roots.
+
+**Paired tests** (exact McNemar, roots only the first policy fails / only the
+second). In the 18 pre-stated tests (8.6) with the R1-start R2 as R2, Holm's
+correction rejects the six BC0 safety-clean tests (adjusted p 4.2e-9 to
+6.0e-6) and nothing else; R1 against the R1-start R2 is 1/0 on success at
+12, 20 and 40 actions, and 1/1, 1/2 and 1/2 on safety-clean success (every
+p = 1). In the second family (the expert, BC0 and R1 against the R1-start
+R2), Holm rejects BC0 against it on safety-clean success at the three
+horizons (33/2 at 40 actions; adjusted p 7.1e-6, 9.9e-5 and 6.6e-7 at 12, 20
+and 40) and nothing else; the expert against it is 0/0 on success and 0/1,
+0/2 and 0/2 on safety-clean success (p >= 0.5). Outside both families, at 12,
+20 and 40 actions:
+
+- the BC0-start R2 against the R1-start R2: success 3/0, 1/0 and 1/0;
+  safety-clean 6/1, 3/2 and 5/2 (p = 0.125, 1 and 0.45);
+- the recorded R2 against it: safety-clean 12/1, 12/2 and 17/2 (p = 0.0034,
+  0.013 and 7.3e-4).
+
+On the hard draw (not pre-stated, unadjusted) R1 against the R1-start R2 is
+0/1 on success, 0/9 on safety-clean success (p = 0.0039) and 0/8 on
+violation episodes (p = 0.0078); the BC0-start R2 against it is also 0/1 and
+0/9 (p = 0.0039).
+
+### 10.6 The R1-start R2's failures and violations
+
+**At 40 actions** it fails one test root, r0_ae01c73aa1ff (second draw, five
+bad voltage meters), which the teacher and every student fail (8.4). The
+teacher and R1 escalate there after 15 actions; it runs to 33, with repeated
+context reads, three schema errors on `compare_parameter_candidates`, two
+unparseable outputs and the loop rule. Its other two violation episodes at 40
+actions are solved roots:
+
+- r0_f166de45703a (second draw, five bad meters). After its fifth meter
+  repair it calls `verify_candidate` where the teacher runs WLS, and commits
+  (accepted as final). It then asks for the closing operator escalation,
+  which is refused (`operator_escalation_precondition_not_met`), and asks
+  again, and the evaluator ends the episode by its loop rule
+  (`evaluation_repeated_nonadvancing_failure`) after 33 actions, against 31
+  for the teacher.
+- r0_be8cd8834c18 (second draw, misranked R/X). After the comparison and the
+  parameter correction it reads the measurement context with the candidate
+  still open, and the tool refuses (`candidate_lifecycle_violation`). It then
+  runs WLS, commits and finishes in 9 actions, against 8.
+
+**On the hard draw** its 11 failures are the eight multi-meter roots every
+policy fails, the two misranked roots every student fails and the teacher
+solves (9.11), and one root only it fails: r0_71cac41b7286 (dominant R/X),
+where it reads the measurement context first and corrects meter 13, and the
+commit is accepted as final although the error is on line 19; every other
+policy solves that root in 7 actions. Its 9 violation episodes are all in
+solved episodes: six of the `verify_candidate` ending above (one single-meter
+and five multi-meter roots), two refused context reads after a comparison and
+an R/X correction (r0_b071aa01bfb0, r0_bb0177c569e5), and r0_098e749ba7ac
+(meter + R/X), where BC0, R1, the recorded R2 and the BC0-start R2 also
+violate (9.11). Its one validation violation (r0_4dd10eaf773d, four bad
+meters) and its three under the 16- and 20-action budgets (two R/X roots of
+the first draw, r0_08dcdf9fe995 and r0_5d224200652c) are the
+`verify_candidate` ending; at 12 and 20 actions on the second draw it repeats
+the refused context read on r0_be8cd8834c18, and at 20 its failure on
+r0_ae01c73aa1ff also loops.
+
+Episodes with each pattern over all nine sets (both draws at every budget,
+validation, hard draw; `r2warm_20261030/mode_counts.json` and
+`post_final_audit.json`):
+
+| Episodes with | Expert | BC0 | R1 | Recorded R2 | BC0-start R2 | R1-start R2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| a `verify_candidate` call | 0 | 9 | 0 | 0 | 0 | 11 |
+| a final acceptance right after it (then the refused escalation) | 0 | 1 | 0 | 0 | 0 | 11 |
+| a context read refused with a candidate open | 0 | 28 | 0 | 0 | 0 | 5 |
+
+Both patterns are departures at one state: right after a correction, with
+the candidate still open. Every training row at that state, in every view,
+is labeled with a WLS run (368 rows in D0's view, 141 in R1's mixture, 288 in
+the round-2 mixture); no row of any view is labeled `verify_candidate`, and
+the teacher calls it in none of its evaluation episodes
+(`r2warm_20261030/verify_audit.json`). Unlike the context order, this
+decision is labeled, consistently and often. BC0 still departs from the label
+(9 and 28 episodes), and so does the R1-start R2 in 16 distinct episodes,
+where R1 and the BC0-start R2 never do. These are rare slips (16 of the
+R1-start R2's 1,633 episodes over the nine sets), on multi-meter roots and
+on R/X roots after a comparison. Half of them (8) fall on the hard draw,
+which has three times the test draws' share of multi-meter roots (72 of 193,
+against 24 of 192).
+
+### 10.7 R1's re-score, the selection rule, jobs, checks and records
+
+**R1's re-score.** r2e rolled R1 out again on the 192 first-draw roots beside
+the R1-start R2, on an RTX PRO 6000 Blackwell. The result matches R1's
+recorded evaluation root for root (192 paired roots, none differing; 191
+successes each), as the two earlier r2e re-scores did.
+
+**Round selection** (section 6's rule on the validation roots: most
+successes, then fewest violation episodes, then fewest mean actions). BC0,
+R1 and the R1-start R2 tie at 96 successes; R1 and the R1-start R2 tie at one
+violation episode, against BC0's 6; the R1-start R2 takes 962 actions and R1
+965, so the rule selects the R1-start R2 on its last key, by three actions in
+96 episodes (`followup_tables.py`: order r2, r1, bc0). Its validation
+violation is the `verify_candidate` ending (r0_4dd10eaf773d, 23 actions
+against the teacher's 21); R1's is an escalation refused on another root
+(r0_94216e229d86). The validation detours, beside the rule as 10.1 asks:
+R1-start R2 0 of 25, R1 0 of 26, BC0-start R2 5 of 26.
+
+**Jobs** (UTC, 30 and 31 October; `r2warm_20261030/jobs.txt`). Nothing was
+preempted, and every GPU job ran on an RTX PRO 6000 Blackwell (the BC0-start
+pass's evaluations mixed A100, H100 and RTX PRO 6000 nodes, 9.12):
+
+| Job | Set | Node, time |
+| --- | --- | --- |
+| r2t 21447607 | training | gr101, 19:06 to 22:28 |
+| fp-r2wgate 21447703 | training receipt | cs606 (CPU), 22:31 |
+| r2e 21447704 | first draw at 40 actions, and R1's re-score | gr103, 22:32 to 00:17 |
+| 21447836 | second draw, 40 | gr103, 22:32 to 23:30 |
+| 21447838 | first draw, 12 | gr103, 22:37 to 23:25 |
+| 21447839 | first draw, 16 | gr105, 22:39 to 23:31 |
+| 21447841 | first draw, 20 | gr106, 22:39 to 23:32 |
+| 21447842 | second draw, 12 | gr105, 22:41 to 23:30 |
+| 21447843 | second draw, 20 | gr106, 22:41 to 23:35 |
+| 21447844 | validation | gr103, 22:41 to 23:11 |
+| 21447845 | hard draw | gr103, 22:41 to 23:45 |
+| fp-r2wfinal 21449776 | tables, checks, archive | cs617 (CPU), 00:18 to 00:19 |
+
+After the finalize job, three CPU jobs of under 30 seconds each read the
+evaluation files for 10.6: fp-r2wpost 21468073 (`post_final_audit.py`, what
+each policy does after its last final acceptance), fp-r2wverify 21468240
+(`verify_audit.py`, the training labels after a correction and seven named
+traces) and fp-r2wmodes 21468311 (`mode_counts.py`, the three patterns per
+set and policy). The scripts are in
+`research/hpc/full_pipeline_20260907/r2warm_20261030/` and were run in the
+cell from `r2warm_20261030/`, beside its copy of `r2rerun_tables.py`.
+
+**Checks.** The round-2 data that r2e re-exported equal the copy, all 87
+files (`collection_check.txt`). The snapshot (`snapshot_check.txt`):
+`out/d0`, `out/bc0` and `out/r1` are identical to the listing taken before
+the set-aside; `out/extra` has 71 entries added, 74 changed and none removed,
+all of them the R1-start R2's evaluations and specs and the rebuilt tables,
+except one that the check flags: the `extra` directory's own entry, whose
+time stamp changes when files are added under it (the check's pattern
+matches paths under `extra/` only).
+
+**Records.** `/scratch/yx3882/r2warm_records_20261030.tgz` (743,487 bytes,
+sha256 779e85f9c5dd7626fb0aca6fd1deeeca42cc472bfc5d00900a7c4b96ffdb4848) was
+downloaded, checked and extracted to
+`output/conventional_only_20261022/results/r2warm_20261030/` (gitignored,
+119 entries). It holds:
+
+- the eight evaluations' summaries, comparisons, episode lists, policies and
+  specs, and r2e's comparison;
+- round 2's receipts and reports (collection, mixture, training receipt,
+  research run, trainer state, round summary);
+- the rebuilt `pooled_tables`, `budget_tables` and `followup_tables` (with
+  `pooled_tables_episodes.jsonl`);
+- `r2warm_tables.json` and `.md` (every number of 10.5 and 10.7, with
+  compact traces of the R1-start R2's failed or violating episodes on the
+  40-action sets), `context_order_audit.json` and `.md` (10.4), the check
+  files, `jobs.txt`, the scripts as run and the dry run's outputs;
+- the logs of r2t, the gate, r2e, the eight evaluations and fp-r2wfinal.
+
+The three audits' outputs (`post_final_audit.json` and `.md`,
+`verify_audit.json`, `mode_counts.json`) were downloaded with matching
+sha256 to `post_final_audit/` in the same folder. The evaluation files with
+full traces stay on torch, as do the BC0-start R2's and the recorded R2's
+records under their `_bc0init_20261030` and `_pool_20261023` names.
+
+### 10.8 What this shows and what it does not
+
+- **The start carried the context order.** On identical data, order and
+  steps, the pass from R1 kept R1's order and the pass from BC0 had BC0's
+  rate. The pre-stated test answers the question of 9.13 for these two
+  passes; with one pass per start it does not measure how often a pass from
+  R1 would lose the order.
+- **On the test draws the R1-start R2 is level with the teacher on success**
+  and within two roots of it on safety-clean success at every budget, and no
+  pre-stated test separates it from R1. Its remaining violations are rare
+  slips at a state the data label consistently (10.6), not the context
+  detour.
+- **It is not uniformly cleaner than R1.** On the hard draw it trails R1 by
+  nine safety-clean roots, mostly the `verify_candidate` ending, in episodes
+  it solves. Whether a refused closing request should cost a scenario its
+  safety-clean status is the metric's definition (section 7.2), applied here
+  unchanged.
+- **Exploratory.** This variant was chosen after section 9's test results
+  were read (10.1), so its test numbers cannot select between it, the
+  BC0-start R2 and R1 without saying so; section 9's R2 remains the rerun
+  designed before its results. The validation rule's preference (three
+  actions in 96 episodes) is too thin to lean on either way.
