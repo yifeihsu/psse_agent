@@ -2585,3 +2585,44 @@ here.
 **Rules.** No prompt engineering, no decoding change and no second attempt
 after any result. If the base weights or anything else blocks the run, that
 is reported instead of a change of model or settings.
+
+### 11.2 Deploy, dry run and submission (19:20 to 19:52 UTC)
+
+**Deploy.** First a listing of `out/d0`, `out/bc0`, `out/r1`, `out/r2`,
+`out/r2_bc0init_20261030`, `out/r2_pool_20261023` and `out/extra` (paths,
+sizes, modification times) was saved in the cell as
+`base_prompted_20261031/snapshot_preset_*.tsv`. Then
+`deploy_cell_from_windows.sh` deployed c38c4ff at 19:25 UTC (BASE 0ddbc13,
+the source's previous HEAD; OVERRIDES `conventional_only_20261022.env`;
+SUBMIT=0), and the dry-run prerequisites passed. Since 0ddbc13 the deploy
+adds only scripts and the no-adapter path: `pipeline.env`, the overrides and
+the stage scripts are unchanged, except that `stage_eval_suite.sbatch`'s
+adapter check lets the sentinel through. The base weights are in the offline
+cache at the pinned revision
+(`hub/models--google--gemma-4-12B-it/snapshots/707f0a3b...`).
+
+**Dry run** (fp-xeval 21538727, 19:38 to 19:48 UTC on gr103, RTX PRO 6000
+Blackwell; spec `out/extra/specs/validation_dryrun_base_prompted.env`, suite
+`base_prompted_20261031/validation_dryrun.json`). The base model loaded from
+the cache with no adapter (`policies.json`: adapter `BASE_MODEL_NO_ADAPTER`,
+no tree hash), and every episode ran to its end without an exception. Of its
+182 actions, 180 parsed into a registered tool call. The other 2 named the
+environment's internal tool `run_wls` instead of the registered
+`wls_from_path`; they were recorded as invalid actions (`policy_exception`)
+and the episodes went on. As fixed in 11.1, its outcomes are not reported, and
+nothing was changed after it.
+
+**Submitted** at 19:51 UTC (`submitted_jobs.txt`,
+`base_prompted_20261031/submit_tests.console.txt`):
+
+- `test_40_base_prompted` 21540503 and `test2_40_base_prompted` 21540504;
+- `test_budget12_base_prompted` 21540505, `test_budget16_base_prompted`
+  21540506 and `test_budget20_base_prompted` 21540507;
+- `test2_budget12_base_prompted` 21540508 and `test2_budget20_base_prompted`
+  21540509;
+- fp-basefinal 21540510 (`base_prompted_20261031/finalize.sbatch`, afterok
+  the seven): `base_tables.py`, the snapshot comparison, the job list and the
+  archive `/scratch/yx3882/base_prompted_records_20261031.tgz`.
+
+Copies of the final job, `base_tables.py` and the submit script, as run, are
+in `base_prompted_20261031/`.
