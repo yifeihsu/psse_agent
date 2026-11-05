@@ -41,6 +41,7 @@ The current training and evaluation flow targets Gemma 4 tool-calling traces sto
 - `eval_sft_agent_gemma_v4.py`: Main Gemma 4 evaluator.
 - `submit_eval_v3.sh`: Slurm evaluation wrapper with resume support and current runtime defaults.
 - `make_stratified_smoke.py`: Builds a small balanced evaluation subset from the test split when you want a faster check.
+- `explain_eval_results.py`: Post-processes an evaluation JSONL with a stronger reviewer model that writes an operator-facing analysis of each trace and is scored against the labels.
 - `eval_sft_agent_hardened.py`: Shared hardened evaluation/runtime logic reused by the Gemma evaluator.
 - `trace_protocol.py`: Shared tool schemas and trace-format helpers.
 - `interactive_agent_eval.py`: Manual interactive runner for probing an adapter with the MATPOWER tools.
@@ -196,6 +197,21 @@ sbatch submit_eval_v3.sh
 ```
 
 This is the quickest regression check when you only want a small per-family sample instead of the full test set.
+
+### Natural-language review of evaluation results
+
+`explain_eval_results.py` post-processes an evaluation JSONL with a stronger reviewer model through the Claude Message Batches API. Each row is sent as the model-visible trace only: case metadata, every tool call with the compact result the agent saw and the raw solver output it did not, and the agent's final verdict. Ground-truth fields never leave the machine; they are used only to score the reviewer afterwards.
+
+```bash
+pip install anthropic
+export ANTHROPIC_API_KEY=...
+python explain_eval_results.py --input outputs/gemma4_power_agent/eval_12345.jsonl --mode dry-run
+python explain_eval_results.py --input outputs/gemma4_power_agent/eval_12345.jsonl
+```
+
+The dry run writes the requests to `*.explained.requests.jsonl` and prints a cost estimate without calling the API. The default `run` mode submits one batch, waits for it, and writes `*.explained.jsonl` plus `*.explained.summary.json`. Use `--mode submit` and later `--mode collect` when you do not want to keep a process waiting, for example from a login node with outbound network access; `--mode sync` calls the API row by row for small debugging runs, and `--only-missing` retries only rows without a successful analysis.
+
+Each output row gains `analysis` (verdict restatement, independent assessment, operator explanation, evidence chain, concerns, process flags, cited entities), `analysis_checks` (restatement and cited-entity checks that need no model), `analysis_scores` (reviewer accuracy against the labels and whether it confirmed, caught, or missed an agent error), and `analysis_meta` (model, batch id, stop reason, token usage). The summary reports the agent's and the reviewer's family accuracy side by side, the reviewer's recall on agent errors, and its false-alarm rate on correct verdicts.
 
 ## MATPOWER / MCP Usage
 
