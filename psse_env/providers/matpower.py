@@ -84,6 +84,8 @@ from psse_env.evidence_profile import (
 )
 from psse_env.oracle.process_validity import current_family_suspicion, current_wls_alarm
 from psse_env.actions import UNEXPLAINED_DISCREPANCY_REQUEST
+from psse_env.providers import detailed_evidence as _detailed
+from psse_env.providers.wls_tables import wls_tables
 from psse_env.providers.hif_continuation import (
     accepted_fit as accepted_hif_fit, conditioned_prediction, current_scan,
     diagnose as diagnose_hif_meters, fit_receipt, model_fingerprint,
@@ -501,6 +503,7 @@ class MatpowerDeploymentProviders:
         flow_noise_residual: float = 8.0,
         flow_at_noise_cue: bool = False,
         pair_refit_adjacent: bool = False,
+        detailed_evidence: bool = False,
         target_first_partial: bool = False,
         chi2_alpha: float = 0.05,
         normalized_residual_threshold: float | None = None,
@@ -600,6 +603,15 @@ class MatpowerDeploymentProviders:
         # line's estimate, then this line again.  Off by default: the single
         # line fit is the one every existing result rests on.
         self.pair_refit_adjacent = bool(pair_refit_adjacent)
+        # RL plan of 2026-11-05: every solve tabulates the buses and lines near
+        # the alarm, every correction reports what it wrote, and a verification
+        # reports the edited component's neighbourhood before and after
+        # (``psse_env.providers.detailed_evidence``).  From solves made anyway,
+        # for every correction kind, no truth.  Off by default: every recorded
+        # output is unchanged.
+        self.detailed_evidence = bool(detailed_evidence)
+        #: The last solves' views by state id, so a verification can read the parent's solve without another one.
+        self._solve_views: dict[str, dict[str, Any]] = {}
         # Stage 2 item 4: the verifier keeps a target-fixed correction with
         # non-negative global progress as partial progress whatever the
         # floor (CandidateQualityOracle.target_first_partial).  Off by default.
@@ -1958,6 +1970,19 @@ class MatpowerDeploymentProviders:
             {"nb": nb, "branch_info": payload.get("branch_info") or []},
             solved["index_map"],
         )
+        evidence_view: dict[str, Any] | None = None
+        if self.detailed_evidence:
+            # The per-bus and per-line tables of this solve beside the two
+            # top-five lists, and the view a later verification reads as "before".
+            try:
+                summary.update(wls_tables(residuals, payload.get("lambdaN") or [], solved["ppc"]))
+                evidence_view = _detailed.solve_view(payload, solved["ppc"])
+            except (KeyError, TypeError, ValueError):
+                evidence_view = None
+            if evidence_view is not None and state.get("state_id") is not None:
+                if len(self._solve_views) >= 64:
+                    self._solve_views.clear()
+                self._solve_views[str(state["state_id"])] = evidence_view
         max_abs_residual = max((abs(value) for value in residuals), default=0.0)
         # Observable anomaly signatures drive expert routing.  Signatures this
         # runner derives from its own solve carry the ``wls_`` prefix and are
@@ -2102,6 +2127,16 @@ class MatpowerDeploymentProviders:
         # predicate.  The explicit scope prevents a passing snapshot check
         # from being mistaken for global anomaly resolution or an AC
         # power-flow convergence claim.
+        if self.detailed_evidence and is_candidate and isinstance(source_action, Mapping) and evidence_view is not None:
+            # What stands on and next to the edited component, before (the
+            # parent's solve, when this provider made it) and after the edit.
+            block = _detailed.target_neighbourhood(
+                source_action, self._solve_views.get(str(state.get("parent_state_id"))), evidence_view,
+            )
+            if block is not None:
+                metrics["detailed_evidence"] = {
+                    "contract": _detailed.DETAILED_EVIDENCE_CONTRACT, "target_neighbourhood": block,
+                }
         if is_candidate:
             metrics.update(self._steady_state_physical_evidence(solved))
         metrics["bus_count"] = int(nb)
@@ -4328,7 +4363,7 @@ class MatpowerDeploymentProviders:
                 "measurement_correction_no_change",
                 "grouped correction produced no corrected measurements",
             )
-        return {
+        output: dict[str, Any] = {
             "modification": {"measurement_updates": corrected},
             "evidence_source": "deployment_correction:lagrangian_correct_port",
             "correction_summary": summarize_measurement_correction_payload(payload),
@@ -4336,6 +4371,19 @@ class MatpowerDeploymentProviders:
             "iterations_performed": payload.get("iterations_performed"),
             "suspect_group": sorted(int(index) for index in suspect_group),
         }
+        if self.detailed_evidence:
+            try:
+                previous = self._measurements(state)
+                case = _load_python_case(self._case_path(state))
+                nb, nl = int(case["bus"].shape[0]), int(case["branch"].shape[0])
+                sigma = self._declared_scada_sigma(self._noise_options(state, len(previous)), nb, len(previous))
+                output["detailed_evidence"] = {
+                    "contract": _detailed.DETAILED_EVIDENCE_CONTRACT,
+                    "edit": _detailed.measurement_edit(corrected, previous, sigma, nb, nl),
+                }
+            except Exception:  # the edit record is evidence beside the correction, never a reason to fail it
+                pass
+        return output
 
     def correct_parameters(
         self, state: Mapping[str, Any], action: Mapping[str, Any]
@@ -4410,6 +4458,15 @@ class MatpowerDeploymentProviders:
         }
         if pair_refit is not None:
             output["pair_refit"] = pair_refit
+        if self.detailed_evidence:
+            # What the correction wrote: every line whose R or X changed (the pair refit moves its partner too).
+            edits = [
+                _detailed.parameter_edit(row + 1, ppc["branch"][row][2:4], updated["branch"][row][2:4])
+                for row in range(nl)
+                if float(ppc["branch"][row][2]) != float(updated["branch"][row][2])
+                or float(ppc["branch"][row][3]) != float(updated["branch"][row][3])
+            ]
+            output["detailed_evidence"] = {"contract": _detailed.DETAILED_EVIDENCE_CONTRACT, "edit": edits}
         return output
 
     @staticmethod
@@ -4463,6 +4520,16 @@ class MatpowerDeploymentProviders:
         return {"status": "refit", "partner_line_index": int(partner_row0) + 1, "steps": steps}, current
 
     def correct_topology(
+        self, state: Mapping[str, Any], action: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        output = self._correct_topology(state, action)
+        if self.detailed_evidence and isinstance(output, dict) and output.get("execution_status") != "failure":
+            edit = _detailed.topology_edit(output)
+            if edit is not None:
+                output["detailed_evidence"] = {"contract": _detailed.DETAILED_EVIDENCE_CONTRACT, "edit": edit}
+        return output
+
+    def _correct_topology(
         self, state: Mapping[str, Any], action: Mapping[str, Any]
     ) -> dict[str, Any]:
         state = self._evidence_state(state)

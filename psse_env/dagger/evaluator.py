@@ -54,6 +54,7 @@ from psse_env.actions import (
     action_signature,
     correction_hypothesis,
     invalid_action,
+    lifecycle_choice_of,
     safe_normalize_action,
 )
 from psse_env.dagger.dataset_builder import (
@@ -214,6 +215,10 @@ class EpisodeEvaluation:
     # (another hypothesis tested next), a loop (the withdrawn hypothesis on
     # the same line again) or nothing; empty when the episode never reverted.
     revert_accounting: dict[str, Any] = field(default_factory=dict)
+    # The lifecycle choice: accepted candidates the policy rolled back in an
+    # environment that allows it (a decline, not a false rollback); empty when
+    # the episode declined nothing.
+    decline_accounting: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -2009,6 +2014,7 @@ class ClosedLoopRolloutEvaluator:
         deterministic_nonadvancing_failures: dict[str, dict[str, Any]] = {}
         loop_detected = False
         revert_events: list[dict[str, Any]] = []
+        decline_events: list[dict[str, Any]] = []
         invalid_indices: list[int] = []
         advancing_indices: list[int] = []
         false_commits = 0
@@ -2587,7 +2593,12 @@ class ClosedLoopRolloutEvaluator:
                 assessment = _candidate_assessment(pre_oracle)
             elif tool == ROLLBACK_STATE:
                 if disposition in {"ACCEPT_FINAL", "ACCEPT_PARTIAL"}:
-                    false_rollbacks += 1
+                    if lifecycle_choice_of(state_before_action) is not None:
+                        # The environment opened the lifecycle step: this is the
+                        # policy declining an accepted candidate.
+                        decline_events.append({"step": step, "disposition": disposition})
+                    else:
+                        false_rollbacks += 1
             elif tool == FINALIZE_DIAGNOSIS:
                 known_false = pre_remaining is not None and pre_remaining > 0
                 if known_false:
@@ -3060,6 +3071,9 @@ class ClosedLoopRolloutEvaluator:
                 }
                 if revert_events
                 else {}
+            ),
+            decline_accounting=(
+                {"declines": len(decline_events), "events": copy.deepcopy(decline_events)} if decline_events else {}
             ),
         )
 

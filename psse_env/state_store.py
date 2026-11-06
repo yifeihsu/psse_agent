@@ -189,10 +189,16 @@ class PolicyObservation:
     # Item 7 step 7: tools this environment adds beyond the macro vocabulary
     # (``compare_routes``); absent from the serialized observation otherwise.
     research_tools: list[str] | None = None
+    # RL plan of 2026-11-05: the lifecycle choice (an accepted candidate may
+    # be declined) and the detailed-evidence contract.  Each is reported only
+    # by an environment built with it and is absent from the serialized
+    # observation otherwise.
+    lifecycle_choice: dict[str, Any] | None = None
+    detailed_evidence: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
-        for optional in ("revert_ledger", "research_tools"):
+        for optional in ("revert_ledger", "research_tools", "lifecycle_choice", "detailed_evidence"):
             if payload.get(optional) is None:
                 payload.pop(optional, None)
         forbidden = find_forbidden_policy_paths(payload)
@@ -659,13 +665,22 @@ class PowerSystemStateStore:
         self._active_state_id = candidate_state_id
         return candidate_state_id
 
-    def rollback(self, candidate_state_id: str) -> str:
+    def rollback(self, candidate_state_id: str, *, declined: bool = False) -> str:
+        """Roll the open candidate back to its parent.
+
+        Only a rejected or inconclusive candidate rolls back, except with
+        ``declined``: an environment built with the lifecycle choice passes it
+        when the policy declines a candidate the verifier accepted.  The
+        candidate keeps its disposition, so the record shows what was declined.
+        """
         candidate = self._require_state(candidate_state_id)
         if candidate.status != "candidate" or not candidate.parent_state_id:
             raise StateStoreError(f"Only the current open candidate can be rolled back: {candidate_state_id}.")
         if candidate.parent_state_id != self._active_state_id:
             raise StateStoreError(f"Candidate {candidate_state_id} does not belong to the active state.")
-        if candidate.candidate_disposition not in {"REJECT", "INCONCLUSIVE"}:
+        if declined and candidate.candidate_disposition in {"ACCEPT_PARTIAL", "ACCEPT_FINAL"}:
+            pass
+        elif candidate.candidate_disposition not in {"REJECT", "INCONCLUSIVE"}:
             raise StateStoreError(
                 f"Candidate {candidate_state_id} cannot be rolled back with disposition "
                 f"{candidate.candidate_disposition!r}."

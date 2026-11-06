@@ -356,6 +356,38 @@ def revert_ledger_of(observation: Mapping[str, Any] | Any) -> Mapping[str, Any] 
     return ledger if isinstance(ledger, Mapping) and ledger.get("contract") == REVERT_CONTRACT else None
 
 
+#: The lifecycle choice (the RL plan of 2026-11-05; the user's direction of
+#: 2026-11-06 to open the workflow to the policy).  Everywhere else the
+#: verifier's verdict fixes the step after a verification: an accepted
+#: candidate can only be committed, a rejected or inconclusive one only rolled
+#: back, so no policy decides anything there.  An environment built with
+#: ``lifecycle_choice`` lets the policy decline: there a rollback of an accepted
+#: candidate is legal, the candidate joins the rejected hypotheses with
+#: ``DECLINED_REJECTION_KIND`` and its verification numbers, and the evaluator
+#: counts a decline instead of a false rollback.  The observation carries the
+#: record below only in such an environment, so every other contract is as it
+#: was.  Committing a rejected candidate stays refused.
+LIFECYCLE_CHOICE_CONTRACT = "lifecycle_choice_v1"
+#: The detailed evidence of corrections and verifications (``psse_env.providers.detailed_evidence``).  The
+#: name lives here so the environment can report the contract without importing the providers package.
+DETAILED_EVIDENCE_CONTRACT = "detailed_evidence_v1"
+#: ``rejection_kind`` of the rejected-hypothesis record a decline leaves.
+DECLINED_REJECTION_KIND = "declined_by_policy"
+ACCEPTED_DISPOSITIONS = frozenset({"ACCEPT_PARTIAL", "ACCEPT_FINAL"})
+
+
+def lifecycle_choice_record() -> dict[str, Any]:
+    """What an environment with the lifecycle choice reports: an accepted candidate may be committed or rolled back."""
+    return {"contract": LIFECYCLE_CHOICE_CONTRACT, "accepted_candidate": [COMMIT_STATE, ROLLBACK_STATE]}
+
+
+def lifecycle_choice_of(observation: Mapping[str, Any] | Any) -> Mapping[str, Any] | None:
+    """The lifecycle-choice record an environment built with it reports, else ``None``."""
+    getter = getattr(observation, "get", None)
+    record = getter("lifecycle_choice") if callable(getter) else None
+    return record if isinstance(record, Mapping) and record.get("contract") == LIFECYCLE_CHOICE_CONTRACT else None
+
+
 #: Item 7 step 7 (the user's request of 2026-10-28, "Build it here"): instead
 #: of committing a parameter-or-breaker guess and reverting it later, compare
 #: the two routes before committing.  One action fits the impedance edit on the

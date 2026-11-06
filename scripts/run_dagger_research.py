@@ -317,6 +317,8 @@ def research_diagnostic_environment_factory(
         ),
         # Compound-error study, stage 2 item 3: off unless a run names it.
         pair_refit_adjacent=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("pair_refit_adjacent", False)),
+        # RL plan of 2026-11-05: off unless a run names it (--env-option detailed_evidence=1).
+        detailed_evidence=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("detailed_evidence", False)),
         target_first_partial=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("target_first_partial", False)),
         # The teacher's own signal (item 1): on when the run names it, else
         # whatever the run's teacher variant needs.
@@ -344,6 +346,10 @@ def research_diagnostic_environment_factory(
             "route_comparison",
             variant_environment_options(RESEARCH_EXPERT_OPTIONS.get("variant")).get("route_comparison", False),
         )),
+        # RL plan of 2026-11-05: the policy may decline an accepted candidate.
+        # Off unless a run names it (--env-option lifecycle_choice=1).
+        lifecycle_choice=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("lifecycle_choice")),
+        detailed_evidence=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("detailed_evidence", False)),
     )
     if env.production_dataset_mode is not True:
         raise RuntimeError("research environment did not enter production dataset mode")

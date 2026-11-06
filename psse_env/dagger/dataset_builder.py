@@ -57,7 +57,13 @@ def tool_schemas_for_observation(tools: Iterable[Mapping[str, Any]], observation
 
     New environments always emit the explicit profile. Missing historical
     profile evidence is deliberately not rewritten as SCADA-only provenance.
+    Where the environment opened the lifecycle step the rollback schema says
+    so (``_with_lifecycle_choice``).
     """
+    return _with_lifecycle_choice(_profile_tool_schemas(tools, observation), observation)
+
+
+def _profile_tool_schemas(tools: Iterable[Mapping[str, Any]], observation: Mapping[str, Any]) -> list[dict[str, Any]]:
     profile = observation.get("evidence_profile")
     if profile is None:
         return copy.deepcopy(list(tools))
@@ -77,6 +83,49 @@ def tool_schemas_for_observation(tools: Iterable[Mapping[str, Any]], observation
     # tools; the balanced-alarm gate is enforced by the process oracle and
     # the providers, not by hiding the auxiliary schemas.
     return [copy.deepcopy(dict(tool)) for tool in tools if internal_name(tool) not in blocked]
+
+
+#: The rollback tool's description where the environment opened the lifecycle
+#: step (``psse_env.actions.lifecycle_choice_of``).
+LIFECYCLE_CHOICE_ROLLBACK_DESCRIPTION = (
+    "Roll back a verified candidate case: a rejected or inconclusive one, or an "
+    "acceptable one you decline because its verification evidence points at the "
+    "wrong component."
+)
+DETAILED_EVIDENCE_PROMPT_PARAGRAPH = (
+    " Detailed evidence: each WLS summary also tabulates the buses and lines near the "
+    "alarm. bus_table gives each bus's signed normalized residuals of the voltage "
+    "magnitude (vm) and the P and Q injections (p, q; null at a zero-injection bus); "
+    "branch_table gives each line's signed normalized residuals of the P and Q flows at "
+    "both ends (pf, qf, pt, qt) and the normalized multipliers of its series R and X "
+    "(lr, lx). A correction reports what it wrote under detailed_evidence.edit: the old "
+    "and new values, with the ratio for R and X and the change in sigma for a meter. A "
+    "verification reports detailed_evidence.target_neighbourhood: the edited component's "
+    "own target metric and the largest normalized residual and multiplier on the lines "
+    "and buses that meet it, before and after the edit. An accepted correction keeps its "
+    "verification numbers under commit_record."
+)
+LIFECYCLE_CHOICE_PROMPT_PARAGRAPH = (
+    " Lifecycle choice: after a candidate is verified as acceptable you may commit it "
+    "or roll it back. Decline it by rolling it back when the verification evidence "
+    "suggests the edit sits on a healthy component; the declined candidate is kept "
+    "with the rejected hypotheses and another hypothesis can be tested. A rejected or "
+    "inconclusive candidate can only be rolled back."
+)
+
+
+def _with_lifecycle_choice(schemas: list[dict[str, Any]], observation: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The rollback schema says what it may do where the lifecycle step is open; every other observation is untouched."""
+    from psse_env.actions import ROLLBACK_STATE, lifecycle_choice_of
+    from psse_env.dagger.protocol_bridge import CANONICAL_TO_INTERNAL_TOOL
+
+    if lifecycle_choice_of(observation) is None:
+        return schemas
+    for tool in schemas:
+        function = tool.get("function") if isinstance(tool, dict) else None
+        if isinstance(function, dict) and CANONICAL_TO_INTERNAL_TOOL.get(str(function.get("name")), str(function.get("name"))) == ROLLBACK_STATE:
+            function["description"] = LIFECYCLE_CHOICE_ROLLBACK_DESCRIPTION
+    return schemas
 
 
 WLS_GATED_PROMPT_PARAGRAPH = (
@@ -145,6 +194,19 @@ CLASSIFIER_GATED_PROMPT_PARAGRAPH = (
 
 
 def system_prompt_for_observation(system_prompt: str, observation: Mapping[str, Any]) -> str:
+    """The system prompt for an observation: the profile's paragraph, then the lifecycle-choice paragraph where it is open."""
+    from psse_env.actions import lifecycle_choice_of
+
+    text = _profile_system_prompt(system_prompt, observation)
+    from psse_env.actions import DETAILED_EVIDENCE_CONTRACT
+
+    record = observation.get("detailed_evidence")
+    if isinstance(record, Mapping) and record.get("contract") == DETAILED_EVIDENCE_CONTRACT:
+        text += DETAILED_EVIDENCE_PROMPT_PARAGRAPH
+    return text + LIFECYCLE_CHOICE_PROMPT_PARAGRAPH if lifecycle_choice_of(observation) is not None else text
+
+
+def _profile_system_prompt(system_prompt: str, observation: Mapping[str, Any]) -> str:
     profile = observation.get("evidence_profile")
     if profile is None:
         return system_prompt
@@ -304,6 +366,11 @@ HISTORY_METRIC_KEYS = (
     "diagnostic_acceptance",
     "hif_conditioning",
     "hif_meter_nonregression",
+    # RL plan of 2026-11-05: what a correction wrote and what stands next to
+    # it (``psse_env.providers.detailed_evidence``).  The key exists only in
+    # the outputs of a provider built with the option, so every other prompt
+    # is unchanged.
+    "detailed_evidence",
 )
 
 # ``last_verification`` can contain a large physical-evidence payload.  Taking
@@ -353,6 +420,7 @@ LAST_VERIFICATION_PRIORITY_KEYS = (
 )
 CONTEXT_DETAIL_KEYS = frozenset(
     {
+        "detailed_evidence",
         "gnn_screen",
         "hif_screen",
         "triage",

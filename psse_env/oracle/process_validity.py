@@ -566,7 +566,14 @@ class ProcessValidityOracle:
             elif not self._known_current_state(store, requested):
                 error_code, error_detail = "unknown_state_id", str(requested)
             elif state.get("candidate_disposition") not in {"REJECT", "INCONCLUSIVE"}:
-                error_code, error_detail = "candidate_lifecycle_violation", "rollback_accepted_candidate"
+                # An accepted candidate may be declined only where the environment
+                # opened the lifecycle step (``lifecycle_choice``); elsewhere the
+                # verdict fixes it, as before.
+                if not (
+                    state.get("candidate_disposition") in _actions.ACCEPTED_DISPOSITIONS
+                    and _actions.lifecycle_choice_of(state) is not None
+                ):
+                    error_code, error_detail = "candidate_lifecycle_violation", "rollback_accepted_candidate"
         elif tool == FINALIZE_DIAGNOSIS:
             if has_open_candidate:
                 error_code, error_detail = "candidate_lifecycle_violation", "finalize_with_open_candidate"
@@ -1137,6 +1144,9 @@ class ProcessValidityOracle:
             return [{"tool": RUN_WLS, "arguments": {"state_id": candidate_id}}]
         if state.get("has_verified_candidate") and candidate_id:
             if state.get("candidate_disposition") in {"ACCEPT_PARTIAL", "ACCEPT_FINAL"}:
-                return [{"tool": COMMIT_STATE, "arguments": {"candidate_state_id": candidate_id}}]
+                safe = [{"tool": COMMIT_STATE, "arguments": {"candidate_state_id": candidate_id}}]
+                if _actions.lifecycle_choice_of(state) is not None:
+                    safe.append({"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": candidate_id}})
+                return safe
             return [{"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": candidate_id}}]
         return [{"tool": RUN_WLS, "arguments": {"state_id": active_id}}] if active_id else []

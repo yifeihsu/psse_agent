@@ -46,6 +46,10 @@ from .actions import (
     REVERT_CONTRACT,
     REVERT_STATE,
     REVERTED_REJECTION_KIND,
+    ACCEPTED_DISPOSITIONS,
+    DECLINED_REJECTION_KIND,
+    DETAILED_EVIDENCE_CONTRACT,
+    lifecycle_choice_record,
     COMPARE_ROUTES,
     ROUTE_COMPARISON_CONTRACT,
     ROUTE_COMPARISON_FAMILY,
@@ -492,8 +496,20 @@ class TransactionalPSSEEnv:
         progress_basis: str = DEFAULT_PROGRESS_BASIS,
         revert_fruitless_cycles: int = 0,
         route_comparison: bool = False,
+        lifecycle_choice: bool = False,
+        detailed_evidence: bool = False,
     ) -> None:
         self.evidence_profile = validate_evidence_profile(evidence_profile)
+        # The detailed evidence (RL plan of 2026-11-05): the providers report
+        # more of each solve and each correction, and an accepted correction
+        # keeps its verification numbers in the ledger.  Off by default: the
+        # observation and the ledger are exactly as before.
+        self.detailed_evidence = bool(detailed_evidence)
+        # The lifecycle choice (RL plan of 2026-11-05): the policy may decline a
+        # candidate the verifier accepted, by rolling it back.  Off by default:
+        # the verdict fixes the step and the observation carries no
+        # ``lifecycle_choice`` record, exactly as before.
+        self.lifecycle_choice = bool(lifecycle_choice)
         # Item 7 step 6: the gated revert of a committed correction, admitted
         # after this many fruitless correction cycles since the ancestor's
         # commit.  0 (the default) builds no revert: the tool is unknown and
@@ -900,6 +916,10 @@ class TransactionalPSSEEnv:
             summary["revert_ledger"] = self._revert_ledger(active_id)
         if self.route_comparison:
             summary["research_tools"] = [COMPARE_ROUTES]
+        if self.lifecycle_choice:
+            summary["lifecycle_choice"] = lifecycle_choice_record()
+        if self.detailed_evidence:
+            summary["detailed_evidence"] = {"contract": DETAILED_EVIDENCE_CONTRACT}
         return self._sanitize_observation(summary) if is_strict_boundary(self.evidence_profile) else summary
 
     def _fruitless_cycles_since(self, lineage: list[str], index: int) -> int:
@@ -1188,6 +1208,14 @@ class TransactionalPSSEEnv:
             research_tools=(
                 [str(tool) for tool in summary["research_tools"]]
                 if isinstance(summary.get("research_tools"), list) else None
+            ),
+            lifecycle_choice=(
+                policy_safe_copy(dict(summary["lifecycle_choice"]))
+                if isinstance(summary.get("lifecycle_choice"), Mapping) else None
+            ),
+            detailed_evidence=(
+                policy_safe_copy(dict(summary["detailed_evidence"]))
+                if isinstance(summary.get("detailed_evidence"), Mapping) else None
             ),
         )
 
@@ -1532,6 +1560,9 @@ class TransactionalPSSEEnv:
                 }
             next_oracle_payload = self._truth_after_commit(candidate_payload)
             accepted_record = self._accepted_candidate_record(candidate_payload)
+            if self.detailed_evidence:
+                # A kept correction keeps what its verification showed, as a rejected one always did.
+                accepted_record["commit_record"] = self._commit_record(candidate_payload)
             assessment = copy.deepcopy(candidate_payload.get("candidate_assessment") or {})
             accept_final = (
                 candidate_payload.get("candidate_disposition")
@@ -1576,17 +1607,28 @@ class TransactionalPSSEEnv:
                     )
             candidate_payload = self.store.get_state(candidate_id)
             parent_hash = self.store.state_hash(str(candidate_payload["parent_state_id"]))
-            parent_id = self.store.rollback(candidate_id)
+            # With the lifecycle choice a rollback of an accepted candidate is
+            # the policy declining it; the process gate admitted it above.
+            declined = bool(
+                self.lifecycle_choice
+                and str(candidate_payload.get("candidate_disposition") or "") in ACCEPTED_DISPOSITIONS
+            )
+            parent_id = self.store.rollback(candidate_id, declined=declined)
             if self.store.state_hash(parent_id) != parent_hash:
                 raise StateStoreError("Rollback did not restore the exact parent hash.")
-            self._remember_rejected_hypothesis(candidate_payload)
+            self._remember_rejected_hypothesis(
+                candidate_payload, rejection_kind=DECLINED_REJECTION_KIND if declined else None,
+            )
             self._fruitless_cycles[parent_id] = self._fruitless_cycles.get(parent_id, 0) + 1
             self.current_candidate_id = None
+            metrics = {"rolled_back_state_id": candidate_id, "restored_parent_hash": parent_hash}
+            if declined:
+                metrics["declined"] = True
             return self._standard_output(
                 execution_status="success",
                 state_mutated=True,
                 active_state_id=parent_id,
-                tool_metrics={"rolled_back_state_id": candidate_id, "restored_parent_hash": parent_hash},
+                tool_metrics=metrics,
             )
         if tool == REVERT_STATE and self.revert_fruitless_cycles:
             return self._step_revert(action)
@@ -3677,7 +3719,10 @@ class TransactionalPSSEEnv:
         if summary.get("has_verified_candidate"):
             disposition = summary.get("candidate_disposition")
             if disposition in {"ACCEPT_PARTIAL", "ACCEPT_FINAL"}:
-                return [{"tool": COMMIT_STATE, "arguments": {"candidate_state_id": summary["candidate_state_id"]}}]
+                available = [{"tool": COMMIT_STATE, "arguments": {"candidate_state_id": summary["candidate_state_id"]}}]
+                if self.lifecycle_choice:
+                    available.append({"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": summary["candidate_state_id"]}})
+                return available
             if disposition == "INCONCLUSIVE":
                 return [
                     {"tool": ASK_FOR_MORE_EVIDENCE, "arguments": {"state_id": summary["candidate_state_id"]}},
@@ -5377,7 +5422,34 @@ class TransactionalPSSEEnv:
             }
         )
 
-    def _remember_rejected_hypothesis(self, candidate_payload: Mapping[str, Any]) -> None:
+    @staticmethod
+    def _commit_record(candidate_payload: Mapping[str, Any]) -> dict[str, Any]:
+        """What an accepted correction's verification showed, flat and at most eight numbers.
+
+        The prompt bounds each ledger record to eight fields and a few levels,
+        so the record is flat: the global progress and the remaining
+        chi-square ratio, then the target's own metric and the largest
+        residual and multiplier next to it, before and after the edit.
+        """
+        verification = candidate_payload.get("verification_output")
+        verification = verification if isinstance(verification, Mapping) else {}
+        record: dict[str, Any] = {}
+        for key, digits in (("global_progress", 3), ("chi_square_ratio", 2)):
+            value = verification.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                record[key] = round(float(value), digits)
+        evidence = verification.get("detailed_evidence")
+        block = evidence.get("target_neighbourhood") if isinstance(evidence, Mapping) else None
+        if isinstance(block, Mapping):
+            for name, source in (("own", "own_metric"), ("adjacent_residual", "adjacent_residual_max"),
+                                 ("adjacent_multiplier", "adjacent_multiplier_max")):
+                values = block.get(source) if isinstance(block.get(source), Mapping) else {}
+                for moment in ("before", "after"):
+                    if values.get(moment) is not None:
+                        record[f"{name}_{moment}"] = values[moment]
+        return policy_safe_copy(record)
+
+    def _remember_rejected_hypothesis(self, candidate_payload: Mapping[str, Any], *, rejection_kind: str | None = None) -> None:
         source_action = candidate_payload.get("source_action") or {}
         raw_verification = candidate_payload.get("verification_output")
         verification_summary: dict[str, Any] = {}
@@ -5403,6 +5475,8 @@ class TransactionalPSSEEnv:
                     "source_action": source_action,
                     "action_signature": action_signature(source_action) if source_action else None,
                     "verification_summary": verification_summary,
+                    # Only a decline names its kind here; a verifier's rejection keeps the record it always had.
+                    **({"rejection_kind": rejection_kind} if rejection_kind else {}),
                 }
             )
         )
