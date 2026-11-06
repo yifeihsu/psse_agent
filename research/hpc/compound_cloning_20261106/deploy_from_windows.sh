@@ -77,7 +77,7 @@ cd "$REPO"
 # The suite list is exempt: a change to it reaches the cluster as the uploaded file, not through git.
 [[ -z "$(git status --porcelain --untracked-files=no -- research psse_env scripts tools ":(exclude)$CELL_REL/eval_suites.env")" ]] \
   || { echo "commit the sources first (tracked modifications under research/, psse_env/, scripts/ or tools/)" >&2; exit 2; }
-for path in "$CELL_REL/cell.env" "$CELL_REL/stage_clone_train.sbatch" psse_env/providers/detailed_evidence.py research/compound_errors/commit_reader_loop.py; do
+for path in "$CELL_REL/cell.env" "$CELL_REL/stage_clone_train.sbatch" psse_env/providers/detailed_evidence.py; do
   git cat-file -e "$COMMIT:$path" 2>/dev/null || { echo "$path is not in $COMMIT: commit the cell and the options first" >&2; exit 2; }
 done
 
