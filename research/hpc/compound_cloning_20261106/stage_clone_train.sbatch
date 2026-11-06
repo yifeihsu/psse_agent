@@ -55,6 +55,8 @@ case "$CLONE_TOOLS" in
 esac
 TRAIN_DIR=$STAGE_DIR/training
 RECEIPT=$STAGE_DIR/training.done
+# A restart loads the row gate's result instead of spending its slot on it (train_runtime_tools.py).
+export CLONE_GATE_CACHE=$STAGE_DIR/row_gate_cache.pkl
 echo "[clone:$MODE] job ${SLURM_JOB_ID:-manual} restart ${SLURM_RESTART_COUNT:-0} node ${SLURMD_NODENAME:-?} $(date -u +%FT%TZ)"
 if [[ -s "$RECEIPT" ]]; then
   echo "[clone:$MODE] receipt present; nothing to train"

@@ -11,7 +11,7 @@ import pytest
 CELL = Path(__file__).resolve().parent
 PIPELINE = CELL.parent / "full_pipeline_20260907"
 GPU_STAGES = ("stage_clone_train.sbatch", "stage_eval.sbatch")
-SHELL_FILES = GPU_STAGES + ("cell.env", "eval_suites.env", "submit_cell.sh", "deploy_from_windows.sh", "remote_prepare.sh", "status_cell.sh")
+SHELL_FILES = GPU_STAGES + ("stage_row_gate.sbatch", "cell.env", "eval_suites.env", "submit_cell.sh", "deploy_from_windows.sh", "remote_prepare.sh", "status_cell.sh")
 
 
 def _load(path: Path):
@@ -204,6 +204,58 @@ def test_outcomes_keep_the_lifecycle_and_join_the_class(tmp_path: Path) -> None:
     report, _text = compare(run / "outcomes_after.jsonl", [("after", run / "outcomes_after.jsonl")])
     assert report["runs"]["after"]["declined_wrong"] == 1 and report["runs"]["after"]["declined_true"] == 1
     assert report["runs"]["after"]["wrong_kept"] == 1
+
+
+def test_the_row_gate_runs_once_for_the_same_rows_and_code(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    module = _load(CELL / "train_runtime_tools.py")
+    train, validation = tmp_path / "train.jsonl", tmp_path / "validation.jsonl"
+    train.write_text("a\n", encoding="utf-8")
+    validation.write_text("b\n", encoding="utf-8")
+    settings = SimpleNamespace(model_name="m", revision="r", max_length=8, allow_prompt_truncation=False, local_files_only=True,
+                               trust_remote_code=False, validate=lambda: None)
+    calls: list[int] = []
+
+    def stock(*, train_file, validation_file, settings):
+        calls.append(1)
+        return "processor", ["t"], ["v"], {"train": {}}
+
+    processor = SimpleNamespace(apply_chat_template=lambda: None)
+    monkeypatch.setattr(module, "_STOCK_PREPARE", stock)
+    monkeypatch.setattr(module.research_cli, "load_exact_processor", lambda *a, **k: (processor, "AutoProcessor"))
+    arguments = dict(train_file=train, validation_file=validation, settings=settings)
+    # Without the variable the stock path runs every time and nothing is kept.
+    monkeypatch.delenv(module.GATE_CACHE_ENV, raising=False)
+    module.prepare_with_gate_cache(**arguments)
+    assert len(calls) == 1
+    cache = tmp_path / "cache" / "gate.pkl"
+    monkeypatch.setenv(module.GATE_CACHE_ENV, str(cache))
+    # The first start gates and keeps the result, the next loads it.
+    _p, first_train, _v, first = module.prepare_with_gate_cache(**arguments)
+    assert len(calls) == 2 and cache.is_file() and first["row_gate_cache"]["hit"] is False and first_train == ["t"]
+    loaded, again_train, again_validation, again = module.prepare_with_gate_cache(**arguments)
+    assert len(calls) == 2 and again["row_gate_cache"]["hit"] is True
+    assert loaded is processor and again_train == ["t"] and again_validation == ["v"]
+    # Other rows or other settings mean another gate, and an unreadable file is only a miss.
+    train.write_text("changed\n", encoding="utf-8")
+    assert module.prepare_with_gate_cache(**arguments)[3]["row_gate_cache"]["hit"] is False and len(calls) == 3
+    settings.max_length = 16
+    assert module.prepare_with_gate_cache(**arguments)[3]["row_gate_cache"]["hit"] is False and len(calls) == 4
+    cache.write_bytes(b"not a pickle")
+    assert module.prepare_with_gate_cache(**arguments)[3]["row_gate_cache"]["hit"] is False and len(calls) == 5
+    assert not list(cache.parent.glob("*.tmp"))
+
+
+def test_the_row_gate_runs_on_a_cpu_node_before_the_training_chain() -> None:
+    text = (CELL / "stage_row_gate.sbatch").read_text(encoding="utf-8")
+    header = [line for line in text.splitlines() if line.startswith("#SBATCH")]
+    assert "#SBATCH --account=torch_pr_627_general" in header and not any("gres" in line for line in header)
+    assert "$OUT/clone/row_gate_cache.pkl" in text
+    stage = (CELL / "stage_clone_train.sbatch").read_text(encoding="utf-8")
+    assert "export CLONE_GATE_CACHE=$STAGE_DIR/row_gate_cache.pkl" in stage
+    submit = (CELL / "submit_cell.sh").read_text(encoding="utf-8")
+    assert submit.index("cc-row-gate") < submit.index('cc-train "$LAST_JOB"')
 
 
 def test_smoke_rows_start_with_the_longest_and_cover_every_group() -> None:

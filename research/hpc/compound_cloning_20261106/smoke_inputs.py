@@ -99,7 +99,8 @@ def choose_roots(roots: Sequence[Mapping[str, Any]], count: int) -> list[Mapping
 
 def gate_timing(args: argparse.Namespace) -> dict[str, Any]:
     from psse_env.research_models import get_research_model_spec
-    from psse_env.sft.research_cli import ResearchTrainerSettings, prepare_research_examples
+    from psse_env.sft import research_cli
+    from psse_env.sft.research_cli import ResearchTrainerSettings
 
     if args.tools == "runtime":
         spec_file = Path(__file__).resolve().with_name("train_runtime_tools.py")
@@ -111,7 +112,8 @@ def gate_timing(args: argparse.Namespace) -> dict[str, Any]:
     settings = ResearchTrainerSettings(model_name=spec.model_id, revision=spec.revision, architecture=spec.architecture,
                                        output_dir=str(args.output_dir), max_length=args.max_length, allow_prompt_truncation=False)
     started = time.perf_counter()
-    _processor, train, validation, report = prepare_research_examples(train_file=args.train, validation_file=args.validation, settings=settings)
+    # Through the module: install() above may have put the cached gate there.
+    _processor, train, validation, report = research_cli.prepare_research_examples(train_file=args.train, validation_file=args.validation, settings=settings)
     seconds = time.perf_counter() - started
     rows = len(train) + len(validation)
     with Path(args.full_train).open(encoding="utf-8") as stream:
@@ -121,6 +123,7 @@ def gate_timing(args: argparse.Namespace) -> dict[str, Any]:
         "full_view_rows": full, "projected_restart_gate_minutes": round(seconds / rows * full / 60, 1),
         "length_audit": {"train": report["train"]["length_audit"], "validation": report["validation"]["length_audit"]},
         "action_distribution": report["train"]["action_distribution"],
+        "row_gate_cache": report.get("row_gate_cache"),
     }
 
 

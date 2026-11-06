@@ -6,6 +6,7 @@
 # WHAT is one of
 #   smoke       the training smoke, and an evaluation smoke of the start adapter on a slice of each suite
 #   smoke-eval  the evaluation smoke alone (needs no rows)
+#   gate        the row gate over the full views, on a CPU node (train and pass submit it first)
 #   train       the cloning pass as a chain of 12-hour jobs
 #   before      the start adapter on each suite; waits for nothing
 #   after       the cloned adapter on each suite, behind the chain's last link unless its receipt exists
@@ -105,7 +106,10 @@ train_links() {
 submit_train() {
   check_rows
   mkdir -p "$OUT/clone"
-  submit_chain "${TRAIN_LINKS:-$(train_links)}" cc-train "" --export=ALL,CLONE_MODE=full "$CELL/stage_clone_train.sbatch"
+  # The row gate first, on a CPU node: the training chain starts only if every row passes, and every
+  # start of a link then loads the gate's result (train_runtime_tools.py).
+  submit_chain 1 cc-row-gate "" "$CELL/stage_row_gate.sbatch"
+  submit_chain "${TRAIN_LINKS:-$(train_links)}" cc-train "$LAST_JOB" --export=ALL,CLONE_MODE=full "$CELL/stage_clone_train.sbatch"
   printf '%s\n' "$LAST_JOB" > "$OUT/clone/last_link.txt"
 }
 
@@ -151,6 +155,7 @@ case "$WHAT" in
     submit_eval_smoke
     ;;
   smoke-eval) submit_eval_smoke ;;
+  gate) check_rows; mkdir -p "$OUT/clone"; submit_chain 1 cc-row-gate "" "$CELL/stage_row_gate.sbatch" ;;
   train) submit_train ;;
   before) submit_arm before "$START_ADAPTER" "" ;;
   after) submit_after ;;
