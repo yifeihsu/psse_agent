@@ -115,12 +115,15 @@ class MeterRouteVariantTests(unittest.TestCase):
         self.assertTrue(expert._meter_route_for(_cue_state()))
         self.assertFalse(expert._meter_route_for(_cue_state(residual=10.9)))
 
-    def test_no_other_variant_carries_the_rule_and_the_default_stays_baseline(self) -> None:
+    def test_no_other_variant_carries_the_rule_and_the_default_is_untouched(self) -> None:
         for name in EXPERT_VARIANTS:
             if name != "baseline_compare_meter_route":
                 self.assertNotIn("meter_route_residual", expert_variant_options(name))
         self.assertEqual(expert_variant_options("baseline_compare"), {"candidate_comparison": True})
-        self.assertEqual(DEFAULT_EXPERT_VARIANT, "baseline")
+        # The unnamed default is baseline_compare since the user's decision of 2026-10-28 (the IEEE 14
+        # study's branch); this test was written on the IEEE 118 branch, which split off before it.
+        self.assertEqual(DEFAULT_EXPERT_VARIANT, "baseline_compare")
+        self.assertNotIn("meter_route_residual", expert_variant_options(DEFAULT_EXPERT_VARIANT))
 
     def test_the_environment_selects_it_by_name(self) -> None:
         import os
