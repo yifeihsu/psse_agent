@@ -1,0 +1,101 @@
+{
+ "contract": "multi_scan_rcond_guard_validation_v1",
+ "option": "PSSE_MULTI_SCAN_RCOND=sparse_symmetric (tools/correct_parameter_group_multi_scan_port.py; default dense_svd)",
+ "fallback": "estimates below 1e-11 (three decades above the guard's 1e-14), unfactorable gains and non-converged Lanczos runs use the dense SVD",
+ "gain_matrices": {
+  "ieee118": {
+   "matrices": 169,
+   "sparse_failed": 0,
+   "rcond_range": [
+    5.2528620284712096e-20,
+    9.438858018037145e-06
+   ],
+   "max_rel_gap_eigvalsh": 0.008428991300461604,
+   "max_rel_gap_sparse": 0.00021610397033936988,
+   "below_1e-14": {
+    "svd": 2.0,
+    "eigvalsh": 2,
+    "sparse": 2
+   },
+   "mean_seconds": {
+    "t_svd": 13.476875524260333,
+    "t_eig": 4.984840547337287,
+    "t_sparse": 0.02438445917156576
+   },
+   "max_asymmetry": 2.551925028982076e-16,
+   "corrections": [
+    "rx2_adjacent 148 true success None  iterations 12 min rcond svd 9.198e-07 sparse 9.198054089814273e-07",
+    "rx2_adjacent 159 wrong failure parameter_correction_failure  iterations 45 min rcond svd 2.123e-06 sparse 2.1232205993206762e-06",
+    "rx2_distant 56 true success None  iterations 15 min rcond svd 9.217e-06 sparse 9.217005933250929e-06",
+    "rx2_distant 91 wrong failure parameter_correction_failure  iterations 10 min rcond svd 5.439e-17 sparse 5.4375707461065805e-17",
+    "meter_rx2 47 true success None  iterations 17 min rcond svd 9.325e-06 sparse 9.324858521895044e-06",
+    "meter_rx2 49 wrong failure parameter_correction_failure  iterations 22 min rcond svd 9.975e-07 sparse 9.974588529966628e-07",
+    "meter_on_rx 68 true success None  iterations 14 min rcond svd 9.089e-07 sparse 9.089015136425875e-07",
+    "meter_on_rx 62 wrong failure parameter_correction_failure  iterations 15 min rcond svd 9.238e-06 sparse 9.238437103117165e-06",
+    "control_rx 123 true success None  iterations 17 min rcond svd 9.315e-06 sparse 9.314794311050176e-06",
+    "control_rx 122 wrong failure parameter_correction_failure  iterations 2 min rcond svd 5.253e-20 sparse 5.2528038814768307e-20"
+   ]
+  },
+  "ieee14_busbranch": {
+   "matrices": 204,
+   "rcond_range": [
+    7.640973600383656e-06,
+    0.0023146091902064743
+   ],
+   "max_rel_gap_sparse": 8.842809260596215e-13,
+   "below_1e-14_svd": 0
+  }
+ },
+ "trajectories": {
+  "ieee14_busbranch_625_roots": {
+   "roots": 625,
+   "both": 625,
+   "identical_trajectories": 625,
+   "solved_default": 374,
+   "solved_sparse": 374
+  },
+  "ieee118_12_roots_two_per_class": {
+   "left": 12,
+   "right": 12,
+   "both": 12,
+   "identical_trajectories": 12,
+   "differing": [],
+   "solved_left": 10,
+   "solved_right": 10,
+   "seconds_left": 11052.7,
+   "seconds_right": 975.2
+  }
+ },
+ "progress_basis_check_ieee14_busbranch": {
+  "left": 625,
+  "right": 625,
+  "both": 625,
+  "identical_trajectories": 579,
+  "differing": [
+   "r0_0107cc6e6063",
+   "r0_0749b51b101b",
+   "r0_0fe8c796405e",
+   "r0_12854960b05c",
+   "r0_20c3b3c80725",
+   "r0_2e55d74598f4",
+   "r0_309195391639",
+   "r0_315ddf78f545",
+   "r0_36acfeee35f3",
+   "r0_44c07b0aecaa",
+   "r0_474e27c76f8f",
+   "r0_48b903c34792",
+   "r0_4bc5b8d71bc5",
+   "r0_530aad9508ee",
+   "r0_553120894dd4",
+   "r0_608052491db4",
+   "r0_6a63d6585615",
+   "r0_6c5ad21bc121",
+   "r0_7ad59f45ad34",
+   "r0_8366a364b076"
+  ],
+  "solved_left": 374,
+  "solved_right": 375,
+  "seconds_left": 3527.9,
+  "seconds_right": 5917.8
+ }
+}

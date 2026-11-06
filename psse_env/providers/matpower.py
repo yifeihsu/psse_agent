@@ -34,6 +34,7 @@ import math
 import os
 import re
 import tempfile
+import time
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -458,6 +459,27 @@ def _render_matpower_case(ppc: Mapping[str, Any], function_name: str) -> str:
             lines.append("\t" + "\t".join(repr(float(value)) for value in row) + ";")
         lines.append("];")
     return "\n".join(lines) + "\n"
+
+
+#: Waits (s) between retries of a file operation Windows refused because
+#: another process held the file open (a sharing refusal is a PermissionError):
+#: about 3 s in all, then the refusal propagates.
+_SHARING_RETRY_DELAYS = (0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0)
+
+
+def _file_holds(path: str, encoded: bytes) -> bool:
+    """Whether ``path`` holds exactly ``encoded``; a missing file holds nothing, a sharing refusal is retried."""
+    for delay in (*_SHARING_RETRY_DELAYS, None):
+        try:
+            with open(path, "rb") as handle:
+                return handle.read() == encoded
+        except FileNotFoundError:
+            return False
+        except PermissionError:
+            if delay is None:
+                raise
+            time.sleep(delay)
+    return False
 
 
 class MatpowerDeploymentProviders:
@@ -1287,17 +1309,21 @@ class MatpowerDeploymentProviders:
         digest = hashlib.sha256(encoded).hexdigest()
         os.makedirs(self.derived_case_dir, exist_ok=True)
         path = os.path.join(self.derived_case_dir, f"{tag}_{digest}.m")
-        try:
-            with open(path, "rb") as handle:
-                if handle.read() == encoded:
-                    return path
-        except FileNotFoundError:
-            pass
+        if _file_holds(path, encoded):
+            return path
 
         # A content-addressed path must never trust stale bytes from a prior
-        # process.  Write and fsync a sibling file before an atomic replace so
+        # process.  Write and fsync a sibling file before an atomic rename so
         # concurrent evaluators either observe the old complete file or these
-        # exact rendered bytes, never a partial case.
+        # exact rendered bytes, never a partial case.  Windows refuses a
+        # replace, and a read, while another process holds the target open, so
+        # evaluators that write the same new case at once used to collide
+        # (compound note section 11.8).  The path is content-addressed, so a
+        # target that already holds these bytes is the result, whoever wrote
+        # it.  A new case is published by a rename, which on Windows fails on
+        # an existing target instead of replacing one another process may be
+        # reading; only stale bytes are replaced, and a sharing refusal is
+        # retried.
         descriptor, temporary_path = tempfile.mkstemp(
             prefix=f".{tag}_{digest}.", suffix=".tmp", dir=self.derived_case_dir
         )
@@ -1306,7 +1332,21 @@ class MatpowerDeploymentProviders:
                 handle.write(encoded)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary_path, path)
+            for delay in (*_SHARING_RETRY_DELAYS, None):
+                if _file_holds(path, encoded):
+                    break
+                try:
+                    try:
+                        os.rename(temporary_path, path)
+                    except FileExistsError:
+                        if _file_holds(path, encoded):
+                            break
+                        os.replace(temporary_path, path)
+                    break
+                except PermissionError:
+                    if delay is None:
+                        raise
+                    time.sleep(delay)
         finally:
             if os.path.exists(temporary_path):
                 os.unlink(temporary_path)

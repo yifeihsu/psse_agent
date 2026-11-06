@@ -43,7 +43,13 @@ construct the same expert:
   compares the two routes on isolated clones before correcting either and
   takes the best-verified route first (``route_comparison=True``; item 7
   step 7, the user's request of 2026-10-28).  Its environment carries the
-  ``compare_routes`` tool (``variant_environment_options``).
+  ``compare_routes`` tool (``variant_environment_options``);
+* ``baseline_compare_meter_route``: ``baseline_compare`` with the meter-route
+  rule (``meter_route_residual=METER_ROUTE_RESIDUAL``): after a committed
+  meter correction, while the solve still reports a maximum normalized
+  residual of at least 11, the meter route leads and the measurement
+  expert's post-commit branch guard stands down (compound errors on IEEE
+  118, 2026-10-29, docs/compound_errors_ieee118_20261028.md section 10).
 
 Research only.  The default for new work, what a pipeline env or a research
 script picks up when it names no variant, is ``baseline_compare`` (the user's
@@ -75,7 +81,27 @@ DEFAULT_EXPERT_VARIANT = "baseline_compare"
 COMPOUND_STUDY_EXPERT_VARIANT = "baseline_compare_guarded_routes"
 EXPERT_VARIANTS = ("baseline", "ledger", "ledger_ranked", "ledger_ranked_compare", "baseline_compare",
                    "baseline_compare_topology_first", "baseline_compare_topology_guarded",
-                   "baseline_compare_guarded_walk", "baseline_compare_guarded_routes")
+                   "baseline_compare_guarded_walk", "baseline_compare_guarded_routes", "baseline_compare_meter_route")
+#: The meter-route rule's threshold: the separation of section 9.4 of the IEEE
+#: 118 compound note (meter-next 32 of 32 and 37 of 39 at or above it,
+#: line-next 4 of 19 and 4 of 36).
+METER_ROUTE_RESIDUAL = 11.0
+
+
+def compound_study_expert_variant(system: str | None = None) -> str:
+    """The compound scripts' teacher for a system when a run names none.
+
+    IEEE 14 keeps ``COMPOUND_STUDY_EXPERT_VARIANT`` (the user's decision of
+    2026-10-29, taken on the IEEE 14 study).  Every other system keeps
+    ``DEFAULT_EXPERT_VARIANT``, the teacher the IEEE 118 study recorded its
+    runs with: the route teacher's cue and route comparison were set on IEEE
+    14's node/breaker roots and have not been run on a bus-branch suite.
+    Naming ``--expert`` overrides either.
+    """
+    from psse_env.systems import resolve_system
+
+    case_id = resolve_system(system).case_id if system else "case14"
+    return COMPOUND_STUDY_EXPERT_VARIANT if case_id == "case14" else DEFAULT_EXPERT_VARIANT
 
 
 def current_expert_variant(variant: str | None = None) -> str:
@@ -105,6 +131,8 @@ def expert_variant_options(variant: str | None = None, *, learned_ranker: Any = 
         return {"candidate_comparison": True, "topology_first": "flow_at_noise", "hypothesis_walk": True}
     if name == "baseline_compare_guarded_routes":
         return {"candidate_comparison": True, "topology_first": "flow_at_noise", "route_comparison": True}
+    if name == "baseline_compare_meter_route":
+        return {"candidate_comparison": True, "meter_route_residual": METER_ROUTE_RESIDUAL}
     if name == "ledger":
         return {"hypothesis_ledger": True}
     options: dict[str, Any] = {
@@ -151,6 +179,7 @@ def variant_environment_options(variant: str | None = None) -> dict[str, Any]:
     return dict(VARIANT_ENVIRONMENT_OPTIONS.get(current_expert_variant(variant), {}))
 
 
-__all__ = ["COMPOUND_STUDY_EXPERT_VARIANT", "DEFAULT_EXPERT_VARIANT", "EXPERT_VARIANTS", "EXPERT_VARIANT_ENV", "REVERT_FRUITLESS_CYCLES",
-           "VARIANT_ENVIRONMENT_OPTIONS", "VARIANT_PROVIDER_OPTIONS", "current_expert_variant",
+__all__ = ["COMPOUND_STUDY_EXPERT_VARIANT", "DEFAULT_EXPERT_VARIANT", "EXPERT_VARIANTS", "EXPERT_VARIANT_ENV", "METER_ROUTE_RESIDUAL",
+           "REVERT_FRUITLESS_CYCLES", "VARIANT_ENVIRONMENT_OPTIONS", "VARIANT_PROVIDER_OPTIONS", "compound_study_expert_variant",
+           "current_expert_variant",
            "expert_variant_options", "variant_environment_options", "variant_provider_options"]

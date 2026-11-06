@@ -1,0 +1,330 @@
+{
+  "by_class": {
+    "control_meter": {
+      "abstention_episodes": 0,
+      "abstentions_unsupported": 0,
+      "basis": {
+        "counterfactual_resolution": 45,
+        "none": 5
+      },
+      "comparisons": 31,
+      "corrections_true": 96,
+      "corrections_wrong": 143,
+      "errors": 0,
+      "failure_reasons": {
+        "final_measurements_outside_clean_tolerance": 5,
+        "resolved_episode_has_remaining_true_faults": 5
+      },
+      "false_commit_episodes": 0,
+      "healthy_touched": 0,
+      "invalid_action_episodes": 0,
+      "loop_episodes": 0,
+      "mean_comparisons": 0.62,
+      "mean_steps": 21.62,
+      "mean_wls_calls": 5.78,
+      "n": 50,
+      "steps": 1081,
+      "success": 45,
+      "success_rate": 0.9,
+      "terminal_outcomes": {
+        "operator_escalation": 50
+      },
+      "verdicts": {
+        "correct_measurements:true:ACCEPT_FINAL": 45,
+        "correct_measurements:true:ACCEPT_PARTIAL": 51,
+        "correct_parameters:wrong:REJECT": 143
+      },
+      "wls_calls": 289
+    },
+    "control_rx": {
+      "abstention_episodes": 0,
+      "abstentions_unsupported": 0,
+      "basis": {
+        "counterfactual_resolution": 45,
+        "none": 5
+      },
+      "comparisons": 28,
+      "corrections_true": 49,
+      "corrections_wrong": 9,
+      "errors": 0,
+      "failure_reasons": {
+        "accepted_measurement_targets_outside_truth": 1,
+        "accepted_parameter_target_outside_same_family_truth": 2,
+        "accepted_target_nonregression_false_target": 2,
+        "final_case_outside_clean_tolerance": 5,
+        "final_measurements_outside_clean_tolerance": 1,
+        "healthy_case_component_modified": 2,
+        "healthy_measurement_modified": 1,
+        "resolved_episode_has_remaining_true_faults": 4
+      },
+      "false_commit_episodes": 0,
+      "healthy_touched": 2,
+      "invalid_action_episodes": 3,
+      "loop_episodes": 2,
+      "mean_comparisons": 0.56,
+      "mean_steps": 8.04,
+      "mean_wls_calls": 2.16,
+      "n": 50,
+      "steps": 402,
+      "success": 45,
+      "success_rate": 0.9,
+      "terminal_outcomes": {
+        "operator_escalation": 50
+      },
+      "verdicts": {
+        "correct_measurements:wrong:ACCEPT_FINAL": 1,
+        "correct_parameters:true:ACCEPT_FINAL": 46,
+        "correct_parameters:true:refused": 3,
+        "correct_parameters:wrong:ACCEPT_FINAL": 1,
+        "correct_parameters:wrong:ACCEPT_PARTIAL": 1,
+        "correct_parameters:wrong:REJECT": 5,
+        "correct_parameters:wrong:refused": 1
+      },
+      "wls_calls": 108
+    },
+    "meter_on_rx": {
+      "abstention_episodes": 0,
+      "abstentions_unsupported": 0,
+      "basis": {
+        "counterfactual_resolution": 11,
+        "none": 64
+      },
+      "comparisons": 63,
+      "corrections_true": 124,
+      "corrections_wrong": 289,
+      "errors": 0,
+      "failure_reasons": {
+        "accepted_measurement_targets_outside_truth": 19,
+        "accepted_parameter_target_outside_same_family_truth": 7,
+        "accepted_target_nonregression_false_target": 28,
+        "accepted_topology_target_outside_same_family_truth": 16,
+        "final_case_outside_clean_tolerance": 57,
+        "final_measurements_outside_clean_tolerance": 57,
+        "healthy_case_component_modified": 23,
+        "healthy_measurement_modified": 16,
+        "resolved_episode_has_remaining_true_faults": 59
+      },
+      "false_commit_episodes": 0,
+      "healthy_touched": 28,
+      "invalid_action_episodes": 47,
+      "loop_episodes": 14,
+      "mean_comparisons": 0.84,
+      "mean_steps": 22.493333333333332,
+      "mean_wls_calls": 6.493333333333333,
+      "n": 75,
+      "steps": 1687,
+      "success": 11,
+      "success_rate": 0.14666666666666667,
+      "terminal_outcomes": {
+        "operator_escalation": 75
+      },
+      "verdicts": {
+        "correct_measurements:true:ACCEPT_FINAL": 2,
+        "correct_measurements:true:ACCEPT_PARTIAL": 27,
+        "correct_measurements:true:REJECT": 2,
+        "correct_measurements:wrong:ACCEPT_FINAL": 3,
+        "correct_measurements:wrong:ACCEPT_PARTIAL": 22,
+        "correct_measurements:wrong:REJECT": 37,
+        "correct_parameters:true:ACCEPT_FINAL": 13,
+        "correct_parameters:true:ACCEPT_PARTIAL": 7,
+        "correct_parameters:true:REJECT": 68,
+        "correct_parameters:true:refused": 5,
+        "correct_parameters:wrong:ACCEPT_FINAL": 1,
+        "correct_parameters:wrong:ACCEPT_PARTIAL": 7,
+        "correct_parameters:wrong:REJECT": 129,
+        "correct_parameters:wrong:refused": 74,
+        "correct_topology:wrong:ACCEPT_PARTIAL": 16
+      },
+      "wls_calls": 487
+    },
+    "meter_rx2": {
+      "abstention_episodes": 0,
+      "abstentions_unsupported": 0,
+      "basis": {
+        "counterfactual_resolution": 130,
+        "none": 20
+      },
+      "comparisons": 204,
+      "corrections_true": 438,
+      "corrections_wrong": 55,
+      "errors": 0,
+      "failure_reasons": {
+        "accepted_measurement_targets_outside_truth": 4,
+        "accepted_parameter_target_outside_same_family_truth": 11,
+        "accepted_target_nonregression_false_target": 14,
+        "accepted_topology_target_outside_same_family_truth": 3,
+        "final_case_outside_clean_tolerance": 16,
+        "final_measurements_outside_clean_tolerance": 7,
+        "healthy_case_component_modified": 14,
+        "healthy_measurement_modified": 2,
+        "resolved_episode_has_remaining_true_faults": 20
+      },
+      "false_commit_episodes": 0,
+      "healthy_touched": 14,
+      "invalid_action_episodes": 11,
+      "loop_episodes": 6,
+      "mean_comparisons": 1.36,
+      "mean_steps": 17.2,
+      "mean_wls_calls": 4.286666666666667,
+      "n": 150,
+      "steps": 2580,
+      "success": 130,
+      "success_rate": 0.8666666666666667,
+      "terminal_outcomes": {
+        "operator_escalation": 150
+      },
+      "verdicts": {
+        "correct_measurements:true:ACCEPT_FINAL": 102,
+        "correct_measurements:true:ACCEPT_PARTIAL": 43,
+        "correct_measurements:true:refused": 1,
+        "correct_measurements:wrong:ACCEPT_FINAL": 2,
+        "correct_measurements:wrong:ACCEPT_PARTIAL": 2,
+        "correct_measurements:wrong:REJECT": 3,
+        "correct_parameters:true:ACCEPT_FINAL": 34,
+        "correct_parameters:true:ACCEPT_PARTIAL": 245,
+        "correct_parameters:true:REJECT": 4,
+        "correct_parameters:true:refused": 9,
+        "correct_parameters:wrong:ACCEPT_FINAL": 3,
+        "correct_parameters:wrong:ACCEPT_PARTIAL": 8,
+        "correct_parameters:wrong:REJECT": 21,
+        "correct_parameters:wrong:refused": 13,
+        "correct_topology:wrong:ACCEPT_PARTIAL": 3
+      },
+      "wls_calls": 643
+    },
+    "rx2_adjacent": {
+      "abstention_episodes": 0,
+      "abstentions_unsupported": 0,
+      "basis": {
+        "counterfactual_resolution": 110,
+        "none": 40
+      },
+      "comparisons": 167,
+      "corrections_true": 299,
+      "corrections_wrong": 134,
+      "errors": 0,
+      "failure_reasons": {
+        "accepted_measurement_targets_outside_truth": 9,
+        "accepted_parameter_target_outside_same_family_truth": 14,
+        "accepted_target_nonregression_false_target": 26,
+        "accepted_topology_target_outside_same_family_truth": 12,
+        "final_case_outside_clean_tolerance": 38,
+        "final_measurements_outside_clean_tolerance": 9,
+        "healthy_case_component_modified": 26,
+        "healthy_measurement_modified": 9,
+        "resolved_episode_has_remaining_true_faults": 33
+      },
+      "false_commit_episodes": 0,
+      "healthy_touched": 26,
+      "invalid_action_episodes": 28,
+      "loop_episodes": 22,
+      "mean_comparisons": 1.1133333333333333,
+      "mean_steps": 14.68,
+      "mean_wls_calls": 3.8866666666666667,
+      "n": 150,
+      "steps": 2202,
+      "success": 110,
+      "success_rate": 0.7333333333333333,
+      "terminal_outcomes": {
+        "operator_escalation": 150
+      },
+      "verdicts": {
+        "correct_measurements:wrong:ACCEPT_FINAL": 3,
+        "correct_measurements:wrong:ACCEPT_PARTIAL": 7,
+        "correct_measurements:wrong:REJECT": 16,
+        "correct_measurements:wrong:refused": 1,
+        "correct_parameters:true:ACCEPT_FINAL": 117,
+        "correct_parameters:true:ACCEPT_PARTIAL": 141,
+        "correct_parameters:true:REJECT": 6,
+        "correct_parameters:true:refused": 35,
+        "correct_parameters:wrong:ACCEPT_FINAL": 3,
+        "correct_parameters:wrong:ACCEPT_PARTIAL": 15,
+        "correct_parameters:wrong:REJECT": 53,
+        "correct_parameters:wrong:refused": 24,
+        "correct_topology:wrong:ACCEPT_FINAL": 1,
+        "correct_topology:wrong:ACCEPT_PARTIAL": 11
+      },
+      "wls_calls": 583
+    },
+    "rx2_distant": {
+      "abstention_episodes": 0,
+      "abstentions_unsupported": 0,
+      "basis": {
+        "counterfactual_resolution": 130,
+        "none": 20
+      },
+      "comparisons": 183,
+      "corrections_true": 292,
+      "corrections_wrong": 49,
+      "errors": 0,
+      "failure_reasons": {
+        "accepted_measurement_targets_outside_truth": 7,
+        "accepted_parameter_target_outside_same_family_truth": 10,
+        "accepted_target_nonregression_false_target": 13,
+        "accepted_topology_target_outside_same_family_truth": 1,
+        "final_case_outside_clean_tolerance": 18,
+        "final_measurements_outside_clean_tolerance": 7,
+        "healthy_case_component_modified": 11,
+        "healthy_measurement_modified": 7,
+        "resolved_episode_has_remaining_true_faults": 19
+      },
+      "false_commit_episodes": 0,
+      "healthy_touched": 13,
+      "invalid_action_episodes": 13,
+      "loop_episodes": 6,
+      "mean_comparisons": 1.22,
+      "mean_steps": 13.02,
+      "mean_wls_calls": 3.2733333333333334,
+      "n": 150,
+      "steps": 1953,
+      "success": 130,
+      "success_rate": 0.8666666666666667,
+      "terminal_outcomes": {
+        "operator_escalation": 150
+      },
+      "verdicts": {
+        "correct_measurements:wrong:ACCEPT_FINAL": 6,
+        "correct_measurements:wrong:ACCEPT_PARTIAL": 3,
+        "correct_parameters:true:ACCEPT_FINAL": 131,
+        "correct_parameters:true:ACCEPT_PARTIAL": 146,
+        "correct_parameters:true:REJECT": 2,
+        "correct_parameters:true:refused": 13,
+        "correct_parameters:wrong:ACCEPT_FINAL": 5,
+        "correct_parameters:wrong:ACCEPT_PARTIAL": 6,
+        "correct_parameters:wrong:REJECT": 16,
+        "correct_parameters:wrong:refused": 12,
+        "correct_topology:wrong:ACCEPT_PARTIAL": 1
+      },
+      "wls_calls": 491
+    }
+  },
+  "contract": "compound_expert_rollout_v1",
+  "env_options": {
+    "pair_refit_adjacent": true
+  },
+  "expert": "baseline_compare",
+  "expert_options": {},
+  "max_steps": 40,
+  "multi_scan_rcond": "sparse_symmetric",
+  "profile": "scada_only",
+  "progress_basis": "chi_square_excess",
+  "roots": 625,
+  "seed": 20261006,
+  "suite": "output\\compound_errors_ieee118_20261028\\suite.json",
+  "system": "case118",
+  "total_seconds": 2660.8,
+  "totals": {
+    "abstention_episodes": 0,
+    "abstentions_unsupported": 0,
+    "comparisons": 676,
+    "errors": 0,
+    "false_commit_episodes": 0,
+    "invalid_action_episodes": 102,
+    "loop_episodes": 50,
+    "n": 625,
+    "steps": 9905,
+    "success": 471,
+    "wls_calls": 2601
+  },
+  "workers": 12
+}

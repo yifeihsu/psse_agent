@@ -1,0 +1,1168 @@
+{
+  "bins": {
+    "evidence_limit": 3,
+    "interface_limit": 30,
+    "legal_alternative": 1
+  },
+  "contract": "compound_decision_audit_v1",
+  "env_options": {},
+  "episodes": "output\\compound_errors_ieee118_20261028\\budget_16\\episodes.jsonl",
+  "expert": "baseline_compare",
+  "max_alternatives": 3,
+  "max_states": 4,
+  "max_steps": 16,
+  "multi_scan_rcond": "sparse_symmetric",
+  "profile": "scada_only",
+  "progress_basis": "chi_square_excess",
+  "reference_episodes": "output\\compound_errors_ieee118_20261028\\expert_baseline_compare\\episodes.jsonl",
+  "roots": 34,
+  "seed": 20261019,
+  "selection": {
+    "control_meter": {
+      "audited_failed": 26,
+      "audited_solved": 0,
+      "failed": 26,
+      "roots": 50
+    },
+    "control_rx": {
+      "audited_failed": 0,
+      "audited_solved": 0,
+      "failed": 0,
+      "roots": 50
+    },
+    "meter_on_rx": {
+      "audited_failed": 7,
+      "audited_solved": 0,
+      "failed": 7,
+      "roots": 75
+    },
+    "meter_rx2": {
+      "audited_failed": 1,
+      "audited_solved": 0,
+      "failed": 1,
+      "roots": 150
+    },
+    "rx2_adjacent": {
+      "audited_failed": 0,
+      "audited_solved": 0,
+      "failed": 0,
+      "roots": 150
+    },
+    "rx2_distant": {
+      "audited_failed": 0,
+      "audited_solved": 0,
+      "failed": 0,
+      "roots": 150
+    }
+  },
+  "strata": {
+    "compound:control_meter": {
+      "alternatives": 286,
+      "alternatives_better": 1,
+      "bins": {
+        "evidence_limit": 2,
+        "interface_limit": 23,
+        "legal_alternative": 1
+      },
+      "decision_states": 104,
+      "episodes": 338,
+      "errors": 0,
+      "reference_success": 0,
+      "roots": 26,
+      "seconds": 8310.699999999999,
+      "state_bins": {
+        "evidence_limit": 80,
+        "interface_limit": 23,
+        "legal_alternative": 1
+      },
+      "truth_success": 24,
+      "truth_tried": 26
+    },
+    "compound:meter_on_rx": {
+      "alternatives": 72,
+      "alternatives_better": 0,
+      "bins": {
+        "interface_limit": 7
+      },
+      "decision_states": 28,
+      "episodes": 86,
+      "errors": 0,
+      "reference_success": 0,
+      "roots": 7,
+      "seconds": 2362.2,
+      "state_bins": {
+        "evidence_limit": 21,
+        "interface_limit": 7
+      },
+      "truth_success": 7,
+      "truth_tried": 7
+    },
+    "compound:meter_rx2": {
+      "alternatives": 9,
+      "alternatives_better": 0,
+      "bins": {
+        "evidence_limit": 1
+      },
+      "decision_states": 4,
+      "episodes": 11,
+      "errors": 0,
+      "reference_success": 0,
+      "roots": 1,
+      "seconds": 373.6,
+      "state_bins": {
+        "evidence_limit": 4
+      },
+      "truth_success": 0,
+      "truth_tried": 1
+    }
+  },
+  "suite": "output\\compound_errors_ieee118_20261028\\suite.json",
+  "system": "case118",
+  "total_seconds": 1014.3,
+  "truth_probe": {
+    "control_meter": {
+      "probes": 26,
+      "reasons": {
+        "final_measurements_outside_clean_tolerance": 2,
+        "resolved_episode_has_remaining_true_faults": 2
+      },
+      "refused": {
+        "correct_measurements:correction_not_supported_by_current_context": 26
+      },
+      "rejected_true": {
+        "correct_measurements": 2
+      },
+      "roots": [
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_459214d65185",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_83fb86147955",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "evidence_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "REJECT"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ]
+          ],
+          "reasons": [
+            "resolved_episode_has_remaining_true_faults",
+            "final_measurements_outside_clean_tolerance"
+          ],
+          "reference_success": false,
+          "root": "r0_1bf77fddf403",
+          "truth_success": false,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_0d27de0ee5c7",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_27be2d4cc1ca",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_32bf5b56da7b",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_6148c238b466",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_8af640423802",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_3499d976fbd5",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "evidence_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "REJECT"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ]
+          ],
+          "reasons": [
+            "resolved_episode_has_remaining_true_faults",
+            "final_measurements_outside_clean_tolerance"
+          ],
+          "reference_success": false,
+          "root": "r0_4c60168339d9",
+          "truth_success": false,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_a6497ca560f2",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_f8cc912dce89",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_1801b98c699b",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_7f80c95ea3ba",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_f202bbda3156",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_65722143da35",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_d21da120b602",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_cdea2c381a2f",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_290d8cb0aec3",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_2509e2f7dbed",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "legal_alternative",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_8e3911134207",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_503583c8bf63",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_745f7c3f578c",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_2e5671a5205f",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_6eb75e7b8a7a",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_f72136216eab",
+          "truth_success": true,
+          "unapplied": 0
+        }
+      ],
+      "solved": 24
+    },
+    "meter_on_rx": {
+      "probes": 7,
+      "reasons": {},
+      "refused": {},
+      "rejected_true": {},
+      "roots": [
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_parameters",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_43ac298a4523",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_parameters",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_e3d98ea57e32",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_parameters",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_df59c451da81",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_parameters",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_aad90095da45",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_parameters",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_a1a5a70c5648",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_parameters",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_728948ae41a4",
+          "truth_success": true,
+          "unapplied": 0
+        },
+        {
+          "bin": "interface_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_parameters",
+              "success",
+              null,
+              "ACCEPT_FINAL"
+            ]
+          ],
+          "reasons": [],
+          "reference_success": false,
+          "root": "r0_4779f899f4ff",
+          "truth_success": true,
+          "unapplied": 0
+        }
+      ],
+      "solved": 7
+    },
+    "meter_rx2": {
+      "probes": 1,
+      "reasons": {
+        "final_case_outside_clean_tolerance": 1,
+        "resolved_episode_has_remaining_true_faults": 1
+      },
+      "refused": {
+        "correct_measurements:correction_not_supported_by_current_context": 1
+      },
+      "rejected_true": {
+        "correct_parameters": 1
+      },
+      "roots": [
+        {
+          "bin": "evidence_limit",
+          "corrections": [
+            [
+              "correct_measurements",
+              "failure",
+              "correction_not_supported_by_current_context",
+              null
+            ],
+            [
+              "correct_parameters",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ],
+            [
+              "correct_parameters",
+              "success",
+              null,
+              "REJECT"
+            ],
+            [
+              "correct_measurements",
+              "success",
+              null,
+              "ACCEPT_PARTIAL"
+            ]
+          ],
+          "reasons": [
+            "resolved_episode_has_remaining_true_faults",
+            "final_case_outside_clean_tolerance"
+          ],
+          "reference_success": false,
+          "root": "r0_cb54a14d162a",
+          "truth_success": false,
+          "unapplied": 0
+        }
+      ],
+      "solved": 0
+    }
+  }
+}

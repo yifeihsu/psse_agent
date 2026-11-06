@@ -51,6 +51,7 @@ class MeasurementExpert:
         *,
         oracle_hints: Sequence[Mapping[str, Any]] | None = None,
         oracle_fault_present: bool = False,
+        meter_route: bool = False,
     ) -> list[ExpertActionProposal]:
         history = list(history or [])
         if oracle_hints is None:
@@ -121,10 +122,14 @@ class MeasurementExpert:
         # must be resolved (or explicitly exhausted) before another measurement
         # correction may use that model's residuals.  Otherwise the second
         # correction can mask a real parameter/topology fault while passing WLS.
+        # The orchestrator's ``meter_route`` rule probe (2026-10-29) lifts this
+        # guard in a state whose residuals it reads as meter-led; the branch
+        # dominance suppression of ``measurement_signal`` still applies.
         measurement_hint_allowed = measurement_signal and not (
             partial_measurement
             and branch_codes
             and not branch_routes_exhausted
+            and not meter_route
         )
         proposals: list[ExpertActionProposal] = []
         normalized_measurement_hints = normalized_hint_actions(

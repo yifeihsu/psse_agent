@@ -54,6 +54,7 @@ from psse_env.oracle.anomaly_evidence import normalized_residual_alarm
 from psse_env.oracle.diagnostics_expert import DiagnosticsExpert
 from psse_env.oracle.expert_types import (
     ExpertActionProposal,
+    history_action_tool,
     recovery_record_applies_to_state,
 )
 from psse_env.oracle.measurement_expert import MeasurementExpert
@@ -165,6 +166,29 @@ def _structural_first_order(
     return non_measurement + measurement
 
 
+#: Evidence code of a meter proposal the ``meter_route_residual`` rule moved ahead.
+METER_ROUTE_EVIDENCE = "meter_route_after_meter_commit"
+
+
+def _measurement_first_order(
+    ranked: list[ExpertActionProposal],
+    *,
+    topology_first: bool = False,
+) -> list[ExpertActionProposal]:
+    """Meter proposals ahead of the structural tier (the ``meter_route_residual`` rule probe, 2026-10-29).
+
+    The order inside each tier is the structural-first order's, and without a
+    meter proposal that order stands.  The moved proposals carry
+    ``METER_ROUTE_EVIDENCE`` so a trace shows where the rule decided.
+    """
+    ordered = _structural_first_order(ranked, topology_first=topology_first)
+    is_meter = [safe_normalize_action(p.action)["tool"] in MEASUREMENT_PATH_TOOLS for p in ordered]
+    if not any(is_meter):
+        return ordered
+    moved = [replace(p, evidence_codes=[*p.evidence_codes, METER_ROUTE_EVIDENCE]) for p, meter in zip(ordered, is_meter) if meter]
+    return moved + [p for p, meter in zip(ordered, is_meter) if not meter]
+
+
 _TRIAGE_FAMILY_TOOLS = {
     "measurement": MEASUREMENT_PATH_TOOLS,
     "parameter": frozenset({CORRECT_PARAMETERS, GET_PARAMETER_CONTEXT, COMPARE_PARAMETER_CANDIDATES}),
@@ -218,6 +242,7 @@ class ExpertPolicyOracle:
         state_ambiguity: bool = False,
         hypothesis_walk: bool = False,
         route_comparison: bool = False,
+        meter_route_residual: float | None = None,
     ) -> None:
         # Item 7 step 7 (the user's request of 2026-10-28): where the solve's
         # confidence says the impedance edit and the breaker flip compete, fetch
@@ -241,6 +266,13 @@ class ExpertPolicyOracle:
         # the two apart.  Recorded and reported, never required; off by
         # default, so no teacher's actions change unless a run names it.
         self.state_ambiguity = bool(state_ambiguity)
+        # Compound errors on IEEE 118, rule probe (2026-10-29,
+        # docs/compound_errors_ieee118_20261028.md section 10): after a
+        # committed meter correction, while the active state's solve still
+        # reports a normalized residual of at least this value, the meter
+        # route leads and the measurement expert's post-commit branch guard
+        # stands down.  None (the default) leaves every teacher unchanged.
+        self.meter_route_residual = None if meter_route_residual is None else float(meter_route_residual)
         # Compound-error study, stage 2 item 5 (decision C, 2026-10-28): every
         # operator handoff the expert proposes carries the explicit
         # "not identifiable: line N isolated by breaker M" statements its
@@ -503,12 +535,14 @@ class ExpertPolicyOracle:
                 mandatory=False,
             )
 
+        meter_route = self._meter_route_for(policy)
         proposals = (
             self.measurement_expert.propose(
                 policy,
                 context.history,
                 oracle_hints=context.oracle_hints,
                 oracle_fault_present="measurement" in context.oracle_fault_families,
+                meter_route=meter_route,
             )
             + self.parameter_expert.propose(
                 policy,
@@ -637,6 +671,8 @@ class ExpertPolicyOracle:
                 if first is not None:
                     return [first, *ranked]
                 ranked = self._route_comparison_order(ranked, policy)
+            if meter_route:
+                return _measurement_first_order(ranked, topology_first=self._topology_first_for(policy))
             return _structural_first_order(ranked, topology_first=self._topology_first_for(policy))
         escalation = self._recovery_exhaustion_proposals(policy, context.history)
         if self.hypothesis_walk:
@@ -895,6 +931,32 @@ class ExpertPolicyOracle:
                     return False
             return bool(self._flow_at_noise_lines(policy))
         return False
+
+    def _meter_route_for(self, policy: PolicyObservation | Mapping[str, Any]) -> bool:
+        """Whether the meter route leads in this state (``meter_route_residual`` rule probe).
+
+        The latest committed correction is a meter correction and the active
+        state's bound WLS solve reports a maximum normalized residual of at
+        least the threshold; a residual that large is itself the detector's
+        alarm (its cutoff is 4.0), so the alarm is on.
+        """
+        if self.meter_route_residual is None:
+            return False
+        accepted = self._get(policy, "accepted_corrections", []) or []
+        if not accepted or history_action_tool(accepted[-1]) != CORRECT_MEASUREMENTS:
+            return False
+        contexts = self._get(policy, "fresh_context_evidence", {}) or {}
+        wls = contexts.get("wls") if isinstance(contexts, Mapping) else None
+        if not isinstance(wls, Mapping) or wls.get("successful") is not True:
+            return False
+        active_id = self._get(policy, "active_state_id")
+        if active_id is not None and str(wls.get("state_id", active_id)) != str(active_id):
+            return False
+        try:
+            residual = float(wls.get("max_normalized_residual"))
+        except (TypeError, ValueError):
+            return False
+        return residual >= self.meter_route_residual
 
     def _cross_family_diversification_proposals(
         self,

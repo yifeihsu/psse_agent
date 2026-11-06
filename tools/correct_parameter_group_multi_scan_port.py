@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Tuple
+import os
 import warnings
 
 import numpy as np
@@ -232,6 +233,43 @@ def _rcond_dense(A: np.ndarray) -> float:
     if not np.isfinite(condA) or condA == 0.0:
         return 0.0
     return 1.0 / condA
+
+
+#: How the Gauss-Newton loop's conditioning guard computes the gain's 2-norm
+#: reciprocal condition (2026-10-28).  ``dense_svd`` (the default) is the
+#: MATLAB port's ``cond``.  ``sparse_symmetric`` reads the same quantity from
+#: the extreme eigenvalues of the gain, which is H'WH and so symmetric: Lanczos
+#: for the largest, shift-invert Lanczos for the smallest.  The guard's
+#: decision stays the dense SVD's: an estimate within three decades of the
+#: guard's floor, a gain that cannot be factored, or a Lanczos run that does
+#: not converge falls back to it.  The dense SVD of IEEE 118's eight-scan gain
+#: (1,882 columns) takes about ten seconds per iteration.
+RCOND_METHOD_ENV = "PSSE_MULTI_SCAN_RCOND"
+RCOND_METHODS = ("dense_svd", "sparse_symmetric")
+_SPARSE_RCOND_FALLBACK = 1e-11
+
+
+def _rcond_sparse_symmetric(G: sp.spmatrix) -> float:
+    largest = float(spla.eigsh(G, k=1, which="LA", return_eigenvectors=False, tol=1e-12)[0])
+    smallest = float(spla.eigsh(G, k=1, sigma=0.0, which="LM", return_eigenvectors=False, tol=1e-12)[0])
+    if not (np.isfinite(largest) and np.isfinite(smallest)) or largest <= 0.0:
+        raise ValueError("gain extremes are not finite")
+    return abs(smallest) / largest
+
+
+def _rcond_gain(G: sp.spmatrix) -> float:
+    """The guard's reciprocal condition of the gain, by ``RCOND_METHOD_ENV``."""
+    method = os.environ.get(RCOND_METHOD_ENV, "dense_svd")
+    if method not in RCOND_METHODS:
+        raise ValueError(f"{RCOND_METHOD_ENV} must be one of {RCOND_METHODS}, got {method!r}")
+    if method == "sparse_symmetric" and G.shape[0] > 2:
+        try:
+            estimate = _rcond_sparse_symmetric(G)
+        except (spla.ArpackNoConvergence, spla.ArpackError, RuntimeError, ValueError, np.linalg.LinAlgError):
+            estimate = None
+        if estimate is not None and estimate >= _SPARSE_RCOND_FALLBACK:
+            return estimate
+    return _rcond_dense(G.toarray())
 
 
 def _branch_supports_analytic_param_jacobian(branch_row: np.ndarray) -> bool:
@@ -610,7 +648,7 @@ def correct_parameter_group_multi_scan(
         objective_history.append(objective_iter)
 
         G_v = G_v.tocsc()
-        rcond_Gv = _rcond_dense(G_v.toarray())
+        rcond_Gv = _rcond_gain(G_v)
         if rcond_Gv < 1e-14:
             if verbose:
                 print(f"    G_v is ill-conditioned at iteration {iter_idx}. Aborting correction.")

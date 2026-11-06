@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import copy
 import json
+import multiprocessing
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -1067,6 +1070,121 @@ class CorrectionExecutorTests(unittest.TestCase):
             self.assertEqual(rebuilt, derived)
             self.assertEqual(rebuilt.read_bytes(), expected)
             self.assertEqual(_load_python_case(str(rebuilt))["branch"].shape, (20, 13))
+
+
+def _round_case(base: dict, round_index: int) -> dict:
+    case = copy.deepcopy(base)
+    case["branch"][0][2] = float(case["branch"][0][2]) * (1.0 + 1e-6 * round_index)
+    return case
+
+
+def _concurrent_derived_case_worker(folder: str, rounds: int, start_at: float, queue) -> None:
+    """One evaluator: render the round's case like its peers, then load it back as the WLS runner does."""
+    providers = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics", derived_case_dir=folder)
+    base = _load_python_case("case14")
+    failures: list[str] = []
+    while time.time() < start_at:
+        time.sleep(0.001)
+    for round_index in range(rounds):
+        try:
+            _load_python_case(providers._derived_case(_round_case(base, round_index), "concurrent"))
+        except Exception as exc:  # inside a parameter comparison this became a failed candidate
+            failures.append(f"{type(exc).__name__}: {exc}")
+    queue.put(failures)
+
+
+class DerivedCaseConcurrencyTests(unittest.TestCase):
+    """Evaluators that write the same new derived case at once (compound note section 11.8, 2026-10-29)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.providers = MatpowerDeploymentProviders(evidence_profile="auxiliary_diagnostics", derived_case_dir=self.tmp.name)
+        self.case = _load_python_case("case14")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _leftovers(self) -> list[str]:
+        return [name for name in os.listdir(self.tmp.name) if name.endswith(".tmp")]
+
+    def test_a_case_another_writer_published_first_is_kept(self) -> None:
+        # Render once to learn the bytes and the path, then start from an empty folder.
+        path = Path(self.providers._derived_case(self.case, "race"))
+        expected = path.read_bytes()
+        path.unlink()
+        real_rename = os.rename
+
+        def peer_publishes_first(source, target):
+            Path(target).write_bytes(expected)  # the other evaluator's rename landed first
+            if os.name == "nt":
+                raise FileExistsError(target)
+            real_rename(source, target)
+
+        with patch("psse_env.providers.matpower.os.rename", side_effect=peer_publishes_first), \
+                patch("psse_env.providers.matpower.os.replace", side_effect=AssertionError("replaced a published case")):
+            self.assertEqual(Path(self.providers._derived_case(self.case, "race")), path)
+        self.assertEqual(path.read_bytes(), expected)
+        self.assertEqual(self._leftovers(), [])
+
+    def test_a_sharing_refusal_is_retried(self) -> None:
+        real_rename = os.rename
+        calls: list[str] = []
+
+        def refused_twice(source, target):
+            calls.append(target)
+            if len(calls) <= 2:
+                raise PermissionError(13, "The process cannot access the file", target)
+            real_rename(source, target)
+
+        with patch("psse_env.providers.matpower.os.rename", side_effect=refused_twice), \
+                patch("psse_env.providers.matpower.time.sleep") as sleep:
+            path = Path(self.providers._derived_case(self.case, "retried"))
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(_load_python_case(str(path))["branch"].shape, (20, 13))
+        self.assertEqual(self._leftovers(), [])
+
+    def test_a_persistent_refusal_still_fails(self) -> None:
+        refusal = PermissionError(13, "Access is denied", "target")
+        with patch("psse_env.providers.matpower.os.rename", side_effect=refusal), \
+                patch("psse_env.providers.matpower.time.sleep"):
+            with self.assertRaises(PermissionError):
+                self.providers._derived_case(self.case, "refused")
+        self.assertEqual(self._leftovers(), [])
+
+    def test_a_refused_read_of_an_existing_case_is_retried(self) -> None:
+        path = Path(self.providers._derived_case(self.case, "read"))
+        real_open = open
+        opened: list[str] = []
+
+        def refused_once(file, *args, **kwargs):
+            opened.append(str(file))
+            if len(opened) == 1:
+                raise PermissionError(13, "Permission denied", str(file))
+            return real_open(file, *args, **kwargs)
+
+        with patch("psse_env.providers.matpower.open", side_effect=refused_once, create=True), \
+                patch("psse_env.providers.matpower.time.sleep"), \
+                patch("psse_env.providers.matpower.os.rename", side_effect=AssertionError("rewrote an existing case")):
+            self.assertEqual(Path(self.providers._derived_case(self.case, "read")), path)
+        self.assertEqual(len(opened), 2)
+
+    def test_concurrent_writers_of_one_new_case_never_fail(self) -> None:
+        # Before the fix, two to four evaluators writing the same new cases at once
+        # raised PermissionError on 25 to 55% of the calls on Windows.
+        context = multiprocessing.get_context("spawn")
+        queue = context.Queue()
+        start_at = time.time() + 10.0
+        workers = [context.Process(target=_concurrent_derived_case_worker, args=(self.tmp.name, 60, start_at, queue))
+                   for _ in range(4)]
+        for worker in workers:
+            worker.start()
+        failures = [failure for _ in workers for failure in queue.get(timeout=300)]
+        for worker in workers:
+            worker.join(timeout=60)
+        self.assertEqual(failures, [])
+        self.assertEqual(self._leftovers(), [])
+        self.assertEqual(len([name for name in os.listdir(self.tmp.name) if name.endswith(".m")]), 60)
 
 
 class DiagnosticProviderTests(unittest.TestCase):

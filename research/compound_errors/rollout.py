@@ -5,9 +5,11 @@
         --profile scada_only --workers 14 --env-option pair_refit_adjacent=1 \\
         --expert-option abstain_isolated_lines=1 --expert-option state_ambiguity=1
 
-The teacher defaults to the compound study's (``COMPOUND_STUDY_EXPERT_VARIANT``,
-``baseline_compare_guarded_routes`` since the user's decision of 2026-10-29);
-``--expert baseline_compare`` runs the default teacher of every other path.
+On IEEE 14 the teacher defaults to the compound study's
+(``COMPOUND_STUDY_EXPERT_VARIANT``, ``baseline_compare_guarded_routes`` since
+the user's decision of 2026-10-29); on any other system it defaults to
+``baseline_compare``, the teacher the IEEE 118 study recorded its runs with
+(``compound_study_expert_variant``).  ``--expert`` names another.
 The three run options are the ones item 7 of the study measured with (the
 pair refit, the isolated-line abstention and the ambiguity statement).
 
@@ -21,6 +23,16 @@ verification metrics, its verdict (the offline disposition the lifecycle step
 carried) and whether its target is a true one.  The summary gives per class
 the success, the mean actions and WLS calls, the verdict distribution of the
 corrections and the failure reasons.
+
+``--system`` (2026-10-28) names the suite's registered system; by default it
+is read from the roots, which must all belong to it.  A system other than
+IEEE 14 runs with the progress basis its research cells use,
+``chi_square_excess`` (the verifier's partial-progress floors were set on IEEE
+14's 95 degrees of freedom; on IEEE 118's 863 the whole-statistic basis makes
+them several times stricter), unless ``--progress-basis`` names one:
+
+    python -m research.compound_errors.rollout --suite output/compound_errors_ieee118_20261028/suite.json \\
+        --output-dir output/compound_errors_ieee118_20261028/expert_baseline_compare --system case118 --workers 28
 """
 from __future__ import annotations
 
@@ -49,13 +61,51 @@ from psse_env.actions import (  # noqa: E402
 )
 from research.rl import decision_audit as audit  # noqa: E402
 from research.rl.decision_audit import parse_run_options  # noqa: E402
-from psse_env.oracle.expert_variants import COMPOUND_STUDY_EXPERT_VARIANT  # noqa: E402
+from psse_env.oracle.expert_variants import compound_study_expert_variant  # noqa: E402
 
 ROLLOUT_CONTRACT = "compound_expert_rollout_v1"
 COMPARE_TOOL = "compare_parameter_candidates"
 VERDICTS = ("ACCEPT_FINAL", "ACCEPT_PARTIAL", "REJECT", "INCONCLUSIVE", "refused", "undisposed")
 _WLS_KEYS = ("chi_square_statistic", "chi_square_threshold", "chi_square_ratio", "globally_resolved", "global_progress",
-             "target_progress", "remaining_suspect_count", "max_normalized_residual")
+             "target_progress", "remaining_suspect_count", "max_normalized_residual", "chi_square_dof", "flow_at_noise_lines")
+#: What the trace keeps of each candidate a parameter comparison fitted: its fate, including a failed fit's error.
+_COMPARISON_CANDIDATE_KEYS = ("line_index", "execution_status", "stage", "error_code", "error_detail", "verification_verdict",
+                              "global_progress", "max_normalized_residual")
+#: The progress basis of a system's research cells: IEEE 14 keeps the environment's default.
+SYSTEM_PROGRESS_BASIS = {"case14": None}
+LARGE_SYSTEM_PROGRESS_BASIS = "chi_square_excess"
+
+
+def suite_system(roots: Sequence[Mapping[str, Any]], system: str | None = None) -> str:
+    """The registered system of every root (``grouping.case_id``); a named system must match all of them."""
+    from psse_env.systems import resolve_system
+
+    found = {str((root.get("grouping") or {}).get("case_id") or "case14") for root in roots}
+    cases = {resolve_system(case).case_id for case in found}
+    if system is not None:
+        named = resolve_system(system).case_id
+        if cases - {named}:
+            raise SystemExit(f"suite roots belong to {sorted(cases)}, not {named}")
+        return named
+    if len(cases) > 1:
+        raise SystemExit(f"suite mixes systems {sorted(cases)}; name one with --system")
+    return next(iter(cases)) if cases else "case14"
+
+
+def multi_scan_rcond() -> str:
+    """How the multi-scan corrector's conditioning guard was computed (``tools.correct_parameter_group_multi_scan_port``)."""
+    import os
+
+    from tools.correct_parameter_group_multi_scan_port import RCOND_METHOD_ENV
+
+    return os.environ.get(RCOND_METHOD_ENV, "dense_svd")
+
+
+def system_progress_basis(system: str, progress_basis: str | None) -> str | None:
+    """The named basis, else the system's (None keeps the environment's default)."""
+    if progress_basis:
+        return progress_basis
+    return SYSTEM_PROGRESS_BASIS.get(system, LARGE_SYSTEM_PROGRESS_BASIS)
 
 
 def truth_of(root: Mapping[str, Any]) -> dict[str, Any]:
@@ -125,7 +175,14 @@ def slim_trace(steps: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
                               for a in metrics.get("supported_corrections") or []],
             }
         elif tool == COMPARE_TOOL:
-            record["comparison"] = {key: metrics.get(key) for key in ("best_line", "ranked_lines", "verdicts", "order") if key in metrics}
+            # The comparison's own record (TransactionalPSSEEnv._step_parameter_comparison): the ranking and every
+            # candidate's fate, so a fit that failed (compound note section 11.8) shows in the trace.
+            record["comparison"] = {
+                "ranked_lines": metrics.get("ranked_line_indices"),
+                "best_line": metrics.get("best_line_index"),
+                "candidates": [{key: item.get(key) for key in _COMPARISON_CANDIDATE_KEYS if key in item}
+                               for item in metrics.get("candidates") or [] if isinstance(item, Mapping)],
+            }
         out.append(record)
     return out
 
@@ -368,8 +425,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--suite", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--profile", default="scada_only")
-    # The compound study's teacher (the user's decision of 2026-10-29).
-    parser.add_argument("--expert", default=COMPOUND_STUDY_EXPERT_VARIANT)
+    # Unnamed: the compound study's teacher on IEEE 14 (the user's decision of 2026-10-29), baseline_compare elsewhere.
+    parser.add_argument("--expert", default=None)
     parser.add_argument("--progress-basis", default=None)
     parser.add_argument("--max-steps", type=int, default=40)
     parser.add_argument("--seed", type=int, default=20261006)
@@ -382,9 +439,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="research environment option, e.g. pair_refit_adjacent=1 (stage 2 item 3)")
     parser.add_argument("--expert-option", action="append", default=None, metavar="KEY=VALUE",
                         help="expert option on top of the variant, e.g. abstain_isolated_lines=1 (stage 2 item 5)")
+    parser.add_argument("--system", default=None, help="the suite's registered system (default: read from the roots)")
     args = parser.parse_args(argv)
 
     roots = load_suite(args.suite)
+    system = suite_system(roots, args.system)
+    args.progress_basis = system_progress_basis(system, args.progress_basis)
+    args.expert = args.expert or compound_study_expert_variant(system)
     if args.classes:
         wanted = set(args.classes)
         roots = [r for r in roots if ((r.get("audit") or {}).get("compound") or {}).get("class") in wanted]
@@ -407,7 +468,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     env_options=parse_run_options(args.env_option), expert_options=parse_run_options(args.expert_option))
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
-    print(f"[rollout] {len(roots)} roots from {args.suite} under {args.profile} ({args.expert}), workers {args.workers}", flush=True)
+    print(f"[rollout] {len(roots)} {system} roots from {args.suite} under {args.profile} ({args.expert}), "
+          f"progress basis {args.progress_basis or 'default'}, workers {args.workers}", flush=True)
     started = time.perf_counter()
     payloads = [{"root": root} for root in roots]
     records: list[dict[str, Any]] = []
@@ -435,7 +497,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         stream.close()
     summary = summarize(records)
-    summary.update(contract=ROLLOUT_CONTRACT, suite=str(args.suite), profile=args.profile, expert=args.expert,
+    summary.update(contract=ROLLOUT_CONTRACT, suite=str(args.suite), system=system, multi_scan_rcond=multi_scan_rcond(),
+                   profile=args.profile, expert=args.expert,
                    progress_basis=args.progress_basis, max_steps=args.max_steps, seed=args.seed, roots=len(roots),
                    env_options=settings["env_options"], expert_options=settings["expert_options"],
                    workers=args.workers, total_seconds=round(time.perf_counter() - started, 1))
