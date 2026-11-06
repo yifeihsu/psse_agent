@@ -62,10 +62,11 @@ hashes, validation losses).
 - The trainer takes the two separately (`psse_env/sft/research_cli.py:818-819, 875-876`,
   `psse_env/sft/training.py:331-338`); it ties them only under `--select-best-eval-loss` (`:116-128`),
   which this pass does not use.
-- A preemption slot is at least 30 minutes, but every restart first repeats the row gate over all
-  rows (`research_cli.py:578`), then loads the model and takes an optimizer smoke step (`:665-685`). The
-  spec's 45 steps per slot leave about 4.5 minutes for that. At 16 an incarnation needs about 9 minutes
-  of training to reach a checkpoint, at 32 about 18.
+- A preemption slot is at least 30 minutes, but every restart first does the row gate over all rows
+  (`research_cli.py:578`; 239 s measured, 72 s from the cache of `train_runtime_tools.py`), then loads the
+  model and takes an optimizer smoke step (`:665-685`). The spec's 45 steps per slot leave about 4.5
+  minutes for that. At 16 an incarnation needs about 9 minutes of training to reach a checkpoint at 34 s
+  per step, at 32 about 18.
 - Validation is only a monitor here: at 128 it costs 5 minutes per pass, and every validation point
   is a kept checkpoint.
 
@@ -107,7 +108,23 @@ later links resume. Results:
 - `outcomes.json`: solved, wrong corrections kept, actions, true and wrong targets declined; overall,
   `by_group` (breaker classes apart) and `by_class`.
 
-## Deploy, smoke, submit (written out, not run)
+## Smoke of 2026-11-06
+
+Commits b72639b and ee38110, on H200 nodes. Jobs 22086642, 22086644, 22086645, then 22092916 (training
+again) and 22092917, 22092919 (the row gate over the full views on CPU, then its cache hit).
+
+- **Row gate, all rows:** 8,866 + 192 rows, no failure, no prompt or target cut, 239 s on a CPU node. Prompt
+  tokens in training: 5,708 at the median, 9,649 at the 95th percentile, 12,987 at most (limit 32,768).
+  A cache hit took 72 s; on the smoke rows 33 s of the same step is loading the processor once. So the
+  first smoke's projection of 27 minutes per restart was wrong: it scaled that load with the rows.
+- **Training, 200 rows, 2 steps on the longest rows:** about 19 s per step, peak 43 GB, adapter reloaded and its
+  canary parsed; validation 0.86 s per row, so about 3 minutes for all 192. Whole job 4.5 minutes.
+- **Start adapter, new format, 8 cases per suite:** compound 1 solved of 8, no declines, 16.4 actions; conventional
+  8 solved of 8, 10.8 actions, false commits on 3 of the 8. The sample is small; the `before` arm measures it.
+- **Evaluation:** 8 compound cases in 8.75 minutes and 8 conventional in 6 minutes, startup included, 4 workers,
+  at most 30 GB. GPU use in these short jobs says little about the long ones.
+
+## Deploy, smoke, submit
 
 From this worktree in Git Bash, SSH master up (`scripts/start_torch_ssh_master.ps1`), sources committed
 on `claude/rl-lifecycle-evidence-20261106`. The deploy refuses while `PROVISIONAL.txt` is beside the rows.
@@ -131,8 +148,8 @@ wsl -- ssh torch bash -s -- before < $C/submit_cell.sh    # start adapter on eve
 wsl -- ssh torch bash -s -- pass < $C/submit_cell.sh      # the pass, then the cloned adapter on every listed suite
 ```
 
-Read after the smoke: `out/smoke/gate_timing.json` (row gate failures stop here; token lengths; projected
-gate time per restart), `out/smoke/training.done`, the log's "a resume would start from" line,
+Read after the smoke: `out/smoke/gate_timing.json` (row gate failures stop here; token lengths),
+`out/smoke/training.done`, the log's "a resume would start from" line,
 `gpu-util-*.csv`, and `out/eval/smoke_*/outcomes.json`. To repeat it: remove `out/smoke` and
 `out/eval/smoke_*`. Failed `reload` canaries after only two steps say the start adapter cannot yet answer
 that row in this format; read `research_run.json` before concluding the plumbing is broken.
@@ -195,8 +212,8 @@ arm (15 to 25 of those) needs no rows and can run while the selection is being r
 | Both systems, if a later selection has them | 14,960 | 3,740 | 35 h | 29, 2.4 h | about 38 | 5 |
 | Any | R | ceil(R / 4) | 9.4 h per 1,000 steps | one per 128 steps | about 10 per 1,000 steps | from the row count |
 
-Each restart adds the row gate over the whole view (measured by the smoke), a model load and the lost work
-since the last checkpoint: guess 15 to 25 minutes. The 885-step pass of 2026-10-21 was restarted nine
+Each restart adds the cached row gate (72 s measured), a model load and the lost work since the last
+checkpoint: guess 10 to 20 minutes. The 885-step pass of 2026-10-21 was restarted nine
 times. Under the run-time tool list the prompts are about 6,900 characters shorter than under the rendering
 the 34 s was measured with, so steps may be faster.
 
@@ -236,10 +253,9 @@ Paths and environment:
 
 Training:
 
-- The tokenizer-based row gate on these rows, with either tool list. Locally only its tokenizer-free part ran
-  (splits disjoint, evidence profile, tool schemas, target message checks: no failure on the current views).
-- Rendering under the run-time list: same trainer path, new input. The smoke is its first run.
-- Row gate time per restart on the full view; the smoke projects it from about 230 rows.
+- Measured by the smoke, see "Smoke of 2026-11-06": the row gate on these rows under the run-time list, its
+  time on the full view, rendering under the run-time list, and the longest row on an H200. Not measured: the
+  gate under the registry list.
 - 34 s per step, about 45 steps per 30-minute slot and 5 minutes per validation pass on these rows, and on
   each GPU type.
 - GPU memory at the longest row: the smoke's optimizer step uses it, on whichever GPU that job gets.

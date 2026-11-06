@@ -16,11 +16,12 @@ optimizer, checkpoints, reload) is research_cli's.  cell.env CLONE_TOOLS=registr
 command instead.  Nothing under psse_env changes; a fix there would make this file redundant.
 
 The row gate.  research-train renders and tokenizes every row before anything else each time the job
-starts.  The smoke of 2026-11-06 measured 0.18 s per row, 27 minutes for this view, which is a whole
-30-minute preemption slot, so a preempted pass would never advance.  With CLONE_GATE_CACHE naming a file,
-the gate's result is kept there, keyed by the row files, the gate's settings and the code that renders
-the rows; a restart with the same key loads it instead of repeating the work.  stage_row_gate.sbatch
-fills it on a CPU node before any GPU time, so a failing row also stops the pass before it starts.
+starts.  Measured on the full view on 2026-11-06: 239 s, of which about 33 s is loading the processor
+(an earlier projection of 27 minutes wrongly scaled that load with the rows).  With CLONE_GATE_CACHE
+naming a file, the gate's result is kept there, keyed by the row files, the gate's settings and the
+code that renders the rows; a restart with the same key loads it, 72 s measured, which leaves a
+preemption slot about three minutes more of training.  stage_row_gate.sbatch fills it on a CPU node
+before any GPU time, so a failing row also stops the pass before it starts.
 """
 from __future__ import annotations
 
@@ -100,10 +101,10 @@ def _read_gate_cache(path: Path, key: str) -> Mapping[str, Any] | None:
         with path.open("rb") as stream:
             cached = pickle.load(stream)
     except Exception as exc:
-        print(f"[row gate] cache {path} unreadable ({type(exc).__name__}); gating again", flush=True)
+        print(f"[row gate] cache {path} unreadable ({type(exc).__name__}); gating again", file=sys.stderr, flush=True)
         return None
     if not isinstance(cached, Mapping) or cached.get("key") != key:
-        print(f"[row gate] cache {path} is for other rows or code; gating again", flush=True)
+        print(f"[row gate] cache {path} is for other rows or code; gating again", file=sys.stderr, flush=True)
         return None
     return cached
 
@@ -140,14 +141,14 @@ def prepare_with_gate_cache(*, train_file: str | Path, validation_file: str | Pa
         if loader != "AutoProcessor" or not callable(getattr(processor, "apply_chat_template", None)):
             raise GateError("Research Gemma training requires AutoProcessor so chat rendering matches inference")
         seconds = round(time.perf_counter() - started, 1)
-        print(f"[row gate] cache hit: {len(cached['train'])} + {len(cached['validation'])} rows in {seconds} s", flush=True)
+        print(f"[row gate] cache hit: {len(cached['train'])} + {len(cached['validation'])} rows in {seconds} s", file=sys.stderr, flush=True)
         report = dict(cached["report"])
         report["row_gate_cache"] = {"hit": True, "key": key, "seconds": seconds}
         return processor, list(cached["train"]), list(cached["validation"]), report
     processor, train, validation, report = _STOCK_PREPARE(train_file=train_file, validation_file=validation_file, settings=settings)
     seconds = round(time.perf_counter() - started, 1)
     _write_gate_cache(path, {"contract": GATE_CACHE_CONTRACT, "key": key, "train": train, "validation": validation, "report": report})
-    print(f"[row gate] gated {len(train)} + {len(validation)} rows in {seconds} s; kept in {path}", flush=True)
+    print(f"[row gate] gated {len(train)} + {len(validation)} rows in {seconds} s; kept in {path}", file=sys.stderr, flush=True)
     report = dict(report)
     report["row_gate_cache"] = {"hit": False, "key": key, "seconds": seconds}
     return processor, train, validation, report

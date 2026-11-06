@@ -9,10 +9,9 @@
 whole view comes first: the optimizer smoke of research-train steps on the first row
 (psse_env/sft/smoke.py), so the smoke meets the largest prompt the pass will train on.
 
-``gate`` runs the tokenizer-based row gate alone on the smoke rows and prints its time per row and
-what that projects for the full view.  research-train repeats the gate over all rows every time a
-preempted job restarts, before its first step, so this is the restart cost that decides how much
-of a preemption slot is left for training.
+``gate`` runs the tokenizer-based row gate alone on the rows it is given and prints its time, the token
+lengths and the action distribution.  stage_row_gate.sbatch runs it on the full views; with
+CLONE_GATE_CACHE set the result is kept for the training stage's restarts (train_runtime_tools.py).
 """
 from __future__ import annotations
 
@@ -120,7 +119,8 @@ def gate_timing(args: argparse.Namespace) -> dict[str, Any]:
         full = sum(1 for line in stream if line.strip())
     return {
         "rows_gated": rows, "gate_seconds": round(seconds, 1), "seconds_per_row": round(seconds / rows, 4),
-        "full_view_rows": full, "projected_restart_gate_minutes": round(seconds / rows * full / 60, 1),
+        # No projection to the full view: most of a small gate's time is loading the processor once.
+        "full_view_rows": full,
         "length_audit": {"train": report["train"]["length_audit"], "validation": report["validation"]["length_audit"]},
         "action_distribution": report["train"]["action_distribution"],
         "row_gate_cache": report.get("row_gate_cache"),
