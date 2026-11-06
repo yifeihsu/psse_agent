@@ -1172,7 +1172,89 @@ multi-meter roots (seven failures, three roots' worth of learnable reorder
 at AUC 0.76), which is where a learned ranker or the student's own
 rollouts (phase 2 of the audit) would still have to earn their place.
 
-**Not done.** The comparison is not yet in a DAgger or RL cell: the
-teacher's demonstrations under `ledger_ranked_compare` have to be collected
-and a student trained on them before the student's score on the misranked
-stratum can be claimed. The expert's own meter ordering is unchanged.
+**Not done at the time.** The comparison was not yet in a DAgger or RL
+cell; section 13 is that cell. The expert's own meter ordering is unchanged.
+
+## 13. One DAgger round with the comparison teacher (cell 2026-10-21)
+
+`research_full_pipeline_20261021_compare` (`overrides/compare_hard_20261021.env`,
+`launch_compare_cell_20261021.sh`) ran one DAgger round of the frozen screen
+student, the 2026-10-01 ranked cell's round-2 adapter and the screen arm's
+starting point, on the 256 hard training roots under the
+`ledger_ranked_compare` teacher, and scored the frozen student, the trained
+candidate and the teacher on the 209 hard development roots. The expert
+aggregate was regenerated with the teacher (522 roots, 4,020 rows, none of
+the hard draw's roots); the collection gave 1,770 eligible rows, 59 of them
+with the comparison as the target, and the mixture held 3,540 rows, 70 of
+them comparison targets. Training took 885 optimizer steps over nine
+preempted and resumed runs (validation loss 0.018 at step 16, flat near
+0.007 from step 170). Getting there took three collection repairs, all in
+the plumbing rather than the method: an unverifiable off-path NLM label
+aborted the stage (the cell now ends such an episode, one occurred), the
+mimic roots carried `split=development` from the mimic builder, which the
+collector refuses for training rows (relabelled `dagger_train`, the builder
+takes `--split`), and the offline teacher-target audit had no action class
+for the new tool and quarantined all 81 comparison labels (admitted as a
+read-only target in 906374d; `restamp_offline_audit.py` recomputed the
+stored verdicts and the round was reassembled without new rollouts).
+
+| Stratum | Roots | Frozen student, RL control (tool not listed) | Frozen student, this cell (tool listed) | Trained student | Teacher |
+| --- | --- | --- | --- | --- | --- |
+| harmonic | 16 | 12 | 9 | **16** | 16 |
+| measurement | 24 | 24 | 23 | 24 | 24 |
+| multi-measurement | 24 | 23 | 23 | 24 | 24 |
+| mimic, opposite sign | 24 | 19 | 16 | **20** | 20 |
+| mimic, same sign | 24 | 14 | 13 | **18** | 20 |
+| parameter, ambiguous / dominant | 24 / 8 | 24 / 8 | 24 / 8 | 24 / 8 | 24 / 8 |
+| parameter, misranked | 9 | 1 | **8** | 8 | 9 |
+| measurement+parameter, ambiguous / dominant | 16 / 8 | 16 / 8 | 16 / 7 | 16 / 8 | 16 / 8 |
+| measurement+parameter, misranked | 8 | 1 | **7** | 7 | 8 |
+| topology, measurement+topology, no_error | 8 / 8 / 8 | 8 / 8 / 8 | 8 / 8 / 8 | 8 / 8 / 8 | 8 / 8 / 8 |
+| **all** | 209 | 174 | 178 | **197** | 201 |
+
+| Policy | Mean steps | Invalid actions | Loop episodes | Comparison calls (episodes) |
+| --- | --- | --- | --- | --- |
+| Frozen student, this cell | 10.70 | 159 | 34 | 179 (66) |
+| Trained student | 9.09 | 6 | 9 | 56 (56) |
+| Teacher | 9.14 | 0 | 0 | 60 (60) |
+
+**The round.** Against the same frozen student under the same evaluation,
+the trained student gains 19 roots and loses none: the 7 harmonic loops
+(the spectra request the screen student never made), 9 mimics, and 3 single
+roots elsewhere. It is as cheap as the teacher on the roots both solve and
+calls the comparison exactly once per episode, only on parameter roots:
+all 40 ambiguous, 15 of 17 misranked and 1 dominant, and on every misranked
+root it then corrects the comparison's best line. That is the teacher's
+pattern learned from 70 demonstrations in 3,540 rows.
+
+**Listing the tool, without training.** The frozen student was never taught
+the comparison, yet with the tool in its schema it calls it on 66 roots and
+lifts the misranked strata from 2 of 17 to 15 of 17 from the tool's
+description alone ("use it when the ranking does not clearly dominate"). The
+same schema change moves 13 other roots, 2 up and 11 down (harmonic,
+mimics and three singles), including three opposite-sign mimics where it
+loops on 18 to 26 repeated comparison calls, so the zero-shot net is only
+174 to 178. The round removes those costs and keeps the misranked gain.
+
+**The remaining gap to the teacher, 4 roots.** Two misranked roots
+(`r0_3ad37c833dc5`, `r0_8013605195d2`) whose ranking the context flags
+dominant at a ratio of 1.30: both students correct the top line directly,
+while the teacher compares below its 1.5 band. The band is the teacher's own
+rule, absent from the tool description; the observation shows the ratio but
+the flag says dominant. The mixture held 14 demonstrations of comparing on a
+dominant-flagged ranking in the 1.2 to 1.5 band (11 from the aggregate,
+whose parameter roots were all drawn dominant, and 3 collected) and none of
+correcting directly there, against about a hundred direct corrections on
+rankings dominant at 1.5 or more; the student learned "compare unless the
+flag says dominant" rather than the band. The other two are same-sign
+mimics where the trained student loops on spectra and NLM requests.
+
+**Reading.** Against the RL runs of sections 5 and 9, whose best evaluation
+was 178 against a control of 174, one supervised round with a teacher that
+has the right action moves the student to within 4 roots of that teacher.
+The decision the RL runs could not learn, the misranked ordering, needed an
+observation the interface did not offer; once offered, the student uses it
+zero-shot and keeps it under training. What remains is a band rule the
+student cannot see and two mimic loops. The obvious repairs are to state the
+band where the policy can read it (in the tool description or a context
+flag) and to add band-edge demonstrations, before any further policy learning.
