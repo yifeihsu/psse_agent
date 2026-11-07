@@ -12,12 +12,15 @@ roots to every iteration.  The counts must name every stratum of the suite
 and add up to ``roots_per_iteration``, so a typo or a changed suite fails
 loudly instead of silently shifting the mix.
 
-Strata are the scenario family (``family``) or the hard draw's stratum
+Strata are the scenario family (``family``), the hard draw's stratum
 (``hard_draw_stratum``): the family, with the parameter families split by
 the ranking stratum the suite builder recorded (dominant, ambiguous,
 misranked) and the flow-meter mimics by variant, the same labels as
-research/rl/hard_draw_report.py.  These labels come from the audit, so they
-shape the training mix only; the policy never sees them.
+research/rl/hard_draw_report.py; or the compound-error class
+(``compound_class``, ``audit.compound.class`` of the compound suites,
+2026-11-07: the RL plan's lesson that a batch lacking a class pushes the
+policy away from it).  These labels come from the audit, so they shape the
+training mix only; the policy never sees them.
 
 Why (2026-10-16): the screen arm's second update broke its harmonic roots
 (12 to 5 of 16 on the hard development draw) after 18 of its 20 informative
@@ -35,7 +38,7 @@ from typing import Any, Mapping, Sequence
 from psse_env.rl.rollout import scenario_family, scenario_root
 
 SAMPLING_MODES = ("permutation", "stratified")
-STRATUM_KEYS = ("family", "hard_draw_stratum")
+STRATUM_KEYS = ("family", "hard_draw_stratum", "compound_class")
 PARAMETER_FAMILIES = frozenset({"parameter", "measurement+parameter"})
 
 
@@ -45,9 +48,17 @@ def root_stratum(scenario: Mapping[str, Any], key: str = "hard_draw_stratum") ->
     family = scenario_family(scenario)
     if key == "family":
         return family
-    if key != "hard_draw_stratum":
+    if key not in STRATUM_KEYS:
         raise ValueError(f"the stratum key must be one of {STRATUM_KEYS}, got {key!r}")
     audit = scenario.get("audit") if isinstance(scenario.get("audit"), Mapping) else {}
+    if key == "compound_class":
+        compound = audit.get("compound") if isinstance(audit.get("compound"), Mapping) else {}
+        name = compound.get("class")
+        if not name:
+            # A root without a class cannot be placed; a silent fallback would
+            # shift the mix of every iteration without anyone seeing it.
+            raise ValueError(f"root {scenario_root(scenario)} carries no audit.compound.class; the suite is not a compound suite")
+        return str(name)
     mimic = audit.get("mimic")
     if isinstance(mimic, Mapping) and mimic.get("variant"):
         return f"mimic:{str(mimic['variant']).removeprefix('mimic_')}"

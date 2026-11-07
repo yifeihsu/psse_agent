@@ -668,15 +668,14 @@ class _CanonicalResearchNativePolicy:
 
         return copy.deepcopy(self._last_generation)
 
-    def render_prompt(
+    def render_messages(
         self, observation: Mapping[str, Any]
-    ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
-        """Render the exact generation prompt of a model observation.
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+        """The chat messages of a model observation, with the tool schemas visible on it and their parameters by name.
 
-        Shared by generation and by RL training, so a training row's prompt
-        is the string the policy decoded from.  Returns the rendered text,
-        the tool schemas visible on the observation and their parameter
-        schemas by name.
+        What :meth:`render_prompt` renders; the RL supervised lifecycle term
+        appends the audit's choice to these messages as the assistant turn
+        (:mod:`psse_env.rl.targets`), so the two render from one source.
         """
 
         if not isinstance(observation, Mapping):
@@ -692,6 +691,20 @@ class _CanonicalResearchNativePolicy:
                 "content": json.dumps(payload, sort_keys=True, allow_nan=False),
             },
         ]
+        return messages, visible_tools, visible_parameters
+
+    def render_prompt(
+        self, observation: Mapping[str, Any]
+    ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+        """Render the exact generation prompt of a model observation.
+
+        Shared by generation and by RL training, so a training row's prompt
+        is the string the policy decoded from.  Returns the rendered text,
+        the tool schemas visible on the observation and their parameter
+        schemas by name.
+        """
+
+        messages, visible_tools, visible_parameters = self.render_messages(observation)
         rendered = render_eval_text(
             self._bundle.processor,
             messages,

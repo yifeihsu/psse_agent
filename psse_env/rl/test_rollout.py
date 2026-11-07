@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from typing import Any, Mapping
 
-from psse_env.actions import FINALIZE_DIAGNOSIS, RUN_WLS
+from psse_env.actions import CORRECT_PARAMETERS, FINALIZE_DIAGNOSIS, ROLLBACK_STATE, RUN_WLS
 from psse_env.rl.reward import RewardWeights
 from psse_env.rl.rollout import (
     RecordingPolicy,
@@ -217,6 +217,47 @@ class RolloutTests(unittest.TestCase):
         self.assertEqual(scenario_root(scenario), "r0_fake")
         self.assertEqual(scenario_family(scenario), "no_error")
 
+    def test_rollout_group_labels_the_lifecycle_decisions_from_the_scenario_truth(self) -> None:
+        scenario = _scenario()
+        scenario["audit"] = {"truth": {"true_parameter_errors": [{"line_index1": 7}]}}
+        trace = [
+            {"step": 0, "action": {"tool": CORRECT_PARAMETERS, "arguments": {"state_id": "active", "line_index": 7}},
+             "execution_status": "success", "error_code": None, "candidate_disposition_offline": None},
+            {"step": 1, "action": {"tool": ROLLBACK_STATE, "arguments": {"state_id": "active"}},
+             "execution_status": "success", "error_code": None, "candidate_disposition_offline": "ACCEPT_PARTIAL"},
+        ]
+
+        class _Result:
+            def as_dict(self):
+                return {"suite_metrics": {"episodes": [{"scenario_id": "r0_fake", "family": "parameter",
+                                                        "truth_audited_task_success": False, "trace": copy.deepcopy(trace),
+                                                        "steps": 2, "policy_steps": 2}]}}
+
+        def evaluator(suites, *, env_factory, policy_factory, max_steps, seed, case_loader, **contract):
+            policy = policy_factory()
+            policy.act({"phase": "wls"})
+            policy.act({"phase": "finalize"})
+            return _Result()
+
+        group = rollout_group(scenario, samples=1, base_seed=3, env_factory=lambda **kwargs: _ScriptEnv(**kwargs),
+                              policy_factory=lambda seed: _SamplingPolicy(seed), max_steps=6, case_loader=None,
+                              weights=RewardWeights(), evaluator=evaluator)
+        self.assertTrue(group[0].pairing_ok, group[0].pairing_note)
+        decisions = group[0].lifecycle
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual((decisions[0]["position"], decisions[0]["tool"], decisions[0]["declined"], decisions[0]["target_is_true"],
+                          decisions[0]["agrees"], decisions[0]["label"]), (1, ROLLBACK_STATE, True, True, False, "commit_state"))
+        self.assertEqual(group[0].labelled_decisions, 1)
+        restored = Trajectory.from_dict(group[0].as_dict())
+        self.assertEqual(restored.lifecycle, group[0].lifecycle)
+        self.assertEqual(Trajectory.from_dict({"root": "r", "steps": []}).lifecycle, [])
+        with tempfile.TemporaryDirectory() as directory:
+            store = TrajectoryStore(directory)
+            store.write_group("r0_fake", group)
+            lifecycle = store_summary(store)["lifecycle"]
+            self.assertEqual((lifecycle["decisions"], lifecycle["declines"], lifecycle["true_target_declined"], lifecycle["disagreeing"],
+                              lifecycle["episodes_with_decline"], lifecycle["groups_with_labelled_decision"]), (1, 1, 1, 1, 1, 1))
+
     def test_store_round_trips_groups_and_resumes_complete_ones(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = TrajectoryStore(directory)
@@ -246,6 +287,7 @@ class RolloutTests(unittest.TestCase):
             self.assertEqual(summary["success_rate"], 1.0)
             self.assertEqual(summary["sampled_steps_with_probabilities"], 8)
             self.assertEqual(summary["fraction_of_steps_with_every_token_above_0_99"], 1.0)
+            self.assertEqual(summary["lifecycle"]["decisions"], 0)
 
 
 if __name__ == "__main__":

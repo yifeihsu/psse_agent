@@ -20,6 +20,17 @@ reference is the starting adapter of the run, loaded beside the trained one
 as a second PEFT adapter named ``reference``; it is never the bare base
 model, which would pull the student back toward the untuned Gemma.
 
+A row with a lifecycle term (:mod:`psse_env.rl.rows`, 2026-11-07) adds the
+same surrogate once more with that term in place of the advantage, averaged
+over the row's tokens and normalized over the lifecycle rows of the step, so
+every labelled decision weighs the same whatever the policy normalization and
+however long its trajectory.  A lifecycle-only row has no policy term and
+counts toward the KL normalization like a preservation row.  A supervised
+row (the audit's choice as the completion) trains the plain log-likelihood of
+its tokens with its term as the weight, averaged over the row and normalized
+over the supervised rows of the step; it has no reference, clip or sampling
+record, and stays outside every other normalization.
+
 Rows are long prompts with short completions, so each row is its own forward
 pass and the model is asked for the completion logits only
 (``logits_to_keep``).  An :class:`UpdateCheckpoint` makes the update survive
@@ -312,6 +323,14 @@ class UpdateReport:
     #: recomputed log-probabilities and the clip baseline, with the tokens
     #: beyond the clip (the ones the surrogate actually clipped or scaled).
     clip_check: list[dict[str, Any]] = field(default_factory=list)
+    #: Per optimizer step: the lifecycle term's loss (zero without lifecycle
+    #: rows), and how many rows carried a lifecycle term.
+    lifecycle_loss: list[float] = field(default_factory=list)
+    lifecycle_rows: int = 0
+    #: Per optimizer step: the supervised lifecycle term's loss (zero without
+    #: supervised rows), and how many supervised rows there were.
+    supervised_loss: list[float] = field(default_factory=list)
+    supervised_rows: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -504,20 +523,25 @@ def _chunks(rows: Sequence[TrainingRow], settings: UpdateSettings) -> list[list[
 
 
 def _chunk_weights(rows: Sequence[TrainingRow], chunk: Sequence[int]) -> dict[str, int]:
-    """Token, row and trajectory counts of a step, for the policy rows and for all rows.
+    """Token, row and trajectory counts of a step, for the policy rows, the lifecycle rows and all rows.
 
-    The policy term is normalized over the rows that carry an advantage and
-    the KL term over every row, so preservation rows regularize without
-    diluting the policy gradient.
+    The policy term is normalized over the rows that carry an advantage, the
+    lifecycle term over the rows that carry a lifecycle term, and the KL term
+    over every row, so preservation and lifecycle-only rows regularize
+    without diluting the policy gradient.
     """
 
-    policy = [index for index in chunk if not rows[index].preservation]
+    policy = [index for index in chunk if rows[index].policy_row]
+    # Supervised rows are outside the KL normalization too: their completion was not sampled.
+    sampled = [index for index in chunk if not rows[index].supervised]
     return {
-        "tokens": sum(rows[index].completion_tokens for index in chunk),
+        "tokens": sum(rows[index].completion_tokens for index in sampled),
         "policy_tokens": sum(rows[index].completion_tokens for index in policy),
-        "rows": len(chunk),
+        "rows": len(sampled),
         "policy_rows": len(policy),
-        "trajectories": len({rows[index].trajectory_key for index in chunk}),
+        "lifecycle_rows": sum(1 for index in sampled if rows[index].lifecycle_term),
+        "supervised_rows": len(chunk) - len(sampled),
+        "trajectories": len({rows[index].trajectory_key for index in sampled}),
         "policy_trajectories": len({rows[index].trajectory_key for index in policy}),
     }
 
@@ -537,11 +561,13 @@ def policy_gradient_update(
     With ``beta_kl > 0`` and no ``reference_logprobs``, the reference is the
     model's PEFT adapter named ``reference``.  Policy rows with a zero
     advantage still count toward the policy normalization, as in GRPO;
-    preservation rows (``row.preservation``) count toward the KL
-    normalization only.  With a ``checkpoint``, a resumed call (same rows,
-    same settings) continues from the last committed state; the caller must
-    have reloaded the model from ``checkpoint.model_dir()`` when it is not
-    ``None``.
+    preservation rows (``row.preservation``) and lifecycle-only rows
+    (``row.lifecycle_only``) count toward the KL normalization only, and a
+    row's lifecycle term (``row.lifecycle_term``) is normalized over the
+    step's lifecycle rows.  With a ``checkpoint``, a resumed call (same
+    rows, same settings) continues from the last committed state; the caller
+    must have reloaded the model from ``checkpoint.model_dir()`` when it is
+    not ``None``.
     """
 
     import torch
@@ -566,7 +592,8 @@ def policy_gradient_update(
             eps=settings.adam_epsilon,
         )
     if settings.clip_ratio is not None:
-        missing = [row for row in rows if row.sampling_logprobs is None or len(row.sampling_logprobs) != row.completion_tokens]
+        missing = [row for row in rows if not row.supervised
+                   and (row.sampling_logprobs is None or len(row.sampling_logprobs) != row.completion_tokens)]
         if missing:
             first = missing[0]
             raise ValueError(
@@ -579,11 +606,15 @@ def policy_gradient_update(
     chunk_tokens = [weight["tokens"] for weight in weights]
     policy_losses: list[float] = []
     kls: list[float] = []
+    lifecycle_losses: list[float] = []
+    supervised_losses: list[float] = []
     grad_norms: list[float] = []
     start_chunk = 0
     start_row = 0
     partial_policy = 0.0
     partial_kl = 0.0
+    partial_lifecycle = 0.0
+    partial_supervised = 0.0
     partial_rows: Mapping[str, Any] = {}
     row_summaries: list[dict[str, Any]] = []
     check_summaries: list[dict[str, Any]] = []
@@ -600,9 +631,13 @@ def policy_gradient_update(
         start_row = int(state.get("chunk_rows_done") or 0)
         policy_losses = [float(v) for v in state.get("policy_losses") or []]
         kls = [float(v) for v in state.get("kls") or []]
+        lifecycle_losses = [float(v) for v in state.get("lifecycle_losses") or []]
+        supervised_losses = [float(v) for v in state.get("supervised_losses") or []]
         grad_norms = [float(v) for v in state.get("grad_norms") or []]
         partial_policy = float(state.get("partial_policy") or 0.0)
         partial_kl = float(state.get("partial_kl") or 0.0)
+        partial_lifecycle = float(state.get("partial_lifecycle") or 0.0)
+        partial_supervised = float(state.get("partial_supervised") or 0.0)
         partial_rows = state.get("partial_row_norms") or {}
         row_summaries = list(state.get("row_grad_norms") or [])
         partial_check = state.get("partial_on_policy") or {}
@@ -668,6 +703,8 @@ def policy_gradient_update(
             optimizer.zero_grad(set_to_none=True)
             chunk_policy = 0.0
             chunk_kl = 0.0
+            chunk_lifecycle = 0.0
+            chunk_supervised = 0.0
         else:
             optimizer.zero_grad(set_to_none=True)
             saved = torch.load(checkpoint.directory / state["grads_file"], map_location="cpu")
@@ -676,56 +713,79 @@ def policy_gradient_update(
                     parameter.grad = saved[name].to(parameter.device, dtype=parameter.dtype)
             chunk_policy = partial_policy
             chunk_kl = partial_kl
+            chunk_lifecycle = partial_lifecycle
+            chunk_supervised = partial_supervised
         weight = weights[chunk_index]
         for position in range(first_row, len(chunk)):
             row = rows[chunk[position]]
-            # The reference pass runs first, with no autograd graph alive while
-            # the adapter is switched (gradient checkpointing recomputes the
-            # forward during backward with whatever adapter is active then).
-            reference = reference_logprobs(row).detach() if settings.beta_kl > 0.0 else None
-            logprobs = completion_logprobs(
-                model, row, use_logits_to_keep=settings.use_logits_to_keep, temperature=settings.temperature
-            )
-            sampler_old = None
-            if row.sampling_logprobs is not None and len(row.sampling_logprobs) == int(logprobs.shape[0]):
-                sampler_old = torch.tensor(list(row.sampling_logprobs), dtype=logprobs.dtype, device=logprobs.device)
-            check.record(logprobs, sampler_old)
-            if training_old is not None:
-                clip_old = training_old[chunk[position]].to(device=logprobs.device, dtype=logprobs.dtype)
-            else:
-                clip_old = sampler_old
-            if settings.clip_ratio is not None:
-                clip_check.record(logprobs, clip_old)
-            policy_term = _policy_term(logprobs, clip_old, float(row.advantage), settings.clip_ratio, torch)
             kl_term = None
-            if reference is not None:
-                delta = reference.to(logprobs.device) - logprobs
-                kl_term = torch.exp(delta) - delta - 1.0
-            # The policy term is normalized over the policy rows of the step, the
-            # KL term over all of its rows (preservation rows included).
-            if settings.loss_normalization == "dapo":
-                policy_scale = 1.0 / max(1, weight["policy_tokens"])
-                kl_scale = 1.0 / max(1, weight["tokens"])
-                loss = policy_term.sum() * policy_scale
-                if kl_term is not None:
-                    loss = loss + settings.beta_kl * kl_term.sum() * kl_scale
-                chunk_policy += float(policy_term.sum().detach()) * policy_scale
-            elif settings.loss_normalization == "trajectory":
-                # A row without a trajectory total (rows built outside build_rows) is its own trajectory.
-                own = max(1, int(row.trajectory_tokens or row.completion_tokens))
-                policy_scale = 1.0 / (own * max(1, weight["policy_trajectories"]))
-                kl_scale = 1.0 / (own * max(1, weight["trajectories"]))
-                loss = policy_term.sum() * policy_scale
-                if kl_term is not None:
-                    loss = loss + settings.beta_kl * kl_term.sum() * kl_scale
-                chunk_policy += float(policy_term.sum().detach()) * policy_scale
+            if row.supervised:
+                # The supervised lifecycle term: the audit's choice rendered as the
+                # completion, not a sampled one, so no reference, clip, sampling
+                # record or on-policy check applies; one weight per decision.
+                logprobs = completion_logprobs(
+                    model, row, use_logits_to_keep=settings.use_logits_to_keep, temperature=settings.temperature
+                )
+                supervised_scale = 1.0 / max(1, weight["supervised_rows"])
+                supervised_term = -(logprobs.mean()) * float(row.lifecycle_term)
+                loss = supervised_term * supervised_scale
+                chunk_supervised += float(supervised_term.detach()) * supervised_scale
             else:
-                policy_scale = 1.0 / max(1, weight["policy_rows"])
-                kl_scale = 1.0 / max(1, weight["rows"])
-                loss = policy_term.mean() * policy_scale
+                # The reference pass runs first, with no autograd graph alive while
+                # the adapter is switched (gradient checkpointing recomputes the
+                # forward during backward with whatever adapter is active then).
+                reference = reference_logprobs(row).detach() if settings.beta_kl > 0.0 else None
+                logprobs = completion_logprobs(
+                    model, row, use_logits_to_keep=settings.use_logits_to_keep, temperature=settings.temperature
+                )
+                sampler_old = None
+                if row.sampling_logprobs is not None and len(row.sampling_logprobs) == int(logprobs.shape[0]):
+                    sampler_old = torch.tensor(list(row.sampling_logprobs), dtype=logprobs.dtype, device=logprobs.device)
+                check.record(logprobs, sampler_old)
+                if training_old is not None:
+                    clip_old = training_old[chunk[position]].to(device=logprobs.device, dtype=logprobs.dtype)
+                else:
+                    clip_old = sampler_old
+                if settings.clip_ratio is not None:
+                    clip_check.record(logprobs, clip_old)
+                # A lifecycle-only row has no policy term; a preservation row keeps
+                # its zero-advantage term, as before, outside the policy normalization.
+                policy_term = None
+                if not row.lifecycle_only:
+                    policy_term = _policy_term(logprobs, clip_old, float(row.advantage), settings.clip_ratio, torch)
+                lifecycle_term = None
+                if row.lifecycle_term:
+                    lifecycle_term = _policy_term(logprobs, clip_old, float(row.lifecycle_term), settings.clip_ratio, torch)
+                if reference is not None:
+                    delta = reference.to(logprobs.device) - logprobs
+                    kl_term = torch.exp(delta) - delta - 1.0
+                # The policy term is normalized over the policy rows of the step, the
+                # lifecycle term over its lifecycle rows (one weight per decision),
+                # the KL term over all of its sampled rows (preservation rows included).
+                if settings.loss_normalization == "dapo":
+                    policy_scale = 1.0 / max(1, weight["policy_tokens"])
+                    kl_scale = 1.0 / max(1, weight["tokens"])
+                    reduce = torch.sum
+                elif settings.loss_normalization == "trajectory":
+                    # A row without a trajectory total (rows built outside build_rows) is its own trajectory.
+                    own = max(1, int(row.trajectory_tokens or row.completion_tokens))
+                    policy_scale = 1.0 / (own * max(1, weight["policy_trajectories"]))
+                    kl_scale = 1.0 / (own * max(1, weight["trajectories"]))
+                    reduce = torch.sum
+                else:
+                    policy_scale = 1.0 / max(1, weight["policy_rows"])
+                    kl_scale = 1.0 / max(1, weight["rows"])
+                    reduce = torch.mean
+                loss = logprobs.new_zeros(())
+                if policy_term is not None:
+                    loss = loss + reduce(policy_term) * policy_scale
+                    chunk_policy += float(reduce(policy_term).detach()) * policy_scale
+                if lifecycle_term is not None:
+                    lifecycle_scale = 1.0 / max(1, weight["lifecycle_rows"])
+                    loss = loss + lifecycle_term.mean() * lifecycle_scale
+                    chunk_lifecycle += float(lifecycle_term.mean().detach()) * lifecycle_scale
                 if kl_term is not None:
-                    loss = loss + settings.beta_kl * kl_term.mean() * kl_scale
-                chunk_policy += float(policy_term.mean().detach()) * policy_scale
+                    loss = loss + settings.beta_kl * reduce(kl_term) * kl_scale
             if settings.bounds_rows:
                 _bounded_row_backward(loss, parameters, bound, torch)
             else:
@@ -735,7 +795,8 @@ def policy_gradient_update(
             done = position + 1
             if checkpoint is not None and done < len(chunk) and done % checkpoint.every_rows == 0:
                 _save_partial(checkpoint, model, optimizer,
-                              state_base={**_state_base(rows, chunks, chunk_index, policy_losses, kls, grad_norms),
+                              state_base={**_state_base(rows, chunks, chunk_index, policy_losses, kls, grad_norms,
+                                                        lifecycle_losses, supervised_losses),
                                           "row_grad_norms": list(row_summaries),
                                           "partial_row_norms": {"norms": list(bound.norms), "clipped": bound.clipped,
                                                                 "dropped": bound.dropped},
@@ -744,7 +805,8 @@ def policy_gradient_update(
                                           "clip_checks": list(clip_summaries),
                                           "partial_clip": clip_check.state(),
                                           **extra_state},
-                              rows_done=done, partial_policy=chunk_policy, partial_kl=chunk_kl, previous=state)
+                              rows_done=done, partial_policy=chunk_policy, partial_kl=chunk_kl,
+                              partial_lifecycle=chunk_lifecycle, partial_supervised=chunk_supervised, previous=state)
                 state = checkpoint.load_state()
         if chunk_index == 0 and settings.max_on_policy_log_ratio is not None:
             gap = check.summary()
@@ -760,6 +822,8 @@ def policy_gradient_update(
         optimizer.step()
         policy_losses.append(chunk_policy)
         kls.append(chunk_kl)
+        lifecycle_losses.append(chunk_lifecycle)
+        supervised_losses.append(chunk_supervised)
         grad_norms.append(grad_norm)
         if settings.bounds_rows:
             row_summaries.append(bound.summary())
@@ -769,7 +833,8 @@ def policy_gradient_update(
         if checkpoint is not None:
             _save_step(checkpoint, model, optimizer, rows=rows, chunks=chunks, completed=chunk_index + 1,
                        policy_losses=policy_losses, kls=kls, grad_norms=grad_norms, row_summaries=row_summaries,
-                       check_summaries=check_summaries, clip_summaries=clip_summaries, extra_state=extra_state)
+                       check_summaries=check_summaries, clip_summaries=clip_summaries, extra_state=extra_state,
+                       lifecycle_losses=lifecycle_losses, supervised_losses=supervised_losses)
             state = checkpoint.load_state()
         if progress is not None:
             progress({
@@ -778,6 +843,10 @@ def policy_gradient_update(
                 "completion_tokens": tokens,
                 "policy_loss": chunk_policy,
                 "kl": chunk_kl,
+                "lifecycle_loss": chunk_lifecycle,
+                "lifecycle_rows": weight["lifecycle_rows"],
+                "supervised_loss": chunk_supervised,
+                "supervised_rows": weight["supervised_rows"],
                 "grad_norm": grad_norm,
                 "row_grad_norms": row_summaries[-1] if settings.bounds_rows else None,
                 "on_policy_check": check_summaries[-1],
@@ -800,9 +869,13 @@ def policy_gradient_update(
         resumed_from=resumed_from,
         row_grad_norms=row_summaries,
         on_policy_check=check_summaries,
-        policy_rows=sum(1 for row in rows if not row.preservation),
+        policy_rows=sum(1 for row in rows if row.policy_row),
         preservation_rows=sum(1 for row in rows if row.preservation),
         clip_check=clip_summaries,
+        lifecycle_loss=lifecycle_losses,
+        lifecycle_rows=sum(1 for row in rows if row.lifecycle_term and not row.supervised),
+        supervised_loss=supervised_losses,
+        supervised_rows=sum(1 for row in rows if row.supervised),
     )
 
 
@@ -856,7 +929,7 @@ def _named_trainable(model: Any) -> list[tuple[str, Any]]:
     return [(name, parameter) for name, parameter in model.named_parameters() if parameter.requires_grad]
 
 
-def _state_base(rows, chunks, chunk_index, policy_losses, kls, grad_norms) -> dict[str, Any]:
+def _state_base(rows, chunks, chunk_index, policy_losses, kls, grad_norms, lifecycle_losses=(), supervised_losses=()) -> dict[str, Any]:
     return {
         "contract": UPDATE_CONTRACT,
         "row_count": len(rows),
@@ -864,6 +937,8 @@ def _state_base(rows, chunks, chunk_index, policy_losses, kls, grad_norms) -> di
         "completed_chunks": int(chunk_index),
         "policy_losses": list(policy_losses),
         "kls": list(kls),
+        "lifecycle_losses": list(lifecycle_losses),
+        "supervised_losses": list(supervised_losses),
         "grad_norms": list(grad_norms),
     }
 
@@ -896,7 +971,8 @@ def _partial_baseline(checkpoint: UpdateCheckpoint | None, rows: Sequence[Traini
     return saved
 
 
-def _save_partial(checkpoint, model, optimizer, *, state_base, rows_done, partial_policy, partial_kl, previous) -> None:
+def _save_partial(checkpoint, model, optimizer, *, state_base, rows_done, partial_policy, partial_kl, previous,
+                  partial_lifecycle=0.0, partial_supervised=0.0) -> None:
     import torch
 
     checkpoint.directory.mkdir(parents=True, exist_ok=True)
@@ -910,6 +986,8 @@ def _save_partial(checkpoint, model, optimizer, *, state_base, rows_done, partia
         "chunk_rows_done": int(rows_done),
         "partial_policy": float(partial_policy),
         "partial_kl": float(partial_kl),
+        "partial_lifecycle": float(partial_lifecycle),
+        "partial_supervised": float(partial_supervised),
         "grads_file": name,
         "model_dir": previous.get("model_dir"),
         "optimizer_file": previous.get("optimizer_file"),
@@ -917,7 +995,7 @@ def _save_partial(checkpoint, model, optimizer, *, state_base, rows_done, partia
 
 
 def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_losses, kls, grad_norms, row_summaries=(),
-               check_summaries=(), clip_summaries=(), extra_state=None) -> None:
+               check_summaries=(), clip_summaries=(), extra_state=None, lifecycle_losses=(), supervised_losses=()) -> None:
     import torch
 
     checkpoint.directory.mkdir(parents=True, exist_ok=True)
@@ -935,7 +1013,7 @@ def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_
     torch.save(optimizer.state_dict(), temporary)
     temporary.replace(checkpoint.directory / optimizer_file)
     _commit_state(checkpoint, {
-        **_state_base(rows, chunks, completed, policy_losses, kls, grad_norms),
+        **_state_base(rows, chunks, completed, policy_losses, kls, grad_norms, lifecycle_losses, supervised_losses),
         "row_grad_norms": list(row_summaries),
         "partial_row_norms": {},
         "on_policy_checks": list(check_summaries),
@@ -945,6 +1023,8 @@ def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_
         "chunk_rows_done": 0,
         "partial_policy": 0.0,
         "partial_kl": 0.0,
+        "partial_lifecycle": 0.0,
+        "partial_supervised": 0.0,
         "grads_file": None,
         "model_dir": model_dir,
         "optimizer_file": optimizer_file,

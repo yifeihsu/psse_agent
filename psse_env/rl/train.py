@@ -5,19 +5,25 @@
     python -m psse_env.rl.train --config rl.json --phase rollout --shard 0/2 # one worker's slice of a phase
     python -m psse_env.rl.train --config rl.json --status
 
-Every phase survives preemption.  Rollouts and the greedy evaluation are
+Every phase survives preemption.  Rollouts and the greedy evaluations are
 stored per root, so a restarted process skips what is done; the update
 commits its adapter and optimizer after every optimizer step and its
 accumulated gradients every few rows (:class:`psse_env.rl.update.UpdateCheckpoint`).
 ``manifest.json`` records the phase the run is at and advances only when a
-phase completes.  The rollout and evaluation phases shard over worker
-processes (``--shard i/n``); the unsharded call of the same phase finishes
-any root left over and closes the phase.
+phase completes.  A run whose config sets ``baseline_evaluation`` starts
+with a ``baseline`` phase, the starting adapter's greedy evaluation under the
+driver's own loader, before its first rollout.  The baseline, rollout and
+evaluation phases shard over worker processes (``--shard i/n``); the
+unsharded call of the same phase finishes any root left over and closes the
+phase.
 
 The config (JSON) names the training and development suites, the starting
 adapter and base model, the evidence profile and environment options the
-pipeline cell used, the sampling, reward, advantage and update settings.
-See docs/rl_experiments_20261014.md.
+pipeline cell used (``environment_options`` and ``expert_options`` carry the
+named options of the research environment and the teacher, 2026-11-07), the
+sampling, reward, advantage and update settings, and the action budgets the
+greedy evaluation reports success within.  See docs/rl_experiments_20261014.md
+and the RL plan of 2026-11-05 (docs/rl_beyond_teacher_plan_20261105.md).
 """
 from __future__ import annotations
 
@@ -36,6 +42,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from psse_env.rl.advantages import GroupAdvantages, group_advantages, summarize_groups
+from psse_env.rl.lifecycle import lifecycle_decisions, scenario_truth, summarize_decisions
 from psse_env.rl.reward import RewardWeights, episode_basis, episode_reward, load_expert_reference
 from psse_env.rl.rollout import Trajectory, TrajectoryStore, rollout_roots, scenario_family, scenario_root, store_summary
 from psse_env.rl.rows import RowSettings, build_rows
@@ -49,8 +56,28 @@ from psse_env.rl.update import (
 )
 
 TRAIN_CONTRACT = "rl_iteration_driver_v2"
-PHASES = ("rollout", "update", "evaluate")
-SHARDED_PHASES = ("rollout", "evaluate")
+#: The phases of a run: a baseline evaluation of the starting adapter before
+#: the first iteration when the config asks for one, then the iteration cycle.
+PHASES = ("baseline", "rollout", "update", "evaluate")
+ITERATION_PHASES = ("rollout", "update", "evaluate")
+SHARDED_PHASES = ("baseline", "rollout", "evaluate")
+#: The named options of the research environment a config may set
+#: (``RESEARCH_ENVIRONMENT_OPTIONS`` of scripts/run_dagger_research.py, as
+#: ``--env-option`` names them).  An option a config does not name is left
+#: to the factory: off, or what its teacher variant needs
+#: (``flow_at_noise_cue``, ``revert_fruitless_cycles``, ``route_comparison``).
+ENVIRONMENT_OPTION_KEYS = (
+    "lifecycle_choice",
+    "detailed_evidence",
+    "pair_refit_adjacent",
+    "flow_at_noise_cue",
+    "route_comparison",
+    "revert_fruitless_cycles",
+    "target_first_partial",
+    "branch_first_partial",
+)
+#: Environment options that are config fields of their own.
+TOP_LEVEL_ENVIRONMENT_FIELDS = ("evidence_profile", "normalized_residual_threshold", "triage_classifier", "progress_basis")
 
 
 @dataclass
@@ -68,8 +95,22 @@ class RLConfig:
     progress_basis: str | None = None
     normalized_residual_threshold: float | None = 4.0
     expert_variant: str = "baseline"
+    #: Named options of the research environment beyond the fields above
+    #: (:data:`ENVIRONMENT_OPTION_KEYS`; RL plan of 2026-11-05, section 5):
+    #: ``{"lifecycle_choice": 1, "detailed_evidence": 1, ...}``.  Every
+    #: phase and shard applies them before building an environment, and the
+    #: rollout summary records them.
+    environment_options: dict[str, Any] = field(default_factory=dict)
+    #: Named options of the teacher beyond its variant
+    #: (``RESEARCH_EXPERT_OPTIONS``: ``abstain_isolated_lines``,
+    #: ``state_ambiguity``, ``learned_ranker``), for ``policy_source: expert``.
+    expert_options: dict[str, Any] = field(default_factory=dict)
     hif_search_profile: str = "research"
     max_steps: int = 40
+    #: Action budgets the greedy evaluation also reports success within: the
+    #: solved cases that used at most this many actions under ``max_steps``
+    #: (:func:`aggregate_evaluation`).
+    evaluation_budgets: list[int] = field(default_factory=lambda: [16, 20])
     samples_per_root: int = 4
     seed: int = 20261014
     #: Sampling.  The update takes log-probabilities at this temperature, so
@@ -91,6 +132,13 @@ class RLConfig:
     load_in_4bit: bool = True
     local_files_only: bool = True
     evaluate_every_iteration: bool = True
+    #: Evaluate the starting adapter on the development suite before the
+    #: first rollout, through the driver's own loader (``load_in_4bit`` as
+    #: configured), so every iteration's score compares with a baseline
+    #: measured the same way (2026-11-07: the cloning cell's arms ran on a
+    #: 4-bit base and the RL cell runs in bf16, so an arm measured there is
+    #: not this run's baseline).  Applies at the start of a run only.
+    baseline_evaluation: bool = False
     evaluation_workers_per_policy: int = 1
     update_checkpoint_rows: int = 32
     #: ``adapter`` samples the LoRA policy; ``expert`` rolls the observable
@@ -136,7 +184,26 @@ class RLConfig:
             raise ValueError("update_checkpoint_rows must be positive")
         if "temperature" in self.update:
             raise ValueError("the update's temperature is the sampling temperature; set it at the top level only")
-        RewardWeights.from_mapping(self.reward)
+        if not isinstance(self.environment_options, Mapping) or not isinstance(self.expert_options, Mapping):
+            raise ValueError("environment_options and expert_options must be mappings")
+        unknown = sorted(set(self.environment_options) - set(ENVIRONMENT_OPTION_KEYS))
+        if unknown:
+            top_level = sorted(set(unknown) & set(TOP_LEVEL_ENVIRONMENT_FIELDS))
+            if top_level:
+                raise ValueError(f"environment_options {top_level} are config fields of their own; set them at the top level")
+            raise ValueError(f"unknown environment_options {unknown}; the named options are {list(ENVIRONMENT_OPTION_KEYS)}")
+        if "variant" in self.expert_options:
+            raise ValueError("expert_options.variant is the expert_variant field")
+        weights = RewardWeights.from_mapping(self.reward)
+        if weights.lifecycle_credit > 0.0 and not self.environment_options.get("lifecycle_choice"):
+            raise ValueError(
+                "reward.lifecycle_credit scores the lifecycle choice, which environment_options.lifecycle_choice must open"
+            )
+        for budget in self.evaluation_budgets:
+            if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0 or budget > int(self.max_steps):
+                raise ValueError(f"evaluation_budgets must be positive integers at most max_steps, got {self.evaluation_budgets!r}")
+        if self.baseline_evaluation and not self.development_suite:
+            raise ValueError("baseline_evaluation needs a development suite to evaluate the starting adapter on")
         UpdateSettings(**self.update).validate()
         RootSampling.from_mapping(self.root_sampling).validate(self.roots_per_iteration)
         RowSettings.from_mapping(self.rows)
@@ -163,9 +230,13 @@ class Manifest:
     phase: str = "rollout"
     current_adapter: str = ""
     history: list[dict[str, Any]] = field(default_factory=list)
+    #: The baseline evaluation of the starting adapter (adapter and summary), once the phase has run.
+    baseline: dict[str, Any] | None = None
 
     @classmethod
-    def load(cls, path: Path, *, initial_adapter: str) -> "Manifest":
+    def load(cls, path: Path, *, initial_adapter: str, initial_phase: str = "rollout") -> "Manifest":
+        """The run's manifest, or a fresh one at ``initial_phase`` (``baseline`` when the config asks for one)."""
+
         if path.is_file():
             payload = json.loads(path.read_text(encoding="utf-8"))
             return cls(
@@ -174,8 +245,11 @@ class Manifest:
                 phase=str(payload.get("phase") or "rollout"),
                 current_adapter=str(payload.get("current_adapter") or initial_adapter),
                 history=list(payload.get("history") or []),
+                baseline=dict(payload["baseline"]) if isinstance(payload.get("baseline"), Mapping) else None,
             )
-        return cls(current_adapter=initial_adapter)
+        if initial_phase not in PHASES:
+            raise ValueError(f"unknown initial phase {initial_phase!r}")
+        return cls(current_adapter=initial_adapter, phase=initial_phase)
 
     def save(self, path: Path) -> None:
         temporary = path.with_suffix(".json.tmp")
@@ -251,7 +325,13 @@ def shard_scenarios(scenarios: Sequence[Mapping[str, Any]], shard: tuple[int, in
 
 
 def configure_research_environment(config: RLConfig) -> Callable[..., Any]:
-    """Point the research runner's environment options at the cell's profile and return its factory."""
+    """Point the research runner's environment and teacher options at the config's and return the environment factory.
+
+    Every named option (:data:`ENVIRONMENT_OPTION_KEYS`) is set from the
+    config or removed, and the teacher options are replaced, so a process
+    that configured another cell earlier cannot leave an option on that this
+    config does not name.
+    """
 
     import scripts.run_dagger_research as research
 
@@ -262,8 +342,31 @@ def configure_research_environment(config: RLConfig) -> Callable[..., Any]:
     )
     if config.progress_basis:
         research.RESEARCH_ENVIRONMENT_OPTIONS["progress_basis"] = config.progress_basis
+    for key in ENVIRONMENT_OPTION_KEYS:
+        if key in config.environment_options:
+            research.RESEARCH_ENVIRONMENT_OPTIONS[key] = config.environment_options[key]
+        else:
+            research.RESEARCH_ENVIRONMENT_OPTIONS.pop(key, None)
+    research.RESEARCH_EXPERT_OPTIONS.clear()
     research.RESEARCH_EXPERT_OPTIONS["variant"] = config.expert_variant
+    research.RESEARCH_EXPERT_OPTIONS.update({str(key): value for key, value in config.expert_options.items()})
     return research.resolve_environment_factory(config.hif_search_profile, config.evidence_profile)
+
+
+def environment_record(config: RLConfig) -> dict[str, Any]:
+    """What the run's environment is built with, for the phase summaries."""
+
+    return {
+        "evidence_profile": config.evidence_profile,
+        "hif_search_profile": config.hif_search_profile,
+        "normalized_residual_threshold": config.normalized_residual_threshold,
+        "triage_classifier": config.triage_classifier,
+        "progress_basis": config.progress_basis,
+        "environment_options": dict(config.environment_options),
+        "expert_variant": config.expert_variant,
+        "expert_options": dict(config.expert_options),
+        "max_steps": config.max_steps,
+    }
 
 
 def sampling_policy_factory(config: RLConfig, adapter: str, env_factory: Callable[..., Any] | None = None) -> Callable[[int], Any]:
@@ -299,6 +402,17 @@ def sampling_policy_factory(config: RLConfig, adapter: str, env_factory: Callabl
 
 def iteration_dir(config: RLConfig, iteration: int) -> Path:
     return Path(config.output_dir) / f"iteration_{iteration:03d}"
+
+
+def initial_phase(config: RLConfig) -> str:
+    """Where a fresh run starts: the baseline evaluation when the config asks for one, else the first rollout."""
+
+    return "baseline" if config.baseline_evaluation else "rollout"
+
+
+def load_manifest(config: RLConfig) -> Manifest:
+    return Manifest.load(Path(config.output_dir) / "manifest.json", initial_adapter=config.initial_adapter,
+                         initial_phase=initial_phase(config))
 
 
 def phase_rollout(
@@ -347,6 +461,7 @@ def phase_rollout(
     if shard is None:
         summary["store"] = store_summary(store)
         summary["sampling"] = {"temperature": config.temperature, "top_p": config.top_p, "top_k": config.top_k}
+        summary["environment"] = environment_record(config)
         if sampling.mode == "stratified":
             summary["root_sampling"] = {"mode": sampling.mode, "key": sampling.key, "strata": dict(sorted(strata.items()))}
         _write_json(out / "rollout_summary.json", summary)
@@ -375,6 +490,10 @@ def score_groups(config: RLConfig, store: TrajectoryStore) -> tuple[list[tuple[l
         success_rate=(successes / episodes) if episodes else None,
         mean_calls=(sum(int(t.reward.get("calls") or 0) for ts, _ in groups for t in ts) / episodes) if episodes else None,
         unpaired_trajectories=sum(1 for ts, _ in groups for t in ts if not t.pairing_ok),
+        lifecycle={
+            **summarize_decisions([decision for ts, _ in groups for t in ts for decision in t.lifecycle]),
+            "labelled_decisions_paired": sum(t.labelled_decisions for ts, _ in groups for t in ts if t.pairing_ok),
+        },
     )
     return groups, summary
 
@@ -435,11 +554,15 @@ def _load_trainable_model(
     return model, processor, side_inputs
 
 
-def _prompt_functions(config: RLConfig, adapter: str, processor: Any) -> tuple[Callable[[Mapping[str, Any]], str], Callable[[str], tuple[list[int], int]]]:
-    """The policy's own prompt renderer and tokenizer, bound to the training processor."""
+def _prompt_functions(
+    config: RLConfig, adapter: str, processor: Any
+) -> tuple[Callable[[Mapping[str, Any]], str], Callable[[str], tuple[list[int], int]], Any]:
+    """The policy's own prompt renderer and tokenizer, bound to the training processor, and the renderer of the
+    audit's choice for the supervised lifecycle term (:class:`psse_env.rl.targets.TargetRenderer`)."""
 
     from psse_env.dagger.release_factories import _ModelBundle
     from psse_env.dagger.research_policy_factory import _CanonicalResearchNativePolicy
+    from psse_env.rl.targets import TargetRenderer
 
     bundle = _ModelBundle(model=None, processor=processor, model_id=config.base_model,
                           model_revision=config.base_revision, adapter_snapshot_path=str(adapter))
@@ -449,7 +572,7 @@ def _prompt_functions(config: RLConfig, adapter: str, processor: Any) -> tuple[C
         rendered, _tools, _parameters = policy.render_prompt(observation)
         return rendered
 
-    return render, policy.prompt_token_ids
+    return render, policy.prompt_token_ids, TargetRenderer(policy, processor)
 
 
 def _carry_adapter_over(source: str, destination: Path) -> None:
@@ -479,13 +602,17 @@ def phase_update(config: RLConfig, manifest: Manifest, *, progress: Callable[[Ma
                     for _, adv in groups},
     })
     next_adapter = out / "adapter"
-    report: dict[str, Any] = {"iteration": manifest.iteration, "adapter_in": manifest.current_adapter, "scores": score_summary}
-    trainable = any(adv.informative for _, adv in groups) and any(
+    weights = RewardWeights.from_mapping(config.reward)
+    report: dict[str, Any] = {"iteration": manifest.iteration, "adapter_in": manifest.current_adapter, "scores": score_summary,
+                              "lifecycle_credit": weights.lifecycle_credit, "lifecycle_form": weights.lifecycle_form}
+    informative_paired = any(adv.informative for _, adv in groups) and any(
         trajectory.pairing_ok for trajectories, adv in groups if adv.informative for trajectory in trajectories
     )
-    if not trainable:
+    # A labelled lifecycle decision is trained whether or not its group is informative.
+    lifecycle_trainable = weights.lifecycle_credit > 0.0 and int(score_summary["lifecycle"]["labelled_decisions_paired"]) > 0
+    if not informative_paired and not lifecycle_trainable:
         report["update"] = None
-        report["note"] = "no informative, paired group: the adapter is carried over unchanged"
+        report["note"] = "no informative, paired group and no labelled lifecycle decision: the adapter is carried over unchanged"
         _carry_adapter_over(manifest.current_adapter, next_adapter)
         _write_json(out / "update_report.json", report)
         return report
@@ -497,12 +624,16 @@ def phase_update(config: RLConfig, manifest: Manifest, *, progress: Callable[[Ma
     reference = config.initial_adapter if settings.beta_kl > 0.0 else None
     model, processor, side_inputs = _load_trainable_model(config, start_adapter, reference_adapter=reference)
     try:
-        render, prompt_ids = _prompt_functions(config, manifest.current_adapter, processor)
+        render, prompt_ids, render_target = _prompt_functions(config, manifest.current_adapter, processor)
         rows, rows_report = build_rows(
             groups, render_prompt=render, prompt_token_ids=prompt_ids,
             max_length=config.max_length, required_side_inputs=side_inputs,
             settings=config.row_settings(manifest.iteration),
+            lifecycle_credit=weights.lifecycle_credit,
+            lifecycle_form=weights.lifecycle_form,
+            render_target=render_target,
         )
+        rows_report["target_renderer"] = {"rendered": render_target.rendered, "refused": render_target.refused}
         report["rows"] = rows_report
         report["resumed_from_checkpoint"] = str(resume_dir) if resume_dir is not None else None
         if not rows:
@@ -528,7 +659,10 @@ def phase_update(config: RLConfig, manifest: Manifest, *, progress: Callable[[Ma
     return report
 
 
-def _compact_evaluation(episode: Mapping[str, Any], *, root: str, family: str, reward: Mapping[str, Any]) -> dict[str, Any]:
+def _compact_evaluation(
+    episode: Mapping[str, Any], *, root: str, family: str, reward: Mapping[str, Any],
+    lifecycle: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
     return {
         "scenario_id": root,
         "family": family,
@@ -543,13 +677,27 @@ def _compact_evaluation(episode: Mapping[str, Any], *, root: str, family: str, r
         "healthy_components_preserved": episode.get("healthy_components_preserved"),
         "tools": [str((step.get("action") or {}).get("tool")) for step in episode.get("trace") or [] if isinstance(step, Mapping)],
         "reward": dict(reward),
+        # The episode's decisions on accepted candidates with the audit's label (psse_env.rl.lifecycle).
+        "lifecycle": [dict(decision) for decision in lifecycle],
     }
 
 
-def aggregate_evaluation(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Success, cost and safety of a greedy evaluation, overall and per family."""
+def _record_steps(record: Mapping[str, Any]) -> int:
+    return int(record.get("policy_steps") or record.get("steps") or 0)
+
+
+def aggregate_evaluation(records: Sequence[Mapping[str, Any]], budgets: Sequence[int] = ()) -> dict[str, Any]:
+    """Success, cost and safety of a greedy evaluation, overall and per family.
+
+    ``solved_within_actions[b]`` counts the solved cases that used at most
+    ``b`` actions under the run's own budget.  The policy sees its remaining
+    budget, so this is not the same as a run with ``max_steps`` ``b``; it is
+    the efficiency measure of the RL plan (section 4), reported beside the
+    solved count.
+    """
 
     count = len(records)
+    solved = [record for record in records if record.get("truth_audited_task_success")]
     by_family: dict[str, dict[str, int]] = {}
     for record in records:
         entry = by_family.setdefault(str(record.get("family")), {"roots": 0, "successes": 0})
@@ -559,44 +707,43 @@ def aggregate_evaluation(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]
     def total(key: str) -> int:
         return sum(int(record.get(key) or 0) for record in records)
 
+    decisions = [decision for record in records for decision in record.get("lifecycle") or [] if isinstance(decision, Mapping)]
     return {
         "roots": count,
-        "truth_audited_task_success": sum(1 for record in records if record.get("truth_audited_task_success")),
+        "truth_audited_task_success": len(solved),
         "mean_steps": (sum(int(record.get("steps") or 0) for record in records) / count) if count else None,
+        "mean_steps_solved": (sum(_record_steps(record) for record in solved) / len(solved)) if solved else None,
+        "solved_within_actions": {str(int(budget)): sum(1 for record in solved if _record_steps(record) <= int(budget))
+                                  for budget in budgets},
         "mean_reward": (sum(float((record.get("reward") or {}).get("total") or 0.0) for record in records) / count) if count else None,
         "false_commit_count": total("false_commit_count"),
         "false_finalization_count": total("false_finalization_count"),
         "invalid_action_count": total("invalid_action_count"),
         "loop_episodes": sum(1 for record in records if record.get("loop_detected")),
+        "lifecycle": {
+            **summarize_decisions(decisions),
+            "episodes_with_decline": sum(1 for record in records if any(
+                decision.get("declined") for decision in record.get("lifecycle") or [] if isinstance(decision, Mapping))),
+        },
         "by_family": dict(sorted(by_family.items())),
     }
 
 
-def phase_evaluate(config: RLConfig, manifest: Manifest, *, shard: tuple[int, int] | None = None) -> dict[str, Any] | None:
-    """Greedy evaluation of the iteration's adapter on the development suite, stored per root.
+def _greedy_evaluation(
+    config: RLConfig, *, adapter: str, out: Path, shard: tuple[int, int] | None, summary_head: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Greedy evaluation of ``adapter`` on the development suite, stored per root under ``out/evaluation/episodes``.
 
-    Skipped when the update phase carried the adapter over unchanged: its
-    score is the previous iteration's (or the starting adapter's).
+    A shard evaluates its slice and returns its counts; the unsharded call
+    finishes any root left over and writes ``out/evaluation.json`` and
+    ``out/evaluation_episodes.jsonl``.
     """
-
-    if not config.development_suite or not config.evaluate_every_iteration:
-        return None
-    out = iteration_dir(config, manifest.iteration)
-    update_path = out / "update_report.json"
-    update_report = json.loads(update_path.read_text(encoding="utf-8")) if update_path.is_file() else None
-    if update_report is not None and update_report.get("update") is None:
-        summary = {"iteration": manifest.iteration, "skipped": "the update phase left the adapter unchanged",
-                   "adapter": str(out / "adapter")}
-        if shard is None:
-            _write_json(out / "evaluation.json", {"summary": summary})
-        return summary
 
     from psse_env.dagger.evaluator import evaluate_rollout_suites
     from psse_env.dagger.release_factories import deterministic_case_loader
     from psse_env.dagger.research_policy_factory import clear_research_policy_cache, research_gemma_policy_factory
     from scripts.run_dagger_research import PAIRED_EVALUATION_CONTRACT
 
-    adapter = str(out / "adapter")
     all_scenarios = load_suite(config.development_suite)
     scenarios = shard_scenarios(all_scenarios, shard)
     episodes_dir = out / "evaluation" / "episodes"
@@ -622,11 +769,13 @@ def phase_evaluate(config: RLConfig, manifest: Manifest, *, shard: tuple[int, in
                 ).as_dict()
                 episode = dict(result["suite_metrics"]["episodes"][0])
                 reward = episode_reward(episode, family=family, expert_reference_calls=reference.get(root), weights=weights)
+                decisions = lifecycle_decisions(episode.get("trace") or [], scenario_truth(scenario))
                 _write_json(episodes_dir / f"{_safe_name(root)}.json",
-                            _compact_evaluation(episode, root=root, family=family, reward=reward.as_dict()))
+                            _compact_evaluation(episode, root=root, family=family, reward=reward.as_dict(), lifecycle=decisions))
                 print(json.dumps({"evaluated": root, "family": family,
                                   "success": bool(episode.get("truth_audited_task_success")),
-                                  "steps": episode.get("steps"), "reward": round(reward.total, 3)}), flush=True)
+                                  "steps": episode.get("steps"), "reward": round(reward.total, 3),
+                                  "declines": sum(1 for decision in decisions if decision.get("declined"))}), flush=True)
         finally:
             del policy
             clear_research_policy_cache()
@@ -637,12 +786,48 @@ def phase_evaluate(config: RLConfig, manifest: Manifest, *, shard: tuple[int, in
     for scenario in all_scenarios:
         path = episodes_dir / f"{_safe_name(scenario_root(scenario))}.json"
         records.append(json.loads(path.read_text(encoding="utf-8")))
-    summary = {"iteration": manifest.iteration, "adapter": adapter, **aggregate_evaluation(records)}
+    summary = {**summary_head, "adapter": adapter, **aggregate_evaluation(records, config.evaluation_budgets)}
     _write_json(out / "evaluation.json", {"summary": summary})
     with (out / "evaluation_episodes.jsonl").open("w", encoding="utf-8") as stream:
         for record in records:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
     return summary
+
+
+def phase_baseline(config: RLConfig, manifest: Manifest, *, shard: tuple[int, int] | None = None) -> dict[str, Any]:
+    """Greedy evaluation of the starting adapter on the development suite before the first rollout (``baseline_evaluation``).
+
+    Measured by the driver's own loader, so every iteration's score compares
+    with a baseline measured the same way; stored under ``<output_dir>/baseline``.
+    """
+
+    del manifest
+    if not config.development_suite:
+        raise ValueError("the baseline evaluation needs a development suite")
+    return _greedy_evaluation(config, adapter=config.initial_adapter, out=Path(config.output_dir) / "baseline", shard=shard,
+                              summary_head={"baseline": True})
+
+
+def phase_evaluate(config: RLConfig, manifest: Manifest, *, shard: tuple[int, int] | None = None) -> dict[str, Any] | None:
+    """Greedy evaluation of the iteration's adapter on the development suite, stored per root.
+
+    Skipped when the update phase carried the adapter over unchanged: its
+    score is the previous iteration's (or the baseline's).
+    """
+
+    if not config.development_suite or not config.evaluate_every_iteration:
+        return None
+    out = iteration_dir(config, manifest.iteration)
+    update_path = out / "update_report.json"
+    update_report = json.loads(update_path.read_text(encoding="utf-8")) if update_path.is_file() else None
+    if update_report is not None and update_report.get("update") is None:
+        summary = {"iteration": manifest.iteration, "skipped": "the update phase left the adapter unchanged",
+                   "adapter": str(out / "adapter")}
+        if shard is None:
+            _write_json(out / "evaluation.json", {"summary": summary})
+        return summary
+    return _greedy_evaluation(config, adapter=str(out / "adapter"), out=out, shard=shard,
+                              summary_head={"iteration": manifest.iteration})
 
 
 def run_phase(
@@ -654,21 +839,27 @@ def run_phase(
 ) -> dict[str, Any] | None:
     manifest_path = Path(config.output_dir) / "manifest.json"
     Path(config.output_dir).mkdir(parents=True, exist_ok=True)
-    manifest = Manifest.load(manifest_path, initial_adapter=config.initial_adapter)
+    manifest = load_manifest(config)
     if phase != manifest.phase:
         raise RuntimeError(f"the run is at phase {manifest.phase!r} of iteration {manifest.iteration}, not {phase!r}")
     if shard is not None and phase not in SHARDED_PHASES:
-        raise ValueError(f"only the {' and '.join(SHARDED_PHASES)} phases are sharded")
+        raise ValueError(f"only the {', '.join(SHARDED_PHASES)} phases are sharded")
     started = time.perf_counter()
     if shard is not None:
         if phase == "rollout":
             result = phase_rollout(config, manifest, progress=progress, shard=shard)
+        elif phase == "baseline":
+            result = phase_baseline(config, manifest, shard=shard)
         else:
             result = phase_evaluate(config, manifest, shard=shard)
         print(json.dumps({"phase": phase, "shard": f"{shard[0]}/{shard[1]}", "iteration": manifest.iteration,
                           "seconds": round(time.perf_counter() - started, 1), "result": result}, default=str), flush=True)
         return result
-    if phase == "rollout":
+    if phase == "baseline":
+        result = phase_baseline(config, manifest)
+        manifest.baseline = {"adapter": config.initial_adapter, "evaluation": result}
+        manifest.phase = "rollout"
+    elif phase == "rollout":
         result = phase_rollout(config, manifest, progress=progress)
         manifest.phase = "update"
     elif phase == "update":
@@ -694,15 +885,18 @@ def run_phase(
 
 def run_iterations(config: RLConfig, iterations: int, *, progress: Callable[[Mapping[str, Any]], None] | None = None) -> None:
     for _ in range(int(iterations)):
-        manifest = Manifest.load(Path(config.output_dir) / "manifest.json", initial_adapter=config.initial_adapter)
-        start_phase = PHASES.index(manifest.phase)
-        for phase in PHASES[start_phase:]:
+        manifest = load_manifest(config)
+        if manifest.phase == "baseline":
+            # Before the first iteration, not one of them.
+            run_phase(config, "baseline", progress=progress)
+            manifest = load_manifest(config)
+        start_phase = ITERATION_PHASES.index(manifest.phase)
+        for phase in ITERATION_PHASES[start_phase:]:
             run_phase(config, phase, progress=progress)
 
 
 def status(config: RLConfig) -> dict[str, Any]:
-    manifest = Manifest.load(Path(config.output_dir) / "manifest.json", initial_adapter=config.initial_adapter)
-    return asdict(manifest)
+    return asdict(load_manifest(config))
 
 
 def _print_progress(record: Mapping[str, Any]) -> None:
@@ -712,9 +906,10 @@ def _print_progress(record: Mapping[str, Any]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", required=True)
-    parser.add_argument("--phase", choices=PHASES, default=None, help="run one phase of the current iteration")
+    parser.add_argument("--phase", choices=PHASES, default=None,
+                        help="run one phase of the current iteration (baseline: the starting adapter's evaluation before the first)")
     parser.add_argument("--shard", default=None,
-                        help="'i/n': this worker's slice of the rollout or evaluation phase; the unsharded call closes the phase")
+                        help="'i/n': this worker's slice of the baseline, rollout or evaluation phase; the unsharded call closes the phase")
     parser.add_argument("--iterations", type=int, default=1, help="iterations to run when no phase is given")
     parser.add_argument("--status", action="store_true")
     args = parser.parse_args(argv)

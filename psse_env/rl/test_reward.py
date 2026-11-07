@@ -40,6 +40,20 @@ def _episode(*, success: bool, basis: str | None, trace: list[dict], steps: int 
 
 
 class RewardTests(unittest.TestCase):
+    def test_lifecycle_credit_is_a_weight_outside_the_episode_total(self) -> None:
+        weights = RewardWeights.from_mapping({"lifecycle_credit": 0.25})
+        self.assertEqual(weights.lifecycle_credit, 0.25)
+        self.assertEqual(RewardWeights().lifecycle_credit, 0.0)
+        with self.assertRaisesRegex(ValueError, "lifecycle_credit"):
+            RewardWeights(lifecycle_credit=-0.1).validate()
+        self.assertEqual(RewardWeights().lifecycle_form, "sampled")
+        self.assertEqual(RewardWeights.from_mapping({"lifecycle_credit": 0.25, "lifecycle_form": "supervised"}).lifecycle_form, "supervised")
+        with self.assertRaisesRegex(ValueError, "lifecycle_form"):
+            RewardWeights(lifecycle_form="bogus").validate()
+        trace = [_step(RUN_WLS)] * 4
+        episode = _episode(success=True, basis="counterfactual_resolution", trace=trace)
+        self.assertEqual(episode_reward(episode, weights=weights).total, episode_reward(episode).total)
+
     def test_decisive_success_outranks_every_handoff_basis(self) -> None:
         trace = [_step(RUN_WLS)] * 6
         decisive = episode_reward(_episode(success=True, basis="counterfactual_resolution", trace=trace))

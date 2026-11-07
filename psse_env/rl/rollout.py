@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
+from psse_env.rl.lifecycle import lifecycle_decisions, scenario_truth, summarize_decisions
 from psse_env.rl.reward import RewardBreakdown, RewardWeights, episode_reward
 
 ROLLOUT_CONTRACT = "rl_grouped_rollout_v1"
@@ -82,11 +83,19 @@ class Trajectory:
     pairing_ok: bool
     pairing_note: str | None = None
     policy_identity: dict[str, Any] = field(default_factory=dict)
+    #: The episode's decisions on accepted candidates with the audit's label
+    #: (:func:`psse_env.rl.lifecycle.lifecycle_decisions`); empty for
+    #: trajectories stored before 2026-11-07.
+    lifecycle: list[dict[str, Any]] = field(default_factory=list)
     contract: str = ROLLOUT_CONTRACT
 
     @property
     def total_reward(self) -> float:
         return float(self.reward["total"])
+
+    @property
+    def labelled_decisions(self) -> int:
+        return sum(1 for decision in self.lifecycle if decision.get("agrees") is not None)
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -106,6 +115,7 @@ class Trajectory:
             pairing_ok=bool(value.get("pairing_ok")),
             pairing_note=value.get("pairing_note"),
             policy_identity=dict(value.get("policy_identity") or {}),
+            lifecycle=[dict(item) for item in value.get("lifecycle") or [] if isinstance(item, Mapping)],
             contract=str(value.get("contract") or ROLLOUT_CONTRACT),
         )
 
@@ -232,18 +242,24 @@ def reward_spread(group: Sequence[Trajectory]) -> float:
 
 
 def store_summary(store: "TrajectoryStore") -> dict[str, Any]:
-    """What a whole iteration's rollouts contain: signal, success, cost and how peaked the sampling was."""
+    """What a whole iteration's rollouts contain: signal, success, cost, how peaked the sampling was, and the
+    lifecycle decisions sampled (whether a decline was ever sampled, and how the decisions agree with the audit)."""
     groups = informative = distinct_groups = episodes = successes = calls = unpaired = 0
     steps = peaked_steps = 0
+    episodes_with_decline = groups_with_labelled_decision = 0
+    decisions: list[dict[str, Any]] = []
     for _root, group in store.iter_groups():
         groups += 1
         informative += int(reward_spread(group) > 1e-9)
         distinct_groups += int(distinct_trajectories(group) > 1)
+        groups_with_labelled_decision += int(any(trajectory.labelled_decisions for trajectory in group))
         for trajectory in group:
             episodes += 1
             successes += int(bool(trajectory.evaluation.get("truth_audited_task_success")))
             calls += int(trajectory.reward.get("calls") or 0)
             unpaired += int(not trajectory.pairing_ok)
+            decisions.extend(trajectory.lifecycle)
+            episodes_with_decline += int(any(decision.get("declined") for decision in trajectory.lifecycle))
             for step in trajectory.steps:
                 if step.token_probabilities:
                     steps += 1
@@ -258,6 +274,11 @@ def store_summary(store: "TrajectoryStore") -> dict[str, Any]:
         "unpaired_trajectories": unpaired,
         "sampled_steps_with_probabilities": steps,
         "fraction_of_steps_with_every_token_above_0_99": (peaked_steps / steps) if steps else None,
+        "lifecycle": {
+            **summarize_decisions(decisions),
+            "episodes_with_decline": episodes_with_decline,
+            "groups_with_labelled_decision": groups_with_labelled_decision,
+        },
     }
 
 
@@ -291,6 +312,7 @@ def rollout_group(
 
     root = scenario_root(scenario)
     family = scenario_family(scenario)
+    truth = scenario_truth(scenario)
     trajectories: list[Trajectory] = []
     for index in range(int(samples)):
         seed = sample_seed(base_seed, root, index)
@@ -326,6 +348,7 @@ def rollout_group(
                 pairing_ok=ok,
                 pairing_note=note,
                 policy_identity=dict(identity) if isinstance(identity, Mapping) else {},
+                lifecycle=lifecycle_decisions(episode.get("trace") or [], truth),
             )
         )
     return trajectories
@@ -436,6 +459,9 @@ def rollout_roots(
                 "rewards": [trajectory.total_reward for trajectory in group],
                 "successes": sum(1 for trajectory in group if trajectory.evaluation.get("truth_audited_task_success")),
                 "distinct_trajectories": distinct_trajectories(group),
+                "declines": sum(1 for trajectory in group for decision in trajectory.lifecycle if decision.get("declined")),
+                "decisions_disagreeing": sum(1 for trajectory in group for decision in trajectory.lifecycle
+                                             if decision.get("agrees") is False),
                 "pairing_ok": all(trajectory.pairing_ok for trajectory in group),
                 "completed": completed,
                 "elapsed_seconds": time.perf_counter() - started,

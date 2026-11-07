@@ -2,9 +2,11 @@
 
 Rolls the observable expert out (``policy_source: expert``) on two development
 roots of the local classifier suite under the classifier-gated profile with
-the tracked triage model, through the driver's own phases.  Skips when the
-local suite is absent (it is gitignored output; see the memory note on
-local audit-artifact tests).
+the tracked triage model, through the driver's own phases, with the RL
+plan's environment options on (the lifecycle choice and the detailed
+evidence; the teacher never declines, so every decision it makes is a commit
+the audit labels).  Skips when the local suite is absent (it is gitignored
+output; see the memory note on local audit-artifact tests).
 """
 from __future__ import annotations
 
@@ -55,20 +57,44 @@ class ExpertRolloutIntegrationTests(unittest.TestCase):
                 initial_adapter=str(adapter), base_model="google/gemma-4-12B-it", base_revision="0" * 40,
                 evidence_profile="classifier_gated_diagnostics", triage_classifier=str(TRIAGE),
                 samples_per_root=2, max_steps=40, policy_source="expert", evaluate_every_iteration=False,
+                environment_options={"lifecycle_choice": 1, "detailed_evidence": 1},
+                reward={"lifecycle_credit": 0.25},
             )
             os.environ.setdefault("PSSE_LOCAL_DIAGNOSTIC_BUILD", "1")
             rollout = run_phase(config, "rollout")
             self.assertEqual(rollout["completed_groups"], 2)
+            self.assertEqual(rollout["environment"]["environment_options"], {"lifecycle_choice": 1, "detailed_evidence": 1})
             manifest = Manifest.load(base / "run" / "manifest.json", initial_adapter=str(adapter))
             self.assertEqual(manifest.phase, "update")
             groups_dir = base / "run" / "iteration_000" / "trajectories" / "groups"
             self.assertEqual(len(list(groups_dir.glob("*.jsonl"))), 2)
-            first = json.loads(next(groups_dir.glob("*.jsonl")).read_text(encoding="utf-8").splitlines()[0])
+            episodes = [json.loads(line) for path in sorted(groups_dir.glob("*.jsonl"))
+                        for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            first = episodes[0]
             self.assertTrue(first["evaluation"]["truth_audited_task_success"], first["reward"])
             self.assertFalse(first["pairing_ok"])
             self.assertGreater(first["reward"]["credit"], 0.0)
+            # The options reached the environment: the policy observation of every
+            # step carries the lifecycle-choice record, and the teacher's commits of
+            # its true measurement correction are decisions the audit labels.
+            from psse_env.actions import lifecycle_choice_of
+
+            observed = [step.get("policy_observation") for episode in episodes
+                        for step in episode["evaluation"]["trace"] if isinstance(step.get("policy_observation"), dict)]
+            self.assertTrue(observed)
+            self.assertTrue(all(lifecycle_choice_of(observation) is not None for observation in observed))
+            decisions = [decision for episode in episodes for decision in episode["lifecycle"]]
+            measurement = [episode for episode in episodes if episode["family"] == "measurement"]
+            self.assertTrue(measurement)
+            self.assertTrue(all(episode["lifecycle"] for episode in measurement), [episode["lifecycle"] for episode in measurement])
+            self.assertTrue(all(decision["tool"] == "commit_state" and decision["agrees"] is True for decision in decisions), decisions)
+            self.assertEqual(rollout["store"]["lifecycle"]["declines"], 0)
+            self.assertEqual(rollout["store"]["lifecycle"]["agreeing"], len(decisions))
             update = run_phase(config, "update")
+            # The expert's episodes carry no generation record, so nothing pairs and
+            # the labelled decisions give no rows either; the adapter is carried over.
             self.assertIsNone(update["update"])
+            self.assertEqual(update["scores"]["lifecycle"]["labelled_decisions_paired"], 0)
             self.assertTrue((base / "run" / "iteration_000" / "adapter" / "adapter_config.json").is_file())
             evaluate = run_phase(config, "evaluate")
             self.assertIsNone(evaluate)

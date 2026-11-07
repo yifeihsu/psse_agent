@@ -51,6 +51,13 @@ NEEDED_STREAMS: dict[str, frozenset[str]] = {
     "harmonic": frozenset({GET_HARMONIC_CONTEXT}),
 }
 ACQUISITION_TOOLS = frozenset({GET_THREE_PHASE_CONTEXT, GET_HARMONIC_CONTEXT})
+#: How the lifecycle credit reaches the update (decision 5 of the RL plan).
+#: ``sampled``: a per-decision term of +/- credit on the tokens the policy
+#: sampled at the decision (moves the choice in proportion to p(1 - p), p the
+#: probability of the audit's choice).  ``supervised``: the audit's choice
+#: itself, rendered as the completion the student was trained to emit, trained
+#: with weight credit (in proportion to 1 - p; :mod:`psse_env.rl.targets`).
+LIFECYCLE_FORMS = ("sampled", "supervised")
 
 
 @dataclass(frozen=True)
@@ -69,14 +76,27 @@ class RewardWeights:
     #: Calls beyond this many are not charged, so a long episode cannot be
     #: pushed below the penalty floor by length alone.
     max_charged_calls: int = 40
+    #: Lifecycle credit from the truth audit (RL plan of 2026-11-05, section
+    #: 6): a per-decision term of this size on every commit or decline of an
+    #: accepted candidate, positive when the decision agrees with the audit
+    #: (commit a true target, decline a wrong one) and negative otherwise.
+    #: It is applied per row by :func:`psse_env.rl.rows.build_rows`, not to
+    #: the episode total, so a labelled decision is trained even when its
+    #: group's samples all scored the same.  Zero leaves the case reward
+    #: alone; a config that sets it must open the lifecycle choice.
+    lifecycle_credit: float = 0.0
+    #: The form of the lifecycle term (:data:`LIFECYCLE_FORMS`).
+    lifecycle_form: str = "sampled"
     basis_credit: dict[str, float] = field(default_factory=lambda: dict(BASIS_CREDIT))
 
     def validate(self) -> None:
         for name, value in asdict(self).items():
-            if name == "basis_credit":
+            if name in {"basis_credit", "lifecycle_form"}:
                 continue
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
                 raise ValueError(f"reward weight {name} must be a nonnegative number, got {value!r}")
+        if self.lifecycle_form not in LIFECYCLE_FORMS:
+            raise ValueError(f"lifecycle_form must be one of {LIFECYCLE_FORMS}, got {self.lifecycle_form!r}")
         if self.max_charged_calls <= 0:
             raise ValueError("max_charged_calls must be positive")
         for basis, credit in self.basis_credit.items():
@@ -260,6 +280,7 @@ __all__ = [
     "BASIS_CREDIT",
     "BUDGET_EXHAUSTED_CREDIT",
     "BUDGET_EXHAUSTED_REQUEST",
+    "LIFECYCLE_FORMS",
     "NEEDED_STREAMS",
     "REWARD_CONTRACT",
     "RewardBreakdown",

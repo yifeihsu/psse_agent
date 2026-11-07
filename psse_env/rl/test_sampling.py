@@ -71,6 +71,28 @@ class RootStratumTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             root_stratum(_root(0, "harmonic"), "bogus")
 
+    def test_compound_class_key_reads_the_suite_class_and_refuses_roots_without_one(self) -> None:
+        root = {"execution": {"scenario_id": "c1"}, "grouping": {"scenario_family": "parameter"},
+                "audit": {"compound": {"class": "rx2_adjacent"}}}
+        self.assertEqual(root_stratum(root, "compound_class"), "rx2_adjacent")
+        self.assertEqual(root_stratum(root, "family"), "parameter")
+        with self.assertRaisesRegex(ValueError, "audit.compound.class"):
+            root_stratum(_root(0, "harmonic"), "compound_class")
+        self.assertEqual(stratum_sizes([root], "compound_class"), {"rx2_adjacent": 1})
+        RootSampling.from_mapping({"mode": "stratified", "key": "compound_class", "counts": {"rx2_adjacent": 1}}).validate(1)
+
+    def test_stratified_draw_by_compound_class(self) -> None:
+        suite = []
+        for index, name in enumerate(["rx2_adjacent"] * 4 + ["meter_rx2"] * 3 + ["control_meter"] * 2):
+            suite.append({"execution": {"scenario_id": f"c{index:02d}"}, "grouping": {"scenario_family": "parameter"},
+                          "audit": {"compound": {"class": name}}})
+        counts = {"rx2_adjacent": 2, "meter_rx2": 1, "control_meter": 1}
+        for iteration in range(4):
+            rows = stratified_roots(suite, iteration=iteration, counts=counts, key="compound_class", seed=5)
+            self.assertEqual(Counter(root_stratum(row, "compound_class") for row in rows), Counter(counts))
+        with self.assertRaisesRegex(ValueError, "missing"):
+            stratified_roots(suite, iteration=0, counts={"rx2_adjacent": 4}, key="compound_class", seed=5)
+
     def test_stratum_sizes(self) -> None:
         self.assertEqual(stratum_sizes(_suite()), {
             "harmonic": 6, "measurement": 10, "mimic:flow_pair_same_sign": 4,

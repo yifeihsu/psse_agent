@@ -160,6 +160,104 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual(report.kl, [0.0])
             self.assertIsNone(report.resumed_from)
 
+    def test_lifecycle_rows_train_their_term_apart_from_the_policy_term(self) -> None:
+        for term in (0.5, -0.5):
+            model = _TinyLM()
+            row = build_step_row(root="r", sample_index=0, step=0, advantage=0.0, prompt_ids=[1, 2, 3], completion_ids=[4, 5],
+                                 max_length=64, lifecycle_term=term, lifecycle_only=True)
+            before = completion_logprobs(model, row).sum().item()
+            report = policy_gradient_update(model, [row], UpdateSettings(learning_rate=0.1, optimizer_steps=1))
+            after = completion_logprobs(model, row).sum().item()
+            if term > 0:
+                self.assertGreater(after, before)
+            else:
+                self.assertLess(after, before)
+            self.assertEqual((report.policy_rows, report.lifecycle_rows, report.preservation_rows, len(report.lifecycle_loss)), (0, 1, 0, 1))
+            # The term's loss: the mean over the row's two tokens of -term * logprob, one lifecycle row in the step.
+            self.assertAlmostEqual(report.lifecycle_loss[0], -term * before / 2, places=5)
+            self.assertEqual(report.policy_loss, [0.0])
+
+    def test_lifecycle_and_policy_terms_add_up_under_their_own_normalizations(self) -> None:
+        def gradient(rows):
+            model = _TinyLM()
+            recorder = _GradRecorder(model)
+            policy_gradient_update(model, rows, UpdateSettings(learning_rate=0.1, optimizer_steps=1, max_grad_norm=1e6), optimizer=recorder)
+            return recorder.grad
+
+        policy = _row([1, 2, 3], [4, 5], 1.0, 0)
+        lifecycle = build_step_row(root="r", sample_index=1, step=0, advantage=0.0, prompt_ids=[2, 3], completion_ids=[6, 7, 8],
+                                   max_length=64, lifecycle_term=-0.25, lifecycle_only=True)
+        riding = build_step_row(root="r", sample_index=2, step=0, advantage=0.5, prompt_ids=[3, 4], completion_ids=[9],
+                                max_length=64, lifecycle_term=0.25)
+        both = gradient([policy, lifecycle])
+        self.assertTrue(torch.allclose(both, gradient([policy]) + gradient([lifecycle]), atol=1e-6))
+        self.assertFalse(torch.allclose(both, gradient([policy]), atol=1e-6))
+        # A term riding on a policy row adds the lifecycle gradient of that row to its policy gradient.
+        plain = build_step_row(root="r", sample_index=2, step=0, advantage=0.5, prompt_ids=[3, 4], completion_ids=[9], max_length=64)
+        only_term = build_step_row(root="r", sample_index=2, step=0, advantage=0.0, prompt_ids=[3, 4], completion_ids=[9], max_length=64,
+                                   lifecycle_term=0.25, lifecycle_only=True)
+        self.assertTrue(torch.allclose(gradient([riding]), gradient([plain]) + gradient([only_term]), atol=1e-6))
+
+    def test_supervised_rows_train_the_audits_choice_outside_every_other_term(self) -> None:
+        model = _TinyLM()
+        target = build_step_row(root="r", sample_index=0, step=0, advantage=0.0, prompt_ids=[1, 2, 3], completion_ids=[4, 5],
+                                max_length=64, lifecycle_term=0.5, supervised=True)
+        before = completion_logprobs(model, target).sum().item()
+        report = policy_gradient_update(model, [target], UpdateSettings(learning_rate=0.1, optimizer_steps=1))
+        after = completion_logprobs(model, target).sum().item()
+        self.assertGreater(after, before)
+        self.assertEqual((report.policy_rows, report.lifecycle_rows, report.supervised_rows, report.preservation_rows), (0, 0, 1, 0))
+        self.assertAlmostEqual(report.supervised_loss[0], -0.5 * before / 2, places=5)
+        self.assertEqual((report.policy_loss, report.lifecycle_loss), ([0.0], [0.0]))
+        # The on-policy check and the clip ignore supervised rows (no record), the reference pass never sees them,
+        # and the KL normalization counts the sampled rows only.
+        calls = []
+
+        def reference(row):
+            calls.append(row.sample_index)
+            return completion_logprobs(_TinyLM(seed=1), row).detach()
+
+        model = _TinyLM()
+        policy = _with_record(model, [_row([1, 2, 3], [4, 5], 1.0, 0)])[0]
+        supervised = build_step_row(root="r", sample_index=1, step=0, advantage=0.0, prompt_ids=[2, 3], completion_ids=[6, 7, 8],
+                                    max_length=64, lifecycle_term=0.25, supervised=True)
+        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=1, beta_kl=0.1, clip_ratio=0.2, clip_reference="training",
+                                  max_on_policy_log_ratio=0.5)
+        report = policy_gradient_update(model, [policy, supervised], settings, reference_logprobs=reference)
+        self.assertEqual(calls, [0])
+        self.assertEqual(report.on_policy_check[0]["rows_without_record"], 0)
+        self.assertEqual(report.on_policy_check[0]["rows"], 1)
+        self.assertEqual((report.policy_rows, report.supervised_rows), (1, 1))
+        self.assertNotEqual(report.supervised_loss[0], 0.0)
+
+    def test_supervised_and_policy_gradients_add_up(self) -> None:
+        def gradient(rows):
+            model = _TinyLM()
+            recorder = _GradRecorder(model)
+            policy_gradient_update(model, rows, UpdateSettings(learning_rate=0.1, optimizer_steps=1, max_grad_norm=1e6), optimizer=recorder)
+            return recorder.grad
+
+        policy = _row([1, 2, 3], [4, 5], 1.0, 0)
+        supervised = build_step_row(root="r", sample_index=1, step=0, advantage=0.0, prompt_ids=[2, 3], completion_ids=[6, 7, 8],
+                                    max_length=64, lifecycle_term=0.25, supervised=True)
+        self.assertTrue(torch.allclose(gradient([policy, supervised]), gradient([policy]) + gradient([supervised]), atol=1e-6))
+        # The supervised gradient is the cross-entropy gradient of the target (a unit-advantage row under the token
+        # normalization is the mean negative log-likelihood too), scaled by the term.
+        plain = build_step_row(root="r", sample_index=1, step=0, advantage=1.0, prompt_ids=[2, 3], completion_ids=[6, 7, 8], max_length=64)
+        self.assertTrue(torch.allclose(gradient([supervised]), 0.25 * gradient([plain]), atol=1e-6))
+
+    def test_checkpoint_state_records_the_lifecycle_losses(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            model = _TinyLM()
+            row = build_step_row(root="r", sample_index=0, step=0, advantage=0.0, prompt_ids=[1, 2], completion_ids=[3, 4],
+                                 max_length=64, lifecycle_term=0.5, lifecycle_only=True)
+            checkpoint = UpdateCheckpoint(directory=Path(directory) / "ckpt", save_model=_save_tiny, every_rows=4)
+            report = policy_gradient_update(model, [row], UpdateSettings(learning_rate=0.1), checkpoint=checkpoint)
+            state = checkpoint.load_state()
+            self.assertEqual(state["lifecycle_losses"], report.lifecycle_loss)
+            self.assertEqual(state["partial_lifecycle"], 0.0)
+            self.assertEqual((state["supervised_losses"], state["partial_supervised"]), ([0.0], 0.0))
+
     def test_zero_advantage_rows_leave_the_parameters_unchanged(self) -> None:
         model = _TinyLM()
         before = model.table.detach().clone()
