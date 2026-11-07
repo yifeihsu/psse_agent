@@ -134,6 +134,11 @@ class RewardBreakdown:
     penalties: float
     costs: float
     contract: str = REWARD_CONTRACT
+    #: Who decided ``healthy_component_corrupted``: the evaluation's own
+    #: preservation check (``evaluation``), the audit of accepted targets
+    #: where the evaluation did not know (``accepted_targets``), or nobody
+    #: (``None``: no corruption found, or unknown with no audit given).
+    healthy_component_source: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -189,8 +194,20 @@ def episode_reward(
     family: str | None = None,
     expert_reference_calls: int | None = None,
     weights: RewardWeights | None = None,
+    kept_wrong_targets: int | None = None,
 ) -> RewardBreakdown:
-    """Score one evaluated episode (``EpisodeEvaluation.as_dict()``)."""
+    """Score one evaluated episode (``EpisodeEvaluation.as_dict()``).
+
+    ``kept_wrong_targets`` is the audit of accepted targets: how many
+    corrections the episode kept on components that are not truly faulted
+    (``psse_env.rl.lifecycle``, ``wrong_target_committed``).  The evaluation's
+    own preservation check does not know the answer for an episode it
+    stopped before the end (``healthy_preservation_known`` False); there the
+    audit decides, so a stopped episode that kept a wrong edit pays the same
+    penalty as one that handed off with it (2026-11-07, the smoke's root
+    r0_3f5b6247abbb, where two refused-escalation loops at -0.61 outscored
+    two clean hand-offs at -0.74 that kept the same wrong correction).
+    """
 
     weights = weights or RewardWeights()
     weights.validate()
@@ -220,6 +237,10 @@ def episode_reward(
     healthy_known = episode.get("healthy_preservation_known")
     healthy_preserved = episode.get("healthy_components_preserved")
     corrupted = bool(healthy_known is not False and healthy_preserved is False)
+    source: str | None = "evaluation" if corrupted else None
+    if healthy_known is False and kept_wrong_targets is not None and int(kept_wrong_targets) > 0:
+        corrupted = True
+        source = "accepted_targets"
     loop = bool(episode.get("loop_detected"))
     invalid = int(episode.get("invalid_action_count") or 0)
 
@@ -253,6 +274,7 @@ def episode_reward(
         invalid_actions=invalid,
         penalties=float(penalties),
         costs=float(costs),
+        healthy_component_source=source,
     )
 
 

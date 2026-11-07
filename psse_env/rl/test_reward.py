@@ -101,9 +101,21 @@ class RewardTests(unittest.TestCase):
         self.assertTrue(reward.healthy_component_corrupted)
         self.assertAlmostEqual(reward.penalties, 1.0 + 0.25 + 0.75 + 0.2 + 0.2)
         self.assertAlmostEqual(reward.total, -reward.penalties)
+        self.assertEqual(reward.healthy_component_source, "evaluation")
+        # A stopped episode: the evaluation does not know whether healthy components were kept.  Without the
+        # audit of accepted targets nothing is charged; with it, a kept wrong target pays the penalty.
         unknown = _episode(success=False, basis=None, trace=[_step(RUN_WLS)],
                            healthy_components_preserved=False, healthy_preservation_known=False)
         self.assertFalse(episode_reward(unknown, weights=weights).healthy_component_corrupted)
+        self.assertIsNone(episode_reward(unknown, weights=weights).healthy_component_source)
+        self.assertFalse(episode_reward(unknown, weights=weights, kept_wrong_targets=0).healthy_component_corrupted)
+        charged = episode_reward(unknown, weights=weights, kept_wrong_targets=1)
+        self.assertTrue(charged.healthy_component_corrupted)
+        self.assertEqual(charged.healthy_component_source, "accepted_targets")
+        self.assertAlmostEqual(charged.penalties, 0.75)
+        # Where the evaluation does know, its answer stands.
+        known_fine = _episode(success=False, basis=None, trace=[_step(RUN_WLS)], healthy_components_preserved=True, healthy_preservation_known=True)
+        self.assertFalse(episode_reward(known_fine, weights=weights, kept_wrong_targets=1).healthy_component_corrupted)
 
     def test_tool_regret_charges_calls_beyond_the_expert_reference(self) -> None:
         weights = RewardWeights(call_cost=0.0, tool_regret_cost=0.1)

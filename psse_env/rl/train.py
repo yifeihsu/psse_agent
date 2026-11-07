@@ -768,8 +768,9 @@ def _greedy_evaluation(
                     case_loader=deterministic_case_loader, **PAIRED_EVALUATION_CONTRACT,
                 ).as_dict()
                 episode = dict(result["suite_metrics"]["episodes"][0])
-                reward = episode_reward(episode, family=family, expert_reference_calls=reference.get(root), weights=weights)
                 decisions = lifecycle_decisions(episode.get("trace") or [], scenario_truth(scenario))
+                reward = episode_reward(episode, family=family, expert_reference_calls=reference.get(root), weights=weights,
+                                        kept_wrong_targets=summarize_decisions(decisions)["wrong_target_committed"])
                 _write_json(episodes_dir / f"{_safe_name(root)}.json",
                             _compact_evaluation(episode, root=root, family=family, reward=reward.as_dict(), lifecycle=decisions))
                 print(json.dumps({"evaluated": root, "family": family,

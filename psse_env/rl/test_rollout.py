@@ -258,6 +258,49 @@ class RolloutTests(unittest.TestCase):
             self.assertEqual((lifecycle["decisions"], lifecycle["declines"], lifecycle["true_target_declined"], lifecycle["disagreeing"],
                               lifecycle["episodes_with_decline"], lifecycle["groups_with_labelled_decision"]), (1, 1, 1, 1, 1, 1))
 
+    def test_rollout_group_charges_a_kept_wrong_target_the_evaluation_could_not_check(self) -> None:
+        scenario = _scenario()
+        scenario["audit"] = {"truth": {"true_parameter_errors": [{"line_index1": 7}]}}
+
+        def make_evaluator(line, known):
+            trace = [
+                {"step": 0, "action": {"tool": CORRECT_PARAMETERS, "arguments": {"state_id": "active", "line_index": line}},
+                 "execution_status": "success", "error_code": None, "candidate_disposition_offline": None},
+                {"step": 1, "action": {"tool": "commit_state", "arguments": {"state_id": "active"}},
+                 "execution_status": "success", "error_code": None, "candidate_disposition_offline": "ACCEPT_PARTIAL"},
+            ]
+
+            class _Result:
+                def as_dict(self):
+                    return {"suite_metrics": {"episodes": [{"scenario_id": "r0_fake", "family": "parameter",
+                                                            "truth_audited_task_success": False, "trace": copy.deepcopy(trace),
+                                                            "steps": 2, "policy_steps": 2, "healthy_preservation_known": known,
+                                                            "healthy_components_preserved": None if not known else True}]}}
+
+            def evaluator(suites, *, env_factory, policy_factory, max_steps, seed, case_loader, **contract):
+                policy = policy_factory()
+                policy.act({"phase": "wls"})
+                policy.act({"phase": "finalize"})
+                return _Result()
+
+            return evaluator
+
+        def reward_of(line, known):
+            group = rollout_group(scenario, samples=1, base_seed=3, env_factory=lambda **kwargs: _ScriptEnv(**kwargs),
+                                  policy_factory=lambda seed: _SamplingPolicy(seed), max_steps=6, case_loader=None,
+                                  weights=RewardWeights(), evaluator=make_evaluator(line, known))
+            return group[0]
+
+        stopped_wrong = reward_of(8, False)  # a wrong target kept, the evaluation stopped before it could check
+        self.assertEqual(stopped_wrong.lifecycle[0]["target_is_true"], False)
+        self.assertTrue(stopped_wrong.reward["healthy_component_corrupted"])
+        self.assertEqual(stopped_wrong.reward["healthy_component_source"], "accepted_targets")
+        stopped_true = reward_of(7, False)  # a true target kept: nothing to charge
+        self.assertFalse(stopped_true.reward["healthy_component_corrupted"])
+        self.assertAlmostEqual(stopped_wrong.total_reward, stopped_true.total_reward - 0.5)
+        ended_wrong = reward_of(8, True)  # the evaluation checked and found the components preserved: its answer stands
+        self.assertFalse(ended_wrong.reward["healthy_component_corrupted"])
+
     def test_store_round_trips_groups_and_resumes_complete_ones(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = TrajectoryStore(directory)

@@ -333,7 +333,11 @@ def rollout_group(
         episode = dict(episodes[0])
         if not episode.get("family") or episode.get("family") == "None":
             episode["family"] = family
-        reward = episode_reward(episode, family=family, expert_reference_calls=expert_reference_calls, weights=weights)
+        # The decisions first: the reward charges a kept wrong target the
+        # evaluation could not check itself (a stopped episode).
+        decisions = lifecycle_decisions(episode.get("trace") or [], truth)
+        reward = episode_reward(episode, family=family, expert_reference_calls=expert_reference_calls, weights=weights,
+                                kept_wrong_targets=summarize_decisions(decisions)["wrong_target_committed"])
         steps, ok, note = pair_records_with_trace(recorder.records, episode.get("trace") or [])
         identity = recorder.research_policy_identity
         trajectories.append(
@@ -348,7 +352,7 @@ def rollout_group(
                 pairing_ok=ok,
                 pairing_note=note,
                 policy_identity=dict(identity) if isinstance(identity, Mapping) else {},
-                lifecycle=lifecycle_decisions(episode.get("trace") or [], truth),
+                lifecycle=decisions,
             )
         )
     return trajectories

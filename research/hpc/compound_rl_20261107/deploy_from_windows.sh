@@ -33,8 +33,11 @@ export MSYS_NO_PATHCONV=1
 [[ -s "$DEV_SUBSET" ]] || { echo "development subset missing: $DEV_SUBSET (run dev_subset.py first)" >&2; exit 2; }
 for config in $CONFIGS; do
   [[ -s "$REPO/$CELL_REL/$config" ]] || { echo "config missing: $CELL_REL/$config" >&2; exit 2; }
-  if grep -q $'\r' "$REPO/$CELL_REL/$config"; then echo "config has CR line endings: $config" >&2; exit 2; fi
+  # -U: Git for Windows' grep strips the CR of CRLF lines before matching, so without it this check never fires
+  # (2026-11-07: a config written by Python's write_text, CRLF on Windows, went up unnoticed).
+  if grep -qU $'\r' "$REPO/$CELL_REL/$config"; then echo "config has CR line endings: $config" >&2; exit 2; fi
 done
+if grep -qU $'\r' "$DEV_SUBSET"; then echo "development subset has CR line endings: $DEV_SUBSET (rebuild it with dev_subset.py)" >&2; exit 2; fi
 
 cd "$REPO"
 [[ "$(git rev-parse "$BRANCH")" == "$COMMIT" ]] || { echo "$BRANCH is not at $COMMIT" >&2; exit 2; }

@@ -80,7 +80,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     subset = stratified_subset(scenarios, size=args.size, seed=args.seed)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(subset, indent=1) + "\n", encoding="utf-8")
+    # LF whatever the platform: the file goes to the cluster byte for byte (write_text would write CRLF on Windows).
+    output.write_text(json.dumps(subset, indent=1) + "\n", encoding="utf-8", newline="\n")
     counts = Counter(root_stratum(scenario, "compound_class") for scenario in subset)
     print(json.dumps({"suite": args.suite, "roots": len(scenarios), "subset": len(subset), "seed": args.seed,
                       "by_class": dict(sorted(counts.items())), "output": str(output)}, indent=2))

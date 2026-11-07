@@ -35,7 +35,8 @@ also shows what the precision change alone moves. About 1 to 2 GPU-hours.
 | `rl_smoke.json` | The stage 3 smoke: one iteration of 8 roots from the training draw, 4 samples each, no evaluation, output `out/smoke_v1` |
 | `rl_ieee14.json` | The IEEE 14 arm: the baseline phase, then 64 roots per iteration in the training draw's class mix (`root_sampling`), greedy evaluation of every iteration on the 300-case development subset, the supervised lifecycle term, output `out/ieee14_v1` |
 | `rl_ieee14_sampled.json` | The comparison arm of decision 5: the same run with the per-decision (`sampled`) lifecycle term, output `out/ieee14_sampled_v1`; it differs from `rl_ieee14.json` in `reward.lifecycle_form` and `output_dir` alone (`test_cell.py`) |
-| `rl.sbatch` | One job runs `ITERATIONS` iterations as separate rollout, update and evaluate processes (two rollout and evaluation workers on an 80 GB card, each holding a bf16 copy); requeues resume at the manifest's phase |
+| `rl.sbatch` | One job runs `ITERATIONS` iterations as separate rollout, update and evaluate processes (two rollout and evaluation workers on an 80 GB card, each holding a bf16 copy); requeues resume at the manifest's phase; `TARGET_ITERATIONS` ends a job once the manifest reaches it |
+| `submit_arm.sh` | An arm as a chain of linked 12-hour jobs (`afterany`), each a link of `rl.sbatch` with the target iteration count; later links exit at once when the target is reached |
 | `dev_subset.py` | The fixed stratified development subset (300 of the 1,275 cases, the suite's class mix, seed 20261107) |
 | `deploy_from_windows.sh` | Clone the cloning cell's source as this cell's, upload the bundle, the training draw, the subset and the configs |
 | `test_cell.py` | The configs load through the driver, name the plan's options, and their class mix matches the training draw |
@@ -102,9 +103,31 @@ The smoke passes when, in `out/smoke_v1/iteration_000/`:
   `rows.target_renderer.refused` at zero and a finite `supervised_loss`, a `clip_check` of zero at
   the first step, a sampler gap (`on_policy_check`) under 0.2 and a KL of zero at the first step.
 
-Then the arm: `CONFIG=rl_ieee14.json`, `ITERATIONS=2` per job, resubmitted until the manifest
-reaches the target; its first job runs the baseline phase before the first rollout. The plan stops
-RL if after three iterations S1 does not differ from S0 (the baseline) on the development subset.
+Then the arm, as a chain of linked 12-hour jobs, because one iteration does not fit one job:
+
+```bash
+wsl -- ssh torch bash -s -- rl_ieee14.json 7 6 crl-ieee14 < research/hpc/compound_rl_20261107/submit_arm.sh
+```
+
+The first link runs the baseline phase before the first rollout; each later link resumes where the
+one before it stopped (rollouts and evaluations per root, the update at its checkpoint), and links
+after the target exit at once. The plan stops RL if after three iterations S1 does not differ from
+S0 (the baseline) on the development subset.
+
+**Pace, from the smoke of 2026-11-07 on an RTX PRO 6000:** about 5 minutes per root group per
+worker and about 7.3 s per update row, the clip-baseline pass included. One 64-root iteration is
+about 256 episodes (2.5 hours on two workers) plus an update of about 3,450 rows (7 hours) plus the
+300-case evaluation: about 13 GPU-hours, three times what section 10 of the plan assumed, and the
+baseline adds about 3 hours once. Six iterations are about 80 GPU-hours per arm; an H200 is faster.
+
+**A reward fix from the smoke (2026-11-07).** The evaluation's healthy-component check does not
+know its answer for an episode it stopped early (a repeated refused action), so such an episode paid
+no penalty for a wrong correction it kept, while a clean hand-off that kept the same wrong edit paid
+0.5; in one smoke group two refused-escalation loops at −0.61 outscored two clean hand-offs at −0.74.
+Now, where the evaluation does not know, the audit of accepted targets decides
+(`episode_reward(..., kept_wrong_targets=...)`, `healthy_component_source` in the breakdown). The
+smoke's stored rewards predate the fix; both arms share the corrected reward.
+
 Status and results:
 
 ```bash
@@ -118,5 +141,7 @@ with its reward, audit, recorded tokens, their sampling probabilities and its la
 counts within 16 and 20 actions and the lifecycle counts.
 
 Status on 2026-11-07: built and tested in the checkout (the driver's unit tests, and the
-real-environment wiring check with the options on and the expert rolled out); not deployed, nothing
-submitted.
+real-environment wiring check with the options on and the expert rolled out); deployed at a0a472b,
+and the smoke (job 22193977) passed every criterion above: 42 supervised rows for 42 labelled
+decisions with none refused, clip check and KL at zero at the first step, a sampler gap of 0.0004,
+finite losses. The arm waits for the development `after` arm's read of the start adapter.

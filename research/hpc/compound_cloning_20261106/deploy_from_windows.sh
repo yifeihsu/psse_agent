@@ -64,7 +64,8 @@ if [[ "$DEPLOY_ROWS" == 1 ]]; then
   echo "training view: $rows rows, $(( (rows + 3) / 4 )) optimizer steps"
 fi
 [[ -s "$EVAL_SUITES_FILE" ]] || { echo "suite list missing: $EVAL_SUITES_FILE" >&2; exit 2; }
-if grep -q $'\r' "$EVAL_SUITES_FILE"; then echo "suite list has CR line endings: $EVAL_SUITES_FILE" >&2; exit 2; fi
+# -U: Git for Windows' grep strips the CR of CRLF lines before matching, so without it this check never fires.
+if grep -qU $'\r' "$EVAL_SUITES_FILE"; then echo "suite list has CR line endings: $EVAL_SUITES_FILE" >&2; exit 2; fi
 for item in $UPLOAD_SUITES; do
   name=${item%%=*}
   file=${item#*=}

@@ -24,14 +24,16 @@
 #
 # CONFIG names a config under $WORK/configs (cluster paths inside), ITERATIONS how many iterations
 # this job attempts before exiting (default 2; resubmit to continue; a requeue restarts the loop and
-# continues at the manifest's phase).  A config with baseline_evaluation starts with the baseline
-# phase, the starting adapter's greedy evaluation under this driver's bf16 loader (the cloning
-# cell's arms ran on a 4-bit base, so they are not this run's baseline); it is sharded like the
-# evaluation.  Cancel the job once the manifest reaches the target.
+# continues at the manifest's phase).  TARGET_ITERATIONS, when set, ends the job as soon as the
+# manifest's iteration reaches it, so the later links of a chain (submit_arm.sh) exit at once.  A
+# config with baseline_evaluation starts with the baseline phase, the starting adapter's greedy
+# evaluation under this driver's bf16 loader (the cloning cell's arms ran on a 4-bit base, so they
+# are not this run's baseline); it is sharded like the evaluation.
 set -euo pipefail
 WORK=/scratch/yx3882/compound_rl_20261107
 CONFIG=${CONFIG:?set CONFIG to a config file name under $WORK/configs}
 ITERATIONS=${ITERATIONS:-2}
+TARGET_ITERATIONS=${TARGET_ITERATIONS:-}
 SRC=$WORK/source
 LOGS=$WORK/logs
 PY=/scratch/yx3882/.conda/envs/gemma4_research_5104/bin/python
@@ -74,7 +76,15 @@ if [[ -z "${RL_WORKERS:-}" ]]; then
 fi
 echo "[rl] $RL_WORKERS worker(s) for the rollout and evaluation phases"
 "$PY" -m psse_env.rl.train --config "$WORK/configs/$CONFIG" --status
+manifest_iteration() {
+  "$PY" -m psse_env.rl.train --config "$WORK/configs/$CONFIG" --status | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["iteration"])'
+}
+reached_target() {
+  [[ -n "$TARGET_ITERATIONS" ]] && (( $(manifest_iteration) >= TARGET_ITERATIONS ))
+}
+if reached_target; then echo "[rl] the manifest is at iteration $(manifest_iteration), the target $TARGET_ITERATIONS: nothing to do"; echo "crl-job-complete"; exit 0; fi
 for (( i = 0; i < ITERATIONS; i++ )); do
+  if reached_target; then echo "[rl] target of $TARGET_ITERATIONS iterations reached $(date -u +%FT%TZ)"; break; fi
   # The driver refuses a phase the manifest is not at, so the loop runs the phase it is at and
   # skips the others; the baseline phase runs once, before the first rollout.
   for phase in baseline rollout update evaluate; do
