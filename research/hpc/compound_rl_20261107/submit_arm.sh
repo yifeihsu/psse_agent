@@ -2,7 +2,7 @@
 # Submit an RL arm as a chain of linked 12-hour jobs (2026-11-07).  Run on torch, or through ssh stdin:
 #
 #   wsl -- ssh torch bash -s -- CONFIG LINKS TARGET_ITERATIONS [JOB_NAME] < research/hpc/compound_rl_20261107/submit_arm.sh
-#   e.g.  ... -- rl_ieee14.json 7 6 crl-ieee14
+#   e.g.  ... -- rl_ieee14.json 10 6 crl-ieee14   (ten links for six iterations: spare links exit at once)
 #
 # Why a chain: one arm iteration is about 13 GPU-hours on an RTX PRO 6000 (the smoke of 2026-11-07: about
 # 7.3 s per update row, about 3,450 rows per iteration, plus the rollouts and the 300-case evaluation), and

@@ -106,12 +106,13 @@ The smoke passes when, in `out/smoke_v1/iteration_000/`:
 Then the arm, as a chain of linked 12-hour jobs, because one iteration does not fit one job:
 
 ```bash
-wsl -- ssh torch bash -s -- rl_ieee14.json 7 6 crl-ieee14 < research/hpc/compound_rl_20261107/submit_arm.sh
+wsl -- ssh torch bash -s -- rl_ieee14.json 10 6 crl-ieee14 < research/hpc/compound_rl_20261107/submit_arm.sh
 ```
 
 The first link runs the baseline phase before the first rollout; each later link resumes where the
 one before it stopped (rollouts and evaluations per root, the update at its checkpoint), and links
-after the target exit at once. The plan stops RL if after three iterations S1 does not differ from
+after the target exit at once. Ten links for six iterations: seven 12-hour links are about 84 hours
+against about 81 needed, no margin for preemptions and queue waits, and a spare link costs nothing. The plan stops RL if after three iterations S1 does not differ from
 S0 (the baseline) on the development subset.
 
 **Pace, from the smoke of 2026-11-07 on an RTX PRO 6000:** about 5 minutes per root group per
@@ -144,4 +145,16 @@ Status on 2026-11-07: built and tested in the checkout (the driver's unit tests,
 real-environment wiring check with the options on and the expert rolled out); deployed at a0a472b,
 and the smoke (job 22193977) passed every criterion above: 42 supervised rows for 42 labelled
 decisions with none refused, clip check and KL at zero at the first step, a sampler gap of 0.0004,
-finite losses. The arm waits for the development `after` arm's read of the start adapter.
+finite losses.
+
+The development `after` arm of the start adapter (read 2026-11-08) solved 762 of 1,275 (teacher 804,
+clean 717 against 761) with false first declines of true partial candidates at 8.3 per 100 (90 of
+1,083; 5.8 on a case's first candidate, 17.1 on the second), above the bar of about 6; 63 of the 64
+cases only the teacher solves hold such a decline, and it declined 205 of 282 wrong accepted
+candidates. Offered a correction pass first or RL from the adapter as it is, the user chose RL: the
+arm was submitted on 2026-11-08 at 03:16Z as `crl-ieee14`, ten links 22259174 to 22259187, target six
+iterations, source dcb6b38. With no correction pass, S1 against S0 includes the supervised lifecycle
+term's repair of those false declines, so every evaluation is read with its lifecycle counts
+(`true_target_declined`, `wrong_target_committed`) beside the solved count.
+
+Decision 9 (2026-11-09 00:35Z, on the user's word): `update.max_row_grad_norm` went from 25 to 1.0 in the deployed `configs/rl_ieee14.json` on torch (backup `rl_ieee14.json.bak_before_decision9`) while the manifest stood at iteration 1, phase rollout, so the bound applies from iteration 1's update on; iteration 0's update ran with 25, and its step 2 gradient of 17.79 before the global clip came almost entirely from one row (`r0_0567f498b2cd` sample 0 step 10, a `run_wls` row with a positive advantage, most likely through the KL term). `rl.sbatch` starts a fresh driver process per phase, which re-reads the config, so no job was touched. The repo copy here mirrors the deployed value; `rl_ieee14_sampled.json` and `rl_smoke.json` still carry 25.
