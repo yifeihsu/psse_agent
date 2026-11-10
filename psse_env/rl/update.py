@@ -37,18 +37,46 @@ pass and the model is asked for the completion logits only
 preemption: the adapter and optimizer state after every optimizer step, and
 the accumulated gradients every few rows inside a step, are written as
 immutable files committed by one ``state.json``.
+
+Two settings change how an update steps (2026-11-09), both off by default
+so that a recorded run reads the same.  ``chunk_by='group'`` keeps every
+sample of a root in one optimizer step: a group's advantages sum to zero, so
+what its samples share cancels within the step, and a group dealt to two
+steps hands each of them one side of that sum.  ``carry_optimizer`` has the
+caller continue one optimizer across the updates of a run
+(:func:`build_optimizer` with the state the last update left), so that a
+weight moves by how steadily its gradient points; the first step of a new
+AdamW moves every weight by the learning rate times the sign of its
+gradient, whatever the gradient's size.
+
+Three more, for the experiment series of 2026-11-10 (stage 0 of its
+workplan), again off by default.  ``fresh_optimizer_steps`` is the number of
+steps an update takes while its optimizer is new: two steps of a new AdamW
+still move every weight the way the first step's rows point, so a run that
+takes several steps per update once the moments are carried takes one in its
+first.  ``step_diagnostics`` adds a report of every optimizer step that
+changes nothing the step does (:class:`StepDiagnostics`): the step's gradient
+split by loss term, the rows that carry it, how far the weights moved, and
+what the policy gives the lifecycle choices.  Every update now also reports
+how its rows were dealt (``row_accounting``: each row in exactly one step of
+the one pass) and binds its checkpoint to a digest of the batch, so a
+checkpoint, and the clip baseline kept in it, cannot be continued on another
+batch of the same size.
 """
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import math
 import random
 import shutil
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from psse_env.rl.prompt_digest import prompt_token_digest
 from psse_env.rl.rows import TrainingRow
 
 UPDATE_CONTRACT = "rl_on_policy_lora_update_v2"
@@ -60,6 +88,12 @@ UPDATE_CONTRACT = "rl_on_policy_lora_update_v2"
 #: step by its number of trajectories.
 LOSS_NORMALIZATIONS = ("dapo", "sequence", "trajectory")
 CLIP_REFERENCES = ("sampler", "training")
+#: What the first optimizer step of an update clips against (``UpdateSettings.first_step_baseline``).
+FIRST_STEP_BASELINES = ("persisted", "own")
+#: How the rows of an update are dealt to its optimizer steps: whole
+#: ``trajectory`` (root, sample) units, or whole ``group`` units (every sample
+#: of a root).  A group's advantages sum to zero only inside one step.
+CHUNKINGS = ("trajectory", "group")
 REFERENCE_ADAPTER = "reference"
 TRAINED_ADAPTER = "default"
 
@@ -123,6 +157,58 @@ class UpdateSettings:
     #: sampler such a token is clipped or scaled by a factor of six at the
     #: first step for a numerical reason, not a policy change.
     clip_reference: str = "sampler"
+    #: How rows are dealt to the optimizer steps (see ``CHUNKINGS``).  With
+    #: ``trajectory`` and more than one step, the samples of a group land in
+    #: different steps: each step then sees one side of advantages that sum
+    #: to zero, and two steps of a new AdamW turn the two sides into a net
+    #: move of about 0.95 of the learning rate on weights whose gradient over
+    #: the whole batch is zero (the run of 2026-11-08, plan point 46).
+    #: ``group`` keeps every group in one step.
+    chunk_by: str = "trajectory"
+    #: Continue one optimizer across the updates of a run instead of building
+    #: a new one for each.  The update itself steps whatever optimizer it is
+    #: given; the driver reads this, builds the optimizer from the state the
+    #: last update left (:func:`build_optimizer`) and saves the state this
+    #: update leaves.  The first step of a new AdamW moves each weight by the
+    #: learning rate times the sign of its gradient; with the moments carried,
+    #: a weight moves by how steadily its gradient has pointed one way.
+    carry_optimizer: bool = False
+    #: The optimizer steps of an update whose optimizer is new (it has taken
+    #: no step yet: the first update of a run, and every update of a run that
+    #: does not carry its optimizer); ``None`` keeps ``optimizer_steps``.
+    #: After the first step of a new AdamW every weight has moved the
+    #: learning rate against the sign of the first step's gradient, and a
+    #: second step can only lengthen or shorten that move (between 0.26 and
+    #: 2.0 of the learning rate; RL plan, point 49 of 2026-11-10), so two
+    #: steps follow the half of the batch that came first.  A run that takes
+    #: several steps per update once its moments are carried sets this to 1.
+    fresh_optimizer_steps: int | None = None
+    #: Report-only diagnostics of every optimizer step
+    #: (:class:`StepDiagnostics`).  The step's gradient and the weights it
+    #: leaves are the same with or without them; they cost one extra backward
+    #: pass for each further loss term of a row and a copy of the trainable
+    #: weights.
+    step_diagnostics: bool = False
+    #: What the first optimizer step of an update takes as its clip baseline.
+    #: ``persisted``: the baseline of ``clip_reference``, as in every
+    #: recorded run.  ``own``: the row's own log-probabilities in the pass
+    #: that trains it.  Before the first step the model has not moved, so the
+    #: ratio is one by definition; the persisted baseline is that only when
+    #: the pass that wrote it and the pass that trains the row ran on one GPU
+    #: type (first arm, 2026-11-10: resumed stints on other card types gave a
+    #: mean gap of 0.024 and 0.064 on decision tokens at step one, with 32
+    #: and 93 tokens beyond the clip).  An update of one step then needs no
+    #: baseline pass at all and runs none.  Later steps clip against the
+    #: persisted baseline either way.
+    first_step_baseline: str = "persisted"
+    #: How many rows of a step the diagnostics name, largest gradient first.
+    diagnostic_top_rows: int = 8
+    #: Whether the diagnostics split the step's gradient by loss term.  The
+    #: split is what costs: one more backward pass for each further term of a
+    #: row (about 1.4 times the update's time on the first arm's batches).
+    #: Without it the diagnostics keep the row norms, the rows that carry the
+    #: step, the lifecycle probabilities and the step's size, at no extra pass.
+    diagnostic_components: bool = True
 
     @property
     def bounds_rows(self) -> bool:
@@ -157,6 +243,21 @@ class UpdateSettings:
             raise ValueError("max_on_policy_log_ratio must be finite and positive when set")
         if self.clip_reference not in CLIP_REFERENCES:
             raise ValueError(f"clip_reference must be one of {CLIP_REFERENCES}, got {self.clip_reference!r}")
+        if self.chunk_by not in CHUNKINGS:
+            raise ValueError(f"chunk_by must be one of {CHUNKINGS}, got {self.chunk_by!r}")
+        if not isinstance(self.carry_optimizer, bool):
+            raise ValueError("carry_optimizer must be true or false")
+        fresh = self.fresh_optimizer_steps
+        if fresh is not None and (isinstance(fresh, bool) or not isinstance(fresh, int) or fresh <= 0):
+            raise ValueError("fresh_optimizer_steps must be a positive integer when set")
+        if not isinstance(self.step_diagnostics, bool):
+            raise ValueError("step_diagnostics must be true or false")
+        if self.first_step_baseline not in FIRST_STEP_BASELINES:
+            raise ValueError(f"first_step_baseline must be one of {FIRST_STEP_BASELINES}, got {self.first_step_baseline!r}")
+        if isinstance(self.diagnostic_top_rows, bool) or not isinstance(self.diagnostic_top_rows, int) or self.diagnostic_top_rows < 0:
+            raise ValueError("diagnostic_top_rows must be a nonnegative integer")
+        if not isinstance(self.diagnostic_components, bool):
+            raise ValueError("diagnostic_components must be true or false")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -331,9 +432,344 @@ class UpdateReport:
     #: supervised rows), and how many supervised rows there were.
     supervised_loss: list[float] = field(default_factory=list)
     supervised_rows: int = 0
+    #: Groups (roots) whose policy rows sit in more than one optimizer step.
+    #: The advantages of a group sum to zero only inside one step, so this
+    #: is zero under ``chunk_by='group'`` or with a single optimizer step.
+    split_groups: int = 0
+    #: How the rows were dealt to the steps of the one pass
+    #: (:func:`row_accounting`): every admitted row in exactly one step.
+    row_accounting: dict[str, Any] = field(default_factory=dict)
+    #: Whether the optimizer had taken no step when the update began, and the
+    #: steps the update therefore planned (``fresh_optimizer_steps``).
+    fresh_optimizer: bool | None = None
+    planned_steps: int | None = None
+    #: The digest that binds the update's checkpoint to this batch of rows.
+    batch_digest: str | None = None
+    #: Per optimizer step, with ``step_diagnostics``: :meth:`StepDiagnostics.summary`.
+    diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def row_kind(row: TrainingRow) -> str:
+    """What a row trains: the audit's choice, a decision by its outcome, a decision by its label, the KL term alone, or the policy."""
+
+    if row.supervised:
+        return "supervised"
+    if row.decision_credit:
+        return "decision_credit"
+    if row.lifecycle_only:
+        return "lifecycle_only"
+    if row.preservation:
+        return "preservation"
+    return "policy"
+
+
+def batch_digest(rows: Sequence[TrainingRow]) -> str:
+    """A digest of the batch an update trains on: every row's identity, weights and tokens, in order.
+
+    A checkpoint records it, and a resumed update whose rows give another
+    digest is refused.  The row and step counts alone let a checkpoint of
+    one batch continue on another of the same size, with that batch's clip
+    baseline and partial gradients.
+    """
+
+    digest = hashlib.sha256()
+    for row in rows:
+        head = [str(row.root), int(row.sample_index), int(row.step), repr(float(row.advantage)), repr(float(row.lifecycle_term)),
+                row_kind(row), len(row.input_ids), int(row.completion_tokens)]
+        digest.update(json.dumps(head, separators=(",", ":")).encode("utf-8"))
+        digest.update(prompt_token_digest(row.input_ids).encode("ascii"))
+    return digest.hexdigest()
+
+
+def row_accounting(rows: Sequence[TrainingRow], chunks: Sequence[Sequence[int]]) -> dict[str, Any]:
+    """Whether the deal puts every admitted row in exactly one optimizer step of the one pass an update makes."""
+
+    seen: dict[int, int] = {}
+    for chunk in chunks:
+        for index in chunk:
+            seen[int(index)] = seen.get(int(index), 0) + 1
+    duplicated = sorted(index for index, count in seen.items() if count > 1)
+    missing = sorted(set(range(len(rows))) - set(seen))
+    unknown = sorted(index for index in seen if not 0 <= index < len(rows))
+    return {
+        "passes": 1,
+        "rows": len(rows),
+        "rows_per_step": [len(chunk) for chunk in chunks],
+        "rows_by_kind": {kind: sum(1 for row in rows if row_kind(row) == kind)
+                         for kind in ("policy", "preservation", "lifecycle_only", "decision_credit", "supervised")},
+        "rows_duplicated": len(duplicated),
+        "rows_missing": len(missing),
+        "rows_unknown": len(unknown),
+        "each_row_once": not duplicated and not missing and not unknown,
+    }
+
+
+#: Keys of a partial-gradient file that hold a diagnostic component's accumulated gradient, not the step's.
+COMPONENT_PREFIX = "__component__/"
+#: The loss terms a step's gradient is split by.
+COMPONENTS = ("policy", "lifecycle", "kl", "supervised")
+_ROLLBACK_TOOL = "rollback_state"
+
+
+class StepDiagnostics:
+    """What one optimizer step did, for the report (``UpdateSettings.step_diagnostics``).
+
+    Nothing here feeds back into the step.  It keeps, for the step in
+    progress:
+
+    * each row's gradient norm before the row bound and whether the bound
+      clipped it, so the rows that carry a step can be named after the
+      update's checkpoint is gone;
+    * the step's accumulated gradient split by loss term (the policy term,
+      the lifecycle term of sampled decision rows, the KL term, the
+      supervised term), each row's part scaled as the row bound scaled the
+      row;
+    * for every row of a labelled lifecycle decision, the probability the
+      model gives the row's completion at this step: the audit's choice on
+      a supervised row, the sampled choice on a sampled decision row.
+
+    At the step it adds how far the weights moved.  ``partial_state`` and
+    ``component_payload`` let a preempted step continue its record.
+    """
+
+    def __init__(self, settings: UpdateSettings, state: Mapping[str, Any] | None = None) -> None:
+        state = dict(state or {})
+        self.settings = settings
+        #: ``[row index, norm before the bound, clipped, dropped]`` in the order the rows were processed.
+        self.row_norms: list[list[Any]] = [list(item) for item in state.get("row_norms") or []]
+        self.decisions: list[dict[str, Any]] = [dict(item) for item in state.get("decisions") or []]
+        self.component_rows: dict[str, int] = {str(k): int(v) for k, v in (state.get("component_rows") or {}).items()}
+        self.components: dict[str, list[Any]] = {}
+        self._before: list[Any] | None = None
+        self._components_summary: dict[str, Any] = {}
+        self._step_norm: float | None = None
+
+    # -- rows -------------------------------------------------------------------------------------------
+    def record_row(self, index: int, row: TrainingRow, *, norm: float, clipped: bool, dropped: bool, logprobs: Any) -> None:
+        self.row_norms.append([int(index), float(norm) if math.isfinite(norm) else None, bool(clipped), bool(dropped)])
+        decision = row.decision
+        if not isinstance(decision, Mapping):
+            return
+        completion_tool = decision.get("label") if row.supervised else decision.get("tool")
+        probability = float(math.exp(min(0.0, float(logprobs.detach().float().sum()))))
+        self.decisions.append({
+            "row": int(index),
+            # The decision the row belongs to: its sampled row and its supervised row are two readings of one decision.
+            "key": [str(row.root), int(row.sample_index), int(row.step)],
+            "kind": row_kind(row),
+            "completion_tool": completion_tool,
+            "probability": probability,
+            # Two-way reading: what is not on this completion is on the other choice.
+            "p_decline": probability if completion_tool == _ROLLBACK_TOOL else 1.0 - probability,
+            "target_is_true": decision.get("target_is_true"),
+            "agrees": decision.get("agrees"),
+            "ordinal": decision.get("ordinal"),
+            "earlier_declines": decision.get("earlier_declines"),
+            "correction_tool": decision.get("correction_tool"),
+        })
+
+    def add_components(self, parts: Mapping[str, Sequence[Any]]) -> None:
+        for name, gradients in parts.items():
+            accumulated = self.components.setdefault(name, [None] * len(gradients))
+            for position, gradient in enumerate(gradients):
+                if gradient is None:
+                    continue
+                accumulated[position] = gradient if accumulated[position] is None else accumulated[position].add_(gradient)
+            self.component_rows[name] = self.component_rows.get(name, 0) + 1
+
+    # -- persistence across a preemption ------------------------------------------------------------------
+    def partial_state(self) -> dict[str, Any]:
+        return {"row_norms": [list(item) for item in self.row_norms], "decisions": [dict(item) for item in self.decisions],
+                "component_rows": dict(self.component_rows)}
+
+    def component_payload(self, names: Sequence[str]) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        for component, gradients in self.components.items():
+            for name, gradient in zip(names, gradients):
+                if gradient is not None:
+                    payload[f"{COMPONENT_PREFIX}{component}/{name}"] = gradient.detach().cpu()
+        return payload
+
+    def load_components(self, saved: Mapping[str, Any], named_parameters: Sequence[tuple[str, Any]]) -> None:
+        self.components = {}
+        for component in COMPONENTS:
+            gradients = [saved.get(f"{COMPONENT_PREFIX}{component}/{name}") for name, _parameter in named_parameters]
+            if any(gradient is not None for gradient in gradients):
+                self.components[component] = [
+                    None if gradient is None else gradient.to(parameter.device, dtype=parameter.dtype)
+                    for gradient, (_name, parameter) in zip(gradients, named_parameters)
+                ]
+
+    # -- the step -----------------------------------------------------------------------------------------
+    def before_step(self, parameters: Sequence[Any]) -> None:
+        """Read the step's accumulated gradient (before the global clip) and keep the weights it will move."""
+
+        total = [parameter.grad for parameter in parameters]
+        squared = sum(float((gradient.detach().float() ** 2).sum()) for gradient in total if gradient is not None)
+        self._step_norm = math.sqrt(squared)
+        summary: dict[str, Any] = {}
+        for name, gradients in self.components.items():
+            own = dot = 0.0
+            for gradient, whole in zip(gradients, total):
+                if gradient is None:
+                    continue
+                own += float((gradient.detach().float() ** 2).sum())
+                if whole is not None:
+                    dot += float((gradient.detach().float() * whole.detach().float()).sum())
+            norm = math.sqrt(own)
+            summary[name] = {
+                "rows": self.component_rows.get(name, 0),
+                "norm": norm,
+                # The share of the step's gradient that lies along this term: the shares add up to one.
+                "share_of_step": (dot / squared) if squared > 0.0 else None,
+                "cosine_with_step": (dot / (norm * self._step_norm)) if norm > 0.0 and squared > 0.0 else None,
+            }
+        self._components_summary = summary
+        self._before = [parameter.detach().clone() for parameter in parameters]
+
+    def summary(self, rows: Sequence[TrainingRow], parameters: Sequence[Any], *, grad_norm: float) -> dict[str, Any]:
+        """The step's record, read after the optimizer stepped."""
+
+        settings = self.settings
+        moved = self._movement(parameters, grad_norm=grad_norm)
+        norms = [(index, norm, clipped) for index, norm, clipped, dropped in self.row_norms if norm is not None and not dropped]
+        squared_total = sum(norm * norm for _index, norm, _clipped in norms)
+        by_kind: dict[str, dict[str, Any]] = {}
+        for index, norm, clipped in norms:
+            entry = by_kind.setdefault(row_kind(rows[index]), {"rows": 0, "clipped": 0, "squared_norm": 0.0})
+            entry["rows"] += 1
+            entry["clipped"] += int(clipped)
+            entry["squared_norm"] += norm * norm
+        for entry in by_kind.values():
+            entry["squared_norm_share"] = (entry.pop("squared_norm") / squared_total) if squared_total > 0.0 else None
+        top = []
+        for index, norm, clipped in sorted(norms, key=lambda item: (-item[1], item[0]))[: settings.diagnostic_top_rows]:
+            row = rows[index]
+            top.append({
+                "row": index, "root": row.root, "sample_index": int(row.sample_index), "step": int(row.step), "kind": row_kind(row),
+                "advantage": float(row.advantage), "lifecycle_term": float(row.lifecycle_term),
+                "completion_tokens": int(row.completion_tokens), "norm": norm, "clipped": clipped,
+                "squared_norm_share": (norm * norm / squared_total) if squared_total > 0.0 else None,
+            })
+        dropped = sum(1 for _index, _norm, _clipped, was_dropped in self.row_norms if was_dropped)
+        return {
+            "rows": len(self.row_norms),
+            "rows_clipped": sum(1 for _index, _norm, clipped in norms if clipped),
+            "rows_clipped_fraction": (sum(1 for _i, _n, clipped in norms if clipped) / len(norms)) if norms else None,
+            "rows_dropped_nonfinite": dropped,
+            "global_clip_scale": min(1.0, settings.max_grad_norm / grad_norm) if grad_norm > 0.0 and math.isfinite(grad_norm) else None,
+            "gradient_norm_before_global_clip": self._step_norm,
+            "components": self._components_summary,
+            "rows_by_kind": dict(sorted(by_kind.items())),
+            "top_rows": top,
+            "top_rows_squared_norm_share": sum(item["squared_norm_share"] or 0.0 for item in top) if squared_total > 0.0 else None,
+            "movement": moved,
+            "decisions": decision_summary(self.decisions),
+        }
+
+    def _movement(self, parameters: Sequence[Any], *, grad_norm: float) -> dict[str, Any]:
+        """How far the step moved the trainable weights, in units of the learning rate."""
+
+        if self._before is None:
+            return {}
+        rate = float(self.settings.learning_rate)
+        squared = absolute = weights = dot = largest = 0.0
+        count = 0
+        for before, parameter in zip(self._before, parameters):
+            delta = (parameter.detach() - before).float()
+            squared += float((delta * delta).sum())
+            absolute += float(delta.abs().sum())
+            largest = max(largest, float(delta.abs().max())) if delta.numel() else largest
+            weights += float((before.float() ** 2).sum())
+            if parameter.grad is not None:
+                dot += float((delta * parameter.grad.detach().float()).sum())
+            count += int(delta.numel())
+        norm = math.sqrt(squared)
+        clipped_norm = min(grad_norm, float(self.settings.max_grad_norm)) if math.isfinite(grad_norm) else None
+        return {
+            "weights": count,
+            "update_norm": norm,
+            "relative_to_weight_norm": (norm / math.sqrt(weights)) if weights > 0.0 else None,
+            # One for a step that moves every weight by exactly the learning rate (the first step of a new AdamW).
+            "rms_over_learning_rate": (math.sqrt(squared / count) / rate) if count else None,
+            "mean_abs_over_learning_rate": (absolute / count / rate) if count else None,
+            "max_abs_over_learning_rate": largest / rate,
+            # How much of the move lies along the step's own descent direction.
+            "cosine_with_descent": (-dot / (norm * clipped_norm)) if norm > 0.0 and clipped_norm else None,
+        }
+
+
+def _auc(positives: Sequence[float], negatives: Sequence[float]) -> float | None:
+    """The chance a positive scores above a negative, ties counting half."""
+
+    if not positives or not negatives:
+        return None
+    wins = 0.0
+    for positive in positives:
+        for negative in negatives:
+            wins += 1.0 if positive > negative else 0.5 if positive == negative else 0.0
+    return wins / (len(positives) * len(negatives))
+
+
+def decision_summary(decisions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """What the model gives the lifecycle choices on a step's decision rows.
+
+    ``p_decline`` is the probability of rolling the accepted candidate back,
+    read two ways (what is not on the row's completion is on the other
+    choice).  The groups are the audit's: true targets at an episode's first
+    accepted candidate and at later ones, and wrong targets; ``auc`` is the
+    chance a wrong target gets a higher decline probability than a true one,
+    which a shift of every probability leaves where it is.
+
+    A decision that has both a sampled row and a supervised row in the step
+    is counted once, by its supervised row (the probability of the audit's
+    choice); ``rows`` says how many rows of each kind were read.
+    """
+
+    rows_by_kind: dict[str, int] = {}
+    unique: dict[Any, Mapping[str, Any]] = {}
+    for position, item in enumerate(decisions):
+        rows_by_kind[str(item.get("kind"))] = rows_by_kind.get(str(item.get("kind")), 0) + 1
+        key = tuple(item["key"]) if item.get("key") is not None else ("row", position)
+        if key not in unique or item.get("kind") == "supervised":
+            unique[key] = item
+    decisions = list(unique.values())
+
+    def group(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        values = [float(item["p_decline"]) for item in items]
+        return {
+            "decisions": len(values),
+            "mean_p_decline": (sum(values) / len(values)) if values else None,
+            "p_decline_above_half": sum(1 for value in values if value > 0.5),
+        }
+
+    labelled = [item for item in decisions if item.get("target_is_true") is not None]
+    true = [item for item in labelled if item["target_is_true"]]
+    wrong = [item for item in labelled if not item["target_is_true"]]
+    first = lambda items: [item for item in items if not item.get("ordinal")]  # noqa: E731
+    later = lambda items: [item for item in items if item.get("ordinal")]  # noqa: E731
+    return {
+        "decisions": len(labelled),
+        "rows": dict(sorted(rows_by_kind.items())),
+        "true_target": group(true),
+        "true_target_first_candidate": group(first(true)),
+        "true_target_later_candidate": group(later(true)),
+        "true_target_after_a_decline": group([item for item in true if item.get("earlier_declines")]),
+        "wrong_target": group(wrong),
+        "wrong_target_first_candidate": group(first(wrong)),
+        "wrong_target_later_candidate": group(later(wrong)),
+        "auc_wrong_above_true": _auc([float(item["p_decline"]) for item in wrong], [float(item["p_decline"]) for item in true]),
+        "auc_first_candidates": _auc([float(item["p_decline"]) for item in first(wrong)],
+                                     [float(item["p_decline"]) for item in first(true)]),
+        "by_correction_tool": {
+            str(tool): {"true_target": group([item for item in true if item.get("correction_tool") == tool]),
+                        "wrong_target": group([item for item in wrong if item.get("correction_tool") == tool])}
+            for tool in sorted({str(item.get("correction_tool")) for item in labelled})
+        },
+    }
 
 
 @dataclass
@@ -508,8 +944,13 @@ def _chunks(rows: Sequence[TrainingRow], settings: UpdateSettings) -> list[list[
     weight; splitting rows across steps gave a trajectory with rows in two
     steps a different total weight from one with rows in one (the external
     review of 2026-10-17, item 2.4).
+
+    That deal splits groups: the samples of a root land in different steps.
+    ``chunk_by='group'`` deals whole groups instead (:func:`_group_chunks`).
     """
 
+    if settings.chunk_by == "group":
+        return _group_chunks(rows, settings)
     by_trajectory: dict[tuple[str, int], list[int]] = {}
     for index, row in enumerate(rows):
         by_trajectory.setdefault(row.trajectory_key, []).append(index)
@@ -520,6 +961,48 @@ def _chunks(rows: Sequence[TrainingRow], settings: UpdateSettings) -> list[list[
     for position, key in enumerate(keys):
         chunks[position % chunk_count].extend(by_trajectory[key])
     return chunks
+
+
+def _group_chunks(rows: Sequence[TrainingRow], settings: UpdateSettings) -> list[list[int]]:
+    """Row indices per optimizer step, whole groups (every sample of a root) kept together.
+
+    The advantage of a sample is its reward minus its group's mean, so a
+    group's advantages sum to zero and whatever its samples share (the steps
+    before they part, the prompt's common prefix) cancels in the gradient.
+    That holds inside one optimizer step only.  Dealt by trajectory, a
+    group's samples land in different steps, each step sees one side of the
+    sum, and an optimizer that normalizes each step by the gradient's size
+    does not give back in the second step what it took in the first (the run
+    of 2026-11-08, plan point 46).
+
+    Groups are shuffled by the seed and dealt round robin, the groups with
+    policy rows first, so every step holds about the same number of them.  A
+    group's preservation and supervised rows travel with it.
+    """
+
+    by_group: dict[str, list[int]] = {}
+    for index, row in enumerate(rows):
+        by_group.setdefault(row.root, []).append(index)
+    keys = list(by_group)
+    random.Random(settings.seed).shuffle(keys)
+    # A stable sort: the groups with policy rows keep their shuffled order, ahead of the rest.
+    keys.sort(key=lambda key: not any(rows[index].policy_row for index in by_group[key]))
+    chunk_count = min(settings.optimizer_steps, len(keys))
+    chunks: list[list[int]] = [[] for _ in range(chunk_count)]
+    for position, key in enumerate(keys):
+        chunks[position % chunk_count].extend(by_group[key])
+    return chunks
+
+
+def _split_groups(rows: Sequence[TrainingRow], chunks: Sequence[Sequence[int]]) -> int:
+    """How many groups (roots) have policy rows in more than one optimizer step."""
+
+    steps: dict[str, set[int]] = {}
+    for position, chunk in enumerate(chunks):
+        for index in chunk:
+            if rows[index].policy_row:
+                steps.setdefault(rows[index].root, set()).add(position)
+    return sum(1 for positions in steps.values() if len(positions) > 1)
 
 
 def _chunk_weights(rows: Sequence[TrainingRow], chunk: Sequence[int]) -> dict[str, int]:
@@ -546,6 +1029,105 @@ def _chunk_weights(rows: Sequence[TrainingRow], chunk: Sequence[int]) -> dict[st
     }
 
 
+def build_optimizer(model: Any, settings: UpdateSettings, state: Mapping[str, Any] | None = None) -> Any:
+    """The update's AdamW over the model's trainable parameters, continued from ``state`` when one is given.
+
+    ``state`` is the ``state_dict()`` an earlier update's optimizer left, for
+    the same trainable parameters in the same order (the same adapter on the
+    same base, loaded the same way).  Its moments and step counts are kept;
+    the learning rate, betas, epsilon and weight decay are the ones
+    ``settings`` names now, not the ones saved with it.
+
+    Why carry it: the first step of a new AdamW moves every weight by the
+    learning rate times the sign of its gradient, so an update of one or two
+    steps that starts a new optimizer is a sign step whatever the gradients'
+    sizes.  With the moments carried, a weight whose gradient keeps its sign
+    from update to update moves the learning rate each time and one whose
+    gradient flips moves about a twentieth of it.  The other side of that:
+    a step whose gradient is zero still moves a weight along the momentum
+    earlier steps left (0.67 of the learning rate on the step after a first
+    one, at the default betas); ``adam_beta1 = 0`` rules that out.
+    """
+
+    import torch
+
+    parameters = _trainable_parameters(model)
+    if not parameters:
+        raise ValueError("model has no trainable parameters")
+    optimizer = torch.optim.AdamW(
+        parameters,
+        lr=settings.learning_rate,
+        weight_decay=settings.weight_decay,
+        betas=(settings.adam_beta1, settings.adam_beta2),
+        eps=settings.adam_epsilon,
+    )
+    if state is not None:
+        _check_optimizer_state(state, parameters)
+        # A copy: load_state_dict keeps the tensors that need no cast, the step counters among them,
+        # so an optimizer loaded from another's live state would step that one's counters and moments.
+        optimizer.load_state_dict(copy.deepcopy(dict(state)))
+        # load_state_dict restores the saved hyperparameters with the moments; the settings in force win.
+        for group in optimizer.param_groups:
+            group["lr"] = settings.learning_rate
+            group["weight_decay"] = settings.weight_decay
+            group["betas"] = (settings.adam_beta1, settings.adam_beta2)
+            group["eps"] = settings.adam_epsilon
+    return optimizer
+
+
+def _check_optimizer_state(state: Mapping[str, Any], parameters: Sequence[Any]) -> None:
+    """Refuse a carried optimizer state that was not written for these trainable parameters.
+
+    ``load_state_dict`` pairs the saved moments with the parameters by
+    position and checks their number only, so a state for other parameters
+    of the same count would load and fail, or broadcast, at the first step.
+    """
+
+    groups = state.get("param_groups") if isinstance(state, Mapping) else None
+    entries = state.get("state") if isinstance(state, Mapping) else None
+    if not isinstance(groups, (list, tuple)) or not isinstance(entries, Mapping):
+        raise RuntimeError("the carried optimizer state is not an optimizer state_dict")
+    identifiers = [identifier for group in groups for identifier in group.get("params", ())]
+    if len(identifiers) != len(parameters):
+        raise RuntimeError(
+            f"the carried optimizer state was written for {len(identifiers)} trainable parameters, "
+            f"the model has {len(parameters)}"
+        )
+    for identifier, parameter in zip(identifiers, parameters):
+        moment = (entries.get(identifier) or {}).get("exp_avg")
+        if moment is not None and tuple(moment.shape) != tuple(parameter.shape):
+            raise RuntimeError(
+                "the carried optimizer state was written for other trainable parameters: a moment of shape "
+                f"{tuple(moment.shape)} for a parameter of shape {tuple(parameter.shape)}"
+            )
+
+
+def optimizer_steps_taken(state: Mapping[str, Any] | None) -> int:
+    """How many steps the optimizer that wrote ``state`` (a ``state_dict()``) had taken; zero for none or a new one."""
+
+    if not state:
+        return 0
+    counts = [int(entry["step"]) for entry in (state.get("state") or {}).values()
+              if isinstance(entry, Mapping) and "step" in entry]
+    return max(counts, default=0)
+
+
+def save_optimizer_state(optimizer: Any, path: str | Path) -> None:
+    """Write the optimizer's ``state_dict()`` for a later update to continue from, through a temporary file."""
+
+    import torch
+
+    _save_tensors(Path(path), optimizer.state_dict(), torch)
+
+
+def load_optimizer_state(path: str | Path) -> dict[str, Any]:
+    """The state :func:`save_optimizer_state` wrote, on the CPU (the optimizer moves it to its parameters)."""
+
+    import torch
+
+    return torch.load(Path(path), map_location="cpu")
+
+
 def policy_gradient_update(
     model: Any,
     rows: Sequence[TrainingRow],
@@ -567,7 +1149,10 @@ def policy_gradient_update(
     step's lifecycle rows.  With a ``checkpoint``, a resumed call (same
     rows, same settings) continues from the last committed state; the caller
     must have reloaded the model from ``checkpoint.model_dir()`` when it is
-    not ``None``.
+    not ``None``.  ``optimizer`` is the optimizer to step: a new AdamW when
+    ``None``, or one the caller continues across updates
+    (:func:`build_optimizer`); a resumed call loads the checkpoint's
+    optimizer state over either.
     """
 
     import torch
@@ -584,13 +1169,7 @@ def policy_gradient_update(
             model, use_logits_to_keep=settings.use_logits_to_keep, temperature=settings.temperature
         )
     if optimizer is None:
-        optimizer = torch.optim.AdamW(
-            parameters,
-            lr=settings.learning_rate,
-            weight_decay=settings.weight_decay,
-            betas=(settings.adam_beta1, settings.adam_beta2),
-            eps=settings.adam_epsilon,
-        )
+        optimizer = build_optimizer(model, settings)
     if settings.clip_ratio is not None:
         missing = [row for row in rows if not row.supervised
                    and (row.sampling_logprobs is None or len(row.sampling_logprobs) != row.completion_tokens)]
@@ -601,7 +1180,21 @@ def policy_gradient_update(
                 f"none or a mismatched record (first: root {first.root} sample {first.sample_index} step {first.step}). "
                 "Build the rows with require_sampling_records or sample with a recording policy."
             )
-    chunks = _chunks(rows, settings)
+    state = checkpoint.load_state() if checkpoint is not None else None
+    # Whether the optimizer is new is read before a checkpoint's state is loaded over it, so a
+    # resumed update plans the steps the interrupted one planned (which its checkpoint also records).
+    fresh = optimizer_steps_taken(optimizer.state_dict()) == 0
+    planned = int(settings.optimizer_steps)
+    if settings.fresh_optimizer_steps is not None:
+        if state is not None and state.get("planned_steps") is not None:
+            planned = int(state["planned_steps"])
+        elif fresh:
+            planned = int(settings.fresh_optimizer_steps)
+    chunks = _chunks(rows, settings if planned == settings.optimizer_steps else replace(settings, optimizer_steps=planned))
+    accounting = row_accounting(rows, chunks)
+    if not accounting["each_row_once"]:
+        raise RuntimeError(f"the deal of rows to optimizer steps is not one pass over the batch: {accounting}")
+    digest = batch_digest(rows)
     weights = [_chunk_weights(rows, chunk) for chunk in chunks]
     chunk_tokens = [weight["tokens"] for weight in weights]
     policy_losses: list[float] = []
@@ -623,10 +1216,34 @@ def policy_gradient_update(
     partial_clip: Mapping[str, Any] = {}
     resumed_from: dict[str, Any] | None = None
     extra_state: dict[str, Any] = {}
-    state = checkpoint.load_state() if checkpoint is not None else None
+    if settings.chunk_by != "trajectory":
+        # Recorded so that a resumed update cannot continue under the other chunking (same row and
+        # step counts, other rows per step); left out under the default, whose state reads as before.
+        extra_state["chunk_by"] = settings.chunk_by
+    extra_state["batch_digest"] = digest
+    if settings.fresh_optimizer_steps is not None:
+        extra_state["planned_steps"] = planned
+    diagnostic_steps: list[dict[str, Any]] = []
+    partial_diagnostics: Mapping[str, Any] = {}
+    if settings.step_diagnostics:
+        extra_state["step_diagnostics"] = diagnostic_steps
+        extra_state["partial_diagnostics"] = {}
     if state is not None:
         if int(state.get("row_count", -1)) != len(rows) or int(state.get("chunk_count", -1)) != len(chunks):
             raise RuntimeError("the update checkpoint was written for a different batch of rows")
+        if state.get("batch_digest") and str(state["batch_digest"]) != digest:
+            raise RuntimeError(
+                "the update checkpoint was written for a different batch of rows: the rows now give another batch digest"
+            )
+        if settings.step_diagnostics:
+            diagnostic_steps.extend(dict(item) for item in state.get("step_diagnostics") or [])
+            partial_diagnostics = state.get("partial_diagnostics") or {}
+        written_by = str(state.get("chunk_by") or "trajectory")
+        if written_by != settings.chunk_by:
+            raise RuntimeError(
+                f"the update checkpoint's optimizer steps were dealt by {written_by!r}, "
+                f"the settings now say chunk_by={settings.chunk_by!r}"
+            )
         start_chunk = int(state["completed_chunks"])
         start_row = int(state.get("chunk_rows_done") or 0)
         policy_losses = [float(v) for v in state.get("policy_losses") or []]
@@ -658,7 +1275,9 @@ def policy_gradient_update(
     # persists its partial result every ``checkpoint.every_rows`` rows and a
     # restarted update continues from there (the model has not moved yet).
     training_old: list[Any] | None = None
-    if settings.clip_ratio is not None and settings.clip_reference == "training":
+    # With its own forward as the first step's baseline, an update of one step clips against nothing persisted.
+    own_first_step = settings.clip_ratio is not None and settings.first_step_baseline == "own"
+    if settings.clip_ratio is not None and settings.clip_reference == "training" and not (own_first_step and planned == 1):
         if extra_state.get("old_logprobs_file"):
             training_old = torch.load(checkpoint.directory / extra_state["old_logprobs_file"], map_location="cpu")
             if len(training_old) != len(rows):
@@ -666,7 +1285,7 @@ def policy_gradient_update(
         elif start_chunk > 0 or (checkpoint is not None and checkpoint.model_dir() is not None):
             raise RuntimeError("the update checkpoint has no clip baseline although an optimizer step was applied")
         else:
-            training_old = _partial_baseline(checkpoint, rows, torch)
+            training_old = _partial_baseline(checkpoint, rows, torch, digest)
             if training_old:
                 resumed_from = {"completed_chunks": 0, "chunk_rows_done": 0, "baseline_rows_done": len(training_old)}
             model.eval()
@@ -678,7 +1297,7 @@ def policy_gradient_update(
                     )
                     if checkpoint is not None and (index + 1) % checkpoint.every_rows == 0 and index + 1 < len(rows):
                         _save_tensors(checkpoint.directory / PARTIAL_BASELINE_FILE,
-                                      {"rows": len(rows), "logprobs": training_old}, torch)
+                                      {"rows": len(rows), "logprobs": training_old, "batch_digest": digest}, torch)
                         if progress is not None:
                             progress({"clip_baseline_rows": index + 1, "rows": len(rows)})
             if checkpoint is not None:
@@ -699,6 +1318,8 @@ def policy_gradient_update(
         )
         check = OnPolicyCheck(state=partial_check if first_row > 0 else None)
         clip_check = OnPolicyCheck(threshold=clip_threshold, state=partial_clip if first_row > 0 else None)
+        diagnostics = (StepDiagnostics(settings, state=partial_diagnostics if first_row > 0 else None)
+                       if settings.step_diagnostics else None)
         if first_row == 0:
             optimizer.zero_grad(set_to_none=True)
             chunk_policy = 0.0
@@ -711,6 +1332,8 @@ def policy_gradient_update(
             for name, parameter in _named_trainable(model):
                 if name in saved:
                     parameter.grad = saved[name].to(parameter.device, dtype=parameter.dtype)
+            if diagnostics is not None:
+                diagnostics.load_components(saved, _named_trainable(model))
             chunk_policy = partial_policy
             chunk_kl = partial_kl
             chunk_lifecycle = partial_lifecycle
@@ -719,6 +1342,8 @@ def policy_gradient_update(
         for position in range(first_row, len(chunk)):
             row = rows[chunk[position]]
             kl_term = None
+            # The row's loss by term, for the diagnostics alone; the step's gradient comes from ``loss``.
+            components: dict[str, Any] = {}
             if row.supervised:
                 # The supervised lifecycle term: the audit's choice rendered as the
                 # completion, not a sampled one, so no reference, clip, sampling
@@ -729,6 +1354,7 @@ def policy_gradient_update(
                 supervised_scale = 1.0 / max(1, weight["supervised_rows"])
                 supervised_term = -(logprobs.mean()) * float(row.lifecycle_term)
                 loss = supervised_term * supervised_scale
+                components["supervised"] = loss
                 chunk_supervised += float(supervised_term.detach()) * supervised_scale
             else:
                 # The reference pass runs first, with no autograd graph alive while
@@ -746,8 +1372,14 @@ def policy_gradient_update(
                     clip_old = training_old[chunk[position]].to(device=logprobs.device, dtype=logprobs.dtype)
                 else:
                     clip_old = sampler_old
-                if settings.clip_ratio is not None:
+                # Against the baseline of ``clip_reference`` in every step, so the report shows the gap the
+                # first step would have clipped on (numerical only: the model has not moved).  A one-step
+                # update that ran no baseline pass has nothing to compare with.
+                if settings.clip_ratio is not None and not (own_first_step and training_old is None
+                                                            and settings.clip_reference == "training"):
                     clip_check.record(logprobs, clip_old)
+                if own_first_step and chunk_index == 0:
+                    clip_old = logprobs.detach()
                 # A lifecycle-only row has no policy term; a preservation row keeps
                 # its zero-advantage term, as before, outside the policy normalization.
                 policy_term = None
@@ -780,13 +1412,23 @@ def policy_gradient_update(
                 if policy_term is not None:
                     loss = loss + reduce(policy_term) * policy_scale
                     chunk_policy += float(reduce(policy_term).detach()) * policy_scale
+                    if diagnostics is not None and float(row.advantage) != 0.0:  # a zero advantage gives a zero gradient
+                        components["policy"] = reduce(policy_term) * policy_scale
                 if lifecycle_term is not None:
                     lifecycle_scale = 1.0 / max(1, weight["lifecycle_rows"])
                     loss = loss + lifecycle_term.mean() * lifecycle_scale
                     chunk_lifecycle += float(lifecycle_term.mean().detach()) * lifecycle_scale
+                    if diagnostics is not None:
+                        components["lifecycle"] = lifecycle_term.mean() * lifecycle_scale
                 if kl_term is not None:
                     loss = loss + settings.beta_kl * reduce(kl_term) * kl_scale
-            if settings.bounds_rows:
+                    if diagnostics is not None:
+                        components["kl"] = settings.beta_kl * reduce(kl_term) * kl_scale
+            if diagnostics is not None:
+                norm, clipped, finite = _diagnosed_row_backward(loss, components if settings.diagnostic_components else {},
+                                                                parameters, bound, diagnostics, torch, bounded=settings.bounds_rows)
+                diagnostics.record_row(chunk[position], row, norm=norm, clipped=clipped, dropped=not finite, logprobs=logprobs)
+            elif settings.bounds_rows:
                 _bounded_row_backward(loss, parameters, bound, torch)
             else:
                 loss.backward()
@@ -804,9 +1446,12 @@ def policy_gradient_update(
                                           "partial_on_policy": check.state(),
                                           "clip_checks": list(clip_summaries),
                                           "partial_clip": clip_check.state(),
-                                          **extra_state},
+                                          **extra_state,
+                                          **({"partial_diagnostics": diagnostics.partial_state()} if diagnostics is not None else {})},
                               rows_done=done, partial_policy=chunk_policy, partial_kl=chunk_kl,
-                              partial_lifecycle=chunk_lifecycle, partial_supervised=chunk_supervised, previous=state)
+                              partial_lifecycle=chunk_lifecycle, partial_supervised=chunk_supervised, previous=state,
+                              components=(diagnostics.component_payload([name for name, _parameter in _named_trainable(model)])
+                                          if diagnostics is not None else None))
                 state = checkpoint.load_state()
         if chunk_index == 0 and settings.max_on_policy_log_ratio is not None:
             gap = check.summary()
@@ -818,8 +1463,12 @@ def policy_gradient_update(
                     f"{gap['rows_without_record']} rows without a record; decision tokens: {gap['uncertain_tokens']} "
                     f"with mean gap {gap['uncertain_mean_abs_log_ratio']}. The update was not applied."
                 )
+        if diagnostics is not None:
+            diagnostics.before_step(parameters)
         grad_norm = float(torch.nn.utils.clip_grad_norm_(parameters, settings.max_grad_norm))
         optimizer.step()
+        if diagnostics is not None:
+            diagnostic_steps.append(diagnostics.summary(rows, parameters, grad_norm=grad_norm))
         policy_losses.append(chunk_policy)
         kls.append(chunk_kl)
         lifecycle_losses.append(chunk_lifecycle)
@@ -851,6 +1500,7 @@ def policy_gradient_update(
                 "row_grad_norms": row_summaries[-1] if settings.bounds_rows else None,
                 "on_policy_check": check_summaries[-1],
                 "clip_check": clip_summaries[-1] if clip_summaries else None,
+                "movement": diagnostic_steps[-1].get("movement") if diagnostics is not None else None,
                 "elapsed_seconds": time.perf_counter() - started,
             })
     model.eval()
@@ -876,6 +1526,12 @@ def policy_gradient_update(
         lifecycle_rows=sum(1 for row in rows if row.lifecycle_term and not row.supervised),
         supervised_loss=supervised_losses,
         supervised_rows=sum(1 for row in rows if row.supervised),
+        split_groups=_split_groups(rows, chunks),
+        row_accounting=accounting,
+        fresh_optimizer=fresh,
+        planned_steps=planned,
+        batch_digest=digest,
+        diagnostics=[dict(item) for item in diagnostic_steps],
     )
 
 
@@ -925,6 +1581,63 @@ def _bounded_row_backward(loss: Any, parameters: Sequence[Any], bound: RowGradie
             parameter.grad = previous.add_(row_gradient)
 
 
+def _diagnosed_row_backward(
+    loss: Any, components: Mapping[str, Any], parameters: Sequence[Any], bound: RowGradientBound, diagnostics: StepDiagnostics,
+    torch_module: Any, *, bounded: bool,
+) -> tuple[float, bool, bool]:
+    """One row's backward pass in a step with diagnostics; returns the row's norm, whether it was clipped, whether it was finite.
+
+    The step's gradient is built exactly as :func:`_bounded_row_backward`
+    builds it: the row's gradient of ``loss`` alone, clipped to the row bound
+    (to nothing without one), added to the step's sum.  The split by loss
+    term is extra: every term but the last is backpropagated once more on
+    the retained graph and scaled as the bound scaled the row, and the last
+    is what remains of the row's gradient, so the parts add up to the row and
+    a row with one term costs no extra pass.
+    """
+
+    held = [parameter.grad for parameter in parameters]
+    for parameter in parameters:
+        parameter.grad = None
+    names = [name for name, term in components.items() if term is not None and getattr(term, "requires_grad", False)]
+    loss.backward(retain_graph=len(names) > 1)
+    limit = bound.bound() if bounded else None
+    norm = float(torch_module.nn.utils.clip_grad_norm_(parameters, max_norm=limit if limit is not None else float("inf")))
+    finite = math.isfinite(norm)
+    clipped = bool(finite and limit is not None and norm > limit)
+    bound.record(norm, clipped=clipped, dropped=not finite)
+    row_total = [parameter.grad for parameter in parameters]
+    if finite and names:
+        # The factor clip_grad_norm_ applied to the row.
+        scale = min(1.0, float(limit) / (norm + 1e-6)) if limit is not None else 1.0
+        remainder = [None if gradient is None else gradient.detach().clone() for gradient in row_total]
+        parts: dict[str, list[Any]] = {}
+        for index, name in enumerate(names[:-1]):
+            for parameter in parameters:
+                parameter.grad = None
+            components[name].backward(retain_graph=index < len(names) - 2)
+            part: list[Any] = []
+            for position, parameter in enumerate(parameters):
+                gradient = parameter.grad
+                if gradient is not None:
+                    gradient = gradient.detach().mul(scale)
+                    if remainder[position] is not None:
+                        remainder[position].sub_(gradient)
+                part.append(gradient)
+            parts[name] = part
+        parts[names[-1]] = remainder
+        diagnostics.add_components(parts)
+    for parameter, previous, gradient in zip(parameters, held, row_total):
+        row_gradient = gradient if finite else None
+        if previous is None:
+            parameter.grad = row_gradient
+        elif row_gradient is None:
+            parameter.grad = previous
+        else:
+            parameter.grad = previous.add_(row_gradient)
+    return norm, clipped, finite
+
+
 def _named_trainable(model: Any) -> list[tuple[str, Any]]:
     return [(name, parameter) for name, parameter in model.named_parameters() if parameter.requires_grad]
 
@@ -955,8 +1668,10 @@ def _save_tensors(path: Path, payload: Any, torch_module: Any) -> None:
     temporary.replace(path)
 
 
-def _partial_baseline(checkpoint: UpdateCheckpoint | None, rows: Sequence[TrainingRow], torch_module: Any) -> list[Any]:
-    """The rows of the clip baseline that a preempted training pass persisted, checked against ``rows``."""
+def _partial_baseline(checkpoint: UpdateCheckpoint | None, rows: Sequence[TrainingRow], torch_module: Any,
+                      digest: str | None = None) -> list[Any]:
+    """The rows of the clip baseline that a preempted training pass persisted, checked against ``rows``
+    (their number, their completion lengths and, where the file records one, the batch digest)."""
     if checkpoint is None or not (checkpoint.directory / PARTIAL_BASELINE_FILE).is_file():
         return []
     payload = torch_module.load(checkpoint.directory / PARTIAL_BASELINE_FILE, map_location="cpu")
@@ -966,19 +1681,23 @@ def _partial_baseline(checkpoint: UpdateCheckpoint | None, rows: Sequence[Traini
         or int(payload.get("rows", -1)) != len(rows)
         or len(saved) > len(rows)
         or any(len(entry) != rows[index].completion_tokens for index, entry in enumerate(saved))
+        or (digest is not None and payload.get("batch_digest") and str(payload["batch_digest"]) != digest)
     ):
         raise RuntimeError("the partial clip baseline was written for a different batch of rows")
     return saved
 
 
 def _save_partial(checkpoint, model, optimizer, *, state_base, rows_done, partial_policy, partial_kl, previous,
-                  partial_lifecycle=0.0, partial_supervised=0.0) -> None:
+                  partial_lifecycle=0.0, partial_supervised=0.0, components=None) -> None:
     import torch
 
     checkpoint.directory.mkdir(parents=True, exist_ok=True)
     name = f"grads_c{state_base['completed_chunks']}_r{rows_done}.pt"
     temporary = checkpoint.directory / (name + ".tmp")
-    torch.save({key: parameter.grad.detach().cpu() for key, parameter in _named_trainable(model) if parameter.grad is not None}, temporary)
+    payload = {key: parameter.grad.detach().cpu() for key, parameter in _named_trainable(model) if parameter.grad is not None}
+    # The diagnostics' split of the same gradient travels in the same file, under keys no parameter has.
+    payload.update(components or {})
+    torch.save(payload, temporary)
     temporary.replace(checkpoint.directory / name)
     previous = previous or {}
     _commit_state(checkpoint, {
@@ -1033,8 +1752,15 @@ def _save_step(checkpoint, model, optimizer, *, rows, chunks, completed, policy_
 
 
 __all__ = [
+    "CHUNKINGS",
+    "COMPONENTS",
     "LOSS_NORMALIZATIONS",
     "OnPolicyCheck",
+    "StepDiagnostics",
+    "batch_digest",
+    "decision_summary",
+    "row_accounting",
+    "row_kind",
     "REFERENCE_ADAPTER",
     "RowGradientBound",
     "TRAINED_ADAPTER",
@@ -1042,7 +1768,11 @@ __all__ = [
     "UpdateCheckpoint",
     "UpdateReport",
     "UpdateSettings",
+    "build_optimizer",
     "completion_logprobs",
+    "load_optimizer_state",
+    "optimizer_steps_taken",
     "peft_reference_logprobs",
     "policy_gradient_update",
+    "save_optimizer_state",
 ]

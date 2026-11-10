@@ -241,11 +241,34 @@ def reward_spread(group: Sequence[Trajectory]) -> float:
     return (max(rewards) - min(rewards)) if rewards else 0.0
 
 
+#: The policy's refusal of a complete-history prompt that does not fit its input
+#: (``psse_env.dagger.research_policy_factory.PromptLimitError``), as the evaluator records the exception.
+PROMPT_LIMIT_MARK = "PromptLimitError"
+#: The same refusal for a prompt within the input limit that did not fit the device (the refusal's own words).
+PROMPT_MEMORY_MARK = "did not fit the device's memory"
+
+
+def prompt_limit_refusals(trace: Sequence[Mapping[str, Any]], *, mark: str = PROMPT_LIMIT_MARK) -> int:
+    """How many steps of an episode the policy refused because its prompt would not fit, read from the trace.
+
+    ``mark`` narrows the count: :data:`PROMPT_MEMORY_MARK` counts the refusals for the device's memory alone.
+    """
+
+    count = 0
+    for step in trace:
+        action = step.get("action") if isinstance(step, Mapping) and isinstance(step.get("action"), Mapping) else {}
+        arguments = action.get("arguments") if isinstance(action.get("arguments"), Mapping) else {}
+        detail = str(arguments.get("error_detail") or "")
+        count += int(PROMPT_LIMIT_MARK in detail and mark in detail)
+    return count
+
+
 def store_summary(store: "TrajectoryStore") -> dict[str, Any]:
     """What a whole iteration's rollouts contain: signal, success, cost, how peaked the sampling was, and the
     lifecycle decisions sampled (whether a decline was ever sampled, and how the decisions agree with the audit)."""
     groups = informative = distinct_groups = episodes = successes = calls = unpaired = 0
     steps = peaked_steps = 0
+    cut_prompts = refused_prompts = refused_for_memory = episodes_refused = 0
     episodes_with_decline = groups_with_labelled_decision = 0
     decisions: list[dict[str, Any]] = []
     for _root, group in store.iter_groups():
@@ -260,7 +283,13 @@ def store_summary(store: "TrajectoryStore") -> dict[str, Any]:
             unpaired += int(not trajectory.pairing_ok)
             decisions.extend(trajectory.lifecycle)
             episodes_with_decline += int(any(decision.get("declined") for decision in trajectory.lifecycle))
+            refused = prompt_limit_refusals(trajectory.evaluation.get("trace") or [])
+            refused_prompts += refused
+            refused_for_memory += prompt_limit_refusals(trajectory.evaluation.get("trace") or [], mark=PROMPT_MEMORY_MARK)
+            episodes_refused += int(refused > 0)
             for step in trajectory.steps:
+                # The bounded mode cuts an over-long prompt from the left and goes on; here it is counted.
+                cut_prompts += int(step.original_prompt_tokens > step.prompt_tokens > 0)
                 if step.token_probabilities:
                     steps += 1
                     peaked_steps += int(min(step.token_probabilities) >= 0.99)
@@ -274,6 +303,11 @@ def store_summary(store: "TrajectoryStore") -> dict[str, Any]:
         "unpaired_trajectories": unpaired,
         "sampled_steps_with_probabilities": steps,
         "fraction_of_steps_with_every_token_above_0_99": (peaked_steps / steps) if steps else None,
+        # What an input limit did to the prompts: cut silently (bounded mode), or refused (complete mode).
+        # A refused step is counted once; "for the device's memory" is the part of them within the input limit.
+        "prompts": {"steps_cut_at_the_input_limit": cut_prompts, "steps_refused_at_the_input_limit": refused_prompts,
+                    "steps_refused_for_the_devices_memory": refused_for_memory,
+                    "episodes_with_a_refused_step": episodes_refused},
         "lifecycle": {
             **summarize_decisions(decisions),
             "episodes_with_decline": episodes_with_decline,
@@ -294,12 +328,15 @@ def rollout_group(
     weights: RewardWeights,
     expert_reference_calls: int | None = None,
     evaluator: Callable[..., Any] | None = None,
+    evaluator_options: Mapping[str, Any] | None = None,
 ) -> list[Trajectory]:
     """K sampled episodes of one root, each audited by the evaluator.
 
     ``policy_factory(seed)`` returns a policy whose decoding is seeded with
     ``seed``; the wrapper records its generations.  ``evaluator`` defaults to
-    :func:`psse_env.dagger.evaluator.evaluate_rollout_suites`.
+    :func:`psse_env.dagger.evaluator.evaluate_rollout_suites`;
+    ``evaluator_options`` are further keyword arguments for it (the
+    observation mode of a run that is not in the bounded one).
     """
 
     if samples <= 0:
@@ -325,6 +362,7 @@ def rollout_group(
             seed=seed,
             case_loader=case_loader,
             **PAIRED_EVALUATION_CONTRACT,
+            **dict(evaluator_options or {}),
         )
         payload = result.as_dict() if hasattr(result, "as_dict") else dict(result)
         episodes = list(payload["suite_metrics"]["episodes"])
@@ -429,6 +467,7 @@ def rollout_roots(
     expert_reference: Mapping[str, int] | None = None,
     evaluator: Callable[..., Any] | None = None,
     progress: Callable[[dict[str, Any]], None] | None = None,
+    evaluator_options: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Roll out every root without a complete group; returns the pass's summary."""
 
@@ -452,6 +491,7 @@ def rollout_roots(
             weights=weights,
             expert_reference_calls=reference,
             evaluator=evaluator,
+            evaluator_options=evaluator_options,
         )
         store.write_group(root, group)
         completed += 1
@@ -488,6 +528,8 @@ __all__ = [
     "TrajectoryStore",
     "distinct_trajectories",
     "pair_records_with_trace",
+    "PROMPT_MEMORY_MARK",
+    "prompt_limit_refusals",
     "reward_spread",
     "store_summary",
     "rollout_group",

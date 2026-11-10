@@ -16,11 +16,22 @@ from hif_search_limits import (
     HIF_R_GRID_SIZE_MIN,
 )
 from psse_env.actions import (
+    COMMIT_STATE,
+    CORRECT_MEASUREMENTS,
+    CORRECT_PARAMETERS,
+    CORRECT_TOPOLOGY,
     INVALID_ACTION,
     MACRO_ACTIONS,
     PARAMETER_COMPARISON_MAX_CANDIDATES,
     PARAMETER_COMPARISON_MIN_CANDIDATES,
+    ROLLBACK_STATE,
     safe_normalize_action,
+)
+from psse_env.dagger.observation_modes import (
+    CANDIDATE_EXPERIMENTS_KEY,
+    COMPLETE_HISTORY,
+    HISTORY_RECORD_KEY,
+    OBSERVABLE_HISTORY_KEY,
 )
 from psse_env.dagger.protocol_bridge import (
     INTERNAL_TO_CANONICAL_TOOL,
@@ -104,6 +115,19 @@ DETAILED_EVIDENCE_PROMPT_PARAGRAPH = (
     "own target metric and the largest normalized residual and multiplier on the lines "
     "and buses that meet it, before and after the edit. An accepted correction keeps its "
     "verification numbers under commit_record."
+)
+COMPLETE_HISTORY_PROMPT_PARAGRAPH = (
+    " Complete history: history_window lists every tool call of this episode in order "
+    "(index 0 is the first), each with its arguments, its outcome and the evidence it "
+    "returned. Case references use the current aliases: evidence on active describes the "
+    "active case, evidence on candidate describes the open candidate, and s0, s1, ... name "
+    "earlier cases, either an active case that a later commit replaced or a candidate that "
+    "was rolled back. candidate_experiments lists every candidate tried so far with its "
+    "correction, the calls that examined it and whether it was committed or rolled back. "
+    "In history_window a table is written once as its columns and then one row of values "
+    "per entry, in the order of the columns; the newest call's evidence is under "
+    "last_tool_output and is not repeated. Evidence on an earlier case does not describe "
+    "the active case, and only the last tool output says which actions are valid next."
 )
 LIFECYCLE_CHOICE_PROMPT_PARAGRAPH = (
     " Lifecycle choice: after a candidate is verified as acceptable you may commit it "
@@ -203,6 +227,9 @@ def system_prompt_for_observation(system_prompt: str, observation: Mapping[str, 
     record = observation.get("detailed_evidence")
     if isinstance(record, Mapping) and record.get("contract") == DETAILED_EVIDENCE_CONTRACT:
         text += DETAILED_EVIDENCE_PROMPT_PARAGRAPH
+    history_record = observation.get(HISTORY_RECORD_KEY)
+    if isinstance(history_record, Mapping) and history_record.get("contract") == COMPLETE_HISTORY:
+        text += COMPLETE_HISTORY_PROMPT_PARAGRAPH
     return text + LIFECYCLE_CHOICE_PROMPT_PARAGRAPH if lifecycle_choice_of(observation) is not None else text
 
 
@@ -1454,9 +1481,25 @@ def prepare_model_policy_observation(
     max_history_chars: int = 4096,
     alias_before_compaction: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Apply the exact model-visible sanitization used by export and audits."""
+    """Apply the exact model-visible sanitization used by export and audits.
+
+    An observation that carries the episode's complete transition stream
+    (``psse_env.dagger.observation_modes``) is rendered by
+    :func:`prepare_complete_history_observation`; ``history`` then replaces
+    the stream it carries (a trace keeps the stream's length only, and the
+    caller passes it rebuilt).  Every other observation is rendered as before.
+    """
     if not isinstance(raw_observation, Mapping):
         raise ValueError("Policy observation must be a mapping.")
+    complete_record = raw_observation.get(OBSERVABLE_HISTORY_KEY)
+    if isinstance(complete_record, Mapping) and complete_record.get("contract") == COMPLETE_HISTORY:
+        events = complete_record.get("events") if history is None else list(history)
+        if not isinstance(events, list):
+            raise ValueError(
+                "the observation was recorded under complete_history_v1 without its events; rebuild them from the "
+                "episode's trace (observation_modes.observable_history_from_trace) and pass them as the history"
+            )
+        return prepare_complete_history_observation(raw_observation, events)
     source_history = list(
         raw_observation.get("history_window", []) if history is None else (history or [])
     )
@@ -1529,6 +1572,323 @@ def prepare_model_policy_observation(
         "hash_aliases": hash_aliases,
         "source_history_events": len(source_history),
         "exported_history_events": len(history_window),
+    }
+
+
+#: What the newest event of a complete history carries in place of its evidence: the same evidence is the
+#: observation's ``last_tool_output``, in the form the model was trained to read it.
+NEWEST_EVENT_EVIDENCE = {"same_as": "last_tool_output"}
+_SCALAR = (str, int, float, bool, type(None))
+
+
+def records_to_table(value: Any) -> Any:
+    """A list of flat records written once as its columns and then its rows; anything else as it is.
+
+    ``[{"line": 7, "pf": 17.1}, {"line": 4, "pf": 19.8, "xfmr": true}]`` becomes
+    ``{"columns": ["line", "pf", "xfmr"], "optional": ["xfmr"], "rows": [[7, 17.1, null], [4, 19.8, true]]}``.
+    The list's content is unchanged: :func:`table_to_records` gives it back
+    exactly.  A column a record does not have is null in its row and named
+    in ``optional``; a list in which such a column also holds a real null is
+    left as records, because the two could not be told apart.
+    """
+
+    if not isinstance(value, list) or len(value) < 2:
+        return value
+    if any(not isinstance(item, Mapping) or not item or any(not isinstance(cell, _SCALAR) for cell in item.values())
+           for item in value):
+        return value
+    columns: list[str] = []
+    for item in value:
+        for key in item:
+            if str(key) not in columns:
+                columns.append(str(key))
+    optional = [column for column in columns if any(column not in item for item in value)]
+    if any(item.get(column) is None for column in optional for item in value if column in item):
+        return value
+    table: dict[str, Any] = {"columns": columns}
+    if optional:
+        table["optional"] = optional
+    table["rows"] = [[item.get(column) for column in columns] for item in value]
+    return table
+
+
+def table_to_records(value: Any) -> Any:
+    """The inverse of :func:`records_to_table`; anything that is not such a table as it is."""
+
+    if not (isinstance(value, Mapping) and set(value) <= {"columns", "optional", "rows"}
+            and isinstance(value.get("columns"), list) and isinstance(value.get("rows"), list)):
+        return value
+    columns = [str(column) for column in value["columns"]]
+    optional = {str(column) for column in value.get("optional") or []}
+    return [{column: cell for column, cell in zip(columns, row) if not (column in optional and cell is None)}
+            for row in value["rows"]]
+
+
+def compact_tables(value: Any) -> Any:
+    """``value`` with every list of flat records, at any depth, written as a table (:func:`records_to_table`)."""
+
+    if isinstance(value, Mapping):
+        return {str(key): compact_tables(item) for key, item in value.items()}
+    if isinstance(value, list):
+        table = records_to_table(value)
+        return table if table is not value else [compact_tables(item) for item in value]
+    return value
+
+
+def expand_tables(value: Any) -> Any:
+    """The inverse of :func:`compact_tables`."""
+
+    if isinstance(value, Mapping):
+        records = table_to_records(value)
+        if records is not value:
+            return records
+        return {str(key): expand_tables(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [expand_tables(item) for item in value]
+    return value
+
+
+def compact_event_evidence(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The events of a complete history with their evidence written more briefly, nothing lost.
+
+    A list of flat records (a solve's bus and branch tables, its largest
+    residuals and multipliers, a context's findings) is written as a table,
+    its keys once (:func:`compact_tables`): a solve's summary falls from
+    about 1,830 tokens to about a third less.  The newest event does not
+    repeat its evidence, which is the observation's last tool output
+    (:data:`NEWEST_EVENT_EVIDENCE`).  Applied after the aliases, so the
+    alias rules read the same keys as in the bounded view.
+    """
+
+    compacted: list[dict[str, Any]] = []
+    for index, event in enumerate(events):
+        event = dict(event)
+        if event.get("observable_metrics"):
+            event["observable_metrics"] = (
+                dict(NEWEST_EVENT_EVIDENCE) if index == len(events) - 1 else compact_tables(event["observable_metrics"])
+            )
+        compacted.append(event)
+    return compacted
+
+
+def complete_history_events(history: Iterable[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+    """Every transition of an episode as a model-visible event, nothing dropped for size.
+
+    An event keeps what :func:`summarize_history` keeps of a transition
+    (the tool in the model's own protocol, its arguments, the outcome, the
+    active case at the time) and, in place of the history summary of its
+    output, the view the model was shown when that output was the latest
+    one (:func:`_compact_last_tool_output`): the same metrics with the bus
+    and branch tables of a solve and the state hashes.  So what a tool
+    returned to the model once stays readable for the rest of the episode.
+
+    Left out of an event on purpose: ``valid_next_actions``.  They authorize
+    actions on the state of their own step; the current ones are in the last
+    tool output.
+    """
+
+    events: list[dict[str, Any]] = []
+    for index, item in enumerate(item for item in (history or []) if isinstance(item, Mapping)):
+        action = safe_normalize_action(item.get("action", item.get("executed_action", {})))
+        try:
+            action = internal_to_canonical_action(action)
+        except (ValueError, TypeError):
+            pass
+        tool_output = item.get("tool_output")
+        if not isinstance(tool_output, Mapping):
+            tool_output = {}
+        transition = item.get("transition_label")
+        if not isinstance(transition, Mapping):
+            transition = {}
+        view = _compact_last_tool_output(tool_output)
+        outcome: dict[str, Any] = {
+            "execution_status": _first_mapping_value((tool_output, transition), "execution_status"),
+            "process_valid": transition.get("process_valid"),
+            "error_code": _first_mapping_value((tool_output, transition), "error_code"),
+            "state_mutated": tool_output.get("state_mutated"),
+        }
+        if view.get("error_detail") is not None:
+            outcome["error_detail"] = view["error_detail"]
+        # The cases the call left behind: a correction's new candidate, a commit's new active case.
+        for key in ("active_state_id", "candidate_state_id"):
+            if key in view:
+                outcome[key] = view[key]
+        event: dict[str, Any] = {
+            "index": index,
+            "tool": action["tool"],
+            "arguments": _strict_json_clone(action["arguments"]),
+            "outcome": outcome,
+        }
+        for key in ("state_id", "candidate_state_id"):
+            if item.get(key) is not None:
+                event[key] = item[key]
+        if view.get("observable_metrics"):
+            event["observable_metrics"] = view["observable_metrics"]
+        events.append(event)
+    return events
+
+
+_CANDIDATE_OPENING_TOOLS = frozenset({CORRECT_MEASUREMENTS, CORRECT_PARAMETERS, CORRECT_TOPOLOGY})
+_CANDIDATE_CLOSING_TOOLS = {COMMIT_STATE: "committed", ROLLBACK_STATE: "rolled_back"}
+
+
+def candidate_experiments(history: Iterable[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+    """The candidates an episode has tried, read from its transitions alone.
+
+    One entry per successful correction: the candidate it opened and the case
+    it was made on, the correction in the model's own protocol, the calls
+    that examined the candidate, and how it ended (``committed``,
+    ``rolled_back``, or still ``open``).  Indices are positions in the
+    complete history.  A rollback is a rollback here whether the verification
+    forced it or the policy declined the candidate; the state summary's
+    rejected hypotheses say which.
+    """
+
+    experiments: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for index, item in enumerate(item for item in (history or []) if isinstance(item, Mapping)):
+        action = safe_normalize_action(item.get("action", item.get("executed_action", {})))
+        tool = action["tool"]
+        arguments = action["arguments"] if isinstance(action["arguments"], Mapping) else {}
+        output = item.get("tool_output") if isinstance(item.get("tool_output"), Mapping) else {}
+        succeeded = output.get("execution_status") == "success"
+        if tool in _CANDIDATE_OPENING_TOOLS and succeeded and output.get("candidate_state_id") is not None:
+            try:
+                correction = internal_to_canonical_action(action)
+            except (ValueError, TypeError):
+                correction = action
+            current = {
+                "candidate_state_id": output.get("candidate_state_id"),
+                "parent_state_id": item.get("state_id"),
+                "correction": {
+                    "tool": correction["tool"],
+                    "arguments": {key: value for key, value in _strict_json_clone(correction["arguments"]).items()
+                                  if key not in {"case_path", "state_id"}},
+                },
+                "opened_at": index,
+                "examined_at": [],
+                "disposition": "open",
+            }
+            experiments.append(current)
+            continue
+        if current is None:
+            continue
+        candidate = current["candidate_state_id"]
+        refers = candidate is not None and candidate in (arguments.get("state_id"), arguments.get("candidate_state_id"))
+        if tool in _CANDIDATE_CLOSING_TOOLS and succeeded and (refers or item.get("candidate_state_id") == candidate):
+            current["disposition"] = _CANDIDATE_CLOSING_TOOLS[tool]
+            current["closed_at"] = index
+            current = None
+        elif refers:
+            current["examined_at"].append(index)
+    return experiments
+
+
+def build_complete_history_alias_bindings(observation: Mapping[str, Any], history: Sequence[Mapping[str, Any]]) -> dict[str, str]:
+    """Local aliases for a complete-history view: ``active``, ``candidate`` and one fixed ``sN`` per earlier case.
+
+    ``N`` is a case's rank by first appearance in the episode's transition
+    stream, which only grows, so a case keeps its number for the rest of the
+    episode: the first active case is ``s0`` once a commit has replaced it,
+    and a candidate that was rolled back is ``sN`` from then on.  The bounded
+    view numbers the cases it happens to show, so there a number moves as the
+    window does.
+
+    Within a transition the references are read with the keys in sorted
+    order, so the numbers depend on what the episode held and not on the
+    order a mapping's keys happen to be in: a record read back from disk
+    (keys sorted) gets the aliases the running episode got.
+    """
+
+    alias_to_id: dict[str, str] = {}
+    active = observation.get("active_state_id")
+    candidate = observation.get("candidate_state_id")
+    if active is not None:
+        alias_to_id["active"] = str(active)
+    if candidate is not None and candidate != active:
+        alias_to_id["candidate"] = str(candidate)
+    rank: dict[str, int] = {}
+    for _key, identifier in (list(_iter_identifier_values(_key_sorted(list(history))))
+                             + list(_iter_identifier_values(_key_sorted(dict(observation))))):
+        rank.setdefault(str(identifier), len(rank))
+    current = set(alias_to_id.values())
+    for identifier, number in rank.items():
+        if identifier not in current:
+            alias_to_id[f"s{number}"] = identifier
+    return alias_to_id
+
+
+def _key_sorted(value: Any) -> Any:
+    """A copy of a JSON-like value with every mapping's keys in sorted order."""
+
+    if isinstance(value, Mapping):
+        return {str(key): _key_sorted(value[key]) for key in sorted(value, key=str)}
+    if isinstance(value, (list, tuple)):
+        return [_key_sorted(item) for item in value]
+    return value
+
+
+def _compact_state_fields(observation: dict[str, Any]) -> None:
+    """Compact the state summary of a model-visible view in place, as :func:`prepare_model_policy_observation` does."""
+
+    if "last_tool_output" in observation:
+        observation["last_tool_output"] = _compact_last_tool_output(observation["last_tool_output"])
+    last_tool = observation.get("last_tool")
+    if isinstance(last_tool, str):
+        observation["last_tool"] = INTERNAL_TO_CANONICAL_TOOL.get(last_tool, last_tool)
+    if "last_verification" in observation:
+        observation["last_verification"] = _compact_last_verification(observation["last_verification"])
+    for field in ("accepted_corrections", "explained_anomalies", "rejected_hypotheses"):
+        if field in observation:
+            observation[field] = _bounded_value(observation[field], max_depth=4, max_items=8, max_text_chars=160)
+
+
+def prepare_complete_history_observation(
+    raw_observation: Mapping[str, Any],
+    events: Iterable[Mapping[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The model-visible view of an observation under ``complete_history_v1``.
+
+    The state summary is compacted exactly as in the bounded view.  What
+    changes is the history: ``history_window`` holds every transition
+    (:func:`complete_history_events`), ``candidate_experiments`` says what
+    became of every candidate, ``history_record`` marks the mode, and the
+    case aliases are fixed for the episode
+    (:func:`build_complete_history_alias_bindings`).  There is no event limit
+    and no character budget; whether the prompt fits the model's input is
+    checked where it is tokenized, and a prompt that does not fit is refused
+    there, never cut.
+    """
+
+    raw_observation = without_controller_fingerprints(
+        {key: value for key, value in raw_observation.items() if key != OBSERVABLE_HISTORY_KEY}
+    )
+    source_history = without_controller_fingerprints([dict(item) for item in events if isinstance(item, Mapping)])
+    observation = _without_history(raw_observation)
+    _compact_state_fields(observation)
+    history_events = complete_history_events(source_history)
+    observation["history_window"] = history_events
+    observation[CANDIDATE_EXPERIMENTS_KEY] = candidate_experiments(source_history)
+    observation[HISTORY_RECORD_KEY] = {"contract": COMPLETE_HISTORY, "events": len(history_events)}
+    state_aliases = build_complete_history_alias_bindings(raw_observation, source_history)
+    episode_aliases = _episode_bindings(raw_observation)
+    # Hashes in the order the episode produced them, so a hash keeps its alias as the history grows; within
+    # an event and in the state summary by sorted key, so the alias does not depend on a mapping's key order.
+    hash_aliases = build_hash_alias_bindings(_key_sorted(history_events), _key_sorted(observation))
+    aliased = alias_model_visible_state(
+        observation, state_aliases, episode_aliases=episode_aliases, hash_aliases=hash_aliases,
+    )
+    if not isinstance(aliased, Mapping):
+        raise ValueError("Prepared policy observation must remain a mapping.")
+    aliased = dict(aliased)
+    aliased["history_window"] = compact_event_evidence(aliased["history_window"])
+    return aliased, {
+        "state_aliases": state_aliases,
+        "episode_aliases": episode_aliases,
+        "hash_aliases": hash_aliases,
+        "source_history_events": len(source_history),
+        "exported_history_events": len(history_events),
+        "observation_mode": COMPLETE_HISTORY,
     }
 
 

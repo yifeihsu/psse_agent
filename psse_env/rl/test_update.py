@@ -11,8 +11,12 @@ from psse_env.rl.update import (
     UpdateCheckpoint,
     UpdateSettings,
     _bounded_row_backward,
+    build_optimizer,
     completion_logprobs,
+    load_optimizer_state,
+    optimizer_steps_taken,
     policy_gradient_update,
+    save_optimizer_state,
 )
 
 try:
@@ -112,6 +116,13 @@ def _rows_after_token_3():
     """Rows whose first completion token is predicted from token 3, so one step moves every row's logits."""
     return [_row([1, 2, 3], [4, 5], 1.0, 0), _row([2, 3], [6], -1.0, 1), _row([0, 3], [7, 8], 0.5, 2),
             _row([5, 3], [9], -0.5, 3), _row([6, 7, 3], [10, 11], 1.5, 4), _row([8, 3], [2], -1.5, 5)]
+
+
+def _group_row(root, sample, prompt, completion, advantage, step=0, preservation=False, supervised=False):
+    """One row of the group ``root``: the samples of a root are one group, and their advantages sum to zero."""
+    return build_step_row(root=root, sample_index=sample, step=step, advantage=advantage, prompt_ids=prompt,
+                          completion_ids=completion, max_length=64, preservation=preservation,
+                          lifecycle_term=0.25 if supervised else 0.0, supervised=supervised)
 
 
 @unittest.skipIf(torch is None, "torch is not installed")
@@ -646,11 +657,302 @@ class UpdateTests(unittest.TestCase):
             missing = _rows_after_token_3()
             policy_gradient_update(_TinyLM(seed=2), missing, UpdateSettings(optimizer_steps=1, max_on_policy_log_ratio=0.1))
 
+    def test_group_chunking_keeps_every_group_in_one_step(self) -> None:
+        from psse_env.rl.update import _chunks, _split_groups
+
+        rows = []
+        for number in range(6):  # informative groups: two samples of two steps, plus a labelled lifecycle decision
+            root = f"informative{number}"
+            for sample, advantage in ((0, 1.0), (1, -1.0)):
+                rows.append(_group_row(root, sample, [1, 2], [3], advantage, step=0))
+                rows.append(_group_row(root, sample, [2, 3 + sample], [5, 6], advantage, step=1))
+            rows.append(_group_row(root, 0, [3, 4], [7], 0.0, step=1, supervised=True))
+        for number in range(5):  # flat groups: one preservation row and one supervised row
+            root = f"flat{number}"
+            rows.append(_group_row(root, 0, [4, 5], [8], 0.0, preservation=True))
+            rows.append(_group_row(root, 1, [5, 6], [9], 0.0, supervised=True))
+        for seed in range(5):
+            chunks = _chunks(rows, UpdateSettings(optimizer_steps=2, seed=seed, chunk_by="group"))
+            self.assertEqual(sorted(index for chunk in chunks for index in chunk), list(range(len(rows))))
+            roots = [{rows[index].root for index in chunk} for chunk in chunks]
+            self.assertEqual(len(roots), 2)
+            self.assertFalse(roots[0] & roots[1])  # no group has rows in both steps
+            self.assertEqual([sum(1 for root in step if root.startswith("informative")) for step in roots], [3, 3])
+            self.assertEqual(sorted(sum(1 for root in step if root.startswith("flat")) for step in roots), [2, 3])
+            self.assertEqual(_split_groups(rows, chunks), 0)
+            # Dealt by trajectory, the same batch has groups with a sample in each step.
+            self.assertGreater(_split_groups(rows, _chunks(rows, UpdateSettings(optimizer_steps=2, seed=seed))), 0)
+
+    def test_split_groups_counts_the_groups_whose_policy_rows_sit_in_more_than_one_step(self) -> None:
+        from psse_env.rl.update import _split_groups
+
+        rows = [_group_row("a", 0, [1, 2], [3], 1.0), _group_row("a", 1, [2, 3], [4], -1.0),
+                _group_row("b", 0, [3, 4], [5], 0.0, preservation=True), _group_row("b", 1, [4, 5], [6], 0.0, supervised=True),
+                _group_row("c", 0, [5, 6], [7], 1.0), _group_row("c", 1, [6, 7], [8], 0.0, supervised=True)]
+        self.assertEqual([row.policy_row for row in rows], [True, True, False, False, True, False])
+        # Group a's two policy rows part: the one case in which a group's advantages no longer cancel within a step.
+        self.assertEqual(_split_groups(rows, [[0, 2, 4], [1, 3, 5]]), 1)
+        # Group a whole; b and c are parted only by rows that carry no group advantage.
+        self.assertEqual(_split_groups(rows, [[0, 1, 2, 4], [3, 5]]), 0)
+        self.assertEqual(_split_groups(rows, [[0, 1, 2, 3, 4, 5]]), 0)
+
+    def test_a_batch_whose_gradient_is_zero_leaves_the_weights_in_place(self) -> None:
+        from psse_env.rl.update import _chunks, _split_groups
+
+        # Each group holds the same row twice with opposite advantages, so each group's gradient is zero.
+        rows = []
+        for root, prompt, completion in (("a", [1, 2], [3, 4]), ("b", [5, 6], [7, 8])):
+            rows += [_group_row(root, 0, prompt, completion, 1.0), _group_row(root, 1, prompt, completion, -1.0)]
+        # The seeds under which the deal by trajectory puts a group's two samples in different steps:
+        # on those the two-step update stays in place only because whole groups are dealt.
+        splitting = [seed for seed in range(8)
+                     if _split_groups(rows, _chunks(rows, UpdateSettings(optimizer_steps=2, seed=seed)))]
+        self.assertGreaterEqual(len(splitting), 3)
+        arms = [UpdateSettings(learning_rate=0.01, optimizer_steps=2, chunk_by="group", seed=seed) for seed in splitting]
+        arms += [UpdateSettings(learning_rate=0.01, optimizer_steps=2, chunk_by="group"),
+                 UpdateSettings(learning_rate=0.01, optimizer_steps=1)]
+        for settings in arms:
+            model = _TinyLM()
+            before = model.table.detach().clone()
+            report = policy_gradient_update(model, rows, settings)
+            self.assertTrue(torch.equal(before, model.table.detach()))
+            self.assertEqual(report.split_groups, 0)
+            self.assertEqual(report.grad_norm, [0.0] * settings.optimizer_steps)
+
+    def test_a_group_dealt_across_two_steps_moves_weights_its_gradient_leaves_alone(self) -> None:
+        # The defect of the run of 2026-11-08: one group, the same row twice with opposite advantages.
+        # Its gradient is zero, but dealt by trajectory each step sees one sample, and a new AdamW
+        # takes the learning rate in the first step and gives back about a twentieth in the second.
+        rate = 0.01
+        rows = [_group_row("a", 0, [1, 2], [3, 4], 1.0), _group_row("a", 1, [1, 2], [3, 4], -1.0)]
+        model = _TinyLM()
+        before = model.table.detach().clone()
+        report = policy_gradient_update(model, rows, UpdateSettings(learning_rate=rate, optimizer_steps=2))
+        self.assertEqual(report.split_groups, 1)
+        moved = (model.table.detach() - before).abs()
+        touched = [2, 3]  # the completion's tokens are predicted from tokens 2 and 3
+        others = [index for index in range(_TinyLM.vocab) if index not in touched]
+        self.assertTrue(torch.equal(moved[others], torch.zeros_like(moved[others])))
+        self.assertTrue(bool((moved[touched] > 0.93 * rate).all()) and bool((moved[touched] < 0.96 * rate).all()))
+
+    def test_what_a_groups_samples_share_cancels_only_when_the_group_is_in_one_step(self) -> None:
+        from psse_env.rl.update import _chunks, _split_groups
+
+        rate = 0.01
+        rows = []
+        # Each group's two samples share their first step (predicted from token 2 in group a, 8 in group b)
+        # and part on the second; the advantages sum to zero within the group.
+        for root, shared, seconds in (("a", ([1, 2], [3]), (([0, 4], [5]), ([0, 6], [7]))),
+                                      ("b", ([1, 8], [9]), (([0, 10], [11]), ([0, 11], [0])))):
+            for sample, advantage in ((0, 1.0), (1, -1.0)):
+                rows.append(_group_row(root, sample, shared[0], shared[1], advantage, step=0))
+                rows.append(_group_row(root, sample, seconds[sample][0], seconds[sample][1], advantage, step=1))
+        shared_rows, own_rows = [2, 8], [4, 6, 10, 11]
+        # A seed under which the deal by trajectory splits both groups: both deals run on it.
+        split = next(settings for settings in (UpdateSettings(learning_rate=rate, optimizer_steps=2, seed=seed) for seed in range(10))
+                     if _split_groups(rows, _chunks(rows, settings)) == 2)
+        whole = UpdateSettings(learning_rate=rate, optimizer_steps=2, seed=split.seed, chunk_by="group")
+        model = _TinyLM()
+        before = model.table.detach().clone()
+        report = policy_gradient_update(model, rows, whole)
+        moved = (model.table.detach() - before).abs()
+        self.assertEqual(report.split_groups, 0)
+        self.assertTrue(torch.equal(moved[shared_rows], torch.zeros_like(moved[shared_rows])))
+        self.assertTrue(bool((moved[own_rows] > 0.5 * rate).all()))
+        # Dealt by trajectory, the shared step's weights move almost the learning rate.
+        model = _TinyLM()
+        report = policy_gradient_update(model, rows, split)
+        moved = (model.table.detach() - before).abs()
+        self.assertEqual(report.split_groups, 2)
+        self.assertTrue(bool((moved[shared_rows] > 0.93 * rate).all()) and bool((moved[shared_rows] < 0.96 * rate).all()))
+
+    def test_a_carried_optimizer_moves_a_weight_by_how_steadily_its_gradient_points(self) -> None:
+        rate = 0.01
+        settings = UpdateSettings(learning_rate=rate, optimizer_steps=1)
+        touched = [2, 5]
+
+        def batch(sign: float):
+            return [_group_row("a", 0, [1, 2], [3], sign), _group_row("a", 1, [4, 5], [6], -sign)]
+
+        def twin(source):
+            other = _TinyLM()
+            other.load_state_dict(source.state_dict())
+            return other
+
+        model = _TinyLM()
+        start = model.table.detach().clone()
+        optimizer = build_optimizer(model, settings)
+        self.assertEqual(optimizer_steps_taken(optimizer.state_dict()), 0)
+        policy_gradient_update(model, batch(1.0), settings, optimizer=optimizer)
+        first = (model.table.detach() - start)[touched]
+        self.assertTrue(torch.allclose(first.abs(), torch.full_like(first, rate), rtol=1e-4))
+        with tempfile.TemporaryDirectory() as directory:
+            save_optimizer_state(optimizer, Path(directory) / "optimizer.pt")
+            carried = load_optimizer_state(Path(directory) / "optimizer.pt")
+        self.assertEqual(optimizer_steps_taken(carried), 1)
+        after_first = model.table.detach().clone()
+
+        def step(rows, state):
+            other = twin(model)
+            continued = build_optimizer(other, settings, state)
+            policy_gradient_update(other, rows, settings, optimizer=continued)
+            return (other.table.detach() - after_first)[touched], optimizer_steps_taken(continued.state_dict())
+
+        # The same gradient again: the full learning rate, the same way.
+        again, steps = step(batch(1.0), carried)
+        self.assertEqual(steps, 2)
+        self.assertTrue(torch.allclose(again, first, rtol=0.02))
+        # The opposite gradient: about a twentieth of it (0.0526), back the way the first step came.
+        back, steps = step(batch(-1.0), carried)
+        self.assertEqual(steps, 2)
+        self.assertTrue(bool((back * first < 0).all()))
+        self.assertTrue(bool((back.abs() > 0.03 * rate).all()) and bool((back.abs() < 0.08 * rate).all()))
+        # A new optimizer on that opposite gradient takes the full learning rate back: the sign step.
+        fresh, steps = step(batch(-1.0), None)
+        self.assertEqual(steps, 1)
+        self.assertTrue(torch.allclose(fresh, -first, rtol=1e-4))
+        default = twin(model)
+        policy_gradient_update(default, batch(-1.0), settings)
+        self.assertTrue(torch.equal((default.table.detach() - after_first)[touched], fresh))
+
+    def test_a_carried_optimizer_takes_the_settings_in_force(self) -> None:
+        model = _TinyLM()
+        settings = UpdateSettings(learning_rate=0.01, optimizer_steps=1)
+        optimizer = build_optimizer(model, settings)
+        policy_gradient_update(model, [_row([1, 2], [3], 1.0)], settings, optimizer=optimizer)
+        changed = UpdateSettings(learning_rate=0.002, optimizer_steps=1, weight_decay=0.01, adam_beta1=0.8,
+                                 adam_beta2=0.99, adam_epsilon=1e-6)
+        continued = build_optimizer(model, changed, optimizer.state_dict())
+        group = continued.param_groups[0]
+        self.assertEqual((group["lr"], group["weight_decay"], group["betas"], group["eps"]), (0.002, 0.01, (0.8, 0.99), 1e-6))
+        self.assertEqual(optimizer_steps_taken(continued.state_dict()), 1)
+        self.assertEqual(optimizer.param_groups[0]["lr"], 0.01)
+
+    def test_building_from_a_live_state_leaves_that_state_as_it_was(self) -> None:
+        model = _TinyLM(seed=1)
+        settings = UpdateSettings(learning_rate=0.01, optimizer_steps=1)
+        batch = [_row([1, 2], [3], 1.0)]
+        first = build_optimizer(model, settings)
+        policy_gradient_update(model, batch, settings, optimizer=first)
+        moment = first.state_dict()["state"][0]["exp_avg"].clone()
+        second = build_optimizer(model, settings, first.state_dict())
+        policy_gradient_update(model, batch, settings, optimizer=second)
+        self.assertEqual(optimizer_steps_taken(first.state_dict()), 1)
+        self.assertTrue(torch.equal(first.state_dict()["state"][0]["exp_avg"], moment))
+        self.assertEqual(optimizer_steps_taken(second.state_dict()), 2)
+
+    def test_a_zero_gradient_step_coasts_on_carried_momentum_unless_beta1_is_zero(self) -> None:
+        rate = 0.01
+        touched = [2, 5]
+        others = [index for index in range(_TinyLM.vocab) if index not in touched]
+        real = [_group_row("a", 0, [1, 2], [3], 1.0), _group_row("a", 1, [4, 5], [6], -1.0)]
+        nothing = [_group_row("b", 0, [1, 2], [3], 1.0), _group_row("b", 1, [1, 2], [3], -1.0)]  # gradient zero
+        for beta1 in (0.9, 0.0):
+            settings = UpdateSettings(learning_rate=rate, optimizer_steps=1, adam_beta1=beta1)
+            model = _TinyLM()
+            optimizer = build_optimizer(model, settings)
+            policy_gradient_update(model, real, settings, optimizer=optimizer)
+            before = model.table.detach().clone()
+            continued = build_optimizer(model, settings, optimizer.state_dict())
+            report = policy_gradient_update(model, nothing, settings, optimizer=continued)
+            moved = (model.table.detach() - before).abs()
+            self.assertEqual(report.grad_norm, [0.0])
+            self.assertTrue(torch.equal(moved[others], torch.zeros_like(moved[others])))
+            if beta1:
+                # 0.4737 / 0.7069 of the learning rate: the first step's momentum over its second moment.
+                self.assertTrue(bool((moved[touched] > 0.66 * rate).all()) and bool((moved[touched] < 0.68 * rate).all()))
+            else:
+                self.assertTrue(torch.equal(moved[touched], torch.zeros_like(moved[touched])))
+
+    def test_a_carried_state_for_other_parameters_is_refused(self) -> None:
+        class _Wide(_TinyLM):
+            vocab = 16
+
+        class _WithBias(_TinyLM):
+            def __init__(self) -> None:
+                super().__init__()
+                self.bias = torch.nn.Parameter(torch.zeros(self.vocab))
+
+        settings = UpdateSettings(learning_rate=0.01, optimizer_steps=1)
+        model = _TinyLM()
+        optimizer = build_optimizer(model, settings)
+        policy_gradient_update(model, [_row([1, 2], [3], 1.0)], settings, optimizer=optimizer)
+        state = optimizer.state_dict()
+        with self.assertRaisesRegex(RuntimeError, "other trainable parameters"):
+            build_optimizer(_Wide(), settings, state)
+        with self.assertRaisesRegex(RuntimeError, "1 trainable parameters, the model has 2"):
+            build_optimizer(_WithBias(), settings, state)
+        with self.assertRaisesRegex(RuntimeError, "not an optimizer state_dict"):
+            build_optimizer(_TinyLM(), settings, {"weights": 1})
+        build_optimizer(_TinyLM(), settings, state)  # the same parameters: accepted
+
+    def test_a_checkpoint_dealt_by_the_other_chunking_is_refused(self) -> None:
+        rows = [_group_row("a", 0, [1, 2], [3], 1.0), _group_row("a", 1, [2, 3], [4], -1.0),
+                _group_row("b", 0, [3, 4], [5], 0.5), _group_row("b", 1, [4, 5], [6], -0.5)]
+        by_trajectory = UpdateSettings(optimizer_steps=2)
+        by_group = UpdateSettings(optimizer_steps=2, chunk_by="group")
+        # Four rows in two steps under either deal, so the row and step counts alone would let the resume through.
+        for written, resumed, message in ((by_group, by_trajectory, "dealt by 'group'"),
+                                          (by_trajectory, by_group, "dealt by 'trajectory'")):
+            with tempfile.TemporaryDirectory() as directory:
+                checkpoint = UpdateCheckpoint(directory=Path(directory), save_model=_save_tiny, every_rows=1)
+                policy_gradient_update(_TinyLM(), rows, written, checkpoint=checkpoint)
+                self.assertEqual(checkpoint.load_state().get("chunk_by"), "group" if written is by_group else None)
+                with self.assertRaisesRegex(RuntimeError, message):
+                    policy_gradient_update(_TinyLM(), rows, resumed, checkpoint=checkpoint)
+
+    def test_an_interrupted_group_update_with_a_carried_optimizer_resumes_to_the_same_parameters(self) -> None:
+        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=2, seed=7, chunk_by="group")
+        rows = []
+        for root, (first, second), advantage in (("a", (([1, 2], [3]), ([2, 3], [4, 5])), 1.0),
+                                                 ("b", (([3, 4], [5]), ([4, 5], [6])), 0.5),
+                                                 ("c", (([5, 6], [7, 8]), ([6, 7], [8])), 1.5),
+                                                 ("d", (([7, 8], [9]), ([8, 9], [10])), 1.0)):
+            rows += [_group_row(root, 0, first[0], first[1], advantage), _group_row(root, 1, second[0], second[1], -advantage)]
+        with tempfile.TemporaryDirectory() as directory:
+            start, carried_file = Path(directory) / "start", Path(directory) / "optimizer.pt"
+            # An earlier update: one step, whose optimizer state the next update continues.
+            one_step = UpdateSettings(learning_rate=0.05, optimizer_steps=1)
+            earlier = _TinyLM(seed=3)
+            optimizer = build_optimizer(earlier, one_step)
+            policy_gradient_update(earlier, _rows(), one_step, optimizer=optimizer)
+            _save_tiny(earlier, start)
+            save_optimizer_state(optimizer, carried_file)
+            carried = load_optimizer_state(carried_file)
+
+            reference = _load_tiny(start, seed=3)
+            expected = policy_gradient_update(reference, rows, settings, optimizer=build_optimizer(reference, settings, carried))
+            self.assertEqual(expected.split_groups, 0)
+
+            checkpoint = UpdateCheckpoint(directory=Path(directory) / "checkpoint", save_model=_save_tiny, every_rows=2)
+            # Two groups, four rows, per step: the run completes step one, saves the
+            # gradients of two rows of step two, and is preempted on the third.
+            interrupted = _load_tiny(start, seed=3, fail_after=6)
+            with self.assertRaises(_Preempted):
+                policy_gradient_update(interrupted, rows, settings, optimizer=build_optimizer(interrupted, settings, carried),
+                                       checkpoint=checkpoint)
+            state = checkpoint.load_state()
+            self.assertEqual((state["completed_chunks"], state["chunk_rows_done"], state["chunk_by"]), (1, 2, "group"))
+            # As the driver does: the optimizer is rebuilt from the state before this update,
+            # and the resume loads the checkpoint's state, one step further, over it.
+            resumed_model = _load_tiny(checkpoint.model_dir(), seed=3)
+            resumed_optimizer = build_optimizer(resumed_model, settings, carried)
+            resumed = policy_gradient_update(resumed_model, rows, settings, optimizer=resumed_optimizer, checkpoint=checkpoint)
+            self.assertEqual(resumed.resumed_from, {"completed_chunks": 1, "chunk_rows_done": 2})
+            self.assertTrue(torch.allclose(resumed_model.table, reference.table, atol=1e-6))
+            self.assertEqual(optimizer_steps_taken(resumed_optimizer.state_dict()), 3)
+            self.assertEqual(optimizer_steps_taken(carried), 1)
+            # Without the carried state the same update ends elsewhere, so the state is what was continued.
+            anew = _load_tiny(start, seed=3)
+            policy_gradient_update(anew, rows, settings)
+            self.assertFalse(torch.allclose(anew.table, reference.table, atol=1e-4))
+
     def test_settings_validation(self) -> None:
         for bad in (dict(learning_rate=0.0), dict(beta_kl=-1.0), dict(loss_normalization="token"), dict(temperature=0.0),
                     dict(max_row_grad_norm=0.0), dict(row_grad_norm_factor=-1.0), dict(row_grad_norm_warmup=0),
                     dict(clip_ratio=0.0), dict(clip_ratio=1.0), dict(clip_ratio=float("nan")),
-                    dict(max_on_policy_log_ratio=0.0), dict(max_on_policy_log_ratio=float("inf"))):
+                    dict(max_on_policy_log_ratio=0.0), dict(max_on_policy_log_ratio=float("inf")),
+                    dict(chunk_by="root"), dict(carry_optimizer="yes")):
             with self.assertRaises(ValueError):
                 UpdateSettings(**bad).validate()
         with self.assertRaises(ValueError):

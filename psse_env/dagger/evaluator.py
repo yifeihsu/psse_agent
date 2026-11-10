@@ -77,6 +77,13 @@ from psse_env.dagger.release_audit import (
     validate_post_correction_handoff_assessment,
 )
 from psse_env.state_store import OracleState, PolicyObservation, policy_safe_copy
+from psse_env.dagger.observation_modes import (
+    BOUNDED_HISTORY,
+    COMPLETE_HISTORY,
+    stored_observation,
+    validate_observation_mode,
+    with_observable_history,
+)
 
 
 STUDY_OBJECTIVE_EPISODE_EVIDENCE_CONTRACT = "dagger_study_objective_episode_evidence_v1"
@@ -1654,9 +1661,14 @@ class ClosedLoopRolloutEvaluator:
         development_holdout_mode: bool = False,
         recovery_stress_mode: bool = False,
         progress_callback: ProgressCallback | None = None,
+        observation_mode: str = BOUNDED_HISTORY,
     ) -> None:
         if not callable(env_factory) or not callable(policy_factory):
             raise TypeError("env_factory and policy_factory must be callable.")
+        # How much of the episode's tool history the policy is shown
+        # (psse_env.dagger.observation_modes); the bounded window is the
+        # mode of every recorded cell.
+        self.observation_mode = validate_observation_mode(observation_mode)
         max_steps = validate_episode_action_limit(max_steps)
         if case_loader is not None and not callable(case_loader):
             raise TypeError("case_loader must be callable when supplied.")
@@ -2486,6 +2498,7 @@ class ClosedLoopRolloutEvaluator:
                 observation,
                 state_before=state_before_action,
                 history=history,
+                observation_mode=self.observation_mode,
             )
             observation["remaining_budget"] = max(self.max_steps - len(trace), 0)
             # This check is repeated even for PolicyObservation implementations
@@ -2782,7 +2795,7 @@ class ClosedLoopRolloutEvaluator:
                     "step": step,
                     "intervention": False,
                     "observation_hash": _stable_hash(observation),
-                    "policy_observation": policy_safe_copy(observation),
+                    "policy_observation": policy_safe_copy(stored_observation(observation)),
                     "objective_action_assessment": copy.deepcopy(
                         objective_action_assessment
                     ),
@@ -3100,6 +3113,7 @@ def evaluate_rollout_suites(
     development_holdout_mode: bool = False,
     recovery_stress_mode: bool = False,
     progress_callback: ProgressCallback | None = None,
+    observation_mode: str = BOUNDED_HISTORY,
 ) -> EvaluationResult:
     """Functional entry point for closed-loop suite evaluation."""
 
@@ -3122,6 +3136,7 @@ def evaluate_rollout_suites(
         development_holdout_mode=development_holdout_mode,
         recovery_stress_mode=recovery_stress_mode,
         progress_callback=progress_callback,
+        observation_mode=observation_mode,
     ).evaluate(scenario_suites)
 
 
@@ -4328,6 +4343,7 @@ def _canonical_study_policy_observation(
     *,
     state_before: Mapping[str, Any],
     history: Sequence[Mapping[str, Any]],
+    observation_mode: str = BOUNDED_HISTORY,
 ) -> dict[str, Any]:
     """Bind the policy input to evaluator-owned state and transition history.
 
@@ -4335,6 +4351,12 @@ def _canonical_study_policy_observation(
     not get to choose or fabricate the history used by schema-v4 objective
     metrics.  The evaluator replaces that field with the canonical bounded
     suffix and rejects state identifiers that contradict its runtime snapshot.
+
+    Under ``complete_history_v1`` the observation also carries the whole
+    policy-safe transition stream (``observable_history``).  The bounded
+    suffix stays in ``history_window`` unchanged, so the objective metrics
+    and a rule expert read the same fields in either mode; only a policy
+    adapter that renders the complete record reads the stream.
     """
 
     bound = copy.deepcopy(dict(observation))
@@ -4375,6 +4397,8 @@ def _canonical_study_policy_observation(
     bound["last_tool_output"] = (
         copy.deepcopy(dict(last_output)) if isinstance(last_output, Mapping) else {}
     )
+    if observation_mode == COMPLETE_HISTORY:
+        bound = with_observable_history(bound, policy_safe_copy(list(history)))
     return bound
 
 

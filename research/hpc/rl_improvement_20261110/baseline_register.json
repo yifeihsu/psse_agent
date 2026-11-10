@@ -1,0 +1,365 @@
+{
+ "contract": "rl_baseline_register_v1",
+ "entries": {
+  "audit_deciding": {
+   "evaluated_at": null,
+   "files": {
+    "episodes_sha256": null,
+    "evaluation_sha256": "876a6980105cffca9f63a4847d7a28adb041d552c7d9a86054e69417b7c621f0"
+   },
+   "how": {
+    "budgets": [],
+    "decoding": "rule policy",
+    "evaluator": "compound study rollout, read as a map of root to result",
+    "max_input_tokens": null,
+    "max_steps": 40,
+    "observation_mode": null,
+    "precision": null,
+    "roots": 300,
+    "source_commit": null,
+    "suite": "/scratch/yx3882/compound_rl_20261107/data/suites/ieee14_dev300.json",
+    "suite_sha256": "04e2ad0998c141c41cf599ef1176fcd9ec510e1c43aec9b66b7963ac3aacb14c"
+   },
+   "kind": "audit",
+   "name": "audit_deciding",
+   "note": "the rule expert with the offline audit deciding every lifecycle choice: a restricted diagnostic reference, not a bound on what a policy can reach",
+   "policy": {
+    "record": "/scratch/yx3882/compound_cloning_20261106/data/audit_map.json"
+   },
+   "results": {
+    "all_cases": 1275,
+    "clean": 189,
+    "false_commits": null,
+    "healthy_component_corrupted": null,
+    "invalid_actions": null,
+    "lifecycle": {
+     "decisions": null,
+     "declines": null,
+     "true_target_declined": null,
+     "wrong_target_committed": 0,
+     "wrong_target_declined": null
+    },
+    "loop_episodes": null,
+    "mean_reward": null,
+    "mean_steps": null,
+    "prompt_limit_refusals": null,
+    "roots": 300,
+    "solved": 200,
+    "solved_on_all_cases": 853,
+    "solved_within_actions": {}
+   },
+   "run": null,
+   "series": {}
+  },
+  "first_arm/S0": {
+   "evaluated_at": "2026-11-08T06:33:35Z",
+   "files": {
+    "episodes_sha256": "01e489e1313a94c9983fa23e46043fb31ce98fc4ce8689c5e19a46a2e3993a53",
+    "evaluation_sha256": "493c1a50dfbdbe8ada079d870ece0a16ecd8f7bdaa6ad9c7516f1f218030ef17"
+   },
+   "how": {
+    "budgets": [
+     16,
+     20
+    ],
+    "decoding": "greedy",
+    "evaluator": "psse_env.rl.train greedy evaluation (paired evaluation contract)",
+    "max_input_tokens": 32768,
+    "max_steps": 40,
+    "observation_mode": "bounded_history_v1",
+    "precision": "bf16",
+    "roots": 300,
+    "source_commit": "dcb6b38bff3b2a9ae251fb9f6557fc280c39e39b",
+    "suite": "/scratch/yx3882/compound_rl_20261107/data/suites/ieee14_dev300.json",
+    "suite_sha256": "04e2ad0998c141c41cf599ef1176fcd9ec510e1c43aec9b66b7963ac3aacb14c"
+   },
+   "kind": "learner",
+   "name": "first_arm/S0",
+   "note": "the cloned start adapter under the first arm's loader",
+   "policy": {
+    "adapter": "/scratch/yx3882/compound_cloning_20261106/out/clone/training/lora",
+    "baseline": true,
+    "iteration": null
+   },
+   "results": {
+    "clean": 168,
+    "false_commits": 15,
+    "healthy_component_corrupted": 47,
+    "invalid_actions": 124,
+    "lifecycle": {
+     "decisions": 562,
+     "declines": 5,
+     "true_target_declined": 2,
+     "wrong_target_committed": 47,
+     "wrong_target_declined": 3
+    },
+    "loop_episodes": 23,
+    "mean_reward": 0.20283333333333334,
+    "mean_steps": 12.866666666666667,
+    "prompt_limit_refusals": null,
+    "roots": 300,
+    "solved": 182,
+    "solved_within_actions": {
+     "16": 165,
+     "20": 182
+    }
+   },
+   "run": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1",
+   "series": {
+    "arm": "crl-ieee14",
+    "name": "compound_rl_20261107"
+   }
+  },
+  "first_arm/S1": {
+   "evaluated_at": "2026-11-08T23:02:14Z",
+   "files": {
+    "episodes_sha256": "781ac923c0945927de0ccb96351511fbe36cf35618c99a0d0d083bda52f50827",
+    "evaluation_sha256": "0debe6870a2024155195d193fa609557ea4068f9165500af8439d9a4611c73e2"
+   },
+   "how": {
+    "budgets": [
+     16,
+     20
+    ],
+    "decoding": "greedy",
+    "evaluator": "psse_env.rl.train greedy evaluation (paired evaluation contract)",
+    "max_input_tokens": 32768,
+    "max_steps": 40,
+    "observation_mode": "bounded_history_v1",
+    "precision": "bf16",
+    "roots": 300,
+    "source_commit": "dcb6b38bff3b2a9ae251fb9f6557fc280c39e39b",
+    "suite": "/scratch/yx3882/compound_rl_20261107/data/suites/ieee14_dev300.json",
+    "suite_sha256": "04e2ad0998c141c41cf599ef1176fcd9ec510e1c43aec9b66b7963ac3aacb14c"
+   },
+   "kind": "learner",
+   "name": "first_arm/S1",
+   "note": "the first arm: every update was two steps of a new optimizer over halves of the batch",
+   "policy": {
+    "adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_000/adapter",
+    "baseline": false,
+    "iteration": 0
+   },
+   "results": {
+    "clean": 171,
+    "false_commits": 10,
+    "healthy_component_corrupted": 47,
+    "invalid_actions": 91,
+    "lifecycle": {
+     "decisions": 563,
+     "declines": 15,
+     "true_target_declined": 5,
+     "wrong_target_committed": 44,
+     "wrong_target_declined": 10
+    },
+    "loop_episodes": 11,
+    "mean_reward": 0.22426666666666667,
+    "mean_steps": 12.736666666666666,
+    "prompt_limit_refusals": null,
+    "roots": 300,
+    "solved": 180,
+    "solved_within_actions": {
+     "16": 166,
+     "20": 180
+    }
+   },
+   "run": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1",
+   "series": {
+    "arm": "crl-ieee14",
+    "name": "compound_rl_20261107"
+   }
+  },
+  "first_arm/S2": {
+   "evaluated_at": "2026-11-09T17:57:12Z",
+   "files": {
+    "episodes_sha256": "b68ef8e6a99d54e5eb638dfe2d659a13f6987fb44b15e379a696e98236f6243c",
+    "evaluation_sha256": "0b37ece1eaccc569d04100f10076bbaa2dee6a0c485cb309c104c314634a81d8"
+   },
+   "how": {
+    "budgets": [
+     16,
+     20
+    ],
+    "decoding": "greedy",
+    "evaluator": "psse_env.rl.train greedy evaluation (paired evaluation contract)",
+    "max_input_tokens": 32768,
+    "max_steps": 40,
+    "observation_mode": "bounded_history_v1",
+    "precision": "bf16",
+    "roots": 300,
+    "source_commit": "dcb6b38bff3b2a9ae251fb9f6557fc280c39e39b",
+    "suite": "/scratch/yx3882/compound_rl_20261107/data/suites/ieee14_dev300.json",
+    "suite_sha256": "04e2ad0998c141c41cf599ef1176fcd9ec510e1c43aec9b66b7963ac3aacb14c"
+   },
+   "kind": "learner",
+   "name": "first_arm/S2",
+   "note": "the first arm: every update was two steps of a new optimizer over halves of the batch",
+   "policy": {
+    "adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_001/adapter",
+    "baseline": false,
+    "iteration": 1
+   },
+   "results": {
+    "clean": 169,
+    "false_commits": 8,
+    "healthy_component_corrupted": 48,
+    "invalid_actions": 110,
+    "lifecycle": {
+     "decisions": 562,
+     "declines": 10,
+     "true_target_declined": 4,
+     "wrong_target_committed": 47,
+     "wrong_target_declined": 6
+    },
+    "loop_episodes": 19,
+    "mean_reward": 0.21796666666666667,
+    "mean_steps": 12.81,
+    "prompt_limit_refusals": null,
+    "roots": 300,
+    "solved": 181,
+    "solved_within_actions": {
+     "16": 165,
+     "20": 181
+    }
+   },
+   "run": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1",
+   "series": {
+    "arm": "crl-ieee14",
+    "name": "compound_rl_20261107"
+   }
+  },
+  "first_arm/S3": {
+   "evaluated_at": "2026-11-10T10:25:58Z",
+   "files": {
+    "episodes_sha256": "8505284661bdf68aba05aa0e9341ec55020dec2101a2b3eeb9561d9c7fc7b332",
+    "evaluation_sha256": "67a1f24116ab3abbba7204d7815788bdb331caa978d1da786d0bf9ea85e6b070"
+   },
+   "how": {
+    "budgets": [
+     16,
+     20
+    ],
+    "decoding": "greedy",
+    "evaluator": "psse_env.rl.train greedy evaluation (paired evaluation contract)",
+    "max_input_tokens": 32768,
+    "max_steps": 40,
+    "observation_mode": "bounded_history_v1",
+    "precision": "bf16",
+    "roots": 300,
+    "source_commit": "dcb6b38bff3b2a9ae251fb9f6557fc280c39e39b",
+    "suite": "/scratch/yx3882/compound_rl_20261107/data/suites/ieee14_dev300.json",
+    "suite_sha256": "04e2ad0998c141c41cf599ef1176fcd9ec510e1c43aec9b66b7963ac3aacb14c"
+   },
+   "kind": "learner",
+   "name": "first_arm/S3",
+   "note": "the first arm: every update was two steps of a new optimizer over halves of the batch",
+   "policy": {
+    "adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_002/adapter",
+    "baseline": false,
+    "iteration": 2
+   },
+   "results": {
+    "clean": 173,
+    "false_commits": 9,
+    "healthy_component_corrupted": 46,
+    "invalid_actions": 103,
+    "lifecycle": {
+     "decisions": 562,
+     "declines": 15,
+     "true_target_declined": 4,
+     "wrong_target_committed": 43,
+     "wrong_target_declined": 11
+    },
+    "loop_episodes": 15,
+    "mean_reward": 0.23059999999999997,
+    "mean_steps": 12.736666666666666,
+    "prompt_limit_refusals": null,
+    "roots": 300,
+    "solved": 182,
+    "solved_within_actions": {
+     "16": 167,
+     "20": 181
+    }
+   },
+   "run": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1",
+   "series": {
+    "arm": "crl-ieee14",
+    "name": "compound_rl_20261107"
+   }
+  },
+  "rule_expert/route_teacher": {
+   "evaluated_at": null,
+   "files": {
+    "episodes_sha256": null,
+    "evaluation_sha256": "00443de2ba31cb9fe4ef1f49806352eb2bec80b162451abc0334920ac4ad3341"
+   },
+   "how": {
+    "budgets": [],
+    "decoding": "rule policy",
+    "evaluator": "compound study rollout, read as a map of root to result",
+    "max_input_tokens": null,
+    "max_steps": 40,
+    "observation_mode": null,
+    "precision": null,
+    "roots": 300,
+    "source_commit": null,
+    "suite": "/scratch/yx3882/compound_rl_20261107/data/suites/ieee14_dev300.json",
+    "suite_sha256": "04e2ad0998c141c41cf599ef1176fcd9ec510e1c43aec9b66b7963ac3aacb14c"
+   },
+   "kind": "expert",
+   "name": "rule_expert/route_teacher",
+   "note": "the rule expert with its route comparison on: the project's reference. In the learner's environment (route comparison off) the same rules solve 184 of the 300 (docs/rl_beyond_teacher_plan_20261105.md, point 47); that run is not in this register",
+   "policy": {
+    "record": "/scratch/yx3882/compound_cloning_20261106/data/teacher_map.json"
+   },
+   "results": {
+    "all_cases": 1275,
+    "clean": 184,
+    "false_commits": null,
+    "healthy_component_corrupted": null,
+    "invalid_actions": null,
+    "lifecycle": {
+     "decisions": null,
+     "declines": null,
+     "true_target_declined": null,
+     "wrong_target_committed": 44,
+     "wrong_target_declined": null
+    },
+    "loop_episodes": null,
+    "mean_reward": null,
+    "mean_steps": null,
+    "prompt_limit_refusals": null,
+    "roots": 300,
+    "solved": 188,
+    "solved_on_all_cases": 804,
+    "solved_within_actions": {}
+   },
+   "run": null,
+   "series": {}
+  }
+ },
+ "seeded_from": {
+  "file": "first_arm_read.json",
+  "first_arm_manifest": {
+   "current_adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_002/adapter",
+   "history": [
+    {
+     "adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_000/adapter",
+     "iteration": 0
+    },
+    {
+     "adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_001/adapter",
+     "iteration": 1
+    },
+    {
+     "adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_002/adapter",
+     "iteration": 2
+    }
+   ],
+   "iteration": 3,
+   "phase": "rollout"
+  },
+  "read_at": "2026-11-10T14:38:47Z",
+  "source_commit_on_torch": "dcb6b38bff3b2a9ae251fb9f6557fc280c39e39b"
+ }
+}

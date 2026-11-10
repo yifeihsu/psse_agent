@@ -1,0 +1,3 @@
+# The run configs and the reserved roots go to the cluster as they are, and make_configs.py --check
+# compares them byte for byte: keep them LF in every checkout.
+*.json text eol=lf

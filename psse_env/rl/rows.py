@@ -143,6 +143,15 @@ class TrainingRow:
     #: one; ``lifecycle_term`` is its weight.  No sampling record, no
     #: advantage, outside the policy and KL normalizations.
     supervised: bool = False
+    #: The lifecycle decision a row belongs to (:func:`decision_record`): the
+    #: audit's label and where the decision sits in its episode.  Report-only
+    #: (the update's decision diagnostics read it); ``None`` on every row that
+    #: is not a labelled decision.
+    decision: dict[str, Any] | None = None
+    #: A decision row whose term is the fork-local advantage from learner
+    #: continuations (:mod:`psse_env.rl.decision_credit`), not the audit's
+    #: membership label.  The term rides in ``lifecycle_term``.
+    decision_credit: bool = False
 
     @property
     def policy_row(self) -> bool:
@@ -199,6 +208,8 @@ def build_step_row(
     lifecycle_term: float = 0.0,
     lifecycle_only: bool = False,
     supervised: bool = False,
+    decision: Mapping[str, Any] | None = None,
+    decision_credit: bool = False,
 ) -> TrainingRow:
     if max_length <= 0:
         raise ValueError("max_length must be positive")
@@ -209,6 +220,8 @@ def build_step_row(
     if supervised and (lifecycle_only or float(advantage) != 0.0 or not lifecycle_term or float(lifecycle_term) < 0.0
                        or sampling_probabilities is not None):
         raise ValueError("a supervised row has a positive lifecycle term, no advantage and no sampling record")
+    if decision_credit and (supervised or preservation or float(advantage) != 0.0):
+        raise ValueError("a decision-credit row is a sampled decision row whose only term is the fork-local advantage")
     prompt = [int(value) for value in prompt_ids]
     completion = [int(value) for value in completion_ids]
     if not completion:
@@ -240,7 +253,49 @@ def build_step_row(
         lifecycle_term=float(lifecycle_term),
         lifecycle_only=bool(lifecycle_only),
         supervised=bool(supervised),
+        decision=dict(decision) if isinstance(decision, Mapping) else None,
+        decision_credit=bool(decision_credit),
     )
+
+
+def decision_record(trajectory: Trajectory, index: int) -> dict[str, Any]:
+    """What a row keeps of the lifecycle decision it belongs to: the audit's label and where the decision sits.
+
+    ``ordinal`` counts the episode's decisions on accepted candidates from
+    zero, so ``ordinal == 0`` is the first accepted candidate, and
+    ``earlier_declines`` how many of the earlier ones the policy declined.
+    Read by the update's decision diagnostics and the reports only.
+    """
+
+    decision = trajectory.lifecycle[index]
+    return {
+        "tool": decision.get("tool"),
+        "label": decision.get("label"),
+        "agrees": decision.get("agrees"),
+        "target_is_true": decision.get("target_is_true"),
+        "verdict": decision.get("verdict"),
+        "correction_tool": decision.get("correction_tool"),
+        "position": decision.get("position"),
+        "ordinal": int(index),
+        "earlier_declines": sum(1 for earlier in trajectory.lifecycle[:index] if earlier.get("declined")),
+    }
+
+
+def paired_decisions(trajectory: Trajectory) -> list[tuple[int, int, dict[str, Any]]]:
+    """``(index, position, decision)`` of every labelled decision that pairs with a step of the trajectory."""
+
+    paired: list[tuple[int, int, dict[str, Any]]] = []
+    for index, decision in enumerate(trajectory.lifecycle):
+        position = decision.get("position")
+        if decision_sign(decision) is None or isinstance(position, bool) or not isinstance(position, int):
+            continue
+        if not 0 <= position < len(trajectory.steps):
+            continue
+        step = trajectory.steps[position]
+        if step.tool and decision.get("tool") and step.tool != decision.get("tool"):
+            continue
+        paired.append((index, position, decision))
+    return paired
 
 
 def decision_terms(trajectory: Trajectory, credit: float) -> dict[int, float]:
@@ -277,6 +332,8 @@ def build_rows(
     lifecycle_credit: float = 0.0,
     lifecycle_form: str = "sampled",
     render_target: TargetRendererLike | None = None,
+    decision_values: Mapping[tuple[str, int, int], Mapping[str, Any]] | None = None,
+    decision_credit_weight: float = 1.0,
 ) -> tuple[list[TrainingRow], dict[str, Any]]:
     """Rows for every step of every informative, correctly paired trajectory, plus the preservation rows ``settings``
     ask for and, with ``lifecycle_credit``, the lifecycle rows of every labelled decision in the form asked for (the
@@ -285,6 +342,17 @@ def build_rows(
 
     With ``lifecycle_credit`` zero the rows are exactly those of the
     pre-2026-11-07 builder, preservation draw included.
+
+    ``decision_values`` (:mod:`psse_env.rl.decision_credit`; workplan of
+    2026-11-10, stage 4) maps ``(root, sample_index, position)`` of a sampled
+    decision to its fork-local advantage from learner continuations.  Such a
+    covered decision is credited by what its choice led to, not by whether
+    its target belongs to the injected faults: its sampled row carries
+    ``decision_credit_weight`` times the local advantage as its only term
+    (no episode advantage), and no supervised row is built for it.  Every
+    other row is built as without the values.  The credited row is the
+    sampled one, with its own sampling record; a forced alternative is never
+    a row.
     """
 
     settings = settings or RowSettings()
@@ -297,6 +365,15 @@ def build_rows(
     if lifecycle_form == "supervised" and credit > 0.0 and render_target is None:
         raise ValueError("the supervised lifecycle form needs a target renderer")
     sampled_credit = credit if lifecycle_form == "sampled" else 0.0
+    weight = float(decision_credit_weight)
+    if not math.isfinite(weight) or weight < 0.0:
+        raise ValueError("decision_credit_weight must be finite and nonnegative")
+    values = dict(decision_values or {})
+    for key, value in values.items():
+        local = value.get("advantage") if isinstance(value, Mapping) else None
+        if isinstance(local, bool) or not isinstance(local, (int, float)) or not math.isfinite(float(local)):
+            raise ValueError(f"the decision value of {key} carries no finite local advantage")
+    values_used: set[tuple[str, int, int]] = set()
     rows: list[TrainingRow] = []
     report: dict[str, Any] = {
         "contract": ROWS_CONTRACT,
@@ -319,6 +396,9 @@ def build_rows(
         "invalid_steps_excluded": 0,
         "prompt_truncated_rows": 0,
         "prompt_truncated_rows_rejected": 0,
+        # Steps whose prompt the policy itself cut at its input limit before decoding (the bounded mode's
+        # silent cut; a complete-history policy refuses instead).  The row re-renders with the same cut.
+        "prompts_cut_at_generation": 0,
         "rows_without_sampling_record_rejected": 0,
         "completion_tokens": 0,
         "rows_with_sampling_probabilities": 0,
@@ -336,7 +416,29 @@ def build_rows(
         "supervised_rows_disagreeing": 0,
         "supervised_rows_unrenderable": 0,
         "supervised_tokens": 0,
+        "decision_credit_weight": weight if values else 0.0,
+        "decision_values": len(values),
+        "decision_credit_rows": 0,
+        "decision_credit_covered_zero_advantage": 0,
+        "decision_credit_rows_without_record": 0,
+        "decision_values_unmatched": 0,
+        "supervised_rows_replaced_by_credit": 0,
     }
+
+    def credit_of(trajectory: Trajectory, position: int, tool: str | None) -> float | None:
+        """The fork-local advantage of a covered decision step, ``None`` when the step is not covered.
+
+        A value written for another action than the step's is refused: the
+        advantage is of the action the policy sampled there.
+        """
+        key = (trajectory.root, int(trajectory.sample_index), int(position))
+        value = values.get(key)
+        if value is None:
+            return None
+        if value.get("tool") and tool and str(value["tool"]) != str(tool):
+            raise ValueError(f"the decision value of {key} is for {value['tool']!r}, the sampled step is {tool!r}")
+        values_used.add(key)
+        return float(value["advantage"])
 
     def trajectory_rows(trajectory: Trajectory, advantage: float, *, preservation: bool, decisions_only: bool = False) -> list[TrainingRow]:
         """Rows of one trajectory: every step, or its labelled decision steps alone (``decisions_only``).
@@ -346,9 +448,18 @@ def build_rows(
         row rather than a preservation row.
         """
         terms = decision_terms(trajectory, sampled_credit)
+        records = {position: decision_record(trajectory, index) for index, position, _decision in paired_decisions(trajectory)}
         built: list[TrainingRow] = []
         for position, step in enumerate(trajectory.steps):
             term = terms.get(position, 0.0)
+            local = credit_of(trajectory, position, step.tool) if values and position in records else None
+            credited = local is not None
+            if credited:
+                # Credited by what the choice led to: the local advantage replaces both the
+                # membership term and the step's episode advantage.
+                term = weight * float(local)
+                if term == 0.0:
+                    report["decision_credit_covered_zero_advantage"] += 1
             if decisions_only and term == 0.0:
                 continue
             report["steps"] += 1
@@ -358,6 +469,8 @@ def build_rows(
             if not step.completion_token_ids:
                 report["empty_completions"] += 1
                 continue
+            if int(step.original_prompt_tokens or 0) > int(step.prompt_tokens or 0) > 0:
+                report["prompts_cut_at_generation"] += 1
             rendered = render_prompt(step.model_observation)
             prompt_ids, _original = prompt_token_ids(rendered)
             if step.prompt_tokens and len(prompt_ids) != int(step.prompt_tokens):
@@ -371,7 +484,7 @@ def build_rows(
                 root=trajectory.root,
                 sample_index=trajectory.sample_index,
                 step=step.step,
-                advantage=0.0 if lifecycle_only else advantage,
+                advantage=0.0 if (lifecycle_only or credited) else advantage,
                 prompt_ids=prompt_ids,
                 completion_ids=step.completion_token_ids,
                 max_length=max_length,
@@ -381,7 +494,14 @@ def build_rows(
                 preservation=preservation and not term,
                 lifecycle_term=term,
                 lifecycle_only=lifecycle_only,
+                decision=records.get(position),
+                decision_credit=credited and bool(term),
             )
+            if credited and row.sampling_logprobs is None:
+                # The local advantage is of the sampled action under the behaviour policy:
+                # without the record of that sampling the row is not the policy's own.
+                report["decision_credit_rows_without_record"] += 1
+                continue
             if row.prompt_digest_matches is False:
                 report["prompt_digest_mismatches"] += 1
                 if settings.require_prompt_digest:
@@ -402,11 +522,13 @@ def build_rows(
             report["completion_tokens"] += row.completion_tokens
             if row.sampling_logprobs is not None:
                 report["rows_with_sampling_probabilities"] += 1
-            if row.lifecycle_term:
+            if row.lifecycle_term and not row.decision_credit:
                 report["lifecycle_rows"] += 1
                 report["lifecycle_rows_agreeing" if row.lifecycle_term > 0.0 else "lifecycle_rows_disagreeing"] += 1
             if row.lifecycle_only:
                 report["lifecycle_only_rows"] += 1
+            if row.decision_credit:
+                report["decision_credit_rows"] += 1
         return built
 
     def decision_rows(trajectory: Trajectory) -> list[TrainingRow]:
@@ -419,16 +541,20 @@ def build_rows(
 
     def supervised_rows_of(trajectory: Trajectory) -> list[TrainingRow]:
         """One supervised row per labelled decision of a paired trajectory: the audit's choice as the completion, on
-        the step's own prompt, checked like a sampled row's prompt."""
+        the step's own prompt, checked like a sampled row's prompt.  A decision the continuation values cover has
+        none: there the outcome credit replaces the membership label."""
         assert render_target is not None
         built: list[TrainingRow] = []
-        for decision in trajectory.lifecycle:
+        for index, decision in enumerate(trajectory.lifecycle):
             sign = decision_sign(decision)
             position = decision.get("position")
             if sign is None or isinstance(position, bool) or not isinstance(position, int) or not 0 <= position < len(trajectory.steps):
                 continue
             step = trajectory.steps[position]
             if step.tool and decision.get("tool") and step.tool != decision.get("tool"):
+                continue
+            if (trajectory.root, int(trajectory.sample_index), int(position)) in values:
+                report["supervised_rows_replaced_by_credit"] += 1
                 continue
             report["supervised_decisions"] += 1
             rendered = render_prompt(step.model_observation)
@@ -458,6 +584,7 @@ def build_rows(
                 prompt_digest=step.prompt_digest,
                 lifecycle_term=credit,
                 supervised=True,
+                decision=decision_record(trajectory, index),
             )
             if row.prompt_digest_matches is False:
                 report["prompt_digest_mismatches"] += 1
@@ -477,6 +604,7 @@ def build_rows(
             report["supervised_rows_agreeing" if sign > 0.0 else "supervised_rows_disagreeing"] += 1
         return built
 
+    decision_rows_wanted = sampled_credit > 0.0 or bool(values)
     supervised: list[TrainingRow] = []
     uninformative: list[Sequence[Trajectory]] = []
     for trajectories, advantages in groups:
@@ -494,7 +622,7 @@ def build_rows(
             report["groups_incomplete"] += 1
             report["trajectories_unpaired"] += sum(1 for trajectory in trajectories if not trajectory.pairing_ok)
             # The group's decisions still carry their labels.
-            if sampled_credit > 0.0:
+            if decision_rows_wanted:
                 for trajectory in trajectories:
                     if trajectory.pairing_ok:
                         rows.extend(decision_rows(trajectory))
@@ -535,10 +663,10 @@ def build_rows(
                 report["preservation_rows"] += sum(1 for row in built if row.preservation)
                 report["preservation_tokens"] += sum(row.completion_tokens for row in built if row.preservation)
                 rows.extend(built)
-            if sampled_credit > 0.0:
+            if decision_rows_wanted:
                 for trajectory in paired[len(chosen):]:
                     rows.extend(decision_rows(trajectory))
-        if sampled_credit > 0.0:
+        if decision_rows_wanted:
             for index in range(len(uninformative)):
                 if index in kept_set:
                     continue
@@ -546,6 +674,8 @@ def build_rows(
                     if trajectory.pairing_ok:
                         rows.extend(decision_rows(trajectory))
     rows.extend(supervised)
+    # A value whose decision no paired trajectory holds trained nothing; the driver's integrity check reads this.
+    report["decision_values_unmatched"] = len(set(values) - values_used)
     return rows, report
 
 
@@ -560,6 +690,8 @@ __all__ = [
     "TrainingRow",
     "build_rows",
     "build_step_row",
+    "decision_record",
     "decision_terms",
+    "paired_decisions",
     "sampling_logprobs_for",
 ]

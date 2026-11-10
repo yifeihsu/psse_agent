@@ -21,6 +21,7 @@ from psse_env.dagger.dataset_builder import (
     tool_schemas_for_observation,
     system_prompt_for_observation,
 )
+from psse_env.dagger.observation_modes import COMPLETE_HISTORY, HISTORY_RECORD_KEY
 from psse_env.dagger.policy_adapter import LocalAliasPolicyAdapter
 from psse_env.research_models import (
     GEMMA4_E2B_LEGACY,
@@ -58,6 +59,68 @@ E2B_BASE_MODEL_REVISION = GEMMA4_E2B_LEGACY.revision
 _PROMPT_PROFILES = SUPPORTED_RESEARCH_PROMPT_PROFILES
 _RESEARCH_BUNDLE_CACHE: dict[tuple[Any, ...], tuple[_ModelBundle, dict[str, Any]]] = {}
 _RESEARCH_BUNDLE_LOCK = threading.Lock()
+
+
+class PromptLimitError(GateError):
+    """A complete-history prompt that does not fit the model's input, with room left for the completion.
+
+    The bounded mode cuts an over-long prompt from the left and goes on.
+    Under ``complete_history_v1`` that cut would silently remove the very
+    history the mode exists to keep, so the policy refuses to act instead:
+    the evaluator records the refusal as an invalid action, the step has no
+    generation record, and the RL row builder leaves the trajectory out.
+
+    The same refusal answers a complete-history prompt that is within the
+    input limit and still does not fit the device's memory
+    (:data:`MEMORY_RETRY_PAUSES`): a process that died on such a prompt would
+    meet it again after every restart.
+    """
+
+
+#: Seconds to wait before generating again after the device ran out of memory on a complete-history prompt
+#: (two workers share a card, and the other one's long prompt passes); after the last pause the prompt is refused.
+MEMORY_RETRY_PAUSES: tuple[float, ...] = (10.0, 30.0)
+#: After a complete-history prompt of at least this many tokens the process returns its cached device memory.
+#: The allocator keeps what a process once used, so without this each worker would hold the peak of its longest
+#: prompt for the rest of the phase, and two workers on one card would add their peaks even when their long
+#: prompts never coincide.  No bounded prompt is this long (their maximum is about 13,000 tokens).
+MEMORY_RELEASE_PROMPT_TOKENS = 16384
+
+
+def is_out_of_memory_error(error: BaseException) -> bool:
+    """Whether ``error`` is the device running out of memory (torch's own class, or the runtime error older builds raise)."""
+
+    if type(error).__name__ == "OutOfMemoryError":
+        return True
+    return isinstance(error, RuntimeError) and "out of memory" in str(error).lower()
+
+
+def release_device_memory(torch_module: Any) -> None:
+    """Give the device back what this process holds and no longer uses."""
+
+    import gc
+
+    gc.collect()
+    try:
+        if torch_module.cuda.is_available():
+            torch_module.cuda.empty_cache()
+    except Exception:  # pragma: no cover - a build without CUDA
+        pass
+
+
+def usable_prompt_tokens() -> int:
+    """The longest prompt a complete-history policy accepts: the input limit less the longest completion."""
+
+    from psse_env.dagger.preliminary_e2b_eval import MAX_INPUT_TOKENS, MAX_NEW_TOKENS
+
+    return int(MAX_INPUT_TOKENS) - int(MAX_NEW_TOKENS)
+
+
+def is_complete_history_view(observation: Mapping[str, Any]) -> bool:
+    """Whether a model-visible observation was rendered under ``complete_history_v1``."""
+
+    record = observation.get(HISTORY_RECORD_KEY) if isinstance(observation, Mapping) else None
+    return isinstance(record, Mapping) and record.get("contract") == COMPLETE_HISTORY
 
 
 @dataclass(frozen=True)
@@ -648,6 +711,9 @@ class _CanonicalResearchNativePolicy:
         self._generation.validate()
         self._generation_calls = 0
         self._last_generation: dict[str, Any] | None = None
+        #: The shortest complete-history prompt the device refused since the last one it held.  An episode's
+        #: history only grows, so its later prompts are tried once and not waited for again.
+        self._memory_refused_tokens: int | None = None
 
     @property
     def last_action_metrics(self) -> dict[str, Any]:
@@ -816,6 +882,18 @@ class _CanonicalResearchNativePolicy:
             raise GateError("Research processor returned an empty prompt")
         prompt_length = min(original_prompt_length, MAX_INPUT_TOKENS)
         truncated_input_tokens = original_prompt_length - prompt_length
+        if is_complete_history_view(observation) and original_prompt_length > usable_prompt_tokens():
+            self._last_action_metrics = {
+                "prompt_tokens": prompt_length,
+                "original_prompt_tokens": original_prompt_length,
+                "truncated_input_tokens": truncated_input_tokens,
+                "prompt_limit_refused": True,
+                "prompt_limit_reason": "input_limit",
+            }
+            raise PromptLimitError(
+                f"the complete-history prompt has {original_prompt_length} tokens, more than the {usable_prompt_tokens()} "
+                "that leave room for a completion; it is refused, not cut"
+            )
 
         try:
             import torch
@@ -848,28 +926,71 @@ class _CanonicalResearchNativePolicy:
             model_inputs = left_pad_model_inputs(model_inputs, pad_tokens=prefill_pad, pad_token_id=pad_token_id)
         started = time.perf_counter()
         self._bundle.model.eval()
-        generation_kwargs = self._generation_kwargs(torch)
         # Sampling also records the probability each chosen token had under
         # the sampling distribution, so a run can tell a peaked policy (every
         # sample identical) from a broken one.
         want_scores = bool(self._generation.do_sample)
-        with torch.inference_mode():
-            generated = self._bundle.model.generate(
-                **model_inputs,
-                max_new_tokens=MAX_NEW_TOKENS,
-                use_cache=True,
-                eos_token_id=stop_ids,
-                pad_token_id=pad_token_id,
-                return_dict_in_generate=want_scores,
-                output_scores=want_scores,
-                **generation_kwargs,
+        complete_view = is_complete_history_view(observation)
+        memory_retries = 0
+        pauses = MEMORY_RETRY_PAUSES
+        if self._memory_refused_tokens is not None and prompt_length >= self._memory_refused_tokens:
+            pauses = ()
+        while True:
+            # Seeded per call, so an attempt repeated after the device ran out of
+            # memory draws what the first one would have drawn.
+            generation_kwargs = self._generation_kwargs(torch)
+            out_of_memory = False
+            try:
+                with torch.inference_mode():
+                    generated = self._bundle.model.generate(
+                        **model_inputs,
+                        max_new_tokens=MAX_NEW_TOKENS,
+                        use_cache=True,
+                        eos_token_id=stop_ids,
+                        pad_token_id=pad_token_id,
+                        return_dict_in_generate=want_scores,
+                        output_scores=want_scores,
+                        **generation_kwargs,
+                    )
+            except Exception as exc:
+                # A complete-history prompt alone: its length is what that mode adds.  The bounded
+                # mode fails as it always did.  Nothing of the exception is kept: it holds the
+                # frames, and they the tensors the device has to get back.
+                if not (complete_view and is_out_of_memory_error(exc)):
+                    raise
+                out_of_memory = True
+            if not out_of_memory:
+                break
+            release_device_memory(torch)
+            if memory_retries < len(pauses):
+                time.sleep(float(pauses[memory_retries]))
+                memory_retries += 1
+                continue
+            self._memory_refused_tokens = min(prompt_length, self._memory_refused_tokens or prompt_length)
+            self._last_action_metrics = {
+                "prompt_tokens": prompt_length,
+                "original_prompt_tokens": original_prompt_length,
+                "truncated_input_tokens": truncated_input_tokens,
+                "prompt_limit_refused": True,
+                "prompt_limit_reason": "device_memory",
+                "memory_retries": memory_retries,
+            }
+            raise PromptLimitError(
+                f"the complete-history prompt of {original_prompt_length} tokens did not fit the device's memory "
+                f"({memory_retries} attempts after the first); it is refused, not cut"
             )
         generation_seconds = time.perf_counter() - started
+        if self._memory_refused_tokens is not None and prompt_length >= self._memory_refused_tokens:
+            self._memory_refused_tokens = None  # the device holds this length again
         sequences = generated.sequences if want_scores else generated
         sampled_ids = sequences[0][prompt_length + prefill_pad :].detach().cpu()
         token_probabilities = (
             sampled_token_probabilities(generated.scores, sampled_ids) if want_scores else None
         )
+        if complete_view and prompt_length >= MEMORY_RELEASE_PROMPT_TOKENS:
+            # The sampled tokens are on the host by now; the output holds the prompt's cache.
+            generated = sequences = None
+            release_device_memory(torch)
         text, generated_tokens, trimmed_pad_tokens = decode_generated_response(
             self._bundle.processor,
             sampled_ids,
@@ -890,6 +1011,8 @@ class _CanonicalResearchNativePolicy:
             "prefill_pad_tokens": int(prefill_pad),
             **repetition,
         }
+        if memory_retries:
+            self._last_action_metrics["memory_retries"] = memory_retries
         self._record_generation(
             observation,
             sampled_ids=sampled_ids,
@@ -1053,11 +1176,18 @@ def research_gemma_policy_factory(
 
 __all__ = [
     "GenerationOptions",
+    "MEMORY_RELEASE_PROMPT_TOKENS",
+    "MEMORY_RETRY_PAUSES",
+    "PromptLimitError",
     "PROMPT_PROFILE_E2B",
     "PROMPT_PROFILE_NATIVE",
     "PROMPT_PROFILE_RELEASE",
     "PROMPT_PROFILE_SMALL_FORCED",
     "ResearchGemmaPolicy",
     "clear_research_policy_cache",
+    "is_complete_history_view",
     "research_gemma_policy_factory",
+    "is_out_of_memory_error",
+    "release_device_memory",
+    "usable_prompt_tokens",
 ]

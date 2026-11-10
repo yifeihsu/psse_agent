@@ -1,0 +1,196 @@
+{
+ "audit_map.json": {
+  "clean": 189,
+  "entries": 1275,
+  "on_dev300": 300,
+  "sha256": "876a6980105cffca9f63a4847d7a28adb041d552c7d9a86054e69417b7c621f0",
+  "solved": 200,
+  "solved_all": 853,
+  "wrong_kept": 0
+ },
+ "config_sha256": {
+  "rl_ieee14.json": "083829f7dea1ad22b7716be5241076fcf793c7b72b5626c7fd4d01b14f5be9e7",
+  "rl_ieee14.json.bak_before_decision9": "cc765dfa175b5483b771aedbeb0c2d0fed9625c51a836840157cd17b222b6690"
+ },
+ "evaluations": {
+  "baseline": {
+   "clean": 168,
+   "episodes_sha256": "01e489e1313a94c9983fa23e46043fb31ce98fc4ce8689c5e19a46a2e3993a53",
+   "healthy_component_corrupted": 47,
+   "mtime_utc": "2026-11-08T06:33:35Z",
+   "sha256": "493c1a50dfbdbe8ada079d870ece0a16ecd8f7bdaa6ad9c7516f1f218030ef17",
+   "summary": {
+    "adapter": "/scratch/yx3882/compound_cloning_20261106/out/clone/training/lora",
+    "baseline": true,
+    "false_commit_count": 15,
+    "false_finalization_count": 2,
+    "invalid_action_count": 124,
+    "lifecycle": {
+     "agreeing": 513,
+     "commits": 557,
+     "decisions": 562,
+     "declines": 5,
+     "disagreeing": 49,
+     "episodes_with_decline": 4,
+     "true_target_declined": 2,
+     "unlabelled": 0,
+     "wrong_target_committed": 47,
+     "wrong_target_declined": 3
+    },
+    "loop_episodes": 23,
+    "mean_reward": 0.20283333333333334,
+    "mean_steps": 12.866666666666667,
+    "mean_steps_solved": 11.631868131868131,
+    "roots": 300,
+    "solved_within_actions": {
+     "16": 165,
+     "20": 182
+    },
+    "truth_audited_task_success": 182
+   }
+  },
+  "iteration_000": {
+   "clean": 171,
+   "episodes_sha256": "781ac923c0945927de0ccb96351511fbe36cf35618c99a0d0d083bda52f50827",
+   "healthy_component_corrupted": 47,
+   "mtime_utc": "2026-11-08T23:02:14Z",
+   "sha256": "0debe6870a2024155195d193fa609557ea4068f9165500af8439d9a4611c73e2",
+   "summary": {
+    "adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_000/adapter",
+    "false_commit_count": 10,
+    "false_finalization_count": 1,
+    "invalid_action_count": 91,
+    "iteration": 0,
+    "lifecycle": {
+     "agreeing": 514,
+     "commits": 548,
+     "decisions": 563,
+     "declines": 15,
+     "disagreeing": 49,
+     "episodes_with_decline": 8,
+     "true_target_declined": 5,
+     "unlabelled": 0,
+     "wrong_target_committed": 44,
+     "wrong_target_declined": 10
+    },
+    "loop_episodes": 11,
+    "mean_reward": 0.22426666666666667,
+    "mean_steps": 12.736666666666666,
+    "mean_steps_solved": 11.494444444444444,
+    "roots": 300,
+    "solved_within_actions": {
+     "16": 166,
+     "20": 180
+    },
+    "truth_audited_task_success": 180
+   }
+  },
+  "iteration_001": {
+   "clean": 169,
+   "episodes_sha256": "b68ef8e6a99d54e5eb638dfe2d659a13f6987fb44b15e379a696e98236f6243c",
+   "healthy_component_corrupted": 48,
+   "mtime_utc": "2026-11-09T17:57:12Z",
+   "sha256": "0b37ece1eaccc569d04100f10076bbaa2dee6a0c485cb309c104c314634a81d8",
+   "summary": {
+    "adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_001/adapter",
+    "false_commit_count": 8,
+    "false_finalization_count": 1,
+    "invalid_action_count": 110,
+    "iteration": 1,
+    "lifecycle": {
+     "agreeing": 511,
+     "commits": 552,
+     "decisions": 562,
+     "declines": 10,
+     "disagreeing": 51,
+     "episodes_with_decline": 7,
+     "true_target_declined": 4,
+     "unlabelled": 0,
+     "wrong_target_committed": 47,
+     "wrong_target_declined": 6
+    },
+    "loop_episodes": 19,
+    "mean_reward": 0.21796666666666667,
+    "mean_steps": 12.81,
+    "mean_steps_solved": 11.58011049723757,
+    "roots": 300,
+    "solved_within_actions": {
+     "16": 165,
+     "20": 181
+    },
+    "truth_audited_task_success": 181
+   }
+  },
+  "iteration_002": {
+   "clean": 173,
+   "episodes_sha256": "8505284661bdf68aba05aa0e9341ec55020dec2101a2b3eeb9561d9c7fc7b332",
+   "healthy_component_corrupted": 46,
+   "mtime_utc": "2026-11-10T10:25:58Z",
+   "sha256": "67a1f24116ab3abbba7204d7815788bdb331caa978d1da786d0bf9ea85e6b070",
+   "summary": {
+    "adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_002/adapter",
+    "false_commit_count": 9,
+    "false_finalization_count": 0,
+    "invalid_action_count": 103,
+    "iteration": 2,
+    "lifecycle": {
+     "agreeing": 515,
+     "commits": 547,
+     "decisions": 562,
+     "declines": 15,
+     "disagreeing": 47,
+     "episodes_with_decline": 8,
+     "true_target_declined": 4,
+     "unlabelled": 0,
+     "wrong_target_committed": 43,
+     "wrong_target_declined": 11
+    },
+    "loop_episodes": 15,
+    "mean_reward": 0.23059999999999997,
+    "mean_steps": 12.736666666666666,
+    "mean_steps_solved": 11.60989010989011,
+    "roots": 300,
+    "solved_within_actions": {
+     "16": 167,
+     "20": 181
+    },
+    "truth_audited_task_success": 182
+   }
+  }
+ },
+ "iteration_002_update_report": true,
+ "manifest": {
+  "current_adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_002/adapter",
+  "history": [
+   {
+    "adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_000/adapter",
+    "iteration": 0
+   },
+   {
+    "adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_001/adapter",
+    "iteration": 1
+   },
+   {
+    "adapter": "/scratch/yx3882/compound_rl_20261107/out/ieee14_v1/iteration_002/adapter",
+    "iteration": 2
+   }
+  ],
+  "iteration": 3,
+  "phase": "rollout"
+ },
+ "read_at": "2026-11-10T14:38:47Z",
+ "source": "dcb6b38bff3b2a9ae251fb9f6557fc280c39e39b",
+ "suites_sha256": {
+  "ieee14_dev300.json": "04e2ad0998c141c41cf599ef1176fcd9ec510e1c43aec9b66b7963ac3aacb14c",
+  "ieee14_train.json": "781c3d91fac93a3577aca9f58d65fac0f59862a7c6b4061eaa41e9026392d858"
+ },
+ "teacher_map.json": {
+  "clean": 184,
+  "entries": 1275,
+  "on_dev300": 300,
+  "sha256": "00443de2ba31cb9fe4ef1f49806352eb2bec80b162451abc0334920ac4ad3341",
+  "solved": 188,
+  "solved_all": 804,
+  "wrong_kept": 44
+ }
+}

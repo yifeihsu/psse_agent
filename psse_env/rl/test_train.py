@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from psse_env.rl.rollout import StepRecord, Trajectory, TrajectoryStore
 from psse_env.rl.train import (
@@ -21,6 +23,13 @@ from psse_env.rl.train import (
     score_groups,
     status,
 )
+
+try:
+    import torch
+
+    from psse_env.rl.test_update import _Preempted, _TinyLM
+except Exception:  # pragma: no cover - torch is optional for the pure-Python tests
+    torch = None
 
 
 def _config(directory: str, **overrides) -> RLConfig:
@@ -40,6 +49,61 @@ def _trajectory(root: str, sample: int, reward: float, *, success: bool, calls: 
     return Trajectory(root=root, family="parameter", sample_index=sample, episode_seed=sample, steps=[step],
                       reward={"total": reward, "calls": calls}, evaluation={"truth_audited_task_success": success},
                       pairing_ok=pairing_ok, lifecycle=list(lifecycle or []))
+
+
+@contextlib.contextmanager
+def _tiny_update_phase(holder):
+    """The update phase on the tiny bigram model of the update tests.
+
+    Stand-ins replace the scoring, the model loader, the prompt functions, the
+    row builder and the adapter writer for the length of the block: two groups
+    of two samples, one row each.  ``holder['fail_after']`` cuts the model's
+    forward passes the way a preemption cuts an update.
+    """
+
+    import psse_env.rl.train as train
+    from psse_env.rl.advantages import GroupAdvantages
+    from psse_env.rl.rows import build_step_row
+
+    tokens = {("a", 0): ([1, 2], [3]), ("a", 1): ([2, 3], [4]), ("b", 0): ([3, 4], [5]), ("b", 1): ([4, 5], [6])}
+
+    def score(config, store):
+        groups = [([_trajectory(root, 0, 1.0, success=True, calls=5), _trajectory(root, 1, -1.0, success=False, calls=9)],
+                   GroupAdvantages(root, (1.0, -1.0), (1.0, -1.0), 0.0, 1.0, True)) for root in ("a", "b")]
+        return groups, {"lifecycle": {"labelled_decisions_paired": 0}}
+
+    def load(config, adapter, *, reference_adapter=None):
+        model = _TinyLM(seed=3, fail_after=holder.get("fail_after"))
+        weights = Path(adapter) / "weights.pt"
+        if weights.is_file():
+            model.load_state_dict(torch.load(weights))
+        return model, None, ()
+
+    def prompt_functions(config, adapter, processor):
+        return (lambda observation: ""), (lambda text: ([], 0)), SimpleNamespace(rendered=0, refused=0)
+
+    def rows_of(groups, **kwargs):
+        rows = []
+        for trajectories, adv in groups:
+            for trajectory, advantage in zip(trajectories, adv.advantages):
+                prompt, completion = tokens[trajectory.root, trajectory.sample_index]
+                rows.append(build_step_row(root=trajectory.root, sample_index=trajectory.sample_index, step=0,
+                                           advantage=advantage, prompt_ids=prompt, completion_ids=completion, max_length=64))
+        return rows, {}
+
+    def save(model, directory):
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        torch.save(model.state_dict(), Path(directory) / "weights.pt")
+
+    names = ("score_groups", "_load_trainable_model", "_prompt_functions", "build_rows", "_save_trained_adapter")
+    originals = [getattr(train, name) for name in names]
+    for name, stand_in in zip(names, (score, load, prompt_functions, rows_of, save)):
+        setattr(train, name, stand_in)
+    try:
+        yield train
+    finally:
+        for name, original in zip(names, originals):
+            setattr(train, name, original)
 
 
 class TrainDriverTests(unittest.TestCase):
@@ -324,6 +388,90 @@ class TrainDriverTests(unittest.TestCase):
         self.assertEqual((summary["false_commit_count"], summary["invalid_action_count"], summary["loop_episodes"]), (2, 3, 1))
         self.assertEqual(summary["false_finalization_count"], 1)
         self.assertEqual(summary["by_family"], {"hif": {"roots": 1, "successes": 1}, "parameter": {"roots": 2, "successes": 1}})
+
+    def test_the_carried_optimizer_is_the_latest_one_an_earlier_iteration_left(self) -> None:
+        from psse_env.rl.train import OPTIMIZER_FILE, _carried_optimizer_file, iteration_dir
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = _config(directory)
+            self.assertIsNone(_carried_optimizer_file(config, 0))
+            self.assertIsNone(_carried_optimizer_file(config, 3))
+            # Iterations 0 and 2 took optimizer steps; iteration 1 carried its adapter over and left no state.
+            for iteration in (0, 1, 2):
+                iteration_dir(config, iteration).mkdir(parents=True)
+            for iteration in (0, 2):
+                (iteration_dir(config, iteration) / OPTIMIZER_FILE).write_bytes(b"")
+            self.assertIsNone(_carried_optimizer_file(config, 0))
+            self.assertEqual(_carried_optimizer_file(config, 1), iteration_dir(config, 0) / OPTIMIZER_FILE)
+            self.assertEqual(_carried_optimizer_file(config, 2), iteration_dir(config, 0) / OPTIMIZER_FILE)
+            self.assertEqual(_carried_optimizer_file(config, 3), iteration_dir(config, 2) / OPTIMIZER_FILE)
+
+    @unittest.skipIf(torch is None, "torch is not installed")
+    def test_the_update_phase_carries_the_optimizer_from_one_iteration_to_the_next(self) -> None:
+        update = {"chunk_by": "group", "optimizer_steps": 2, "learning_rate": 0.01}
+        tables = {}
+        for carry in (True, False):
+            with tempfile.TemporaryDirectory() as directory, _tiny_update_phase({}) as train:
+                # The switch is left out when it is off, as in every config written before it existed.
+                config = _config(directory, update={**update, **({"carry_optimizer": True} if carry else {})},
+                                 update_checkpoint_rows=1)
+                first_dir, second_dir = train.iteration_dir(config, 0), train.iteration_dir(config, 1)
+                first = train.phase_update(config, Manifest(phase="update", current_adapter=config.initial_adapter))
+                second = train.phase_update(config, Manifest(iteration=1, phase="update", current_adapter=first["adapter_out"]))
+                self.assertEqual((first["update"]["optimizer_steps"], second["update"]["optimizer_steps"]), (2, 2))
+                self.assertEqual((first["update"]["split_groups"], second["update"]["split_groups"]), (0, 0))
+                self.assertFalse((first_dir / "update_checkpoint").exists())
+                if carry:
+                    self.assertEqual(first["optimizer"], {"carried_from": None, "steps_before": 0, "steps_after": 2,
+                                                          "continuity_since_iteration": 0})
+                    self.assertEqual(second["optimizer"], {"carried_from": str(first_dir / train.OPTIMIZER_FILE),
+                                                           "steps_before": 2, "steps_after": 4, "continuity_since_iteration": 0})
+                    written = json.loads((second_dir / "update_report.json").read_text(encoding="utf-8"))
+                    self.assertEqual(written["optimizer"], second["optimizer"])
+                    self.assertTrue((second_dir / train.OPTIMIZER_FILE).is_file())
+                else:
+                    self.assertNotIn("optimizer", first)
+                    self.assertNotIn("optimizer", second)
+                    self.assertFalse((first_dir / train.OPTIMIZER_FILE).exists())
+                    self.assertFalse((second_dir / train.OPTIMIZER_FILE).exists())
+                tables[carry] = [torch.load(path / "adapter" / "weights.pt")["table"] for path in (first_dir, second_dir)]
+        # The first update starts a new optimizer either way; the second continues it only when it is carried.
+        self.assertTrue(torch.equal(tables[True][0], tables[False][0]))
+        self.assertFalse(torch.allclose(tables[True][1], tables[False][1], atol=1e-4))
+
+    @unittest.skipIf(torch is None, "torch is not installed")
+    def test_a_preempted_update_phase_resumes_with_the_carried_optimizer(self) -> None:
+        update = {"carry_optimizer": True, "chunk_by": "group", "optimizer_steps": 2, "learning_rate": 0.01}
+        tables = {}
+        for preempted in (False, True):
+            holder = {"fail_after": None}
+            with tempfile.TemporaryDirectory() as directory, _tiny_update_phase(holder) as train:
+                config = _config(directory, update=update, update_checkpoint_rows=1)
+                first_dir, out = train.iteration_dir(config, 0), train.iteration_dir(config, 1)
+                first = train.phase_update(config, Manifest(phase="update", current_adapter=config.initial_adapter))
+                manifest = Manifest(iteration=1, phase="update", current_adapter=first["adapter_out"])
+                if preempted:
+                    # Two rows per optimizer step: the first step lands, the second is cut after its first row.
+                    holder["fail_after"] = 3
+                    with self.assertRaises(_Preempted):
+                        train.phase_update(config, manifest)
+                    holder["fail_after"] = None
+                    state = json.loads((out / "update_checkpoint" / "state.json").read_text(encoding="utf-8"))
+                    self.assertEqual((state["completed_chunks"], state["chunk_rows_done"]), (1, 1))
+                    self.assertFalse((out / train.OPTIMIZER_FILE).exists())
+                report = train.phase_update(config, manifest)
+                self.assertEqual(report["resumed_from_checkpoint"],
+                                 str(out / "update_checkpoint" / "step_1") if preempted else None)
+                self.assertEqual(report["update"]["resumed_from"],
+                                 {"completed_chunks": 1, "chunk_rows_done": 1} if preempted else None)
+                # The state before the update is the earlier iteration's either way; the resumed update
+                # continues from its own checkpoint, one step further on.
+                self.assertEqual(report["optimizer"], {"carried_from": str(first_dir / train.OPTIMIZER_FILE),
+                                                       "steps_before": 2, "steps_after": 4, "continuity_since_iteration": 0})
+                self.assertTrue((out / train.OPTIMIZER_FILE).is_file())
+                self.assertFalse((out / "update_checkpoint").exists())
+                tables[preempted] = torch.load(out / "adapter" / "weights.pt")["table"]
+        self.assertTrue(torch.allclose(tables[True], tables[False], atol=1e-7))
 
 
 if __name__ == "__main__":
