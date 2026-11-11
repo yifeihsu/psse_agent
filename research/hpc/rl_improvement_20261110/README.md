@@ -4,8 +4,8 @@ The run cell of the workplan in `docs/rl_improvement_workplan_20261110.md`. What
 is in `docs/rl_improvement_implementation_20261110.md`. Work directory on torch:
 `/scratch/yx3882/rl_improvement_20261110`.
 
-**Nothing here has run on a GPU yet.** The driver, the observation mode, the fork harness and the reports are
-tested on a CPU; the smokes below are the first run on the cluster.
+**On a GPU so far: the two smokes** (2026-11-11, both passed; section 7 of the implementation notes). Everything
+else here is tested on a CPU only.
 
 ## The arms
 
@@ -64,6 +64,8 @@ Nothing below is submitted by any script here except `submit_arm.sh` and the `sb
    ```
    Read in each `update_report.json`: `integrity.ok`, `rows.target_renderer.refused == 0`,
    `rows.prompts_cut_at_generation == 0`, and in `rollout_summary.json` the `prompts` block (steps refused).
+   On 2026-11-11 each took about 8 GPU-hours (5 and 6 preemptions): the update ran at 38 to 40 s per row, with the
+   component split these two configs turn on.
 3. **Prompt capacity** on each card type the jobs land on:
    `sbatch --export=ALL,CONFIG=arm_b_complete.json,TASK=capacity --job-name=rli-capacity source/.../rl.sbatch`
    writes `out/prompt_capacity/<card>-<job>.md`. If a card supports less than the limit, lower the limit. To see
@@ -82,7 +84,8 @@ Nothing below is submitted by any script here except `submit_arm.sh` and the `sb
    Start with the one-step and two-chunk runs; the four-chunk run is for weak decision movement only.
 6. **Stage 2, fork probe**: `sbatch source/research/hpc/rl_improvement_20261110/fork_probe.sbatch`
    (learner rollouts on the probe's roots, the frozen fork sample, 48 states x 2 views, 384 suffix episodes, the
-   report with the screening gate). With the probe's forks in place, the decision panel of stage 0 is
+   report with the screening gate, which counts the learner's continuations alone and is "not evaluated" for a
+   probe the rule expert continued). With the probe's forks in place, the decision panel of stage 0 is
    `sbatch --export=ALL,PANEL_ADAPTER=<an updated adapter>,PANEL_LABEL=cal1 fork_probe.sbatch`.
 7. **Stage 3, arms A and B**: `submit_arm.sh arm_a_bounded.json 6 2 rli-a` and `submit_arm.sh arm_b_complete.json 8 2 rli-b`.
    After each evaluation: `research.rl.baseline_register add`, then `research.rl.scorecard`.
@@ -97,11 +100,14 @@ Nothing below is submitted by any script here except `submit_arm.sh` and the `sb
 - A run stops at once on a nonfinite update, wrong likelihood provenance, a cut history, duplicated or missing
   update work, or an invalid checkpoint recovery. Every arm has `stop_on_integrity_failure`: the update writes
   `iteration_NNN/integrity_failure.json`, the job ends with `rli-job-stopped`, and the phase is refused until the
-  marker is removed by hand.
+  marker is removed by hand. A batch whose rows were all rejected stops the run the same way.
+- An update's checkpoint is continued only under the settings and the order of rows it was written with. To change
+  a setting in the middle of an update, remove that iteration's `update_checkpoint/` and let the update start again.
 - A preemption is neither an iteration nor a failure.
-- Promotion (`research.rl.scorecard`, `promotion_check`): positive paired net solves over the matched reference,
-  an expert-failed root recovered, a nonnegative paired clean-success change, no more healthy-component corruption.
-  These allocate compute on small samples. They are not tests of significance.
+- Promotion (`research.rl.scorecard`, `promotion_check`): the learner evaluated on exactly the matched reference's
+  roots, positive paired net solves over that reference, an expert-failed root recovered, a nonnegative paired
+  clean-success change, no more healthy-component corruption. These allocate compute on small samples. They are
+  not tests of significance.
 
 ## Files
 

@@ -12,8 +12,10 @@ update that fails: the driver leaves a marker beside the report and refuses
 the phase until someone has looked (:class:`IntegrityError`).
 
 What the report cannot show is caught where it happens and raises there: a
-checkpoint continued on another batch (the batch digest of
-:mod:`psse_env.rl.update`), a carried optimizer state for other parameters,
+checkpoint continued on another batch, in another order of the rows or under
+other settings (the batch digest, the plan digest and the settings a
+checkpoint of :mod:`psse_env.rl.update` records), a carried optimizer state
+for other parameters,
 a first step that is off policy beyond the tolerance, continuation values
 sampled under another adapter (:func:`psse_env.rl.decision_credit.check_provenance`).
 """
@@ -40,27 +42,35 @@ def update_integrity(report: Mapping[str, Any]) -> dict[str, Any]:
     ``ok`` is whether there is none.  ``warnings`` are things to read that do
     not stop a run by themselves (rows the builder left out for a reason it
     counts, a resumed update).
+
+    ``applied`` is whether an optimizer step was taken.  What the row builder
+    counted is read either way.  A batch whose rows were all rejected takes
+    no step, and the reasons a row is rejected for (a prompt that is not the
+    sampled one, a cut history, a choice that could not be rendered) are stop
+    conditions whether or not a row was left: that batch is the case where
+    something is wrong with every row, not the case with nothing to stop for.
     """
 
     failures: list[str] = []
     warnings: list[str] = []
     checks: dict[str, Any] = {}
-    update = report.get("update")
+    applied = isinstance(report.get("update"), Mapping)
+    update: Mapping[str, Any] = report["update"] if applied else {}
     rows = report.get("rows") if isinstance(report.get("rows"), Mapping) else {}
-    if not isinstance(update, Mapping):
-        return {"contract": INTEGRITY_CONTRACT, "ok": True, "applied": False, "failures": [], "warnings": [],
-                "checks": {"note": report.get("note")}}
+    if not applied:
+        checks["note"] = report.get("note")
 
     # --- nonfinite updates
-    series = [value for name in ("policy_loss", "kl", "lifecycle_loss", "supervised_loss", "grad_norm")
-              for value in (update.get(name) or [])]
-    dropped = sum(int(step.get("dropped_nonfinite") or 0) for step in update.get("row_grad_norms") or [])
-    checks["finite_losses_and_gradient_norms"] = _finite(series)
-    checks["rows_dropped_as_nonfinite"] = dropped
-    if not checks["finite_losses_and_gradient_norms"]:
-        failures.append("nonfinite_update: a loss or a gradient norm is not finite")
-    if dropped:
-        failures.append(f"nonfinite_update: {dropped} rows had a gradient that is not finite")
+    if applied:
+        series = [value for name in ("policy_loss", "kl", "lifecycle_loss", "supervised_loss", "grad_norm")
+                  for value in (update.get(name) or [])]
+        dropped = sum(int(step.get("dropped_nonfinite") or 0) for step in update.get("row_grad_norms") or [])
+        checks["finite_losses_and_gradient_norms"] = _finite(series)
+        checks["rows_dropped_as_nonfinite"] = dropped
+        if not checks["finite_losses_and_gradient_norms"]:
+            failures.append("nonfinite_update: a loss or a gradient norm is not finite")
+        if dropped:
+            failures.append(f"nonfinite_update: {dropped} rows had a gradient that is not finite")
 
     # --- likelihood provenance: the trained prompt is the sampled one, the trained tokens have their sampling record
     provenance = {name: int(rows.get(name) or 0) for name in (
@@ -96,39 +106,48 @@ def update_integrity(report: Mapping[str, Any]) -> dict[str, Any]:
         failures.append(f"history_truncation: {truncation['prompts_cut_at_generation']} steps whose prompt the policy cut at its input limit")
 
     # --- duplicated or missing update work
-    accounting = update.get("row_accounting") if isinstance(update.get("row_accounting"), Mapping) else {}
-    steps = update.get("optimizer_steps")
-    planned = update.get("planned_steps")
-    optimizer = report.get("optimizer") if isinstance(report.get("optimizer"), Mapping) else None
-    checks["update_work"] = {
-        "each_row_once": accounting.get("each_row_once"),
-        "rows_built": rows.get("rows"), "rows_updated": update.get("rows"),
-        "optimizer_steps": steps, "planned_steps": planned,
-        "optimizer_steps_carried": None if optimizer is None else (optimizer.get("steps_before"), optimizer.get("steps_after")),
-    }
-    if accounting and not accounting.get("each_row_once"):
-        failures.append("update_work: a row is in no optimizer step or in more than one")
-    if rows.get("rows") is not None and update.get("rows") is not None and int(rows["rows"]) != int(update["rows"]):
-        failures.append(f"update_work: {rows['rows']} rows were built and {update['rows']} were updated")
-    if planned is not None and steps is not None and int(steps) > int(planned):
-        failures.append(f"update_work: {steps} optimizer steps were taken, {planned} were planned")
-    if optimizer is not None and optimizer.get("steps_after") is not None and steps is not None:
-        taken = int(optimizer["steps_after"]) - int(optimizer.get("steps_before") or 0)
-        if taken != int(steps):
-            failures.append(f"update_work: the carried optimizer counts {taken} steps for an update of {steps}")
-    for name in ("policy_loss", "kl", "grad_norm"):
-        if steps is not None and len(update.get(name) or []) != int(steps):
-            failures.append(f"update_work: {len(update.get(name) or [])} values of {name} for {steps} optimizer steps")
+    if applied:
+        accounting = update.get("row_accounting") if isinstance(update.get("row_accounting"), Mapping) else {}
+        steps = update.get("optimizer_steps")
+        planned = update.get("planned_steps")
+        optimizer = report.get("optimizer") if isinstance(report.get("optimizer"), Mapping) else None
+        checks["update_work"] = {
+            "each_row_once": accounting.get("each_row_once"),
+            "rows_built": rows.get("rows"), "rows_updated": update.get("rows"),
+            "optimizer_steps": steps, "planned_steps": planned,
+            "optimizer_steps_carried": None if optimizer is None else (optimizer.get("steps_before"), optimizer.get("steps_after")),
+        }
+        if accounting and not accounting.get("each_row_once"):
+            failures.append("update_work: a row is in no optimizer step or in more than one")
+        if rows.get("rows") is not None and update.get("rows") is not None and int(rows["rows"]) != int(update["rows"]):
+            failures.append(f"update_work: {rows['rows']} rows were built and {update['rows']} were updated")
+        if planned is not None and steps is not None and int(steps) > int(planned):
+            failures.append(f"update_work: {steps} optimizer steps were taken, {planned} were planned")
+        if optimizer is not None and optimizer.get("steps_after") is not None and steps is not None:
+            taken = int(optimizer["steps_after"]) - int(optimizer.get("steps_before") or 0)
+            if taken != int(steps):
+                failures.append(f"update_work: the carried optimizer counts {taken} steps for an update of {steps}")
+        for name in ("policy_loss", "kl", "grad_norm"):
+            if steps is not None and len(update.get(name) or []) != int(steps):
+                failures.append(f"update_work: {len(update.get(name) or [])} values of {name} for {steps} optimizer steps")
 
-    # --- checkpoint recovery
-    checks["recovery"] = {"resumed_from": update.get("resumed_from"), "resumed_from_checkpoint": report.get("resumed_from_checkpoint"),
-                          "batch_digest": update.get("batch_digest")}
-    if update.get("resumed_from") and not update.get("batch_digest"):
-        warnings.append("recovery: the update resumed from a checkpoint that records no batch digest")
+        # --- checkpoint recovery
+        resumed = update.get("resumed_from")
+        checks["recovery"] = {"resumed_from": resumed, "resumed_from_checkpoint": report.get("resumed_from_checkpoint"),
+                              "batch_digest": update.get("batch_digest"), "plan_digest": accounting.get("plan_digest")}
+        if resumed and not update.get("batch_digest"):
+            warnings.append("recovery: the update resumed from a checkpoint that records no batch digest")
+        if isinstance(resumed, Mapping) and resumed.get("plan_verified") is False:
+            warnings.append("recovery: the update resumed from a checkpoint that records neither the order of its rows nor its "
+                            "settings, so the rows before the checkpoint are taken on trust")
+    elif rows:
+        checks["update_work"] = {"rows_built": rows.get("rows"), "rows_updated": None}
+        if not int(rows.get("rows") or 0) and not failures:
+            warnings.append("rows: no training row was built, and no stop condition accounts for it")
     for name in ("groups_incomplete", "trajectories_unpaired", "prompt_truncated_rows_rejected", "empty_completions"):
         if int(rows.get(name) or 0):
             warnings.append(f"rows: {name} = {rows[name]}")
-    return {"contract": INTEGRITY_CONTRACT, "ok": not failures, "applied": True, "failures": failures, "warnings": warnings,
+    return {"contract": INTEGRITY_CONTRACT, "ok": not failures, "applied": applied, "failures": failures, "warnings": warnings,
             "checks": checks}
 
 

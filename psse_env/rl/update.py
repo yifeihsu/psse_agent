@@ -484,8 +484,26 @@ def batch_digest(rows: Sequence[TrainingRow]) -> str:
     return digest.hexdigest()
 
 
+def plan_digest(chunks: Sequence[Sequence[int]]) -> str:
+    """A digest of the order an update takes its rows in: the rows of every optimizer step, as they are run.
+
+    A checkpoint counts the rows it has done; which rows those are is their
+    position in this order.  The order comes from the seed and the deal, so a
+    resumed update that built another order (a changed seed, another way of
+    dealing) would skip rows it never ran and run again rows it had: the
+    checkpoint records the digest and such a resume is refused.
+    """
+
+    plan = [[int(index) for index in chunk] for chunk in chunks]
+    return hashlib.sha256(json.dumps(plan, separators=(",", ":")).encode("ascii")).hexdigest()
+
+
 def row_accounting(rows: Sequence[TrainingRow], chunks: Sequence[Sequence[int]]) -> dict[str, Any]:
-    """Whether the deal puts every admitted row in exactly one optimizer step of the one pass an update makes."""
+    """Whether the deal puts every admitted row in exactly one optimizer step of the one pass an update makes.
+
+    This is a property of the plan.  That the rows run are the plan's rows
+    also after a preemption is what the checkpoint's ``plan_digest`` holds.
+    """
 
     seen: dict[int, int] = {}
     for chunk in chunks:
@@ -504,6 +522,7 @@ def row_accounting(rows: Sequence[TrainingRow], chunks: Sequence[Sequence[int]])
         "rows_missing": len(missing),
         "rows_unknown": len(unknown),
         "each_row_once": not duplicated and not missing and not unknown,
+        "plan_digest": plan_digest(chunks),
     }
 
 
@@ -1147,7 +1166,8 @@ def policy_gradient_update(
     (``row.lifecycle_only``) count toward the KL normalization only, and a
     row's lifecycle term (``row.lifecycle_term``) is normalized over the
     step's lifecycle rows.  With a ``checkpoint``, a resumed call (same
-    rows, same settings) continues from the last committed state; the caller
+    rows in the same order, same settings; anything else is refused)
+    continues from the last committed state; the caller
     must have reloaded the model from ``checkpoint.model_dir()`` when it is
     not ``None``.  ``optimizer`` is the optimizer to step: a new AdamW when
     ``None``, or one the caller continues across updates
@@ -1221,6 +1241,10 @@ def policy_gradient_update(
         # step counts, other rows per step); left out under the default, whose state reads as before.
         extra_state["chunk_by"] = settings.chunk_by
     extra_state["batch_digest"] = digest
+    # What the rows a checkpoint counts as done were: their order, and the settings their gradient was taken under.
+    plan = accounting["plan_digest"]
+    extra_state["plan_digest"] = plan
+    extra_state["settings"] = settings.as_dict()
     if settings.fresh_optimizer_steps is not None:
         extra_state["planned_steps"] = planned
     diagnostic_steps: list[dict[str, Any]] = []
@@ -1244,6 +1268,25 @@ def policy_gradient_update(
                 f"the update checkpoint's optimizer steps were dealt by {written_by!r}, "
                 f"the settings now say chunk_by={settings.chunk_by!r}"
             )
+        # The gradient the checkpoint holds was accumulated under its own settings and its own order of rows.
+        recorded_settings = state.get("settings")
+        if isinstance(recorded_settings, Mapping):
+            current = settings.as_dict()
+            changed = {name: (recorded_settings.get(name), current.get(name))
+                       for name in sorted(set(recorded_settings) | set(current)) if recorded_settings.get(name) != current.get(name)}
+            if changed:
+                raise RuntimeError(
+                    f"the update checkpoint was written under other settings (then, now): {changed}. The gradient it holds "
+                    "cannot be continued under these; remove the checkpoint to start the update again"
+                )
+        recorded_plan = state.get("plan_digest")
+        if recorded_plan and str(recorded_plan) != plan:
+            raise RuntimeError(
+                "the update checkpoint was written for another order of the rows: the rows it counts as done are not the "
+                "first rows of the order built now, so a resume would run some rows twice and others never; remove the "
+                "checkpoint to start the update again"
+            )
+        plan_verified = bool(recorded_plan) and isinstance(recorded_settings, Mapping)
         start_chunk = int(state["completed_chunks"])
         start_row = int(state.get("chunk_rows_done") or 0)
         policy_losses = [float(v) for v in state.get("policy_losses") or []]
@@ -1266,6 +1309,9 @@ def policy_gradient_update(
         if state.get("optimizer_file"):
             optimizer.load_state_dict(torch.load(checkpoint.directory / state["optimizer_file"], map_location="cpu"))
         resumed_from = {"completed_chunks": start_chunk, "chunk_rows_done": start_row}
+        if not plan_verified:
+            # A checkpoint from before the order and the settings were recorded: read in the integrity warnings.
+            resumed_from["plan_verified"] = False
 
     # The clip baseline from the training pass: every row's log-probabilities
     # under the model as it stands before the first optimizer step, taken
@@ -1773,6 +1819,7 @@ __all__ = [
     "load_optimizer_state",
     "optimizer_steps_taken",
     "peft_reference_logprobs",
+    "plan_digest",
     "policy_gradient_update",
     "save_optimizer_state",
 ]

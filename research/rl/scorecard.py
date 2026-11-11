@@ -150,7 +150,13 @@ def exact_sign_test(won: int, lost: int) -> float:
 
 
 def paired(learner: Mapping[str, Mapping[str, Any]], reference: Mapping[str, Mapping[str, Any]], key: str = "success") -> dict[str, Any]:
-    """The learner against a reference on the roots both were run on."""
+    """The learner against a reference on the roots both were run on.
+
+    The counts are of the shared roots alone, so they say nothing about a
+    root one of the two was not run on: ``learner_roots_missing`` (in the
+    reference, not in the learner) and ``reference_roots_missing`` say how
+    many those are, and a rule that reads the counts has to read them too.
+    """
 
     roots = sorted(set(learner) & set(reference))
     usable = [root for root in roots if learner[root].get(key) is not None and reference[root].get(key) is not None]
@@ -159,6 +165,7 @@ def paired(learner: Mapping[str, Mapping[str, Any]], reference: Mapping[str, Map
     both = [root for root in usable if learner[root][key] and reference[root][key]]
     return {
         "roots": len(usable), "roots_missing_in_one": len(set(learner) ^ set(reference)),
+        "learner_roots_missing": len(set(reference) - set(learner)), "reference_roots_missing": len(set(learner) - set(reference)),
         "both": len(both), "learner_only": len(won), "reference_only": len(lost),
         "neither": len(usable) - len(both) - len(won) - len(lost),
         "net": len(won) - len(lost), "p_exact_two_sided": exact_sign_test(len(won), len(lost)),
@@ -283,7 +290,11 @@ def build_scorecard(
         if expert is not None:
             failed = sorted(root for root, record in references[expert].items() if not record["success"])
             recovered = [root for root in failed if root in records and records[root]["success"]]
-            entry["expert_failures_recovered"] = {"expert_failed_roots": len(failed), "recovered": len(recovered), "roots": recovered}
+            entry["expert_failures_recovered"] = {
+                "expert_failed_roots": len(failed), "recovered": len(recovered), "roots": recovered,
+                # Roots of the learner the expert's record does not hold: whether the expert fails them is not known.
+                "learner_roots_without_an_expert_record": len(set(records) - set(references[expert])),
+            }
         if matched is not None:
             entry["promotion"] = promotion_check(entry, card["references"][matched], matched=matched)
         card["learners"][label] = entry
@@ -306,13 +317,29 @@ def promotion_check(entry: Mapping[str, Any], reference_summary: Mapping[str, An
     corruption.  ``inspect`` lists what the workplan says to read before
     the budget grows: declines of true candidates in the mixed classes and
     at later candidates.
+
+    All of that is read from the roots the learner and a reference share,
+    and the corruption count from each one's own roots, so an evaluation
+    that stopped part of the way would be judged on the roots it happened
+    to finish.  The rule therefore also requires the learner to have been
+    run on the matched reference's roots, all of them and no others, and
+    the expert's record to hold every one of them (``evaluated_on_the_same_roots``).
     """
 
     against = entry["against"][matched]
-    recovered = (entry.get("expert_failures_recovered") or {}).get("recovered")
+    recovery = entry.get("expert_failures_recovered") or {}
+    recovered = recovery.get("recovered")
     mine = entry["summary"].get("healthy_component_corrupted_episodes")
     theirs = reference_summary.get("healthy_component_corrupted_episodes")
+    coverage = {
+        "learner_roots": entry["summary"].get("roots"), "matched_reference_roots": reference_summary.get("roots"),
+        "learner_roots_missing": against["solved"].get("learner_roots_missing"),
+        "reference_roots_missing": against["solved"].get("reference_roots_missing"),
+        "learner_roots_without_an_expert_record": recovery.get("learner_roots_without_an_expert_record"),
+    }
     conditions = {
+        "evaluated_on_the_same_roots": (against["solved"]["roots_missing_in_one"] == 0
+                                        and not coverage["learner_roots_without_an_expert_record"]),
         "positive_paired_net_solves": against["solved"]["net"] > 0,
         "expert_failed_roots_recovered": None if recovered is None else recovered > 0,
         "nonnegative_paired_clean_change": against["clean"]["net"] >= 0 if against["clean"]["roots"] else None,
@@ -324,6 +351,7 @@ def promotion_check(entry: Mapping[str, Any], reference_summary: Mapping[str, An
         "conditions": conditions,
         "promote": all(value is True for value in conditions.values()),
         "undetermined": sorted(name for name, value in conditions.items() if value is None),
+        "coverage": coverage,
         "counts": {"learner_only": against["solved"]["learner_only"], "reference_only": against["solved"]["reference_only"],
                    "p_exact_two_sided": against["solved"]["p_exact_two_sided"], "clean_net": against["clean"]["net"],
                    "healthy_component_corrupted_episodes": [mine, theirs]},
@@ -344,8 +372,13 @@ def stop_rule(baseline_to_iterations: Sequence[Mapping[str, Any]], *, screen_ite
     ``stop_after_without_gain`` completed iterations in a row without a
     positive paired net.  Nothing else (a better local decline rate, a
     lower loss) resets the count.
+
+    An entry whose two sides were not run on the same roots is not a
+    completed evaluation: ``comparisons_on_unequal_roots`` counts them, and
+    the rule's answer is not to be read while it is above zero.
     """
 
+    unequal = sum(1 for item in baseline_to_iterations if int(item.get("roots_missing_in_one") or 0) > 0)
     gains = [int(item["net"]) > 0 for item in baseline_to_iterations]
     streak = 0
     for gain in gains:
@@ -355,6 +388,7 @@ def stop_rule(baseline_to_iterations: Sequence[Mapping[str, Any]], *, screen_ite
         "completed_valid_iterations": completed,
         "paired_net_by_iteration": [int(item["net"]) for item in baseline_to_iterations],
         "iterations_without_gain_in_a_row": streak,
+        "comparisons_on_unequal_roots": unequal,
         "screen_complete": completed >= screen_iterations,
         "further_iterations_allowed": max(0, screen_iterations + extra_iterations - completed),
         "stop": streak >= stop_after_without_gain or (completed >= screen_iterations + extra_iterations and not any(gains)),
@@ -427,6 +461,12 @@ def markdown(card: Mapping[str, Any], *, title: str = "Paired scorecard") -> str
             lines.append(f"| {name} | {solved['roots']} | {solved['both']} | {solved['learner_only']} | {solved['reference_only']} | "
                          f"{solved['net']:+d} | {solved['p_exact_two_sided']:.3f} | {clean['net']:+d} | "
                          f"{_cell(calls['learner'])} / {_cell(calls['reference'])} on {calls['roots']} |")
+        for name, against in entry["against"].items():
+            solved = against["solved"]
+            if solved["roots_missing_in_one"]:
+                lines += ["", f"Not run on the same roots as {name}: {solved.get('learner_roots_missing', 0)} of its roots have no "
+                              f"learner record and {solved.get('reference_roots_missing', 0)} of the learner's roots are not in it. "
+                              f"The paired counts above are of the {solved['roots']} roots they share."]
         recovered = entry.get("expert_failures_recovered")
         if recovered is not None:
             lines += ["", f"Roots the expert fails that the learner solves: {recovered['recovered']} of {recovered['expert_failed_roots']}"

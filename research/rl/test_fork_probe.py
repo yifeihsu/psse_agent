@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from psse_env.actions import COMMIT_STATE, CORRECT_PARAMETERS, ROLLBACK_STATE
 from psse_env.dagger.observation_modes import BOUNDED_HISTORY, COMPLETE_HISTORY
@@ -12,7 +13,9 @@ from psse_env.rl.forks import DecisionState
 from psse_env.rl.reward import RewardWeights
 from psse_env.rl.rollout import TrajectoryStore
 from psse_env.rl.test_forks import Scripted, ToyEvaluator, render_other_choice, rollouts, scenario
+from research.rl import fork_probe
 from research.rl.fork_probe import (
+    LEARNER_POLICY,
     STRATA,
     build_manifest,
     build_report,
@@ -187,7 +190,7 @@ class ForkProbeTests(unittest.TestCase):
             evaluator, roots, manifest = _probe(base)
             common = dict(output_dir=base / "branches", env_factory=lambda **_k: None,
                           continuation_factory=lambda seed: Scripted(lines=(7,)), max_steps=12, case_loader=None,
-                          weights=RewardWeights(), continuations=1, evaluator=evaluator, label={"continuation_policy": "toy"})
+                          weights=RewardWeights(), continuations=1, evaluator=evaluator, label={"continuation_policy": LEARNER_POLICY})
             first = run_branches(manifest, roots, shard=(0, 2), **common)
             rest = run_branches(manifest, roots, **common)
             self.assertEqual((first["jobs"], first["ran"]), (16, 16))  # four of the seven forks, two modes, two choices
@@ -236,7 +239,7 @@ class ForkProbeTests(unittest.TestCase):
             report = build_report(manifest, branches, decisions)
             text = markdown(report, title="Toy probe")
         self.assertEqual((report["forks"], report["branches"]["total"], report["branches"]["valid"]), (7, 28, 28))
-        self.assertEqual(report["continuation_policy"], ["toy"])
+        self.assertEqual(report["continuation_policy"], [LEARNER_POLICY])
         rows = {row["root"]: row for row in report["forks_table"]}
         for mode in (BOUNDED_HISTORY, COMPLETE_HISTORY):
             # Declining a wrong line and correcting the true one solves the case; declining a true line loses it.
@@ -259,6 +262,30 @@ class ForkProbeTests(unittest.TestCase):
         gate = report["screening_gate"]
         self.assertEqual((gate["expert_failed_roots_probed"], gate["expert_failed_roots_solved"], gate["in_validation"], gate["passed"]),
                          (3, 3, ["v1"], False))
+        self.assertEqual((gate["applies"], gate["continuation_policies"], gate["solved_by_other_continuations"]["expert_failed_roots_solved"]),
+                         (True, [LEARNER_POLICY], 0))
+        # The same branches continued by the rule expert (the wiring check on a CPU) are not the learner's: whatever they
+        # solve, the rule is not evaluated on them, however many roots that is.
+        by_expert = [{**branch, "continuation_policy": "expert"} for branch in branches]
+        wiring = build_report(manifest, by_expert, decisions)["screening_gate"]
+        self.assertEqual((wiring["applies"], wiring["passed"], wiring["expert_failed_roots_solved"], wiring["in_validation"]),
+                         (False, None, 0, []))
+        self.assertEqual(wiring["solved_by_other_continuations"], {"policies": ["expert"], "expert_failed_roots_solved": 3,
+                                                                   "roots": ["a1", "a2", "v1"]})
+        wiring_text = markdown(build_report(manifest, by_expert, decisions), title="Wiring")
+        self.assertIn("Screening count: not evaluated. No branch was continued by the learner", wiring_text)
+        self.assertIn("Continuations by expert solved 3 of those roots", wiring_text)
+        self.assertNotIn("Met.", wiring_text)
+        self.assertNotIn("Not met", wiring_text)
+        # With the count lowered to what the toy probe can reach, the learner's branches meet the rule and the expert's still do not.
+        with mock.patch.object(fork_probe, "GATE_EXPERT_FAILED_ROOTS", 3):
+            self.assertTrue(build_report(manifest, branches, decisions)["screening_gate"]["passed"])
+            self.assertIsNone(build_report(manifest, by_expert, decisions)["screening_gate"]["passed"])
+            # A probe with both kinds of branch counts the learner's alone.
+            mixed = [branch if index % 2 else {**branch, "continuation_policy": "expert"} for index, branch in enumerate(branches)]
+            both = build_report(manifest, mixed, decisions)["screening_gate"]
+            self.assertEqual((both["applies"], both["continuation_policies"]), (True, [LEARNER_POLICY, "expert"]))
+            self.assertLessEqual(both["expert_failed_roots_solved"], 3)
         history = report["history_effect_on_the_decision"]
         self.assertEqual((history["forks"], history["all_wrong_targets"]["forks"], history["all_true_targets"]["forks"]), (7, 3, 4))
         self.assertEqual(history["wrong_target"]["forks"], 1)  # the kind, which leaves out the two breaker-only forks

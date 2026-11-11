@@ -175,7 +175,9 @@ class Scripted:
 
     It decides from the observation alone, so it can take over an episode
     after a forced step, and it exposes a generation record as a sampling
-    policy does: the decision token is the completion's second token.
+    policy does: the decision token is the completion's second token.  Its
+    record is of one distribution: ``p_choice`` for the token of a commit (and
+    of any other call) and the rest for the token of a decline.
     """
 
     def __init__(self, lines=(7,), *, decline=(), context_first: bool = False, p_choice: float = 0.8) -> None:
@@ -207,7 +209,8 @@ class Scripted:
         self.last_generation = {
             "model_observation": {"prompt": prompt}, "prompt_tokens": len(prompt), "original_prompt_tokens": len(prompt),
             "completion_token_ids": [5, 10 if action["tool"] == ROLLBACK_STATE else 11],
-            "completion_token_probabilities": [0.99, self.p_choice], "text": f"call:{action['tool']}", "call_index": self.calls,
+            "completion_token_probabilities": [0.99, round(1.0 - self.p_choice, 10) if action["tool"] == ROLLBACK_STATE else self.p_choice],
+            "text": f"call:{action['tool']}", "call_index": self.calls,
             "prompt_token_digest": prompt_token_digest(prompt),
         }
         self.calls += 1
@@ -411,18 +414,29 @@ class DecisionCreditTests(unittest.TestCase):
             trajectory = next(t for t in groups[0][1] if t.sample_index == row["sample_index"])
             row["probability"], row["probability_source"] = decision_token_probability(
                 trajectory.steps[row["position"]], row["tool"], render_other_choice)
-        self.assertEqual({(row["probability"], row["probability_source"]) for row in group.rows}, {(0.8, "decision_token")})
+        # One policy at one state: 0.8 on the token of the commit, 0.2 on the token of the decline.
+        self.assertEqual({(row["tool"], row["probability"], row["probability_source"]) for row in group.rows},
+                         {(COMMIT_STATE, 0.8, "decision_token"), (ROLLBACK_STATE, 0.2, "decision_token")})
         branches = [branch(self.evaluator, roots["r1"], group.state, choice, Scripted(lines=(7,))) for choice in (COMMIT_STATE, ROLLBACK_STATE)]
         q_commit, q_decline = (record["reward"]["total"] for record in branches)
         values = state_values(group, branches, self.settings)
         self.assertEqual((values["covered"], values["informative"], values["stratum"]), (True, True, "wrong_target"))
         self.assertAlmostEqual(values["q_gap_commit_minus_decline"], q_commit - q_decline)
         by_tool = {row["tool"]: row for row in values["rows"]}
-        # Two choices: A(a) = Q(a) - [p(a) Q(a) + (1 - p(a)) Q(other)] = (1 - p(a)) (Q(a) - Q(other)).
+        # One baseline for the state, V = p(commit) Q(commit) + p(decline) Q(decline), whichever choice a row sampled:
+        # A(a) = Q(a) - V = (1 - p(a)) (Q(a) - Q(other)).
+        self.assertEqual(len({row["baseline"] for row in values["rows"]}), 1)
+        self.assertAlmostEqual(values["baseline"], 0.8 * q_commit + 0.2 * q_decline)
+        self.assertAlmostEqual(values["policy"][COMMIT_STATE], 0.8)
+        self.assertAlmostEqual(values["policy"][ROLLBACK_STATE], 0.2)
+        self.assertEqual(values["probability_basis"], "both_choices_recorded")
+        self.assertAlmostEqual(values["mass_on_neither_choice"], 0.0)
         self.assertAlmostEqual(by_tool[COMMIT_STATE]["advantage"], 0.2 * (q_commit - q_decline))
-        self.assertAlmostEqual(by_tool[ROLLBACK_STATE]["advantage"], 0.2 * (q_decline - q_commit))
+        self.assertAlmostEqual(by_tool[ROLLBACK_STATE]["advantage"], 0.8 * (q_decline - q_commit))
         self.assertLess(by_tool[COMMIT_STATE]["advantage"], 0.0)
         self.assertGreater(by_tool[ROLLBACK_STATE]["advantage"], 0.0)
+        # The policy's own expectation of the advantage over the two choices is zero, as a baseline's has to be.
+        self.assertAlmostEqual(0.8 * by_tool[COMMIT_STATE]["advantage"] + 0.2 * by_tool[ROLLBACK_STATE]["advantage"], 0.0)
         self.assertEqual(len(values["rows"]), 3)
         mapped = values_map({"states": [values]})
         self.assertEqual(set(mapped), {("r1", 0, 2), ("r1", 1, 2), ("r1", 2, 2)})
@@ -434,11 +448,61 @@ class DecisionCreditTests(unittest.TestCase):
         self.assertEqual(with_source["q_branch"], values["q_branch"])
         summary = summarize_values([values])
         self.assertEqual((summary["covered"], summary["all"]["decline_better"], summary["sampled_rows_credited"]), (1, 1, 3))
+        self.assertEqual(summary["probability_basis"], {"both_choices_recorded": 1})
+        self.assertEqual(summary["mass_on_neither_choice"]["states_measured"], 1)
+        self.assertAlmostEqual(summary["mass_on_neither_choice"]["max"], 0.0)
         # The audit's label says decline here and the values agree; a label on the other side would be a conflict.
         self.assertEqual(summary["membership_label_against_values"]["label_and_values_disagree"], 0)
         flipped = copy.deepcopy(values)
         flipped["decision"]["label"] = COMMIT_STATE
         self.assertEqual(summarize_values([flipped])["membership_label_against_values"]["roots"], ["r1"])
+
+    def test_the_baseline_is_the_states_and_not_the_rows(self) -> None:
+        groups, roots = self._groups()
+        group = candidate_states(groups)[0]
+        branches = [branch(self.evaluator, roots["r1"], group.state, choice, Scripted(lines=(7,))) for choice in (COMMIT_STATE, ROLLBACK_STATE)]
+        q_commit, q_decline = (record["reward"]["total"] for record in branches)
+
+        def credited(p_commit, p_decline):
+            for row in group.rows:
+                row["probability"] = p_commit if row["tool"] == COMMIT_STATE else p_decline
+                row["probability_source"] = "decision_token"
+            return state_values(group, branches, self.settings)
+
+        # The policy also called other tools at this step with probability 0.1 (the review's case, 0.7 and 0.2): taking
+        # each row's probability for its own choice and the complement for the other gave the commit rows a baseline
+        # with 0.3 on the decline and the decline row one with 0.8 on the commit.  The state has one.
+        values = credited(0.7, 0.2)
+        self.assertEqual(len({row["baseline"] for row in values["rows"]}), 1)
+        self.assertAlmostEqual(values["baseline"], (0.7 * q_commit + 0.2 * q_decline) / 0.9)
+        self.assertAlmostEqual(values["mass_on_neither_choice"], 0.1)
+        self.assertAlmostEqual(values["policy"][COMMIT_STATE] + values["policy"][ROLLBACK_STATE], 1.0)
+        by_tool = {row["tool"]: row for row in values["rows"]}
+        self.assertAlmostEqual(by_tool[COMMIT_STATE]["advantage"] - by_tool[ROLLBACK_STATE]["advantage"], q_commit - q_decline)
+        self.assertEqual((by_tool[COMMIT_STATE]["probability"], by_tool[ROLLBACK_STATE]["probability"]), (0.7, 0.2))
+        summary = summarize_values([values])
+        self.assertAlmostEqual(summary["mass_on_neither_choice"]["max"], 0.1)
+        # Probabilities that cannot be of one distribution credit nothing, and the summary counts the state.
+        broken = credited(0.8, 0.8)
+        self.assertEqual((broken["covered"], broken["rows"]), (False, []))
+        self.assertIn("add up to more than one", broken["reason"])
+        self.assertEqual(values_map({"states": [broken]}), {})
+        self.assertEqual(summarize_values([broken])["states_with_inconsistent_probabilities"], 1)
+        # A state every row left by the same choice: the other choice's probability is not on record and is the complement.
+        commits = copy.deepcopy(group)
+        commits.rows = [row for row in commits.rows if row["tool"] == COMMIT_STATE]
+        for row in commits.rows:
+            row["probability"] = 0.7
+        single = state_values(commits, branches, self.settings)
+        self.assertEqual((single["probability_basis"], single["mass_on_neither_choice"]), ("complement_of_the_sampled_choice", None))
+        self.assertAlmostEqual(single["baseline"], 0.7 * q_commit + 0.3 * q_decline)
+        self.assertEqual(summarize_values([single])["probability_basis"], {"complement_of_the_sampled_choice": 1})
+        # A row whose decision token was not found is not credited; the rows that recorded theirs still are, by the same baseline.
+        whole = credited(0.7, 0.2)
+        group.rows[0]["probability"], group.rows[0]["probability_source"] = None, "no_decision_token"
+        partial = state_values(group, branches, self.settings)
+        self.assertEqual((len(whole["rows"]), len(partial["rows"])), (3, 2))
+        self.assertEqual({row["baseline"] for row in partial["rows"]}, {whole["baseline"]})
 
     def test_a_state_without_a_valid_branch_of_each_choice_or_without_a_probability_credits_nothing(self) -> None:
         groups, roots = self._groups()
@@ -450,9 +514,20 @@ class DecisionCreditTests(unittest.TestCase):
         self.assertEqual(values["branches"], {"valid": 1, "invalid": 1, "mismatched_prefix": 0, "forced_refused": 1})
         self.assertEqual(values_map({"states": [values]}), {})
         declined = branch(self.evaluator, roots["r1"], group.state, ROLLBACK_STATE, Scripted(lines=(7,)))
-        self.assertEqual(state_values(group, [kept, declined], self.settings)["rows"], [])  # no probability was read
+        unread = state_values(group, [kept, declined], self.settings)  # no probability was read
+        self.assertEqual((unread["rows"], unread["covered"], unread["policy"], unread["baseline"]), ([], True, None, None))
+        self.assertEqual(summarize_values([unread])["probability_basis"], {"no_probability_read": 1})
         step = groups[0][1][0].steps[2]
-        self.assertEqual(decision_token_probability(step, COMMIT_STATE, None), (0.8, "least_likely_token"))
+        # Without the other choice's rendering the decision token is not known, and nothing stands in for it: the least
+        # likely token of a completion is not the probability of the choice.
+        self.assertEqual(decision_token_probability(step, COMMIT_STATE, None), (None, "no_decision_token"))
+        self.assertEqual(decision_token_probability(step, COMMIT_STATE, lambda *_args: list(step.completion_token_ids)),
+                         (None, "no_decision_token"))  # the two renderings do not part
+
+        def unrenderable(*_args):
+            raise ValueError("no rendering of the other choice")
+
+        self.assertEqual(decision_token_probability(step, COMMIT_STATE, unrenderable), (None, "no_decision_token"))
         step.token_probabilities = []
         self.assertEqual(decision_token_probability(step, COMMIT_STATE, render_other_choice), (None, "no_sampling_record"))
 

@@ -131,13 +131,16 @@ class ScorecardTests(unittest.TestCase):
     def test_the_scorecard_and_its_promotion_rule(self) -> None:
         card = build_scorecard({"S1": self.learner}, {"S0": self.baseline, "expert": self.expert}, expert="expert", matched="S0")
         entry = card["learners"]["S1"]
-        self.assertEqual(entry["expert_failures_recovered"], {"expert_failed_roots": 2, "recovered": 2, "roots": ["r1", "r4"]})
+        self.assertEqual(entry["expert_failures_recovered"], {"expert_failed_roots": 2, "recovered": 2, "roots": ["r1", "r4"],
+                                                              "learner_roots_without_an_expert_record": 0})
         self.assertEqual(entry["against"]["expert"]["solved"]["net"], 1)
         promotion = entry["promotion"]
-        self.assertEqual(promotion["conditions"], {"positive_paired_net_solves": True, "expert_failed_roots_recovered": True,
-                                                   "nonnegative_paired_clean_change": True,
+        self.assertEqual(promotion["conditions"], {"evaluated_on_the_same_roots": True, "positive_paired_net_solves": True,
+                                                   "expert_failed_roots_recovered": True, "nonnegative_paired_clean_change": True,
                                                    "no_more_healthy_component_corruption": True})
         self.assertTrue(promotion["promote"])
+        self.assertEqual(promotion["coverage"], {"learner_roots": 5, "matched_reference_roots": 5, "learner_roots_missing": 0,
+                                                 "reference_roots_missing": 0, "learner_roots_without_an_expert_record": 0})
         self.assertEqual(promotion["inspect"]["true_candidates_declined_in_mixed_classes"]["declined"], 1)
         self.assertEqual(promotion["counts"]["healthy_component_corrupted_episodes"], [0, 1])
         # No gain, or a gain bought with a clean-success loss, is not promoted.
@@ -156,9 +159,44 @@ class ScorecardTests(unittest.TestCase):
                        "Promotion rule against S0: promote.", "| rx2_distant | 2 | 1 | 1 | 2 |"):
             self.assertIn(needle, text)
 
+    def test_an_evaluation_that_did_not_finish_is_not_promoted(self) -> None:
+        references = {"S0": self.baseline, "expert": self.expert}
+        # Only r1 was evaluated: the learner solves it, the reference and the expert do not, and nothing it has is worse.
+        partial = {"r1": self.learner["r1"]}
+        entry = build_scorecard({"S1": partial}, references, expert="expert", matched="S0")["learners"]["S1"]
+        solved = entry["against"]["S0"]["solved"]
+        self.assertEqual((solved["roots"], solved["net"], solved["learner_roots_missing"], solved["reference_roots_missing"]), (1, 1, 4, 0))
+        promotion = entry["promotion"]
+        self.assertEqual(promotion["conditions"], {"evaluated_on_the_same_roots": False, "positive_paired_net_solves": True,
+                                                   "expert_failed_roots_recovered": True, "nonnegative_paired_clean_change": True,
+                                                   "no_more_healthy_component_corruption": True})
+        self.assertFalse(promotion["promote"])
+        self.assertEqual((promotion["coverage"]["learner_roots"], promotion["coverage"]["learner_roots_missing"]), (1, 4))
+        text = markdown(build_scorecard({"S1": partial}, references, expert="expert", matched="S0"))
+        self.assertIn("Promotion rule against S0: do not promote. evaluated on the same roots: no;", text)
+        self.assertIn("Not run on the same roots as S0: 4 of its roots have no learner record and 0 of the learner's roots are not in it. "
+                      "The paired counts above are of the 1 roots they share.", text)
+        # A learner run on a root the reference was not run on, or one the expert's record does not hold, is not either.
+        extra = {**self.learner, "r9": self.learner["r1"]}
+        wider = build_scorecard({"S1": extra}, references, expert="expert", matched="S0")["learners"]["S1"]["promotion"]
+        self.assertEqual((wider["promote"], wider["conditions"]["evaluated_on_the_same_roots"]), (False, False))
+        self.assertEqual((wider["coverage"]["reference_roots_missing"], wider["coverage"]["learner_roots_without_an_expert_record"]), (1, 1))
+        narrow_expert = {root: record for root, record in self.expert.items() if root != "r5"}
+        unknown = build_scorecard({"S1": self.learner}, {"S0": self.baseline, "expert": narrow_expert}, expert="expert",
+                                  matched="S0")["learners"]["S1"]["promotion"]
+        self.assertEqual((unknown["promote"], unknown["coverage"]["learner_roots_without_an_expert_record"]), (False, 1))
+        # An expert's record that is wider than the evaluation is no gap: every evaluated root is in it.
+        wide_expert = {**self.expert, "r9": self.expert["r1"]}
+        self.assertTrue(build_scorecard({"S1": self.learner}, {"S0": self.baseline, "expert": wide_expert}, expert="expert",
+                                        matched="S0")["learners"]["S1"]["promotion"]["promote"])
+
     def test_the_stop_rule_counts_completed_iterations_without_a_paired_gain(self) -> None:
         def nets(*values):
             return [{"net": value} for value in values]
+
+        self.assertEqual(stop_rule(nets(-2, 1))["comparisons_on_unequal_roots"], 0)
+        self.assertEqual(stop_rule([{"net": 1, "roots_missing_in_one": 4}, {"net": 0, "roots_missing_in_one": 0}])
+                         ["comparisons_on_unequal_roots"], 1)
 
         first = stop_rule(nets(-2))
         self.assertEqual((first["stop"], first["screen_complete"], first["further_iterations_allowed"]), (False, False, 2))

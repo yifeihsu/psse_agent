@@ -391,6 +391,33 @@ class AdversarialUpdateTests(unittest.TestCase):
                 finally:
                     train.update_integrity = original
 
+    def test_a_batch_whose_rows_are_all_rejected_stops_the_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, _tiny_model_phase({}) as train:
+            config = _config(directory)
+            _write_rollouts(config)
+            Path(config.initial_adapter).mkdir()
+            (Path(config.initial_adapter) / "adapter_config.json").write_text("{}", encoding="utf-8")
+            # Every stored step now names another prompt than the one the update renders for it.
+            store = TrajectoryStore(iteration_dir(config, 0) / "trajectories")
+            for root in store.roots():
+                group = store.read_group(root)
+                for trajectory in group:
+                    for step in trajectory.steps:
+                        step.prompt_digest = "f" * 64
+                store.write_group(root, group)
+            Manifest(phase="update", current_adapter=config.initial_adapter).save(Path(directory) / "manifest.json")
+            with self.assertRaisesRegex(IntegrityError, "prompt_digest_mismatches"):
+                run_phase(config, "update")
+            written = json.loads((iteration_dir(config, 0) / "update_report.json").read_text(encoding="utf-8"))
+            self.assertEqual((written["update"], written["rows"]["rows"]), (None, 0))
+            self.assertGreater(written["rows"]["prompt_digest_mismatches"], 0)
+            self.assertEqual((written["integrity"]["ok"], written["integrity"]["applied"]), (False, False))
+            # No step was taken and the run did not move on to the evaluation of an adapter that was never trained.
+            self.assertTrue((iteration_dir(config, 0) / MARKER_FILE).is_file())
+            self.assertEqual(load_manifest(config).phase, "update")
+            with self.assertRaisesRegex(IntegrityError, "remove the marker"):
+                train.phase_update(config, Manifest(phase="update", current_adapter=config.initial_adapter))
+
     def test_decision_values_replace_the_membership_label_on_the_rows_they_cover(self) -> None:
         from psse_env.rl.decision_credit import DECISION_CREDIT_CONTRACT
 

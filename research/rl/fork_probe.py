@@ -99,6 +99,10 @@ DEFAULT_EXPERT_FAILED = {"training": 12, "validation": 6}
 #: The workplan's screening rule: learner continuations solve this many distinct expert-failed roots, one of them
 #: at least in the validation split.
 GATE_EXPERT_FAILED_ROOTS = 5
+#: What a branch's ``continuation_policy`` is when the learner continued it (the driver's ``policy_source`` of a run
+#: on an adapter).  The rule is about these branches alone: a run whose continuations the rule expert made checks
+#: the wiring, and what it solves is not a count of the rule.
+LEARNER_POLICY = "adapter"
 
 
 # --------------------------------------------------------------------------- inputs
@@ -715,22 +719,35 @@ def build_report(manifest: Mapping[str, Any], branches: Sequence[Mapping[str, An
                 "roots": sorted(row["root"] for row in rows if row["modes"][mode]["label_against_value"]),
             },
         }
-    # The screening count: distinct expert-failed roots on which some continuation solved the case.
+    # The screening count: distinct expert-failed roots on which a continuation of the learner solved the case.
+    # A branch another policy continued (the rule expert, in a wiring check) is counted beside it, never in it.
+    policies = sorted({str(branch.get("continuation_policy")) for branch in branches})
     recovered: dict[str, set[str]] = {"training": set(), "validation": set()}
     recovered_by_mode: dict[str, set[str]] = {mode: set() for mode in modes}
+    recovered_by_others: set[str] = set()
     for branch in branches:
         fork = forks[int(branch["fork_index"])]
         if branch.get("valid") and branch.get("success") and fork["expert_success"] is False:
+            if str(branch.get("continuation_policy")) != LEARNER_POLICY:
+                recovered_by_others.add(fork["state"]["root"])
+                continue
             recovered[fork["split"]].add(fork["state"]["root"])
             recovered_by_mode[str(branch["observation_mode"])].add(fork["state"]["root"])
     distinct = recovered["training"] | recovered["validation"]
+    applies = LEARNER_POLICY in policies
+    others = [policy for policy in policies if policy != LEARNER_POLICY]
     gate = {
         "rule": f"learner continuations solve at least {GATE_EXPERT_FAILED_ROOTS} distinct expert-failed roots, one or more in the validation split",
+        # Whether any branch was continued by the learner; without one the rule is not evaluated (``passed`` is None).
+        "applies": applies,
+        "continuation_policies": policies,
         "expert_failed_roots_probed": sum(1 for fork in forks if fork["expert_success"] is False),
         "expert_failed_roots_solved": len(distinct),
         "in_training": sorted(recovered["training"]), "in_validation": sorted(recovered["validation"]),
         "by_observation_mode": {mode: len(roots) for mode, roots in recovered_by_mode.items()},
-        "passed": len(distinct) >= GATE_EXPERT_FAILED_ROOTS and bool(recovered["validation"]),
+        "solved_by_other_continuations": {"policies": others, "expert_failed_roots_solved": len(recovered_by_others),
+                                          "roots": sorted(recovered_by_others)},
+        "passed": (len(distinct) >= GATE_EXPERT_FAILED_ROOTS and bool(recovered["validation"])) if applies else None,
     }
     history = None
     if decisions and {BOUNDED_HISTORY, COMPLETE_HISTORY} <= set(modes):
@@ -844,9 +861,16 @@ def markdown(report: Mapping[str, Any], *, title: str = "Fork probe") -> str:
         lines.append(f"Coverage, {split}: {coverage['selected']} of {coverage['wanted']} forks; expert-failed roots "
                      f"{coverage['expert_failed']['selected']} (target {coverage['expert_failed']['target']}); shortfalls: {shortfalls}.")
     gate = report["screening_gate"]
-    lines += ["", f"Screening count: {gate['expert_failed_roots_solved']} distinct expert-failed roots solved by a continuation, of "
-                  f"{gate['expert_failed_roots_probed']} probed ({len(gate['in_training'])} training, {len(gate['in_validation'])} validation). "
-                  f"Rule: {gate['rule']}. {'Met' if gate['passed'] else 'Not met'}.", ""]
+    others = gate.get("solved_by_other_continuations") or {}
+    beside = (f" Continuations by {', '.join(others['policies'])} solved {others['expert_failed_roots_solved']} of those roots; "
+              "they are not the learner's and are not in the count." if others.get("policies") else "")
+    if gate.get("applies", True):
+        lines += ["", f"Screening count: {gate['expert_failed_roots_solved']} distinct expert-failed roots solved by a learner continuation, "
+                      f"of {gate['expert_failed_roots_probed']} probed ({len(gate['in_training'])} training, "
+                      f"{len(gate['in_validation'])} validation). Rule: {gate['rule']}. {'Met' if gate['passed'] else 'Not met'}.{beside}", ""]
+    else:
+        lines += ["", f"Screening count: not evaluated. No branch was continued by the learner, so this run checks the wiring and says "
+                      f"nothing about the rule ({gate['rule']}).{beside}", ""]
     for mode, summary in report["summary"].items():
         lines += [f"## Observation mode {mode}", "",
                   "| kind of fork | forks | decline better | commit better | equal | reward if committed | reward if declined | "

@@ -17,12 +17,26 @@ current policy sampled to the end, ``continuations`` times per choice.  With
   sampled ``c`` at this state themselves;
 * the baseline is ``V = p(commit) Q_b(commit) + p(decline) Q_b(decline)``,
   with ``Q_b`` from the forced branches alone and ``p`` the behaviour
-  policy's own probability of the choice at the state.  It is the same
-  whichever choice an episode happened to sample, which is what a baseline
-  has to be for the policy gradient to stay unbiased, and its samples are the
-  separate branch samples;
+  policy's own probability of the choice at the state.  It is one number per
+  state, the same whichever choice an episode happened to sample, which is
+  what a baseline has to be for the policy gradient to stay unbiased, and
+  its samples are the separate branch samples;
 * the fork-local advantage of a rollout episode that sampled choice ``a``
   there is ``A = Q(a) - V``.
+
+Where ``p`` comes from: a rollout records the probability of the tokens it
+sampled, so a state's rows give the probability of each choice some row
+sampled (:func:`decision_token_probability`).  When both choices were
+sampled there, both are on record and ``p`` is the two renormalized to one;
+what they leave (``mass_on_neither_choice``: the policy's probability of
+calling another tool at that step) is reported.  When every row sampled the
+same choice, the other choice's probability is not on record and is taken
+as the complement, which assumes that mass is nothing.  On the 1,915
+labelled decisions of the first arm and the smoke of 2026-11-11 it was at
+most 0.004 at the 64 states where it could be measured.  The baseline never
+takes one row's probability for its own choice and the complement for the
+other row by row: two rows that sampled different choices would then get
+two baselines for one state (the review of 2026-11-11, item 1).
 
 :func:`psse_env.rl.rows.build_rows` puts ``weight * A`` on that episode's own
 sampled decision row, in place of the row's episode advantage and of the
@@ -253,9 +267,14 @@ def decision_token_probability(
     The two choices are the same tool call but for the tool's name, so the
     completion and the other choice's rendering part at one token: the
     recorded probability of that token is the probability of the choice
-    (``decision_token``).  Without a renderer, or when the other choice
-    cannot be rendered, the least likely token of the completion stands in
-    (``least_likely_token``).  ``None`` when the step has no sampling record.
+    (``decision_token``).  ``None`` when that token cannot be found: the step
+    has no sampling record (``no_sampling_record``), or there is no renderer,
+    the other choice cannot be rendered, or the two renderings do not part
+    (``no_decision_token``).  Nothing stands in for it: the least likely token
+    of a completion is some token the policy was unsure of, an argument as
+    readily as the tool's name, and not the probability of the choice, so a
+    row without its decision token is not credited from the continuations and
+    keeps the objective it had.
     """
 
     probabilities = list(step.token_probabilities or [])
@@ -271,7 +290,7 @@ def decision_token_probability(
         for index, (own, other) in enumerate(zip(completion, alternative)):
             if own != other:
                 return float(probabilities[index]), "decision_token"
-    return float(min(probabilities)), "least_likely_token"
+    return None, "no_decision_token"
 
 
 # --------------------------------------------------------------------------- values
@@ -281,8 +300,51 @@ def _mean(values: Sequence[float]) -> float | None:
     return (sum(values) / len(values)) if values else None
 
 
+#: How far above one the two choices' recorded probabilities may add up before they are taken as not being of one
+#: distribution (the rows of a state decode from one prompt, so beyond numerical noise they cannot).
+PROBABILITY_SUM_TOLERANCE = 0.01
+
+
+def behaviour_policy(rows: Sequence[Mapping[str, Any]], *, floor: float) -> dict[str, Any] | None:
+    """The behaviour policy's probability of each choice at a state, from the probabilities its rows recorded.
+
+    Every row of a state decoded its decision from the same prompt, so the
+    recorded probability of a choice is one number whichever row sampled it
+    (their mean is taken; they differ by numerical noise at most).  With both
+    choices on record the two are renormalized to one and what they leave is
+    ``mass_on_neither_choice``.  With one, the other is its complement, which
+    takes that mass as nothing.  ``None`` when no row recorded a probability.
+    Either way the result belongs to the state, not to a row.
+    """
+
+    recorded = {choice: [float(row["probability"]) for row in rows if row["tool"] == choice and row.get("probability") is not None]
+                for choice in CHOICES}
+    known = {choice: sum(values) / len(values) for choice, values in recorded.items() if values}
+    if not known:
+        return None
+    if len(known) == 2:
+        total = known[COMMIT_STATE] + known[ROLLBACK_STATE]
+        if total > 1.0 + PROBABILITY_SUM_TOLERANCE or total <= 0.0:
+            return {"inconsistent": True, "recorded": known}
+        commit = known[COMMIT_STATE] / total
+        outside: float | None = 1.0 - total
+        basis = "both_choices_recorded"
+    else:
+        (choice, value), = known.items()
+        commit = value if choice == COMMIT_STATE else 1.0 - value
+        outside = None
+        basis = "complement_of_the_sampled_choice"
+    commit = min(max(commit, float(floor)), 1.0 - float(floor))
+    return {"inconsistent": False, "recorded": known, "probability_basis": basis, "mass_on_neither_choice": outside,
+            "policy": {COMMIT_STATE: commit, ROLLBACK_STATE: 1.0 - commit}}
+
+
 def state_values(group: StateGroup, branches: Sequence[Mapping[str, Any]], settings: DecisionCreditSettings) -> dict[str, Any]:
-    """The values of the two choices at a state and the fork-local advantage of every covered sampled row."""
+    """The values of the two choices at a state and the fork-local advantage of every covered sampled row.
+
+    The baseline is the state's: one number, the same for every row whichever
+    choice it sampled (:func:`behaviour_policy`).
+    """
 
     valid = [branch for branch in branches if branch.get("valid")]
     forced = {choice: [float(branch["reward"]["total"]) for branch in valid if branch.get("forced_tool") == choice] for choice in CHOICES}
@@ -310,20 +372,31 @@ def state_values(group: StateGroup, branches: Sequence[Mapping[str, Any]], setti
     q_branch = {choice: _mean(forced[choice]) for choice in CHOICES}
     q = {choice: _mean(forced[choice] + (natural[choice] if settings.include_source_return else [])) for choice in CHOICES}
     floor = float(settings.probability_floor)
+    behaviour = behaviour_policy(group.rows, floor=floor)
+    if behaviour is None:
+        # No row's decision token was read: nothing says how likely either choice was, so nothing is credited.
+        record.update(covered=True, q=q, q_branch=q_branch, policy=None, baseline=None, probability_basis=None,
+                      mass_on_neither_choice=None, q_gap_commit_minus_decline=q_branch[COMMIT_STATE] - q_branch[ROLLBACK_STATE],
+                      informative=abs(q_branch[COMMIT_STATE] - q_branch[ROLLBACK_STATE]) > 1e-9)
+        return record
+    if behaviour["inconsistent"]:
+        record.update(covered=False, recorded_probabilities=behaviour["recorded"],
+                      reason="the recorded probabilities of the two choices add up to more than one")
+        return record
+    policy = behaviour["policy"]
+    baseline = sum(policy[choice] * q_branch[choice] for choice in CHOICES)
     for row in group.rows:
         probability = row.get("probability")
         if probability is None:
             continue
-        p = min(max(float(probability), floor), 1.0 - floor)
-        policy = {row["tool"]: p, other_choice(row["tool"]): 1.0 - p}
-        baseline = sum(policy[choice] * q_branch[choice] for choice in CHOICES)
         record["rows"].append({
             "sample_index": int(row["sample_index"]), "position": int(row["position"]), "tool": row["tool"],
-            "probability": p, "probability_source": row.get("probability_source"),
+            "probability": min(max(float(probability), floor), 1.0 - floor), "probability_source": row.get("probability_source"),
             "baseline": baseline, "advantage": q[row["tool"]] - baseline,
         })
     record.update(
-        covered=True, q=q, q_branch=q_branch,
+        covered=True, q=q, q_branch=q_branch, policy=policy, baseline=baseline,
+        probability_basis=behaviour["probability_basis"], mass_on_neither_choice=behaviour["mass_on_neither_choice"],
         # The better choice by the forced branches, and whether they tell the choices apart at all.
         q_gap_commit_minus_decline=q_branch[COMMIT_STATE] - q_branch[ROLLBACK_STATE],
         informative=abs(q_branch[COMMIT_STATE] - q_branch[ROLLBACK_STATE]) > 1e-9,
@@ -353,6 +426,13 @@ def summarize_values(states: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     # Where the audit's membership label and the realized values point different ways.
     conflicts = [state for state in covered if state["informative"] and state["decision"].get("label") in CHOICES
                  and (state["q_gap_commit_minus_decline"] > 0) != (state["decision"]["label"] == COMMIT_STATE)]
+    # How the behaviour probabilities were known, and how much of the policy's mass was on neither choice where
+    # both were on record (the complement taken elsewhere assumes that mass is nothing).
+    bases: dict[str, int] = {}
+    for state in covered:
+        basis = str(state.get("probability_basis") or "no_probability_read")
+        bases[basis] = bases.get(basis, 0) + 1
+    outside = [float(state["mass_on_neither_choice"]) for state in covered if state.get("mass_on_neither_choice") is not None]
     return {
         "states": len(states),
         "covered": len(covered),
@@ -360,6 +440,9 @@ def summarize_values(states: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "equal_return_states": sum(1 for state in covered if not state["informative"]),
         "sampled_rows_credited": len(rows),
         "mean_abs_advantage": _mean([abs(float(row["advantage"])) for row in rows]),
+        "probability_basis": dict(sorted(bases.items())),
+        "mass_on_neither_choice": {"states_measured": len(outside), "mean": _mean(outside), "max": max(outside) if outside else None},
+        "states_with_inconsistent_probabilities": sum(1 for state in states if state.get("recorded_probabilities") is not None),
         "branches_invalid": sum(int(state["branches"]["invalid"]) for state in states),
         "branches_mismatched_prefix": sum(int(state["branches"]["mismatched_prefix"]) for state in states),
         "all": kind(covered),
@@ -410,8 +493,10 @@ __all__ = [
     "DECISION_CREDIT_CONTRACT",
     "DEFAULT_QUOTAS",
     "DecisionCreditSettings",
+    "PROBABILITY_SUM_TOLERANCE",
     "STRATA",
     "StateGroup",
+    "behaviour_policy",
     "candidate_states",
     "check_provenance",
     "decision_token_probability",

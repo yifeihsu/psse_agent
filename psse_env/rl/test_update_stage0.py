@@ -10,6 +10,7 @@ changing nothing they report on.
 """
 from __future__ import annotations
 
+import json
 import math
 import tempfile
 import unittest
@@ -359,6 +360,68 @@ class AccountingTests(unittest.TestCase):
             report = policy_gradient_update(_TinyLM(), rows, settings, checkpoint=checkpoint)
             self.assertEqual(report.batch_digest, batch_digest(rows))
 
+    def test_a_checkpoint_is_bound_to_the_order_of_its_rows_and_to_its_settings(self) -> None:
+        import psse_env.rl.update as update_module
+
+        rows = _groups()
+        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=1, chunk_by="group", max_row_grad_norm=1.0, seed=7)
+        other = next(seed for seed in range(8, 60) if _chunks(rows, replace(settings, seed=seed)) != _chunks(rows, settings))
+        self.assertNotEqual(update_module.plan_digest(_chunks(rows, settings)),
+                            update_module.plan_digest(_chunks(rows, replace(settings, seed=other))))
+        with tempfile.TemporaryDirectory() as directory:
+            start = Path(directory) / "start"
+            _save_tiny(_TinyLM(seed=3), start)
+            reference = _load_tiny(start, seed=3)
+            expected = policy_gradient_update(reference, rows, settings)
+            checkpoint = UpdateCheckpoint(directory=Path(directory) / "checkpoint", save_model=_save_tiny, every_rows=2)
+            with self.assertRaises(_Preempted):
+                policy_gradient_update(_load_tiny(start, seed=3, fail_after=6), rows, settings, checkpoint=checkpoint)
+            state = checkpoint.load_state()
+            self.assertEqual((state["chunk_rows_done"], state["plan_digest"]), (6, expected.row_accounting["plan_digest"]))
+            self.assertEqual(state["settings"], settings.as_dict())
+            # Another seed deals the rows in another order: the six rows done are not the first six of that order, so
+            # a resume would run rows twice and leave others out while the plan still says each row once.
+            with self.assertRaisesRegex(RuntimeError, r"other settings \(then, now\): \{'seed': \(7, %d\)\}" % other):
+                policy_gradient_update(_load_tiny(start, seed=3), rows, replace(settings, seed=other), checkpoint=checkpoint)
+            # So is any other setting the gradient in the checkpoint was accumulated under.
+            for changes in ({"max_row_grad_norm": 5.0}, {"loss_normalization": "trajectory"}, {"learning_rate": 0.01},
+                            {"step_diagnostics": True}):
+                with self.assertRaisesRegex(RuntimeError, "other settings"):
+                    policy_gradient_update(_load_tiny(start, seed=3), rows, replace(settings, **changes), checkpoint=checkpoint)
+            # The same settings and another deal (the dealing rule itself changed): the order's digest catches it.
+            original = update_module._group_chunks
+            update_module._group_chunks = lambda *args: [list(reversed(chunk)) for chunk in original(*args)]
+            try:
+                with self.assertRaisesRegex(RuntimeError, "another order of the rows"):
+                    policy_gradient_update(_load_tiny(start, seed=3), rows, settings, checkpoint=checkpoint)
+            finally:
+                update_module._group_chunks = original
+            # The refusals consumed nothing: the unchanged call resumes and ends where the uninterrupted update did.
+            self.assertEqual(checkpoint.load_state(), state)
+            resumed_model = _load_tiny(start, seed=3)
+            resumed = policy_gradient_update(resumed_model, rows, settings, checkpoint=checkpoint)
+            self.assertEqual(resumed.resumed_from, {"completed_chunks": 0, "chunk_rows_done": 6})
+            self.assertEqual(resumed.row_accounting, expected.row_accounting)
+            self.assertTrue(torch.allclose(resumed_model.table, reference.table, atol=1e-7))
+
+    def test_a_checkpoint_from_before_the_order_was_recorded_resumes_with_a_warning(self) -> None:
+        rows = _groups()
+        settings = UpdateSettings(learning_rate=0.05, optimizer_steps=1, chunk_by="group", seed=7)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = UpdateCheckpoint(directory=Path(directory), save_model=_save_tiny, every_rows=2)
+            with self.assertRaises(_Preempted):
+                policy_gradient_update(_TinyLM(seed=3, fail_after=6), rows, settings, checkpoint=checkpoint)
+            state = checkpoint.load_state()
+            for name in ("plan_digest", "settings"):
+                state.pop(name)
+            checkpoint.state_path.write_text(json.dumps(state), encoding="utf-8")
+            resumed = policy_gradient_update(_TinyLM(seed=3), rows, settings, checkpoint=checkpoint)
+            self.assertEqual(resumed.resumed_from, {"completed_chunks": 0, "chunk_rows_done": 6, "plan_verified": False})
+            result = update_integrity({"rows": {"rows": len(rows)}, "update": resumed.as_dict()})
+            self.assertTrue(result["ok"], result["failures"])
+            self.assertTrue(any("taken on trust" in warning for warning in result["warnings"]))
+            self.assertEqual(result["checks"]["recovery"]["plan_digest"], resumed.row_accounting["plan_digest"])
+
     def test_a_clip_baseline_cannot_be_continued_on_another_batch(self) -> None:
         from psse_env.rl.test_update import _with_record
 
@@ -600,6 +663,32 @@ class IntegrityTests(unittest.TestCase):
         self.assertTrue(resumed["ok"])
         self.assertTrue(any("no batch digest" in warning for warning in resumed["warnings"]))
         self.assertTrue(math.isfinite(clean["checks"]["provenance"]["first_step_mean_abs_log_ratio"]))
+
+    def test_a_batch_whose_rows_were_all_rejected_is_a_stop_and_not_a_pass(self) -> None:
+        # No row survived, so no step was taken; the reasons the rows were rejected for are stop conditions all the same.
+        rejected = update_integrity({
+            "update": None, "note": "no training rows after pairing and rendering checks",
+            "rows": {"rows": 0, "prompt_digest_mismatches": 22, "prompts_cut_at_generation": 15,
+                     "target_renderer": {"rendered": 0, "refused": 0}}})
+        self.assertEqual((rejected["ok"], rejected["applied"]), (False, False))
+        self.assertTrue(any("22 steps whose re-rendered prompt is not the sampled one" in failure for failure in rejected["failures"]))
+        self.assertTrue(any("15 steps whose prompt the policy cut" in failure for failure in rejected["failures"]))
+        self.assertEqual(rejected["checks"]["update_work"], {"rows_built": 0, "rows_updated": None})
+        for counter, needle in (("prompt_length_mismatches", "prompt_length_mismatches"), ("prompt_digest_missing", "prompt_digest_missing"),
+                                ("rows_without_sampling_record_rejected", "without a sampling record"),
+                                ("supervised_rows_unrenderable", "could not be rendered"), ("prompt_truncated_rows", "training length")):
+            result = update_integrity({"update": None, "rows": {"rows": 0, counter: 3}})
+            self.assertFalse(result["ok"], counter)
+            self.assertTrue(any(needle in failure for failure in result["failures"]), (counter, result["failures"]))
+        # No row and nothing that stops a run accounts for it: something to read, not a stop.
+        empty = update_integrity({"update": None, "note": "no training rows", "rows": {"rows": 0, "empty_completions": 4}})
+        self.assertEqual((empty["ok"], empty["applied"], empty["failures"]), (True, False, []))
+        self.assertTrue(any("no training row was built" in warning for warning in empty["warnings"]))
+        self.assertTrue(any("empty_completions = 4" in warning for warning in empty["warnings"]))
+        # An update with nothing to train on never built rows: nothing to check and nothing to warn about.
+        carried = update_integrity({"update": None, "note": "carried over"})
+        self.assertEqual((carried["ok"], carried["applied"], carried["failures"], carried["warnings"]), (True, False, [], []))
+        self.assertEqual(carried["checks"]["note"], "carried over")
 
 
 if __name__ == "__main__":
