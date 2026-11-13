@@ -389,6 +389,103 @@ class TrainDriverTests(unittest.TestCase):
         self.assertEqual(summary["false_finalization_count"], 1)
         self.assertEqual(summary["by_family"], {"hif": {"roots": 1, "successes": 1}, "parameter": {"roots": 2, "successes": 1}})
 
+    def test_aggregate_evaluation_reads_the_open_rules_only_where_rules_are_lifted(self) -> None:
+        closed = [{"family": "parameter", "truth_audited_task_success": True, "steps": 6, "reward": {"total": 0.9}}]
+        self.assertNotIn("open_rules", aggregate_evaluation(closed))
+        rules = ["commit_rejected_candidate", "correction_outside_context"]
+        opened = [
+            {"family": "parameter", "truth_audited_task_success": True, "steps": 8, "reward": {"total": 0.8},
+             "open_rules": {"rules": rules, "used": {"commit_rejected_candidate": 2, "correction_outside_context": 1}, "kept": 2,
+                            "rejected_candidates": [{"kept": True, "target_is_true": True}, {"kept": True, "target_is_true": False}]}},
+            {"family": "topology", "truth_audited_task_success": False, "steps": 9, "reward": {"total": -0.2},
+             "open_rules": {"rules": rules, "used": {}, "kept": 0, "rejected_candidates": [{"kept": False, "target_is_true": False}]}},
+        ]
+        summary = aggregate_evaluation(closed + opened)
+        self.assertEqual(summary["open_rules"], {
+            "episodes": 2, "rules": rules, "episodes_using_a_lifted_rule": 1,
+            "actions_using_each_rule": {"commit_rejected_candidate": 2, "correction_outside_context": 1},
+            "rejected_candidates": {"decisions": 3, "kept": 2, "rolled_back": 1, "unlabelled": 0, "true_target_kept": 1,
+                                    "wrong_target_kept": 1, "true_target_rolled_back": 0, "wrong_target_rolled_back": 1,
+                                    "episodes_keeping_one": 1},
+        })
+        # Everything else is counted as before.
+        self.assertEqual((summary["roots"], summary["truth_audited_task_success"]), (3, 2))
+
+    def test_an_evaluated_episode_under_the_open_rules_records_what_it_kept(self) -> None:
+        import psse_env.dagger.evaluator as evaluator_module
+        import psse_env.dagger.research_policy_factory as policy_module
+        import scripts.run_dagger_research as research
+        from psse_env.rl.train import open_rules_evaluation
+
+        self.assertIsNone(open_rules_evaluation({"open_rule_accounting": {"counts": {"commit_rejected_candidate": 1}}}, (), []))
+        # Line 8 is healthy: the policy corrects it, the check rejects the candidate, the policy keeps it.
+        trace = [
+            {"step": 0, "action": {"tool": "run_wls", "arguments": {"state_id": "active"}}, "execution_status": "success", "error_code": None},
+            {"step": 1, "action": {"tool": "correct_parameters", "arguments": {"state_id": "active", "line_index": 8}},
+             "execution_status": "success", "error_code": None},
+            {"step": 2, "action": {"tool": "commit_state", "arguments": {"candidate_state_id": "c"}}, "execution_status": "success",
+             "error_code": None, "candidate_disposition_offline": "REJECT", "open_rules_used": ["commit_rejected_candidate"]},
+        ]
+
+        class _Result:
+            def __init__(self, scenario) -> None:
+                self.scenario = scenario
+
+            def as_dict(self):
+                return {"suite_metrics": {"episodes": [{
+                    "scenario_id": self.scenario["execution"]["scenario_id"], "family": "parameter", "truth_audited_task_success": False,
+                    # Stopped before the end: the evaluation's own preservation check has no answer, the audit decides.
+                    "healthy_preservation_known": False,
+                    "trace": trace, "steps": 3, "policy_steps": 3, "keep_accounting": {"kept": 1, "events": [{"step": 2}]},
+                    "open_rule_accounting": {"counts": {"commit_rejected_candidate": 1}, "events": []}}]}}
+
+        originals = (evaluator_module.evaluate_rollout_suites, policy_module.research_gemma_policy_factory,
+                     policy_module.clear_research_policy_cache)
+        snapshot = [(options, dict(options)) for options in (research.RESEARCH_ENVIRONMENT_OPTIONS, research.RESEARCH_EXPERT_OPTIONS)]
+        evaluator_module.evaluate_rollout_suites = lambda suites, **_kwargs: _Result(suites["standard_success"][0])
+        policy_module.research_gemma_policy_factory = lambda adapter, **_kwargs: object()
+        policy_module.clear_research_policy_cache = lambda: None
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                dev = Path(directory) / "dev.json"
+                dev.write_text(json.dumps([{"execution": {"scenario_id": "d1"}, "grouping": {"scenario_family": "parameter"},
+                                            "audit": {"truth": {"true_parameter_errors": [{"line_index1": 7}]}}}]), encoding="utf-8")
+                for name, options, lifted in (("open", {"open_rules": 1}, True), ("closed", {}, False),
+                                              ("other", {"open_rules": "correction_outside_context"}, False)):
+                    out = Path(directory) / name
+                    config = _config(str(out), development_suite=str(dev), baseline_evaluation=True, load_in_4bit=False,
+                                     environment_options=options)
+                    config.validate()
+                    summary = run_phase(config, "baseline")
+                    record = json.loads((out / "baseline" / "evaluation_episodes.jsonl").read_text(encoding="utf-8").splitlines()[0])
+                    if lifted:
+                        block = record["open_rules"]
+                        self.assertEqual((block["used"], block["kept"]), ({"commit_rejected_candidate": 1}, 1))
+                        [decision] = block["rejected_candidates"]
+                        self.assertEqual((decision["kept"], decision["target_is_true"], decision["agrees"], decision["arguments"]),
+                                         (True, False, False, {"line_index": 8}))
+                        self.assertEqual(summary["open_rules"]["rejected_candidates"]["wrong_target_kept"], 1)
+                        self.assertEqual(summary["open_rules"]["actions_using_each_rule"], {"commit_rejected_candidate": 1})
+                        # A rejected candidate kept on a healthy line is a wrong correction kept: the reward's audit of
+                        # kept targets counts it as it counts a wrong accepted one.
+                        self.assertEqual(summary["healthy_component_corrupted"], 1)
+                        self.assertEqual(record["reward"]["healthy_component_source"], "accepted_targets")
+                    elif name == "closed":
+                        self.assertNotIn("open_rules", record)
+                        self.assertNotIn("open_rules", summary)
+                        self.assertEqual(summary["healthy_component_corrupted"], 0)
+                    else:
+                        # Rules are lifted, the commit rule is not: nothing was a choice, so nothing is labelled.
+                        self.assertEqual(record["open_rules"]["rejected_candidates"], [])
+                        self.assertEqual(summary["open_rules"]["rejected_candidates"]["decisions"], 0)
+                        self.assertEqual(summary["healthy_component_corrupted"], 0)
+        finally:
+            (evaluator_module.evaluate_rollout_suites, policy_module.research_gemma_policy_factory,
+             policy_module.clear_research_policy_cache) = originals
+            for options, original in snapshot:
+                options.clear()
+                options.update(original)
+
     def test_the_carried_optimizer_is_the_latest_one_an_earlier_iteration_left(self) -> None:
         from psse_env.rl.train import OPTIMIZER_FILE, _carried_optimizer_file, iteration_dir
 

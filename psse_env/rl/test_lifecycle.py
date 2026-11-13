@@ -11,7 +11,16 @@ from psse_env.actions import (
     RUN_WLS,
     VERIFY_CANDIDATE,
 )
-from psse_env.rl.lifecycle import decision_sign, lifecycle_decisions, scenario_truth, summarize_decisions, target_is_true
+from psse_env.rl.lifecycle import (
+    REJECTED_CONTRACT,
+    decision_sign,
+    lifecycle_decisions,
+    rejected_candidate_decisions,
+    scenario_truth,
+    summarize_decisions,
+    summarize_rejected,
+    target_is_true,
+)
 
 
 def _step(tool: str, arguments: dict | None = None, *, status: str = "success", disposition: str | None = None,
@@ -124,6 +133,63 @@ class DecisionTests(unittest.TestCase):
         healthy = scenario_truth({"audit": {"truth": {"true_measurement_errors": []}}})
         trace = [_step(CORRECT_MEASUREMENTS, {"suspect_group": [2]}), _step(ROLLBACK_STATE, disposition="ACCEPT_PARTIAL")]
         self.assertEqual(lifecycle_decisions(trace, healthy)[0]["agrees"], True)
+
+
+class RejectedCandidateTests(unittest.TestCase):
+    """Where the open rules lift the commit rule, the disposal of a rejected candidate is a choice too."""
+
+    def test_kept_and_rolled_back_candidates_are_labelled_against_the_audit(self) -> None:
+        trace = [
+            _step(CORRECT_PARAMETERS, {"line_index": 7}, number=1),
+            _step(COMMIT_STATE, disposition="REJECT", number=2),  # a true target kept: agrees
+            _step(CORRECT_PARAMETERS, {"line_index": 8}, number=3),
+            _step(COMMIT_STATE, disposition="INCONCLUSIVE", number=4),  # a wrong target kept: disagrees
+            _step(CORRECT_MEASUREMENTS, {"suspect_group": [3]}, number=5),
+            _step(ROLLBACK_STATE, disposition="REJECT", number=6),  # a true target rolled back: disagrees
+            _step(CORRECT_TOPOLOGY, {"cb_name": "CB_2", "status": 0}, number=7),
+            _step(ROLLBACK_STATE, disposition="REJECT", number=8),  # a wrong target rolled back: agrees
+            _step(CORRECT_PARAMETERS, {"line_index": 7}, number=9),
+            _step(COMMIT_STATE, disposition="ACCEPT_FINAL", number=10),  # an accepted candidate is the other function's
+        ]
+        decisions = rejected_candidate_decisions(trace, TRUTH)
+        self.assertEqual([d["position"] for d in decisions], [1, 3, 5, 7])
+        self.assertEqual([d["step"] for d in decisions], [2, 4, 6, 8])
+        self.assertEqual([d["verdict"] for d in decisions], ["REJECT", "INCONCLUSIVE", "REJECT", "REJECT"])
+        self.assertEqual([d["kept"] for d in decisions], [True, True, False, False])
+        self.assertEqual([d["target_is_true"] for d in decisions], [True, False, True, False])
+        self.assertEqual([d["label"] for d in decisions], [COMMIT_STATE, ROLLBACK_STATE, COMMIT_STATE, ROLLBACK_STATE])
+        self.assertEqual([d["agrees"] for d in decisions], [True, False, False, True])
+        self.assertEqual([d["correction_position"] for d in decisions], [0, 2, 4, 6])
+        self.assertEqual(decisions[3]["arguments"], {"cb_name": "CB_2", "status": 0})
+        self.assertTrue(all(d["contract"] == REJECTED_CONTRACT for d in decisions))
+        self.assertEqual(summarize_rejected(decisions), {
+            "decisions": 4, "kept": 2, "rolled_back": 2, "unlabelled": 0, "true_target_kept": 1, "wrong_target_kept": 1,
+            "true_target_rolled_back": 1, "wrong_target_rolled_back": 1,
+        })
+        # The two readings never count the same step.
+        self.assertEqual([d["position"] for d in lifecycle_decisions(trace, TRUTH)], [9])
+
+    def test_a_refused_commit_and_a_failed_correction_are_not_decisions(self) -> None:
+        trace = [
+            _step(CORRECT_PARAMETERS, {"line_index": 8}, status="failure"),
+            _step(ROLLBACK_STATE, disposition="REJECT"),  # no candidate of a successful correction is open
+            _step(CORRECT_PARAMETERS, {"line_index": 7}),
+            _step(COMMIT_STATE, disposition="REJECT", status="failure"),  # refused: the rule is closed here
+            _step(ROLLBACK_STATE, disposition="REJECT"),
+        ]
+        decisions = rejected_candidate_decisions(trace, TRUTH)
+        self.assertEqual([(d["position"], d["kept"], d["target_is_true"], d["agrees"]) for d in decisions], [(4, False, True, False)])
+        self.assertEqual(rejected_candidate_decisions([], TRUTH), [])
+
+    def test_unknown_truth_leaves_them_unlabelled(self) -> None:
+        trace = [_step(CORRECT_PARAMETERS, {"line_index": 7}), _step(COMMIT_STATE, disposition="REJECT")]
+        [decision] = rejected_candidate_decisions(trace, scenario_truth({}))
+        self.assertEqual((decision["kept"], decision["target_is_true"], decision["label"], decision["agrees"]), (True, None, None, None))
+        self.assertEqual(summarize_rejected([decision]), {
+            "decisions": 1, "kept": 1, "rolled_back": 0, "unlabelled": 1, "true_target_kept": 0, "wrong_target_kept": 0,
+            "true_target_rolled_back": 0, "wrong_target_rolled_back": 0,
+        })
+        self.assertEqual(summarize_rejected([])["decisions"], 0)
 
 
 if __name__ == "__main__":

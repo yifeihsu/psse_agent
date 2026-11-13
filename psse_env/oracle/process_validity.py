@@ -360,6 +360,9 @@ class ProcessValidityOracle:
         elif tool in CORRECTION_TOOLS:
             requested = args.get("state_id") or active_id
             confirmation_required = post_correction_confirmation_required(state)
+            # The rules this environment lifted for the policy (``open_rules``);
+            # empty everywhere else, so every branch below is as it was.
+            open_rules = _actions.open_rules_of(state)
             if has_open_candidate:
                 error_code, error_detail = "candidate_lifecycle_violation", "correction_with_open_candidate"
             elif not self._known_current_state(store, requested):
@@ -368,7 +371,7 @@ class ProcessValidityOracle:
                 error_code, error_detail = "state_reference_mismatch", "correction_state_not_active"
             elif strict and not successful_current_wls(state):
                 error_code, error_detail = "missing_precondition", "current_balanced_wls_required"
-            elif confirmation_required:
+            elif confirmation_required and _actions.OPEN_RULE_CORRECTION_AFTER_ESTIMATOR_PASSES not in open_rules:
                 # This controller marker is created only after an accepted
                 # correction reaches observable statistical quiescence.  It
                 # requests one same-state investigation followed by operator
@@ -448,8 +451,11 @@ class ProcessValidityOracle:
                 # reached and a handoff would leave it outstanding.
                 error_code = "correction_route_not_actionable"
                 error_detail = "measurement_voltage_meter_correction_requires_phase_measurements"
-            elif tool == CORRECT_MEASUREMENTS and not hif_meter_route_ready(state) and self._measurement_route_blocked_by_branch_dominance(
-                state, active_id
+            elif (
+                tool == CORRECT_MEASUREMENTS
+                and _actions.OPEN_RULE_CORRECTION_ON_CLOSED_ROUTE not in open_rules
+                and not hif_meter_route_ready(state)
+                and self._measurement_route_blocked_by_branch_dominance(state, active_id)
             ):
                 # The fresh measurement context declared the meter route shut:
                 # branch evidence dominates and neither branch family has had
@@ -556,7 +562,14 @@ class ProcessValidityOracle:
             elif not self._known_current_state(store, requested):
                 error_code, error_detail = "unknown_state_id", str(requested)
             elif state.get("candidate_disposition") not in {"ACCEPT_PARTIAL", "ACCEPT_FINAL"}:
-                error_code, error_detail = "candidate_lifecycle_violation", "commit_rejected_or_inconclusive_candidate"
+                # A rejected or inconclusive candidate may be kept only where
+                # the environment lifted the commit's verdict lock
+                # (``open_rules``); elsewhere the verdict fixes it, as before.
+                if not (
+                    state.get("candidate_disposition") in _actions.REJECTED_DISPOSITIONS
+                    and _actions.OPEN_RULE_COMMIT_REJECTED_CANDIDATE in _actions.open_rules_of(state)
+                ):
+                    error_code, error_detail = "candidate_lifecycle_violation", "commit_rejected_or_inconclusive_candidate"
         elif tool == ROLLBACK_STATE:
             requested = args.get("candidate_state_id") or candidate_id
             if not has_verified_candidate:
@@ -839,6 +852,7 @@ class ProcessValidityOracle:
         tool = normalized["tool"]
         family = _CORRECTION_CONTEXT_FAMILY[tool]
         active_id = state.get("active_state_id")
+        open_rules = _actions.open_rules_of(state)
         if not self._context_is_fresh(state, family):
             return "missing_precondition", f"{family}_context_missing"
 
@@ -856,6 +870,11 @@ class ProcessValidityOracle:
             # evidence prohibit a branch correction in the current control
             # epoch.  Re-running arbitrary targets cannot change that fact.
             if evidence.get("route_status") != "actionable":
+                if _actions.OPEN_RULE_CORRECTION_ON_CLOSED_ROUTE in open_rules:
+                    # The rule is lifted: the policy may test a target on a
+                    # route the context closed.  A closed route lists no
+                    # correction, so the inventory check below cannot apply.
+                    return None
                 route_status = str(
                     evidence.get("route_status") or "missing_route_status"
                 )
@@ -870,6 +889,17 @@ class ProcessValidityOracle:
                         f"{route_status}:{route_reason}"
                     ),
                 )
+
+        if (
+            family == "measurement"
+            and _actions.OPEN_RULE_CORRECTION_ON_CLOSED_ROUTE in open_rules
+            and not hif_meter_route_ready(state)
+            and self._measurement_route_blocked_by_branch_dominance(state, active_id)
+        ):
+            # The meter route's own closure: the fresh measurement context shut
+            # it under branch dominance and lists nothing.  Lifted like the
+            # branch routes above.
+            return None
 
         supported = evidence.get("supported_corrections")
         if not isinstance(supported, (list, tuple)):
@@ -895,7 +925,10 @@ class ProcessValidityOracle:
                 return "missing_precondition", f"{family}_context_missing"
             supported_signatures.add(action_signature(supported_action))
 
-        if requested_signature not in supported_signatures:
+        if (
+            requested_signature not in supported_signatures
+            and _actions.OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT not in open_rules
+        ):
             return (
                 "correction_not_supported_by_current_context",
                 f"{family}_correction_not_supported_by_context",
@@ -1148,5 +1181,11 @@ class ProcessValidityOracle:
                 if _actions.lifecycle_choice_of(state) is not None:
                     safe.append({"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": candidate_id}})
                 return safe
-            return [{"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": candidate_id}}]
+            safe = [{"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": candidate_id}}]
+            if (
+                state.get("candidate_disposition") in _actions.REJECTED_DISPOSITIONS
+                and _actions.OPEN_RULE_COMMIT_REJECTED_CANDIDATE in _actions.open_rules_of(state)
+            ):
+                safe.append({"tool": COMMIT_STATE, "arguments": {"candidate_state_id": candidate_id}})
+            return safe
         return [{"tool": RUN_WLS, "arguments": {"state_id": active_id}}] if active_id else []

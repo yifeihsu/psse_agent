@@ -59,6 +59,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from psse_env.actions import OPEN_RULE_COMMIT_REJECTED_CANDIDATE, normalize_open_rules
 from psse_env.dagger.observation_modes import BOUNDED_HISTORY, validate_observation_mode
 from psse_env.rl.advantages import GroupAdvantages, group_advantages, summarize_groups
 from psse_env.rl.decision_credit import (
@@ -75,7 +76,13 @@ from psse_env.rl.decision_credit import (
 )
 from psse_env.rl.forks import CHOICES, branch_seed, run_branch
 from psse_env.rl.integrity import MARKER_FILE, IntegrityError, update_integrity
-from psse_env.rl.lifecycle import lifecycle_decisions, scenario_truth, summarize_decisions
+from psse_env.rl.lifecycle import (
+    lifecycle_decisions,
+    rejected_candidate_decisions,
+    scenario_truth,
+    summarize_decisions,
+    summarize_rejected,
+)
 from psse_env.rl.reward import RewardWeights, episode_basis, episode_reward, load_expert_reference
 from psse_env.rl.rollout import (
     Trajectory,
@@ -119,6 +126,7 @@ OPTIMIZER_FILE = "optimizer.pt"
 #: (``flow_at_noise_cue``, ``revert_fruitless_cycles``, ``route_comparison``).
 ENVIRONMENT_OPTION_KEYS = (
     "lifecycle_choice",
+    "open_rules",
     "detailed_evidence",
     "pair_refit_adjacent",
     "flow_at_noise_cue",
@@ -1110,13 +1118,37 @@ def _compound_class(scenario: Mapping[str, Any] | None) -> str | None:
     return str(compound["class"]) if compound.get("class") else None
 
 
+def open_rules_evaluation(episode: Mapping[str, Any], lifted: Sequence[str],
+                          rejected: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """What an evaluated episode shows of the lifted rules (``open_rules``); ``None`` where none is lifted.
+
+    ``used`` counts the actions that needed each lifted rule, as the evaluator
+    recorded them; ``rejected_candidates`` are the rejected or inconclusive
+    candidates the policy kept or rolled back, with the audit's label
+    (:func:`psse_env.rl.lifecycle.rejected_candidate_decisions`).
+    """
+
+    if not lifted:
+        return None
+    accounting = episode.get("open_rule_accounting") if isinstance(episode.get("open_rule_accounting"), Mapping) else {}
+    kept = episode.get("keep_accounting") if isinstance(episode.get("keep_accounting"), Mapping) else {}
+    return {
+        "rules": [str(rule) for rule in lifted],
+        "used": {str(rule): int(count) for rule, count in sorted((accounting.get("counts") or {}).items())},
+        "kept": int(kept.get("kept") or 0),
+        "rejected_candidates": [dict(decision) for decision in rejected],
+    }
+
+
 def _compact_evaluation(
     episode: Mapping[str, Any], *, root: str, family: str, reward: Mapping[str, Any],
     lifecycle: Sequence[Mapping[str, Any]] = (), scenario: Mapping[str, Any] | None = None,
-    telemetry: Mapping[str, Any] | None = None,
+    telemetry: Mapping[str, Any] | None = None, open_rules: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     trace = [step for step in episode.get("trace") or [] if isinstance(step, Mapping)]
     return {
+        # Only where the environment lifted rules, so every other record is as it was.
+        **({"open_rules": dict(open_rules)} if open_rules is not None else {}),
         "scenario_id": root,
         "family": family,
         # The audit's class of a compound root, for the reports' strata; the policy never sees it.
@@ -1174,7 +1206,7 @@ def aggregate_evaluation(records: Sequence[Mapping[str, Any]], budgets: Sequence
         values = [cost.get(key) for cost in costs if cost.get(key) is not None]
         return sum(values) if values else None
 
-    return {
+    summary = {
         "roots": count,
         # Solved with no refused action, no refused commit and no loop.
         "clean_success": sum(1 for record in solved if not int(record.get("invalid_action_count") or 0)
@@ -1201,6 +1233,26 @@ def aggregate_evaluation(records: Sequence[Mapping[str, Any]], budgets: Sequence
         },
         "by_family": dict(sorted(by_family.items())),
     }
+    opened = [record["open_rules"] for record in records if isinstance(record.get("open_rules"), Mapping)]
+    if opened:
+        # The open rules: how often each lifted rule was needed, and what became of the rejected candidates.
+        used: dict[str, int] = {}
+        for entry in opened:
+            for rule, number in (entry.get("used") or {}).items():
+                used[str(rule)] = used.get(str(rule), 0) + int(number)
+        summary["open_rules"] = {
+            "episodes": len(opened),
+            "rules": sorted({str(rule) for entry in opened for rule in entry.get("rules") or []}),
+            "episodes_using_a_lifted_rule": sum(1 for entry in opened if entry.get("used")),
+            "actions_using_each_rule": dict(sorted(used.items())),
+            "rejected_candidates": {
+                **summarize_rejected([decision for entry in opened for decision in entry.get("rejected_candidates") or []
+                                      if isinstance(decision, Mapping)]),
+                "episodes_keeping_one": sum(1 for entry in opened if any(
+                    decision.get("kept") for decision in entry.get("rejected_candidates") or [] if isinstance(decision, Mapping))),
+            },
+        }
+    return summary
 
 
 def _greedy_evaluation(
@@ -1247,11 +1299,18 @@ def _greedy_evaluation(
                 ).as_dict()
                 episode = dict(result["suite_metrics"]["episodes"][0])
                 decisions = lifecycle_decisions(episode.get("trace") or [], scenario_truth(scenario))
+                # Under the open rules a rejected candidate may be kept: one kept on a healthy component is a
+                # wrong correction kept, as a wrong accepted one is.
+                lifted = normalize_open_rules(config.environment_options.get("open_rules"))
+                rejected = (rejected_candidate_decisions(episode.get("trace") or [], scenario_truth(scenario))
+                            if OPEN_RULE_COMMIT_REJECTED_CANDIDATE in lifted else [])
                 reward = episode_reward(episode, family=family, expert_reference_calls=reference.get(root), weights=weights,
-                                        kept_wrong_targets=summarize_decisions(decisions)["wrong_target_committed"])
+                                        kept_wrong_targets=summarize_decisions(decisions)["wrong_target_committed"]
+                                        + summarize_rejected(rejected)["wrong_target_kept"])
                 _write_json(episodes_dir / f"{_safe_name(root)}.json",
                             _compact_evaluation(episode, root=root, family=family, reward=reward.as_dict(), lifecycle=decisions,
-                                                scenario=scenario, telemetry=telemetry.as_dict()))
+                                                scenario=scenario, telemetry=telemetry.as_dict(),
+                                                open_rules=open_rules_evaluation(episode, lifted, rejected)))
                 print(json.dumps({"evaluated": root, "family": family,
                                   "success": bool(episode.get("truth_audited_task_success")),
                                   "steps": episode.get("steps"), "reward": round(reward.total, 3),

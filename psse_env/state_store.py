@@ -195,10 +195,15 @@ class PolicyObservation:
     # observation otherwise.
     lifecycle_choice: dict[str, Any] | None = None
     detailed_evidence: dict[str, Any] | None = None
+    # The user's direction of 2026-11-12: the rules this environment lifted
+    # for the policy (``psse_env.actions.open_rules_of``).  Reported only by
+    # an environment built with ``open_rules`` and absent from the serialized
+    # observation otherwise.
+    open_rules: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
-        for optional in ("revert_ledger", "research_tools", "lifecycle_choice", "detailed_evidence"):
+        for optional in ("revert_ledger", "research_tools", "lifecycle_choice", "detailed_evidence", "open_rules"):
             if payload.get(optional) is None:
                 payload.pop(optional, None)
         forbidden = find_forbidden_policy_paths(payload)
@@ -646,13 +651,22 @@ class PowerSystemStateStore:
         candidate.candidate_assessment = dict(_json_clone(candidate_assessment or {}))
         return candidate_state_id
 
-    def commit(self, candidate_state_id: str) -> str:
+    def commit(self, candidate_state_id: str, *, kept: bool = False) -> str:
+        """Make the open candidate the active state.
+
+        Only an accepted candidate commits, except with ``kept``: an
+        environment built with the open commit rule passes it when the policy
+        keeps a candidate the verifier rejected or could not judge.  The
+        candidate keeps its disposition, so the record shows what was kept.
+        """
         candidate = self._require_state(candidate_state_id)
         if candidate.state_id == self._active_state_id or candidate.status != "candidate":
             raise StateStoreError(f"Only the current open candidate can be committed: {candidate_state_id}.")
         if candidate.parent_state_id != self._active_state_id:
             raise StateStoreError(f"Candidate {candidate_state_id} does not belong to the active state.")
-        if candidate.candidate_disposition not in {"ACCEPT_PARTIAL", "ACCEPT_FINAL"}:
+        if kept and candidate.candidate_disposition in {"REJECT", "INCONCLUSIVE"}:
+            pass
+        elif candidate.candidate_disposition not in {"ACCEPT_PARTIAL", "ACCEPT_FINAL"}:
             raise StateStoreError(
                 f"Candidate {candidate_state_id} cannot be committed with disposition "
                 f"{candidate.candidate_disposition!r}."

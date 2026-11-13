@@ -32,8 +32,12 @@ BEHAVIOUR_ONLY_FIELDS = frozenset({"research_tools"})
 DROPPED_ARGUMENTS = {"ask_for_more_evidence": frozenset({"abstentions"})}
 
 
-def episode_examples(episode: Mapping[str, Any], root: Mapping[str, Any], *, behaviour: str) -> list[dict[str, Any]]:
-    """One example per policy step: the observation the policy acted on, and the action it took."""
+def episode_examples(episode: Mapping[str, Any], root: Mapping[str, Any], *, behaviour: str, tag: str = "clone") -> list[dict[str, Any]]:
+    """One example per policy step: the observation the policy acted on, and the action it took.
+
+    ``tag`` is the middle part of the example id (``<case>:<tag>:<step>``); rows of another behaviour policy on the
+    same cases name their own, so the two can sit in one file.
+    """
     scenario_id = str(root["execution"]["scenario_id"])
     grouping = root.get("grouping") or {}
     compound = (root.get("audit") or {}).get("compound") or {}
@@ -47,7 +51,7 @@ def episode_examples(episode: Mapping[str, Any], root: Mapping[str, Any], *, beh
         if not isinstance(action, Mapping) or not isinstance(observation, Mapping):
             continue
         examples.append({
-            "example_id": f"{scenario_id}:clone:{index:02d}",
+            "example_id": f"{scenario_id}:{tag}:{index:02d}",
             "scenario_id": scenario_id,
             "root_scenario_id": str(grouping.get("root_scenario_id") or scenario_id),
             "physical_root_fingerprint": grouping.get("physical_root_fingerprint"),
@@ -67,13 +71,14 @@ def episode_examples(episode: Mapping[str, Any], root: Mapping[str, Any], *, beh
     return examples
 
 
-def episode_chat_rows(episode: Mapping[str, Any], root: Mapping[str, Any], *, behaviour: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def episode_chat_rows(episode: Mapping[str, Any], root: Mapping[str, Any], *, behaviour: str,
+                      tag: str = "clone") -> tuple[list[dict[str, Any]], dict[str, int]]:
     """The episode's chat rows, each labelled with its case, class, step and tool, and the refused examples by reason."""
     from psse_env.dagger.dataset_builder import examples_to_chat_sft
 
     rows: list[dict[str, Any]] = []
     refused: Counter = Counter()
-    for example in episode_examples(episode, root, behaviour=behaviour):
+    for example in episode_examples(episode, root, behaviour=behaviour, tag=tag):
         try:
             exported = examples_to_chat_sft([example], protocol="canonical")
         except Exception as exc:  # every refusal is reported with its tool

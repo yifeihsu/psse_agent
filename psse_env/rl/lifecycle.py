@@ -42,6 +42,9 @@ from psse_env.actions import COMMIT_STATE, CORRECT_MEASUREMENTS, CORRECT_PARAMET
 
 LIFECYCLE_CONTRACT = "rl_lifecycle_decisions_v1"
 ACCEPTED_VERDICTS = frozenset({"ACCEPT_FINAL", "ACCEPT_PARTIAL"})
+#: The candidates the acceptance check did not accept; a choice only where the open rules lift the commit rule.
+REJECTED_CONTRACT = "rl_rejected_candidate_decisions_v1"
+REJECTED_VERDICTS = frozenset({"REJECT", "INCONCLUSIVE"})
 CORRECTION_TOOLS = frozenset({CORRECT_MEASUREMENTS, CORRECT_PARAMETERS, CORRECT_TOPOLOGY})
 DECISION_TOOLS = frozenset({COMMIT_STATE, ROLLBACK_STATE})
 
@@ -146,6 +149,87 @@ def lifecycle_decisions(trace: Sequence[Mapping[str, Any]], truth: Mapping[str, 
     return decisions
 
 
+def rejected_candidate_decisions(trace: Sequence[Mapping[str, Any]], truth: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Every step that disposed of a candidate the acceptance check did not accept, with the audit's label.
+
+    Under the commit rule of the open rules (``psse_env.actions.OPEN_RULE_COMMIT_REJECTED_CANDIDATE``)
+    the policy may keep such a candidate, so its disposal is a choice like the
+    decline of an accepted one: the audit would keep it when its target is a
+    truly faulted component and roll it back otherwise.  With the rule closed
+    every one of them is rolled back and nothing is chosen, so a caller asks
+    only where the rule is lifted.  ``kept`` is a successful ``commit_state``;
+    the other fields are those of :func:`lifecycle_decisions`.
+
+    A measurement for the evaluation records: no row term reads it.
+    """
+
+    decisions: list[dict[str, Any]] = []
+    open_correction: dict[str, Any] | None = None
+    for position, step in enumerate(policy_trace_steps(trace)):
+        action = step.get("action") if isinstance(step.get("action"), Mapping) else {}
+        tool = str(action.get("tool") or "")
+        status = step.get("execution_status")
+        if tool in CORRECTION_TOOLS:
+            if status == "success":
+                arguments = action.get("arguments") if isinstance(action.get("arguments"), Mapping) else {}
+                open_correction = {
+                    "position": position,
+                    "tool": tool,
+                    "arguments": {str(key): value for key, value in arguments.items() if key != "state_id"},
+                }
+            continue
+        if tool not in DECISION_TOOLS or status != "success":
+            continue
+        verdict = step.get("candidate_disposition_offline")
+        correction = open_correction
+        open_correction = None
+        if verdict not in REJECTED_VERDICTS or correction is None:
+            continue
+        truthful = target_is_true(correction["tool"], correction["arguments"], truth) if truth.get("known", True) else None
+        label = None if truthful is None else (COMMIT_STATE if truthful else ROLLBACK_STATE)
+        number = step.get("step")
+        decisions.append({
+            "contract": REJECTED_CONTRACT,
+            "position": position,
+            "step": int(number) if isinstance(number, int) and not isinstance(number, bool) else position,
+            "tool": tool,
+            "verdict": str(verdict),
+            "kept": tool == COMMIT_STATE,
+            "correction_position": correction["position"],
+            "correction_tool": correction["tool"],
+            "arguments": correction["arguments"],
+            "target_is_true": truthful,
+            "label": label,
+            "agrees": None if label is None else (tool == label),
+        })
+    return decisions
+
+
+def summarize_rejected(decisions: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """Counts of the rejected candidates an episode (or an evaluation) kept or rolled back, by what their target was."""
+
+    summary = {
+        "decisions": 0,
+        "kept": 0,
+        "rolled_back": 0,
+        "unlabelled": 0,
+        "true_target_kept": 0,
+        "wrong_target_kept": 0,
+        "true_target_rolled_back": 0,
+        "wrong_target_rolled_back": 0,
+    }
+    for decision in decisions:
+        summary["decisions"] += 1
+        kept = bool(decision.get("kept"))
+        summary["kept" if kept else "rolled_back"] += 1
+        truthful = decision.get("target_is_true")
+        if truthful is None:
+            summary["unlabelled"] += 1
+        else:
+            summary[("true" if truthful else "wrong") + "_target_" + ("kept" if kept else "rolled_back")] += 1
+    return summary
+
+
 def decision_sign(decision: Mapping[str, Any]) -> float | None:
     """``+1`` for a decision that agrees with the audit, ``-1`` for one that does not, ``None`` when unlabelled."""
 
@@ -195,9 +279,13 @@ __all__ = [
     "CORRECTION_TOOLS",
     "DECISION_TOOLS",
     "LIFECYCLE_CONTRACT",
+    "REJECTED_CONTRACT",
+    "REJECTED_VERDICTS",
     "decision_sign",
     "lifecycle_decisions",
     "policy_trace_steps",
+    "rejected_candidate_decisions",
+    "summarize_rejected",
     "scenario_truth",
     "summarize_decisions",
     "target_is_true",

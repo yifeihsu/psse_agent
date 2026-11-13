@@ -57,6 +57,7 @@ from psse_env.actions import (
     lifecycle_choice_of,
     safe_normalize_action,
 )
+from psse_env.actions import OPEN_RULE_COMMIT_REJECTED_CANDIDATE, REJECTED_DISPOSITIONS, open_rules_of
 from psse_env.dagger.dataset_builder import (
     find_forbidden_policy_paths,
     find_forbidden_provenance_paths,
@@ -226,6 +227,14 @@ class EpisodeEvaluation:
     # environment that allows it (a decline, not a false rollback); empty when
     # the episode declined nothing.
     decline_accounting: dict[str, Any] = field(default_factory=dict)
+    # The open commit rule: rejected or inconclusive candidates the policy
+    # committed in an environment that allows it (kept against the verdict,
+    # not a false commit); empty when the episode kept none.
+    keep_accounting: dict[str, Any] = field(default_factory=dict)
+    # The open rules: the lifted rules each action needed, as the environment
+    # reported them (how often per rule, and at which steps); empty when the
+    # episode used none or the environment lifted none.
+    open_rule_accounting: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -2027,6 +2036,8 @@ class ClosedLoopRolloutEvaluator:
         loop_detected = False
         revert_events: list[dict[str, Any]] = []
         decline_events: list[dict[str, Any]] = []
+        keep_events: list[dict[str, Any]] = []
+        open_rule_events: list[dict[str, Any]] = []
         invalid_indices: list[int] = []
         advancing_indices: list[int] = []
         false_commits = 0
@@ -2602,7 +2613,13 @@ class ClosedLoopRolloutEvaluator:
 
             if tool == COMMIT_STATE:
                 if disposition not in {"ACCEPT_FINAL", "ACCEPT_PARTIAL"}:
-                    false_commits += 1
+                    if commit_keeps_rejected_candidate(state_before_action, disposition):
+                        # The environment lifted the commit's verdict lock:
+                        # this is the policy keeping a candidate the
+                        # acceptance check did not accept.
+                        keep_events.append({"step": step, "disposition": disposition})
+                    else:
+                        false_commits += 1
                 assessment = _candidate_assessment(pre_oracle)
             elif tool == ROLLBACK_STATE:
                 if disposition in {"ACCEPT_FINAL", "ACCEPT_PARTIAL"}:
@@ -2657,6 +2674,17 @@ class ClosedLoopRolloutEvaluator:
                     }
                     next_state = _current_state(env)
             tool_seconds = time.perf_counter() - tool_started
+            # The lifted rules this action needed (``open_rules``), as the
+            # environment reports them for the action it just dispatched;
+            # nothing where no rule is lifted or the action never reached it.
+            reported_rules = getattr(env, "last_open_rules_used", None)
+            open_rules_used = (
+                [str(rule) for rule in reported_rules]
+                if circuit_breaker_error is None and isinstance(reported_rules, (list, tuple))
+                else []
+            )
+            if open_rules_used:
+                open_rule_events.append({"step": step, "tool": tool, "rules": list(open_rules_used)})
 
             status = str(output.get("execution_status") or "failure")
             output["execution_status"] = status
@@ -2815,6 +2843,8 @@ class ClosedLoopRolloutEvaluator:
                         output=output,
                         terminal=terminal_after,
                     ),
+                    # Present only on a step that needed a lifted rule.
+                    **({"open_rules_used": list(open_rules_used)} if open_rules_used else {}),
                 }
             )
             self._emit_progress(
@@ -3087,6 +3117,17 @@ class ClosedLoopRolloutEvaluator:
             ),
             decline_accounting=(
                 {"declines": len(decline_events), "events": copy.deepcopy(decline_events)} if decline_events else {}
+            ),
+            keep_accounting=(
+                {"kept": len(keep_events), "events": copy.deepcopy(keep_events)} if keep_events else {}
+            ),
+            open_rule_accounting=(
+                {
+                    "counts": dict(sorted(Counter(rule for event in open_rule_events for rule in event["rules"]).items())),
+                    "events": copy.deepcopy(open_rule_events),
+                }
+                if open_rule_events
+                else {}
             ),
         )
 
@@ -4055,6 +4096,18 @@ def _hypothesis_record(hypothesis: tuple[str, Any] | None) -> list[Any] | None:
         return None
     family, target = hypothesis
     return [family, list(target) if isinstance(target, tuple) else target]
+
+
+def commit_keeps_rejected_candidate(state: Mapping[str, Any] | Any, disposition: Any) -> bool:
+    """Whether a commit of a candidate with this verdict is the policy keeping it, not a false commit.
+
+    Only in an environment that lifted the commit's verdict lock
+    (``psse_env.actions.OPEN_RULE_COMMIT_REJECTED_CANDIDATE``), and only for a
+    verified candidate the acceptance check rejected or could not judge: a
+    commit with nothing verified open stays a false commit everywhere.
+    """
+
+    return str(disposition) in REJECTED_DISPOSITIONS and OPEN_RULE_COMMIT_REJECTED_CANDIDATE in open_rules_of(state)
 
 
 def update_revert_events(

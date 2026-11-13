@@ -50,6 +50,11 @@ from .actions import (
     DECLINED_REJECTION_KIND,
     DETAILED_EVIDENCE_CONTRACT,
     lifecycle_choice_record,
+    OPEN_RULE_COMMIT_REJECTED_CANDIDATE,
+    OPEN_RULE_HANDOFF_WITHOUT_EXHAUSTION,
+    REJECTED_DISPOSITIONS,
+    normalize_open_rules,
+    open_rules_record,
     COMPARE_ROUTES,
     ROUTE_COMPARISON_CONTRACT,
     ROUTE_COMPARISON_FAMILY,
@@ -498,6 +503,7 @@ class TransactionalPSSEEnv:
         route_comparison: bool = False,
         lifecycle_choice: bool = False,
         detailed_evidence: bool = False,
+        open_rules: Any = None,
     ) -> None:
         self.evidence_profile = validate_evidence_profile(evidence_profile)
         # The detailed evidence (RL plan of 2026-11-05): the providers report
@@ -510,6 +516,16 @@ class TransactionalPSSEEnv:
         # the verdict fixes the step and the observation carries no
         # ``lifecycle_choice`` record, exactly as before.
         self.lifecycle_choice = bool(lifecycle_choice)
+        # The open rules (the user's direction of 2026-11-12): the named rules
+        # of the process gate, the commit's verdict lock and the handoff's
+        # exhaustion requirement are lifted for the policy
+        # (``psse_env.actions.OPEN_RULES``).  Nothing by default: every rule
+        # holds and the observation carries no ``open_rules`` record, exactly
+        # as before.
+        self.open_rules = normalize_open_rules(open_rules)
+        # The lifted rules the last dispatched action needed, for the
+        # evaluator's accounting; never part of an observation.
+        self.last_open_rules_used: list[str] = []
         # Item 7 step 6: the gated revert of a committed correction, admitted
         # after this many fruitless correction cycles since the ancestor's
         # commit.  0 (the default) builds no revert: the tool is unknown and
@@ -918,9 +934,37 @@ class TransactionalPSSEEnv:
             summary["research_tools"] = [COMPARE_ROUTES]
         if self.lifecycle_choice:
             summary["lifecycle_choice"] = lifecycle_choice_record()
+        if self._open_rules():
+            summary["open_rules"] = open_rules_record(self._open_rules())
         if self.detailed_evidence:
             summary["detailed_evidence"] = {"contract": DETAILED_EVIDENCE_CONTRACT}
         return self._sanitize_observation(summary) if is_strict_boundary(self.evidence_profile) else summary
+
+    def _open_rules(self) -> tuple[str, ...]:
+        """The rules this environment lifted; nothing for an environment built before the option existed."""
+        return tuple(getattr(self, "open_rules", None) or ())
+
+    def _open_rules_needed(self, validity_state: Mapping[str, Any], action: Mapping[str, Any]) -> list[str]:
+        """The lifted rules a legal action needs: those without which the process gate would refuse it.
+
+        Each lifted rule is put back in turn and the gate asked again, so an
+        action that leans on two rules names both.  The handoff's rule is the
+        audit's to report (``exhaustion_waived`` in its ledger).
+        """
+        rules = self._open_rules()
+        needed: list[str] = []
+        for rule in rules:
+            if rule == OPEN_RULE_HANDOFF_WITHOUT_EXHAUSTION:
+                continue
+            closed = dict(validity_state)
+            rest = [other for other in rules if other != rule]
+            if rest:
+                closed["open_rules"] = open_rules_record(rest)
+            else:
+                closed.pop("open_rules", None)
+            if not self.process_oracle.check(closed, action, store=self.store)["process_valid"]:
+                needed.append(rule)
+        return needed
 
     def _fruitless_cycles_since(self, lineage: list[str], index: int) -> int:
         """Fruitless correction cycles on the lineage states after ``lineage[index]``."""
@@ -1217,6 +1261,10 @@ class TransactionalPSSEEnv:
                 policy_safe_copy(dict(summary["detailed_evidence"]))
                 if isinstance(summary.get("detailed_evidence"), Mapping) else None
             ),
+            open_rules=(
+                policy_safe_copy(dict(summary["open_rules"]))
+                if isinstance(summary.get("open_rules"), Mapping) else None
+            ),
         )
 
     def get_oracle_state(self, history: list[Mapping[str, Any]] | None = None) -> OracleState:
@@ -1317,6 +1365,7 @@ class TransactionalPSSEEnv:
 
     def step(self, action: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         normalized = safe_normalize_action(action)
+        self.last_open_rules_used = []
         counted_actions = self._counted_action_total()
         if counted_actions >= self.max_steps:
             # The final allowed action was already executed and recorded.
@@ -1377,6 +1426,8 @@ class TransactionalPSSEEnv:
             )
             validity_state[SYNTHETIC_TERMINAL_COMPATIBILITY_KEY] = True
         validity = self.process_oracle.check(validity_state, normalized, store=self.store)
+        if validity["process_valid"] and self._open_rules():
+            self.last_open_rules_used = self._open_rules_needed(validity_state, normalized)
         if not validity["process_valid"]:
             output = self.record_noop_failure(
                 action=normalized,
@@ -1568,7 +1619,13 @@ class TransactionalPSSEEnv:
                 candidate_payload.get("candidate_disposition")
                 == CandidateDisposition.ACCEPT_FINAL.value
             )
-            committed_id = self.store.commit(candidate_id)
+            # With the commit rule open a rejected or inconclusive candidate
+            # is the policy keeping it; the process gate admitted it above.
+            kept = bool(
+                OPEN_RULE_COMMIT_REJECTED_CANDIDATE in self._open_rules()
+                and str(candidate_payload.get("candidate_disposition") or "") in REJECTED_DISPOSITIONS
+            )
+            committed_id = self.store.commit(candidate_id, kept=kept)
             self.context_flags.setdefault("accepted_corrections", []).append(accepted_record)
             self._oracle_payload = next_oracle_payload
             self._persist_observable_semantics(
@@ -1588,11 +1645,14 @@ class TransactionalPSSEEnv:
                 self._oracle_payload.pop("oracle_terminal_eligible", None)
             elif accept_final:
                 self._oracle_payload["oracle_terminal_eligible"] = True
+            commit_metrics: dict[str, Any] = {"candidate_assessment": assessment}
+            if kept:
+                commit_metrics["kept"] = True
             return self._standard_output(
                 execution_status="success",
                 state_mutated=True,
                 active_state_id=committed_id,
-                tool_metrics={"candidate_assessment": assessment},
+                tool_metrics=commit_metrics,
             )
         if tool == ROLLBACK_STATE:
             candidate_id = str(args.get("candidate_state_id") or self.current_candidate_id)
@@ -1818,6 +1878,8 @@ class TransactionalPSSEEnv:
                 self.terminal = True
                 self.terminal_outcome = "operator_escalation"
                 metrics["operator_escalation_audit"] = escalation_audit["ledger"]
+                if escalation_audit["ledger"].get("exhaustion_waived"):
+                    self.last_open_rules_used = [OPEN_RULE_HANDOFF_WITHOUT_EXHAUSTION]
                 metrics["terminal_outcome"] = self.terminal_outcome
                 declared = safe_normalize_action(action)["arguments"].get("abstentions")
                 if declared is not None:
@@ -2273,6 +2335,8 @@ class TransactionalPSSEEnv:
         active_id = str(summary.get("active_state_id") or "")
         target_id = str(arguments.get("state_id") or active_id)
         missing: list[str] = []
+        # What the open handoff rule let through (``open_rules``); empty everywhere else.
+        exhaustion_waived: list[str] = []
         if normalized["tool"] != ASK_FOR_MORE_EVIDENCE:
             missing.append("escalation_tool_invalid")
         request = arguments.get("request")
@@ -2898,17 +2962,29 @@ class TransactionalPSSEEnv:
                     investigation_tools.append(telemetry_tool)
             if not investigation_tools and not post_correction_budget_deferral:
                 missing.append("same_state_investigation_evidence_missing")
+            # With the handoff rule open (``open_rules``) the policy may hand
+            # the case over before every required context was fetched and
+            # every listed correction tried; the ledger below still reports
+            # what was left.
+            # Read with a default: the audit is also run on stand-ins for the
+            # environment that carry only what it reads.
+            exhaustion_open = OPEN_RULE_HANDOFF_WITHOUT_EXHAUSTION in (getattr(self, "open_rules", None) or ())
             if request in {RECOVERY_OPTIONS_EXHAUSTED_REQUEST, UNEXPLAINED_DISCREPANCY_REQUEST}:
+                unexhausted: list[str] = []
                 if (
                     missing_required_contexts
                     and not post_correction_confirmation_handoff
                 ):
-                    missing.append("required_recovery_contexts_missing")
+                    unexhausted.append("required_recovery_contexts_missing")
                 if (
                     outstanding_recovery_targets
                     and not post_correction_confirmation_handoff
                 ):
-                    missing.append("same_state_supported_corrections_unexhausted")
+                    unexhausted.append("same_state_supported_corrections_unexhausted")
+                if exhaustion_open:
+                    exhaustion_waived = unexhausted
+                else:
+                    missing.extend(unexhausted)
             elif request == AMBIGUOUS_BRANCH_CANDIDATES_REQUEST:
                 # The bounded handoff: every ranked parameter candidate on
                 # this state was tested and rejected.  The meter route is shut
@@ -3000,6 +3076,10 @@ class TransactionalPSSEEnv:
             ),
             "operator_review_required": True,
         }
+        if exhaustion_waived:
+            # Named only where the handoff rule was lifted and used, so every
+            # other ledger is as it was.
+            ledger["exhaustion_waived"] = list(exhaustion_waived)
         return {
             "sufficient": not missing,
             "missing": list(dict.fromkeys(missing)),
@@ -3723,12 +3803,20 @@ class TransactionalPSSEEnv:
                 if self.lifecycle_choice:
                     available.append({"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": summary["candidate_state_id"]}})
                 return available
+            # With the commit rule open the policy may keep a candidate the
+            # acceptance check did not accept.
+            keep = (
+                [{"tool": COMMIT_STATE, "arguments": {"candidate_state_id": summary["candidate_state_id"]}}]
+                if OPEN_RULE_COMMIT_REJECTED_CANDIDATE in self._open_rules() and disposition in REJECTED_DISPOSITIONS
+                else []
+            )
             if disposition == "INCONCLUSIVE":
                 return [
                     {"tool": ASK_FOR_MORE_EVIDENCE, "arguments": {"state_id": summary["candidate_state_id"]}},
                     {"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": summary["candidate_state_id"]}},
+                    *keep,
                 ]
-            return [{"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": summary["candidate_state_id"]}}]
+            return [{"tool": ROLLBACK_STATE, "arguments": {"candidate_state_id": summary["candidate_state_id"]}}, *keep]
         active_id = summary["active_state_id"]
         actions = [
             {"tool": RUN_WLS, "arguments": {"state_id": active_id}},

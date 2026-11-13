@@ -69,9 +69,10 @@ def tool_schemas_for_observation(tools: Iterable[Mapping[str, Any]], observation
     New environments always emit the explicit profile. Missing historical
     profile evidence is deliberately not rewritten as SCADA-only provenance.
     Where the environment opened the lifecycle step the rollback schema says
-    so (``_with_lifecycle_choice``).
+    so (``_with_lifecycle_choice``), and where it lifted the commit's verdict
+    lock the commit schema does (``_with_open_rules``).
     """
-    return _with_lifecycle_choice(_profile_tool_schemas(tools, observation), observation)
+    return _with_open_rules(_with_lifecycle_choice(_profile_tool_schemas(tools, observation), observation), observation)
 
 
 def _profile_tool_schemas(tools: Iterable[Mapping[str, Any]], observation: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -136,6 +137,63 @@ LIFECYCLE_CHOICE_PROMPT_PARAGRAPH = (
     "with the rejected hypotheses and another hypothesis can be tested. A rejected or "
     "inconclusive candidate can only be rolled back."
 )
+#: The lifecycle paragraph's last sentence, which no longer holds where the
+#: environment also lifted the commit's verdict lock (``open_rules``).
+LIFECYCLE_CHOICE_ROLLBACK_ONLY_SENTENCE = " A rejected or inconclusive candidate can only be rolled back."
+#: The commit tool's description where the environment lets the policy keep a
+#: candidate the acceptance check did not accept (``psse_env.actions.open_rules_of``).
+OPEN_RULES_COMMIT_DESCRIPTION = (
+    "Commit a verified candidate case: an acceptable one, or a rejected or inconclusive "
+    "one you keep because the evidence says its edit sits on a faulted component."
+)
+#: One sentence per lifted rule (``psse_env.actions.OPEN_RULES``); the paragraph names only the rules the
+#: environment reports.
+OPEN_RULES_PROMPT_SENTENCES = {
+    "correction_outside_context": (
+        "A correction may name a meter, a line or a breaker that the context on the active "
+        "case does not list."
+    ),
+    "correction_on_closed_route": (
+        "A correction may be issued where its context reports the route as not actionable."
+    ),
+    "correction_after_estimator_passes": (
+        "After a committed correction leaves the WLS quiet, further corrections remain "
+        "possible; request operator review once you judge the case resolved."
+    ),
+    "commit_rejected_candidate": (
+        "A verified candidate may be committed whatever its verification shows: keep a "
+        "rejected or inconclusive one when the evidence says its edit sits on a faulted "
+        "component, and roll it back otherwise."
+    ),
+    "handoff_without_exhaustion": (
+        "Operator review may be requested before every listed correction has been tried."
+    ),
+}
+
+
+def open_rules_prompt_paragraph(rules: Iterable[str]) -> str:
+    """The paragraph naming the lifted rules, in the order of ``psse_env.actions.OPEN_RULES``; empty for no rule."""
+    from psse_env.actions import OPEN_RULES
+
+    named = set(rules)
+    sentences = [OPEN_RULES_PROMPT_SENTENCES[rule] for rule in OPEN_RULES if rule in named]
+    if not sentences:
+        return ""
+    return " Open rules: these controller rules are lifted here. " + " ".join(sentences)
+
+
+def _with_open_rules(schemas: list[dict[str, Any]], observation: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The commit schema says what it may do where the commit's verdict lock is lifted; every other observation is untouched."""
+    from psse_env.actions import COMMIT_STATE, OPEN_RULE_COMMIT_REJECTED_CANDIDATE, open_rules_of
+    from psse_env.dagger.protocol_bridge import CANONICAL_TO_INTERNAL_TOOL
+
+    if OPEN_RULE_COMMIT_REJECTED_CANDIDATE not in open_rules_of(observation):
+        return schemas
+    for tool in schemas:
+        function = tool.get("function") if isinstance(tool, dict) else None
+        if isinstance(function, dict) and CANONICAL_TO_INTERNAL_TOOL.get(str(function.get("name")), str(function.get("name"))) == COMMIT_STATE:
+            function["description"] = OPEN_RULES_COMMIT_DESCRIPTION
+    return schemas
 
 
 def _with_lifecycle_choice(schemas: list[dict[str, Any]], observation: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -218,8 +276,9 @@ CLASSIFIER_GATED_PROMPT_PARAGRAPH = (
 
 
 def system_prompt_for_observation(system_prompt: str, observation: Mapping[str, Any]) -> str:
-    """The system prompt for an observation: the profile's paragraph, then the lifecycle-choice paragraph where it is open."""
-    from psse_env.actions import lifecycle_choice_of
+    """The system prompt for an observation: the profile's paragraph, then the lifecycle-choice paragraph where it
+    is open, then the open-rules paragraph where the environment lifted rules."""
+    from psse_env.actions import OPEN_RULE_COMMIT_REJECTED_CANDIDATE, lifecycle_choice_of, open_rules_of
 
     text = _profile_system_prompt(system_prompt, observation)
     from psse_env.actions import DETAILED_EVIDENCE_CONTRACT
@@ -230,7 +289,17 @@ def system_prompt_for_observation(system_prompt: str, observation: Mapping[str, 
     history_record = observation.get(HISTORY_RECORD_KEY)
     if isinstance(history_record, Mapping) and history_record.get("contract") == COMPLETE_HISTORY:
         text += COMPLETE_HISTORY_PROMPT_PARAGRAPH
-    return text + LIFECYCLE_CHOICE_PROMPT_PARAGRAPH if lifecycle_choice_of(observation) is not None else text
+    rules = open_rules_of(observation)
+    if lifecycle_choice_of(observation) is not None:
+        # Where the commit's verdict lock is lifted too, a rejected candidate
+        # is no longer bound to the rollback: the open-rules paragraph says
+        # what it may do, so the lifecycle paragraph drops its last sentence.
+        text += (
+            LIFECYCLE_CHOICE_PROMPT_PARAGRAPH.removesuffix(LIFECYCLE_CHOICE_ROLLBACK_ONLY_SENTENCE)
+            if OPEN_RULE_COMMIT_REJECTED_CANDIDATE in rules
+            else LIFECYCLE_CHOICE_PROMPT_PARAGRAPH
+        )
+    return text + open_rules_prompt_paragraph(rules) if rules else text
 
 
 def _profile_system_prompt(system_prompt: str, observation: Mapping[str, Any]) -> str:

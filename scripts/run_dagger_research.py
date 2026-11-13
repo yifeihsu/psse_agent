@@ -350,6 +350,10 @@ def research_diagnostic_environment_factory(
         # Off unless a run names it (--env-option lifecycle_choice=1).
         lifecycle_choice=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("lifecycle_choice")),
         detailed_evidence=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("detailed_evidence", False)),
+        # The user's direction of 2026-11-12: rules of the controller lifted
+        # for the policy.  None unless a run names them (--env-option
+        # open_rules=1 for all, or rule names joined by "+").
+        open_rules=RESEARCH_ENVIRONMENT_OPTIONS.get("open_rules"),
     )
     if env.production_dataset_mode is not True:
         raise RuntimeError("research environment did not enter production dataset mode")

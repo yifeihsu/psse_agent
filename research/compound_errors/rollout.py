@@ -152,6 +152,9 @@ def slim_trace(steps: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         record: dict[str, Any] = {"step": index, "tool": tool, "arguments": arguments,
                                   "status": step.get("execution_status"), "error_code": step.get("error_code"),
                                   "disposition": step.get("candidate_disposition_offline")}
+        if step.get("open_rules_used"):
+            # The lifted rules this action needed (``open_rules``); only on a step that needed one.
+            record["open_rules_used"] = [str(rule) for rule in step["open_rules_used"]]
         output = step.get("policy_tool_output") if isinstance(step.get("policy_tool_output"), Mapping) else {}
         metrics = output.get("tool_metrics") if isinstance(output.get("tool_metrics"), Mapping) else {}
         if tool == RUN_WLS:
@@ -200,7 +203,7 @@ def compact_episode(episode: Mapping[str, Any], root: Mapping[str, Any]) -> dict
         # Item 7 step 6: a committed correction a later revert withdrew.
         record["reverted"] = bool(record["candidate_state_id"] and str(record["candidate_state_id"]) in reverted)
     compound = (root.get("audit") or {}).get("compound") or {}
-    return {
+    record = {
         "contract": ROLLOUT_CONTRACT,
         "scenario_id": str(root["execution"]["scenario_id"]),
         "class": compound.get("class"),
@@ -231,6 +234,11 @@ def compact_episode(episode: Mapping[str, Any], root: Mapping[str, Any]) -> dict
         "trace": slim_trace(steps),
         "seconds": episode.get("seconds"),
     }
+    # The open rules: the rejected candidates kept and the lifted rules each action needed; only where there are any.
+    for key in ("keep_accounting", "open_rule_accounting"):
+        if episode.get(key):
+            record[key] = dict(episode[key])
+    return record
 
 
 def route_comparisons(steps: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

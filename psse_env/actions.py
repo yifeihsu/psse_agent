@@ -388,6 +388,96 @@ def lifecycle_choice_of(observation: Mapping[str, Any] | Any) -> Mapping[str, An
     return record if isinstance(record, Mapping) and record.get("contract") == LIFECYCLE_CHOICE_CONTRACT else None
 
 
+#: The open rules (the user's direction of 2026-11-12).  The process gate, the
+#: commit's verdict lock and the handoff audit encode the rule expert's own
+#: procedure: a correction must be one the context on the active state lists,
+#: on a route the context reports actionable, and none follows once a
+#: committed correction leaves the estimator quiet; only an accepted candidate
+#: may be committed; and the operator handoff waits until every required
+#: context was fetched and every listed correction tried.  A policy held to
+#: them cannot pass the rule expert.  An environment built with ``open_rules``
+#: lifts the named ones for the policy.  The correction tools still compute
+#: their own values, the verification still reports its numbers and the truth
+#: audit still scores the final case.  The observation carries the record
+#: below only in such an environment, so every other contract is as it was.
+OPEN_RULES_CONTRACT = "open_rules_v1"
+#: A correction may name a target the fresh context on the active state does not list.
+OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT = "correction_outside_context"
+#: A correction may be issued on a route its context reports as not actionable
+#: (a complete negative screen, or the meter route shut by branch dominance).
+OPEN_RULE_CORRECTION_ON_CLOSED_ROUTE = "correction_on_closed_route"
+#: A correction may follow a committed one that left the estimator quiet: the
+#: post-correction confirmation no longer ends the corrections.
+OPEN_RULE_CORRECTION_AFTER_ESTIMATOR_PASSES = "correction_after_estimator_passes"
+#: A verified candidate the acceptance check rejected, or could not judge, may be committed.
+OPEN_RULE_COMMIT_REJECTED_CANDIDATE = "commit_rejected_candidate"
+#: The operator handoff no longer waits for every required context and every listed correction.
+OPEN_RULE_HANDOFF_WITHOUT_EXHAUSTION = "handoff_without_exhaustion"
+OPEN_RULES = (
+    OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT,
+    OPEN_RULE_CORRECTION_ON_CLOSED_ROUTE,
+    OPEN_RULE_CORRECTION_AFTER_ESTIMATOR_PASSES,
+    OPEN_RULE_COMMIT_REJECTED_CANDIDATE,
+    OPEN_RULE_HANDOFF_WITHOUT_EXHAUSTION,
+)
+REJECTED_DISPOSITIONS = frozenset({"REJECT", "INCONCLUSIVE"})
+
+
+def normalize_open_rules(value: Any) -> tuple[str, ...]:
+    """The rules an ``open_rules`` option names, in the order of :data:`OPEN_RULES`.
+
+    ``None``, ``False``, ``0`` and an empty value open nothing; ``True``,
+    ``1`` and ``"all"`` open every rule; a name, several names joined by
+    ``,`` or ``+``, or a sequence of names open those.  An unknown name is an
+    error, so a misspelt rule cannot silently leave a rule in place.
+    """
+
+    if value is None or value is False:
+        return ()
+    if value is True:
+        return OPEN_RULES
+    if isinstance(value, (int, float)):
+        if value == 0:
+            return ()
+        if value == 1:
+            return OPEN_RULES
+        raise ValueError(f"open_rules must be a flag or rule names, got {value!r}")
+    if isinstance(value, str):
+        text = value.strip()
+        if text.lower() in {"", "0", "false", "no", "off", "none"}:
+            return ()
+        if text.lower() in {"1", "true", "yes", "on", "all"}:
+            return OPEN_RULES
+        names = [part.strip() for part in text.replace("+", ",").split(",") if part.strip()]
+    elif isinstance(value, Mapping):
+        if value.get("contract") != OPEN_RULES_CONTRACT:
+            raise ValueError(f"an open_rules record must carry the contract {OPEN_RULES_CONTRACT!r}")
+        names = [str(name) for name in value.get("rules") or []]
+    else:
+        try:
+            names = [str(name).strip() for name in value]
+        except TypeError as exc:
+            raise ValueError(f"open_rules must be a flag or rule names, got {value!r}") from exc
+    unknown = sorted(set(names) - set(OPEN_RULES))
+    if unknown:
+        raise ValueError(f"unknown open rules {unknown}; the rules are {list(OPEN_RULES)}")
+    return tuple(rule for rule in OPEN_RULES if rule in set(names))
+
+
+def open_rules_record(rules: Any = True) -> dict[str, Any]:
+    """What an environment with open rules reports: the contract and the rules it lifted."""
+    return {"contract": OPEN_RULES_CONTRACT, "rules": list(normalize_open_rules(rules))}
+
+
+def open_rules_of(observation: Mapping[str, Any] | Any) -> frozenset[str]:
+    """The rules an environment built with ``open_rules`` reports as lifted; empty everywhere else."""
+    getter = getattr(observation, "get", None)
+    record = getter("open_rules") if callable(getter) else None
+    if not isinstance(record, Mapping) or record.get("contract") != OPEN_RULES_CONTRACT:
+        return frozenset()
+    return frozenset(str(rule) for rule in record.get("rules") or [] if str(rule) in OPEN_RULES)
+
+
 #: Item 7 step 7 (the user's request of 2026-10-28, "Build it here"): instead
 #: of committing a parameter-or-breaker guess and reverting it later, compare
 #: the two routes before committing.  One action fits the impedance edit on the
