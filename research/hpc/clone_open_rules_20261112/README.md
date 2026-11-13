@@ -135,6 +135,7 @@ bash research/hpc/clone_open_rules_20261112/deploy_from_windows.sh "$(git rev-pa
 C=research/hpc/clone_open_rules_20261112
 export MSYS_NO_PATHCONV=1
 wsl -- ssh torch bash -s -- smoke < $C/submit_cell.sh   # 2 training steps on the longest rows; S0 on 8 cases with the rules lifted
+wsl -- ssh torch bash -s -- smoke_baseline < $C/submit_cell.sh   # the baseline smoke alone, again; an earlier one is moved aside
 wsl -- ssh torch bash -s < $C/status_cell.sh
 wsl -- ssh torch bash -s -- s0 < $C/submit_cell.sh      # S0's baseline with the rules lifted (needs no pass)
 wsl -- ssh torch bash -s -- pass < $C/submit_cell.sh    # the row gate, then the pass (4 links)
@@ -147,19 +148,38 @@ and `out/baseline_smoke_open/baseline/evaluation.json` (the `open_rules` block, 
 
 ## Duration and GPU-hours
 
-Estimates; nothing here has run on a GPU.
+Measured in the smokes of 2026-11-13 on an RTX PRO 6000 (97 GB); the rest estimated.
 
-- **The pass: about 16 to 27 GPU-hours.** S0's pass took 12.5 GPU-hours on H200s for 2,217 steps, about 20 s per
-  step, and 34 s per step was measured on an A100. These rows are about as long, and there are 2,742 steps.
-- **Each baseline: about 6 GPU-hours** (arm B's took 6.1 hours of running), so about 12 for the two.
-- **Row gate:** a few CPU minutes (239 s for S0's views). **Smoke:** under 1 GPU-hour.
+- **The pass: about 21 GPU-hours on that card.** 25 to 27 s per optimizer step, so about 20 hours for 2,742 steps,
+  plus about 1.5 hours for the 21 validation passes (42 s per 32 rows). By card, about 16 to 27 GPU-hours: S0's pass
+  took 12.5 GPU-hours on H200s, and 34 s per step was measured on an A100. Peak memory 53 GB.
+- **Each baseline: about 6 GPU-hours** (arm B's took 6.1 hours of running), so about 12 for the two. The smoke's 8
+  cases took 6.5 minutes on two shards, peak 58.5 GB.
+- **Row gate:** 0.29 s per row in the smoke, so about 55 minutes for the 11,158 rows. **Smokes:** about 6 minutes each.
+
+## Smokes (2026-11-13)
+
+Both on source 68b1950, one RTX PRO 6000 each.
+
+- **Training smoke** (job 22943411): 200 rows, the longest first, 2 optimizer steps. Row gate 232 rows in 68 s,
+  longest row 12,939 tokens, nothing cut; validation loss 0.218 after the 2 steps; the reload canary passed, and a
+  resume would start from checkpoint-2.
+- **Baseline smoke** (job 22943412): S0 with the five rules lifted solves 7 of the 8 cases, the same 7 as arm A's S0
+  with the rules in place, with 3 clean solves against 6. In r0_007c37519b53, r0_018a7be478a1 and r0_0681aebdc72f
+  the last hand-off was refused, sent again and cut as a loop. Replaying arm A's actions without the model shows that
+  the open environment accepts the usual hand-off in all three, and that a request text the audit does not support
+  gives exactly the run's record (`operator_escalation_request_unsupported`, then a repeated-failure stop). The
+  record kept tool names only, so S0's text is not known; two open-rules sentences said "request operator review".
+  They now name the tool and the request (`dataset_builder.OPEN_RULES_HANDOFF`), the views were re-rendered with them
+  (`selection_report.json`, "rerendered"; the old views in `superseded_20261113_handoff_wording/`), and the driver's
+  records keep each refused step's error and every hand-off's request. One case used a lifted rule:
+  r0_18ba2a24188a kept a rejected true line-4 candidate and a rejected wrong meter-48 candidate, and failed, as it
+  does with the rules in place.
 
 ## Not verified without the cluster
 
-- The tokenizer row gate on these rows. The local checks are its message checks only.
-- How S0 behaves when its prompt names rules it never trained with lifted; the smoke's 8 cases are the first look.
-- The driver's new `open_rules` record on a real episode (tested on stand-ins, `psse_env/rl/test_train.py`).
-- Memory and seconds per step.
+- The tokenizer row gate on the full views (the smoke gated 232 rows).
+- S0 beyond the smoke's 8 cases, and the reworded hand-off sentences.
 
 ## Not built
 

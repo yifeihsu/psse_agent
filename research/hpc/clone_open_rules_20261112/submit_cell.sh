@@ -2,6 +2,7 @@
 # Submit the open-rules clone's jobs.  Run on torch, or through ssh stdin:
 #
 #   wsl -- ssh torch bash -s -- smoke                 < research/hpc/clone_open_rules_20261112/submit_cell.sh
+#   wsl -- ssh torch bash -s -- smoke_baseline        < ...   the baseline smoke alone, again (an earlier one is moved aside)
 #   wsl -- ssh torch bash -s -- s0 [LINKS]            < ...   S0's baseline in the open environment (default 2 links)
 #   wsl -- ssh torch bash -s -- pass [LINKS]          < ...   the row gate on a CPU node, then the pass (links from the rows)
 #   wsl -- ssh torch bash -s -- clone [LINKS] [AFTER_JOB] < ...   the cloned adapter's baseline (default 2 links)
@@ -18,7 +19,7 @@ export PATH=/opt/slurm/bin:$PATH
 WORK=/scratch/yx3882/clone_open_rules_20261112
 # shellcheck source=cell.env
 source "$WORK/source/research/hpc/clone_open_rules_20261112/cell.env"
-COMMAND=${1:?smoke, s0, pass, clone or all}
+COMMAND=${1:?smoke, smoke_baseline, s0, pass, clone or all}
 [[ -d "$CELL" ]] || { echo "no source at $CELL: deploy first" >&2; exit 2; }
 mkdir -p "$LOGS" "$OUT/clone"
 
@@ -107,6 +108,18 @@ case "$COMMAND" in
     id=$(sbatch --parsable --time=03:00:00 --job-name=orc-baseline-smoke_open --export=ALL,BASELINE_NAME=smoke_open "$CELL/stage_baseline.sbatch")
     record "orc-baseline-smoke_open job=${id%%;*}"
     ;;
+  smoke_baseline)
+    # The baseline smoke again, on the same eight cases (data/suites keeps the slice): a finished one has left its
+    # manifest past the baseline, so its output is renamed with the time, never removed.
+    not_queued orc-baseline-smoke_open
+    if [[ -e "$OUT/baseline_smoke_open" ]]; then
+      aside="$OUT/baseline_smoke_open.before_$(date -u +%Y%m%dT%H%M%SZ)"
+      mv "$OUT/baseline_smoke_open" "$aside"
+      echo "moved the earlier baseline smoke to $aside"
+    fi
+    id=$(sbatch --parsable --time=03:00:00 --job-name=orc-baseline-smoke_open --export=ALL,BASELINE_NAME=smoke_open "$CELL/stage_baseline.sbatch")
+    record "orc-baseline-smoke_open job=${id%%;*}"
+    ;;
   s0) submit_s0 "${2:-2}" ;;
   pass) submit_pass "${2:-}" ;;
   clone) submit_clone "${2:-2}" "${3:-}" ;;
@@ -115,6 +128,6 @@ case "$COMMAND" in
     submit_pass ""
     submit_clone 2 "$PASS_LAST"
     ;;
-  *) echo "unknown command $COMMAND (smoke, s0, pass, clone or all)" >&2; exit 2 ;;
+  *) echo "unknown command $COMMAND (smoke, smoke_baseline, s0, pass, clone or all)" >&2; exit 2 ;;
 esac
 squeue -u "$USER" -o "%.12i %.28j %.9T %.10M %.26E %.20R"

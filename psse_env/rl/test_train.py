@@ -486,6 +486,33 @@ class TrainDriverTests(unittest.TestCase):
                 options.clear()
                 options.update(original)
 
+    def test_an_evaluation_record_keeps_refused_steps_and_handoff_requests(self) -> None:
+        from psse_env.rl.train import _compact_evaluation
+
+        # The first smoke of the open environment: a hand-off with a request the audit does not support, sent twice.
+        refused = {"action": {"tool": "ask_for_more_evidence", "arguments": {"state_id": "s", "request": "operator_review"}},
+                   "execution_status": "failure", "error_code": "operator_escalation_request_unsupported",
+                   "policy_tool_output": {"error_detail": "operator_review"}}
+        trace = [
+            {"action": {"tool": "run_wls", "arguments": {"state_id": "s"}}, "execution_status": "success", "error_code": None},
+            refused,
+            dict(refused, error_code="evaluation_repeated_nonadvancing_failure", policy_tool_output={}),
+        ]
+        record = _compact_evaluation({"trace": trace, "truth_audited_task_success": True, "steps": 3}, root="r", family="compound",
+                                     reward={})
+        self.assertEqual(record["step_errors"], [
+            {"step": 1, "tool": "ask_for_more_evidence", "error_code": "operator_escalation_request_unsupported",
+             "error_detail": "operator_review"},
+            {"step": 2, "tool": "ask_for_more_evidence", "error_code": "evaluation_repeated_nonadvancing_failure",
+             "error_detail": None},
+        ])
+        self.assertEqual(record["handoff_requests"], ["operator_review", "operator_review"])
+        # A clean episode records no error and its one hand-off.
+        clean = _compact_evaluation({"trace": [trace[0], {"action": {"tool": "ask_for_more_evidence", "arguments": {
+            "state_id": "s", "request": "operator_escalation:recovery_options_exhausted"}}, "execution_status": "success"}]},
+            root="r", family="compound", reward={})
+        self.assertEqual((clean["step_errors"], clean["handoff_requests"]), ([], ["operator_escalation:recovery_options_exhausted"]))
+
     def test_the_carried_optimizer_is_the_latest_one_an_earlier_iteration_left(self) -> None:
         from psse_env.rl.train import OPTIMIZER_FILE, _carried_optimizer_file, iteration_dir
 

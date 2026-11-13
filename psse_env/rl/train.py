@@ -59,7 +59,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from psse_env.actions import OPEN_RULE_COMMIT_REJECTED_CANDIDATE, normalize_open_rules
+from psse_env.actions import ASK_FOR_MORE_EVIDENCE, OPEN_RULE_COMMIT_REJECTED_CANDIDATE, normalize_open_rules
 from psse_env.dagger.observation_modes import BOUNDED_HISTORY, validate_observation_mode
 from psse_env.rl.advantages import GroupAdvantages, group_advantages, summarize_groups
 from psse_env.rl.decision_credit import (
@@ -1140,6 +1140,14 @@ def open_rules_evaluation(episode: Mapping[str, Any], lifted: Sequence[str],
     }
 
 
+def _step_error_detail(step: Mapping[str, Any]) -> str | None:
+    """The detail the environment gave with a refused step (the request text of a refused hand-off), cut to 200 characters."""
+
+    output = step.get("policy_tool_output")
+    detail = output.get("error_detail") if isinstance(output, Mapping) else None
+    return str(detail)[:200] if detail else None
+
+
 def _compact_evaluation(
     episode: Mapping[str, Any], *, root: str, family: str, reward: Mapping[str, Any],
     lifecycle: Sequence[Mapping[str, Any]] = (), scenario: Mapping[str, Any] | None = None,
@@ -1168,6 +1176,17 @@ def _compact_evaluation(
         "invalid_action_count": episode.get("invalid_action_count"),
         "healthy_components_preserved": episode.get("healthy_components_preserved"),
         "tools": [str((step.get("action") or {}).get("tool")) for step in episode.get("trace") or [] if isinstance(step, Mapping)],
+        # Each refused step with what the environment said, and the request text of every hand-off: the first smoke
+        # of the open environment (2026-11-13) had refused hand-offs whose request no record kept.
+        "step_errors": [
+            {"step": index, "tool": str((step.get("action") or {}).get("tool")), "error_code": str(step.get("error_code")),
+             "error_detail": _step_error_detail(step)}
+            for index, step in enumerate(trace) if step.get("error_code")
+        ],
+        "handoff_requests": [
+            str(((step.get("action") or {}).get("arguments") or {}).get("request"))
+            for step in trace if str((step.get("action") or {}).get("tool")) == ASK_FOR_MORE_EVIDENCE
+        ],
         "reward": dict(reward),
         # The episode's decisions on accepted candidates with the audit's label (psse_env.rl.lifecycle).
         "lifecycle": [dict(decision) for decision in lifecycle],

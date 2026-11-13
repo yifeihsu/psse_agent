@@ -16,6 +16,7 @@ from hif_search_limits import (
     HIF_R_GRID_SIZE_MIN,
 )
 from psse_env.actions import (
+    ASK_FOR_MORE_EVIDENCE,
     COMMIT_STATE,
     CORRECT_MEASUREMENTS,
     CORRECT_PARAMETERS,
@@ -24,6 +25,7 @@ from psse_env.actions import (
     MACRO_ACTIONS,
     PARAMETER_COMPARISON_MAX_CANDIDATES,
     PARAMETER_COMPARISON_MIN_CANDIDATES,
+    RECOVERY_OPTIONS_EXHAUSTED_REQUEST,
     ROLLBACK_STATE,
     safe_normalize_action,
 )
@@ -146,6 +148,13 @@ OPEN_RULES_COMMIT_DESCRIPTION = (
     "Commit a verified candidate case: an acceptable one, or a rejected or inconclusive "
     "one you keep because the evidence says its edit sits on a faulted component."
 )
+#: The hand-off the open-rules sentences name word for word.  The first wording said "request operator review" in
+#: two sentences; in the first smoke of the open environment (2026-11-13) S0's hand-off was refused in 3 of 8 cases,
+#: most likely for a request text the hand-off audit does not support (``operator_escalation_request_unsupported``).
+OPEN_RULES_HANDOFF = (
+    f"{INTERNAL_TO_CANONICAL_TOOL.get(ASK_FOR_MORE_EVIDENCE, ASK_FOR_MORE_EVIDENCE)} with the request "
+    f"{RECOVERY_OPTIONS_EXHAUSTED_REQUEST}"
+)
 #: One sentence per lifted rule (``psse_env.actions.OPEN_RULES``); the paragraph names only the rules the
 #: environment reports.
 OPEN_RULES_PROMPT_SENTENCES = {
@@ -158,7 +167,7 @@ OPEN_RULES_PROMPT_SENTENCES = {
     ),
     "correction_after_estimator_passes": (
         "After a committed correction leaves the WLS quiet, further corrections remain "
-        "possible; request operator review once you judge the case resolved."
+        f"possible; once you judge the case resolved, hand it to the operator: {OPEN_RULES_HANDOFF}."
     ),
     "commit_rejected_candidate": (
         "A verified candidate may be committed whatever its verification shows: keep a "
@@ -166,7 +175,8 @@ OPEN_RULES_PROMPT_SENTENCES = {
         "component, and roll it back otherwise."
     ),
     "handoff_without_exhaustion": (
-        "Operator review may be requested before every listed correction has been tried."
+        f"The hand-off to the operator, {OPEN_RULES_HANDOFF}, may be sent before every listed "
+        "correction has been tried."
     ),
 }
 

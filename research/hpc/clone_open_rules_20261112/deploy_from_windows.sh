@@ -25,7 +25,9 @@ BOUNDED_WORK=/scratch/yx3882/compound_cloning_20261106
 SELECTION_DIR=${SELECTION_DIR:-$MAIN/output/compound_rl_20261106/open_rules_selection_ieee14}
 PYTHON=${PYTHON:-python}
 SHORT=${COMMIT:0:7}
-BUNDLE_LOCAL=$REPO/output/deploy_orc_${SHORT}.bundle
+# Relative to the repo (the script works from it): with MSYS_NO_PATHCONV set, git.exe takes a POSIX /c/... path
+# literally and cannot create the bundle (the first deploy of 68b1950 failed so).
+BUNDLE_LOCAL=output/deploy_orc_${SHORT}.bundle
 export MSYS_NO_PATHCONV=1
 # Windows Python reads C:\ paths; MSYS_NO_PATHCONV keeps Git Bash from converting /c/ ones on its own.
 winpath() { cygpath -w "$1" 2>/dev/null || printf '%s' "$1"; }
