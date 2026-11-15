@@ -119,9 +119,15 @@ wsl -- ssh torch "test -s $BOUNDED_WORK/data/start_adapter/adapter_model.safeten
 wsl -- ssh torch "test -s $BOUNDED_WORK/out/clone/training/lora/adapter_model.safetensors && echo s0_adapter_present || echo S0_ADAPTER_MISSING"
 wsl -- ssh torch "test -x /scratch/yx3882/.conda/envs/gemma4_research_5104/bin/python && echo python_present || echo PYTHON_MISSING"
 wsl -- ssh torch "test -s /scratch/yx3882/rl_improvement_20261110/out/arm_a_bounded/baseline/evaluation.json && echo arm_a_baseline_present || echo ARM_A_BASELINE_MISSING"
-# What the RL arm reads in place (stage_arm.sbatch): the training draw and the roots kept apart from it.
-arm_field() { "$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$REPO/$CELL_REL/configs/baseline_clone_open.json" "$1"; }
-wsl -- ssh torch "test -s $(arm_field training_suite) && echo training_suite_present || echo TRAINING_SUITE_MISSING; test -s $(arm_field reserved_roots) && echo reserved_roots_present || echo RESERVED_ROOTS_MISSING"
+# What the RL arm reads in place (stage_arm.sbatch): the training draw and the roots kept apart from it.  The config
+# is named relative to the repo, as planned() names the series: Windows Python cannot open a /c/... path.  The
+# deploy of 2026-11-14 handed it one, got no path back, and "test -s" with nothing to test printed "present".
+arm_field() { "$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$CELL_REL/configs/baseline_clone_open.json" "$1"; }
+for field in training_suite reserved_roots; do
+  path=$(arm_field "$field")
+  [[ "$path" == /* ]] || { echo "the arm's config names no $field" >&2; exit 2; }
+  wsl -- ssh torch "test -s $path && echo ${field}_present || echo ${field^^}_MISSING"
+done
 planned() { "$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"][sys.argv[2]][sys.argv[3]])' research/hpc/rl_improvement_20261110/series.json "$1" "$2"; }
 path=$(planned development_suite path)
 found=$(remote_sha "$path")

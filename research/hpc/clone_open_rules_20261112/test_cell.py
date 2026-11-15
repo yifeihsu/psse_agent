@@ -151,6 +151,20 @@ class CellFilesTests(unittest.TestCase):
                 self.assertNotIn("\\$(", line, f"deploy_from_windows.sh line {number}")
         self.assertIn('[[ "$(remote_sha "$WORK/data/rows/selection.train_view.jsonl")" == "$(sha256sum "$TRAIN_LOCAL" | cut -d\' \' -f1)" ]]', text)
 
+    def test_the_deploy_script_hands_windows_python_no_posix_path(self) -> None:
+        # Windows Python cannot open the /c/... paths Git Bash gives ($REPO, $MAIN, $SELECTION_DIR): a file is named
+        # relative to the repo, or through winpath.  The arm's check of 2026-11-14 read its config by "$REPO/..." and
+        # reported files present that it had not looked at.
+        text = (CELL / "deploy_from_windows.sh").read_text(encoding="utf-8")
+        for number, line in enumerate(text.splitlines(), start=1):
+            if '"$PYTHON"' not in line:
+                continue
+            bare = line.replace('"$(winpath "$SELECTION_DIR")"', "").replace('"$(winpath "$MANIFEST_LOCAL")"', "")
+            for name in ("$REPO", "$MAIN", "$SELECTION_DIR", "$MANIFEST_LOCAL"):
+                self.assertNotIn(name, bare, f"deploy_from_windows.sh line {number}")
+        self.assertIn('"$CELL_REL/configs/baseline_clone_open.json" "$1"; }', text)
+        self.assertIn('[[ "$path" == /* ]] || { echo "the arm\'s config names no $field" >&2; exit 2; }', text)
+
     def test_the_shell_files_parse(self) -> None:
         try:
             done = subprocess.run(["bash", "--version"], capture_output=True, text=True, timeout=30)
