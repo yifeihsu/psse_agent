@@ -18,6 +18,19 @@ EPISODE_CONTRACT = "minimal_episode_v1"
 OUTCOME_PROMPT_LIMIT = "prompt_limit"
 
 
+#: What a model policy reports about its last generation (``last_action_metrics``), kept per step.
+POLICY_METRIC_KEYS = ("prompt_tokens", "original_prompt_tokens", "generated_tokens", "generation_seconds",
+                      "hit_max_new_tokens", "prompt_limit_refused", "prompt_limit_reason", "memory_retries")
+
+
+def _policy_metrics(policy: Any) -> dict[str, Any]:
+    metrics = getattr(policy, "last_action_metrics", None)
+    if not isinstance(metrics, Mapping):
+        return {}
+    kept = {key: metrics[key] for key in POLICY_METRIC_KEYS if key in metrics}
+    return {"policy_metrics": kept} if kept else {}
+
+
 def run_episode(env: MinimalDiagnosisEnv, root: Mapping[str, Any], policy: Any, *,
                 weights: RewardWeights | None = None, keep_observations: bool = True) -> dict[str, Any]:
     """One episode of ``policy`` on ``root``: its steps, its score and its reward.
@@ -40,14 +53,19 @@ def run_episode(env: MinimalDiagnosisEnv, root: Mapping[str, Any], policy: Any, 
                 # The prompt no longer fits the model: nothing later in the episode can fit either.
                 policy_seconds += time.perf_counter() - asked
                 env.stop(OUTCOME_PROMPT_LIMIT)
-                steps.append({"step": env.steps + 1, "action": None, "result": None, "policy_error": failure})
+                steps.append({"step": env.steps + 1, "action": None, "result": None, "policy_error": failure,
+                              **_policy_metrics(policy)})
                 break
         policy_seconds += time.perf_counter() - asked
         before = observation
         observation, result = env.step(action)
-        step: dict[str, Any] = {"step": env.steps, "action": env.history()[-1]["action"], "result": result}
+        step: dict[str, Any] = {"step": env.steps, "action": env.history()[-1]["action"], "result": result,
+                                **_policy_metrics(policy)}
         if failure is not None:
             step["policy_error"] = failure
+        if isinstance(action, str):
+            # The model's words where they were not one valid call: what an "unparseable_action" was.
+            step["raw_output"] = action[:600]
         if keep_observations:
             step["observation"] = before
         steps.append(step)
