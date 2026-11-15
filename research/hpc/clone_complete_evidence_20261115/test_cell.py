@@ -73,8 +73,12 @@ class CellFilesTests(unittest.TestCase):
         stage = (CELL / "stage_clone_train.sbatch").read_text(encoding="utf-8")
         bounded_stage = (BOUNDED_CELL / "stage_clone_train.sbatch").read_text(encoding="utf-8")
         options = _trainer_options(stage)
-        self.assertEqual(options, _trainer_options(bounded_stage))  # the trainer's options, one for one
-        self.assertEqual(len(options), 23)
+        # The trainer's options, one for one, and one more: the loss from the logits of the target's span alone.  The
+        # same loss; without it the 20,390-token row does not fit a 95 GB card (the first smoke, job 23274632).
+        self.assertEqual([option for option in options if option != "--supervised-logits-only"], _trainer_options(bounded_stage))
+        self.assertEqual(options.count("--supervised-logits-only"), 1)
+        self.assertNotIn("--supervised-logits-only", _trainer_options(bounded_stage))
+        self.assertEqual(len(options), 24)
         self.assertIn('--initial-adapter "$START_ADAPTER"', options)
         # The bounded cell's entry with the run-time tool lists, and its evidence-profile check of every row.
         self.assertIn('TRAIN_COMMAND=("$PY" "$BOUNDED_CELL/train_runtime_tools.py")', stage)
@@ -118,6 +122,8 @@ class CellFilesTests(unittest.TestCase):
         baseline = (CELL / "stage_baseline.sbatch").read_text(encoding="utf-8")
         for job in ("cec-row-gate", "cec-train", "cec-smoke", "cec-baseline-clone_complete", "cec-baseline-smoke_complete"):
             self.assertIn(job, submit)
+        for command in ("smoke)", "smoke_train)", "smoke_baseline)", "pass)", "clone)", "all)"):
+            self.assertIn(f"  {command}", submit)
         for name in ("clone_complete", "smoke_complete"):
             self.assertIn(f"BASELINE_NAME={name}", submit)
             self.assertIn(name, baseline)
@@ -134,6 +140,8 @@ class CellFilesTests(unittest.TestCase):
         self.assertIn('[[ "$COMPLETE_EVIDENCE" == 1 ]] ||', baseline)
         self.assertIn('grep -q COMPLETE_EVIDENCE_CONTRACT "$SRC/psse_env/actions.py"', baseline)
         self.assertIn('[[ -s "$OUT/clone/training.done" ]] ||', baseline)
+        # Two processes on one card only where it holds them: 69.2 GB at the smoke's peak, so not on an 80 GB card.
+        self.assertIn("(( ${gpu_mib:-0} >= 90000 )) && RL_WORKERS=2", baseline)
         deploy = (CELL / "deploy_from_windows.sh").read_text(encoding="utf-8")
         for needed in ('git grep -q COMPLETE_EVIDENCE_CONTRACT "$COMMIT" -- psse_env/actions.py',
                        'git grep -q OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT "$COMMIT" -- psse_env/transactional_env.py',

@@ -14,9 +14,12 @@
 #SBATCH --output=/scratch/yx3882/clone_complete_evidence_20261115/logs/%x-%j.out
 # The complete-evidence clone: the cloning pass of 2026-11-06 (research/hpc/compound_cloning_20261106, which made
 # S0) on the rows of the complete-evidence selection, from the same start adapter and with the same trainer options.
-# The stage is that pass's with one difference, the rows (cell.env): the bounded cell's train_runtime_tools.py
-# renders each row with its run-time tool list, as there, and the row limit is the same.  max-steps is
-# ceil(rows / 4), read from the row file here.
+# The stage is that pass's with two differences.  The rows (cell.env): the bounded cell's train_runtime_tools.py
+# renders each row with its run-time tool list, as there, and the row limit is the same.  And one trainer option,
+# --supervised-logits-only (psse_env/sft/supervised_logits.py): the loss is computed from the logits of the target's
+# span alone.  It is the same loss; without it the model projects every prompt position onto the vocabulary, about
+# 1 MB a position, and the first smoke of this cell (job 23274632, 2026-11-15) ran out of a 95 GB card on the
+# 20,390-token row.  max-steps is ceil(rows / 4), read from the row file here.
 #
 # CLONE_MODE=smoke runs the same path on about 200 rows for two optimizer steps, the longest row of the view first,
 # saving at each step and validating at the second, and first times the row gate.
@@ -122,6 +125,7 @@ if [[ ! -s "$TRAIN_DIR/lora/adapter_model.safetensors" || ! -s "$TRAIN_DIR/resea
     --output-dir "$TRAIN_DIR" \
     --max-length "$TRAIN_MAX_LENGTH" \
     --strict-prompt-length \
+    --supervised-logits-only \
     --batch-size 1 \
     --gradient-accumulation-steps 4 \
     --learning-rate "$CLONE_LEARNING_RATE" \

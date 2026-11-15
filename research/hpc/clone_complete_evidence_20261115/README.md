@@ -81,6 +81,11 @@ adapter (that cell's copy of R1), the same trainer options one for one (lr 3e-5,
 20261107, run-time tool lists, limit 32,768 tokens). No adapter trained since can read these rows, so the pass
 starts where those two did.
 
+One trainer option is added, `--supervised-logits-only` (`psse_env/sft/supervised_logits.py`): the loss is computed
+from the logits of the target's span alone. It is the same loss. Without it the model projects every prompt position
+onto the vocabulary, about 1 MB a position, and the first training smoke (job 23274632, 2026-11-15) ran out of a
+95 GB card on the longest row, 20,390 tokens. The earlier passes ran without the option and are not changed.
+
 One optimizer step takes four rows. The rows are about half as long again as the open-rules rows (see the numbers
 in `render_manifest.json`; token counts there are a sibling tokenizer's estimate), so the pass is estimated at 22 to
 38 GPU-hours against 16 to 27, and `submit_cell.sh` counts 60 s a step when it sizes the chain.
@@ -148,7 +153,8 @@ wsl -- ssh torch bash -s -- all < research/hpc/clone_complete_evidence_20261115/
 
 The smoke must show: every row through the gate with none cut, two optimizer steps and a resumable checkpoint, and
 in the baseline smoke no prompt refused and the peak memory of the card. `all` submits the row gate, the pass and
-the clone's baseline; `pass` and `clone` submit them one at a time.
+the clone's baseline; `pass` and `clone` submit them one at a time. `smoke_train` and `smoke_baseline` run one half
+of the smoke again.
 
 ## Not decided here
 
