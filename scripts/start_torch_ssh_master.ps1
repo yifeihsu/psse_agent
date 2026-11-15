@@ -52,7 +52,10 @@ if (Test-SshMaster -Alias $HostAlias) {
 # exists, disabling multiplexing") and runs a plain connection instead, which
 # is what the earlier "SSH returned success, but no reusable master" meant.
 # Remove the stale socket first; the check above already proved it is dead.
-$staleSocket = & wsl.exe -- sh -c "ssh -G $HostAlias | awk '/^controlpath /{print `$2}'" 2>$null
+# The command holds no dollar sign: wsl.exe hands it to a shell of its own before sh sees it, and that shell
+# expanded awk's `$2` to nothing, so this read "controlpath <path>", a name no test finds, and the stale socket
+# stayed (2026-11-15: two sign-ins, each ending in "no reusable master").
+$staleSocket = & wsl.exe -- sh -c "ssh -G $HostAlias | sed -n 's/^controlpath //p'" 2>$null
 $staleSocket = ("$staleSocket").Trim()
 if ($staleSocket) {
     & wsl.exe -- sh -c "test -S '$staleSocket' && rm -f '$staleSocket' && echo removed" 2>$null | ForEach-Object {
@@ -67,7 +70,10 @@ if ($LASTEXITCODE -ne 0) {
     throw "Could not start the WSL SSH master for '$HostAlias'."
 }
 if (-not (Test-SshMaster -Alias $HostAlias)) {
-    throw "SSH returned success, but no reusable master is available for '$HostAlias'."
+    # ssh signed in but could not take the control socket, so it is a plain connection in the background that
+    # nothing can reuse.  End it: left alone, each failed start leaves one more signed-in session behind.
+    & wsl.exe -- pkill -f "^ssh -MNf $HostAlias" 2>$null
+    throw "SSH returned success, but no reusable master is available for '$HostAlias'. The control socket '$staleSocket' is in the way: remove it in WSL and run this again."
 }
 
 Write-Host "WSL SSH master is ready. Reuse it with: wsl -- ssh $HostAlias '<command>'"
