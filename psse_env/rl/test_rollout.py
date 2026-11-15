@@ -301,6 +301,62 @@ class RolloutTests(unittest.TestCase):
         ended_wrong = reward_of(8, True)  # the evaluation checked and found the components preserved: its answer stands
         self.assertFalse(ended_wrong.reward["healthy_component_corrupted"])
 
+    def test_rollout_group_records_the_choice_on_a_rejected_candidate_where_the_commit_rule_is_lifted(self) -> None:
+        scenario = _scenario()
+        scenario["audit"] = {"truth": {"true_parameter_errors": [{"line_index1": 7}]}}
+        trace = [
+            {"step": 0, "action": {"tool": CORRECT_PARAMETERS, "arguments": {"state_id": "active", "line_index": 8}},
+             "execution_status": "success", "error_code": None, "candidate_disposition_offline": None},
+            {"step": 1, "action": {"tool": "commit_state", "arguments": {"state_id": "active"}},
+             "execution_status": "success", "error_code": None, "candidate_disposition_offline": "REJECT"},
+        ]
+
+        class _Result:
+            def as_dict(self):
+                return {"suite_metrics": {"episodes": [{"scenario_id": "r0_fake", "family": "parameter",
+                                                        "truth_audited_task_success": False, "trace": copy.deepcopy(trace),
+                                                        "steps": 2, "policy_steps": 2, "healthy_preservation_known": False,
+                                                        "healthy_components_preserved": None}]}}
+
+        def evaluator(suites, *, env_factory, policy_factory, max_steps, seed, case_loader, **contract):
+            policy = policy_factory()
+            policy.act({"phase": "wls"})
+            policy.act({"phase": "finalize"})
+            return _Result()
+
+        def group_of(**options):
+            return rollout_group(scenario, samples=1, base_seed=3, env_factory=lambda **kwargs: _ScriptEnv(**kwargs),
+                                 policy_factory=lambda seed: _SamplingPolicy(seed), max_steps=6, case_loader=None,
+                                 weights=RewardWeights(), evaluator=evaluator, **options)
+
+        closed = group_of()  # read as with the rule in place: nothing is a decision, nothing is charged
+        self.assertEqual((closed[0].lifecycle, closed[0].labelled_decisions), ([], 0))
+        self.assertFalse(closed[0].reward["healthy_component_corrupted"])
+        lifted = group_of(rejected_choice=True)
+        [decision] = lifted[0].lifecycle
+        self.assertEqual((decision["position"], decision["tool"], decision["verdict"], decision["kept"], decision["target_is_true"],
+                          decision["label"], decision["agrees"]), (1, "commit_state", "REJECT", True, False, ROLLBACK_STATE, False))
+        self.assertNotIn("declined", decision)
+        self.assertEqual(lifted[0].labelled_decisions, 1)
+        # A rejected candidate kept on a healthy line is a wrong correction kept, charged like an accepted one.
+        self.assertTrue(lifted[0].reward["healthy_component_corrupted"])
+        self.assertEqual(lifted[0].reward["healthy_component_source"], "accepted_targets")
+        self.assertAlmostEqual(lifted[0].total_reward, closed[0].total_reward - 0.5)
+        self.assertEqual(Trajectory.from_dict(lifted[0].as_dict()).lifecycle, lifted[0].lifecycle)
+        with tempfile.TemporaryDirectory() as directory:
+            store = TrajectoryStore(directory)
+            store.write_group("r0_fake", lifted)
+            summary = store_summary(store)
+            # The lifecycle counts stay those of accepted candidates; the rejected ones have their own block.
+            self.assertEqual((summary["lifecycle"]["decisions"], summary["lifecycle"]["episodes_with_decline"],
+                              summary["lifecycle"]["wrong_target_committed"], summary["lifecycle"]["groups_with_labelled_decision"]),
+                             (0, 0, 0, 1))
+            self.assertEqual((summary["rejected_candidates"]["decisions"], summary["rejected_candidates"]["wrong_target_kept"]), (1, 1))
+        with tempfile.TemporaryDirectory() as directory:
+            store = TrajectoryStore(directory)
+            store.write_group("r0_fake", closed)
+            self.assertNotIn("rejected_candidates", store_summary(store))
+
     def test_store_round_trips_groups_and_resumes_complete_ones(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = TrajectoryStore(directory)

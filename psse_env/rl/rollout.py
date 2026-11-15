@@ -20,7 +20,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
-from psse_env.rl.lifecycle import lifecycle_decisions, scenario_truth, summarize_decisions
+from psse_env.rl.lifecycle import (
+    kept_wrong_targets,
+    lifecycle_decisions,
+    rejected_decisions,
+    scenario_truth,
+    summarize_decisions,
+    summarize_rejected,
+)
 from psse_env.rl.reward import RewardBreakdown, RewardWeights, episode_reward
 
 ROLLOUT_CONTRACT = "rl_grouped_rollout_v1"
@@ -85,7 +92,9 @@ class Trajectory:
     policy_identity: dict[str, Any] = field(default_factory=dict)
     #: The episode's decisions on accepted candidates with the audit's label
     #: (:func:`psse_env.rl.lifecycle.lifecycle_decisions`); empty for
-    #: trajectories stored before 2026-11-07.
+    #: trajectories stored before 2026-11-07.  An episode sampled with the
+    #: commit rule lifted also holds its decisions on rejected candidates
+    #: here, in the episode's order (``rejected_choice``).
     lifecycle: list[dict[str, Any]] = field(default_factory=list)
     contract: str = ROLLOUT_CONTRACT
 
@@ -293,6 +302,7 @@ def store_summary(store: "TrajectoryStore") -> dict[str, Any]:
                 if step.token_probabilities:
                     steps += 1
                     peaked_steps += int(min(step.token_probabilities) >= 0.99)
+    rejected = rejected_decisions(decisions)
     return {
         "groups": groups,
         "groups_with_reward_spread": informative,
@@ -308,11 +318,15 @@ def store_summary(store: "TrajectoryStore") -> dict[str, Any]:
         "prompts": {"steps_cut_at_the_input_limit": cut_prompts, "steps_refused_at_the_input_limit": refused_prompts,
                     "steps_refused_for_the_devices_memory": refused_for_memory,
                     "episodes_with_a_refused_step": episodes_refused},
+        # The counts are of accepted candidates; "groups_with_labelled_decision" counts a group for a labelled
+        # decision of either kind.
         "lifecycle": {
             **summarize_decisions(decisions),
             "episodes_with_decline": episodes_with_decline,
             "groups_with_labelled_decision": groups_with_labelled_decision,
         },
+        # Only an episode sampled with the commit rule lifted records these (the choice exists nowhere else).
+        **({"rejected_candidates": summarize_rejected(rejected)} if rejected else {}),
     }
 
 
@@ -329,6 +343,7 @@ def rollout_group(
     expert_reference_calls: int | None = None,
     evaluator: Callable[..., Any] | None = None,
     evaluator_options: Mapping[str, Any] | None = None,
+    rejected_choice: bool = False,
 ) -> list[Trajectory]:
     """K sampled episodes of one root, each audited by the evaluator.
 
@@ -337,6 +352,10 @@ def rollout_group(
     :func:`psse_env.dagger.evaluator.evaluate_rollout_suites`;
     ``evaluator_options`` are further keyword arguments for it (the
     observation mode of a run that is not in the bounded one).
+    ``rejected_choice`` says the environment lifts the commit rule: the
+    episodes' decisions on rejected candidates are then recorded and
+    labelled with the accepted ones, and a rejected candidate kept on a
+    healthy component is charged as a wrong correction kept.
     """
 
     if samples <= 0:
@@ -373,9 +392,9 @@ def rollout_group(
             episode["family"] = family
         # The decisions first: the reward charges a kept wrong target the
         # evaluation could not check itself (a stopped episode).
-        decisions = lifecycle_decisions(episode.get("trace") or [], truth)
+        decisions = lifecycle_decisions(episode.get("trace") or [], truth, rejected_choice=rejected_choice)
         reward = episode_reward(episode, family=family, expert_reference_calls=expert_reference_calls, weights=weights,
-                                kept_wrong_targets=summarize_decisions(decisions)["wrong_target_committed"])
+                                kept_wrong_targets=kept_wrong_targets(decisions))
         steps, ok, note = pair_records_with_trace(recorder.records, episode.get("trace") or [])
         identity = recorder.research_policy_identity
         trajectories.append(
@@ -468,6 +487,7 @@ def rollout_roots(
     evaluator: Callable[..., Any] | None = None,
     progress: Callable[[dict[str, Any]], None] | None = None,
     evaluator_options: Mapping[str, Any] | None = None,
+    rejected_choice: bool = False,
 ) -> dict[str, Any]:
     """Roll out every root without a complete group; returns the pass's summary."""
 
@@ -492,6 +512,7 @@ def rollout_roots(
             expert_reference_calls=reference,
             evaluator=evaluator,
             evaluator_options=evaluator_options,
+            rejected_choice=rejected_choice,
         )
         store.write_group(root, group)
         completed += 1

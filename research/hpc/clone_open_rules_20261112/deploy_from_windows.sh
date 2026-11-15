@@ -37,6 +37,7 @@ cd "$REPO"
 [[ -z "$(git status --porcelain --untracked-files=no -- research psse_env scripts tools)" ]] \
   || { echo "commit the sources first (tracked modifications under research/, psse_env/, scripts/ or tools/)" >&2; exit 2; }
 for path in "$CELL_REL/cell.env" "$CELL_REL/stage_row_gate.sbatch" "$CELL_REL/stage_clone_train.sbatch" "$CELL_REL/stage_baseline.sbatch" \
+            "$CELL_REL/stage_arm.sbatch" \
             "$CELL_REL/configs/baseline_s0_open.json" "$CELL_REL/configs/baseline_clone_open.json" "$CELL_REL/configs/baseline_smoke_open.json" \
             research/hpc/compound_cloning_20261106/train_runtime_tools.py research/hpc/compound_cloning_20261106/smoke_inputs.py; do
   git cat-file -e "$COMMIT:$path" 2>/dev/null || { echo "$path is not in $COMMIT: commit the cell first" >&2; exit 2; }
@@ -113,6 +114,9 @@ wsl -- ssh torch "test -s $BOUNDED_WORK/data/start_adapter/adapter_model.safeten
 wsl -- ssh torch "test -s $BOUNDED_WORK/out/clone/training/lora/adapter_model.safetensors && echo s0_adapter_present || echo S0_ADAPTER_MISSING"
 wsl -- ssh torch "test -x /scratch/yx3882/.conda/envs/gemma4_research_5104/bin/python && echo python_present || echo PYTHON_MISSING"
 wsl -- ssh torch "test -s /scratch/yx3882/rl_improvement_20261110/out/arm_a_bounded/baseline/evaluation.json && echo arm_a_baseline_present || echo ARM_A_BASELINE_MISSING"
+# What the RL arm reads in place (stage_arm.sbatch): the training draw and the roots kept apart from it.
+arm_field() { "$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$REPO/$CELL_REL/configs/baseline_clone_open.json" "$1"; }
+wsl -- ssh torch "test -s $(arm_field training_suite) && echo training_suite_present || echo TRAINING_SUITE_MISSING; test -s $(arm_field reserved_roots) && echo reserved_roots_present || echo RESERVED_ROOTS_MISSING"
 planned() { "$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"][sys.argv[2]][sys.argv[3]])' research/hpc/rl_improvement_20261110/series.json "$1" "$2"; }
 path=$(planned development_suite path)
 found=$(remote_sha "$path")
@@ -123,5 +127,6 @@ deployed; nothing submitted.  The order of work (README.md of the cell), each st
   2. status:   wsl -- ssh torch bash -s < $CELL_REL/status_cell.sh
   3. S0's baseline in the open environment:        wsl -- ssh torch bash -s -- s0 < $CELL_REL/submit_cell.sh
   4. the row gate, the pass, the clone's baseline: wsl -- ssh torch bash -s -- pass < $CELL_REL/submit_cell.sh
+  5. the RL arm from the clone (its baseline closed): wsl -- ssh torch bash -s -- arm < $CELL_REL/submit_cell.sh
      then: wsl -- ssh torch bash -s -- clone < $CELL_REL/submit_cell.sh     (or 3 and 4 at once: all)
 EOF

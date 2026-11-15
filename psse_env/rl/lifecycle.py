@@ -30,6 +30,17 @@ group's samples all scored the same.  For a two-way choice with both outcomes
 known this is the per-decision reward the plan describes; it uses the tokens
 the policy sampled, as every other row does, instead of a re-rendered target.
 
+Where the open rules lift the commit rule
+(``psse_env.actions.OPEN_RULE_COMMIT_REJECTED_CANDIDATE``) the policy may also
+keep a candidate the acceptance check did not accept, so its disposal is a
+choice too: the audit would keep it when its target is truly faulted and roll
+it back otherwise.  ``lifecycle_decisions(..., rejected_choice=True)`` returns
+those decisions with the accepted ones, in the episode's order, and every
+term that reads a decision's label trains them alike (2026-11-14).  They are
+told apart by their verdict (:func:`is_rejected_candidate`); the counts of
+:func:`summarize_decisions` stay those of the accepted candidates, and
+:func:`summarize_rejected` counts the others.
+
 Nothing here reads the policy's view.  The truth comes from the scenario's
 ``audit.truth`` block (the compound and conventional suites carry it), as
 ``research.compound_errors.rollout.target_is_true`` reads it.
@@ -98,16 +109,15 @@ def policy_trace_steps(trace: Sequence[Mapping[str, Any]]) -> list[Mapping[str, 
     return [step for step in trace if isinstance(step, Mapping) and not step.get("intervention")]
 
 
-def lifecycle_decisions(trace: Sequence[Mapping[str, Any]], truth: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Every decision of an episode on an accepted candidate, with the audit's label.
+def _candidate_disposals(trace: Sequence[Mapping[str, Any]], truth: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Every successful commit or rollback of the open candidate of a successful correction, with the audit's label.
 
-    ``position`` indexes the policy steps (the trajectory's step records);
-    ``step`` is the trace step's own number.  ``label`` is the tool the audit
-    would choose, ``agrees`` whether the policy chose it; both are ``None``
-    when the correction names no target the truth can be read for.
+    The fields both kinds of decision share; the readers below add
+    ``contract`` and ``declined`` or ``kept``.  A disposal whose verdict is
+    neither accepted nor rejected (none recorded) is no decision of either kind.
     """
 
-    decisions: list[dict[str, Any]] = []
+    disposals: list[dict[str, Any]] = []
     open_correction: dict[str, Any] | None = None
     for position, step in enumerate(policy_trace_steps(trace)):
         action = step.get("action") if isinstance(step.get("action"), Mapping) else {}
@@ -127,18 +137,16 @@ def lifecycle_decisions(trace: Sequence[Mapping[str, Any]], truth: Mapping[str, 
         verdict = step.get("candidate_disposition_offline")
         correction = open_correction
         open_correction = None
-        if verdict not in ACCEPTED_VERDICTS or correction is None:
+        if correction is None or (verdict not in ACCEPTED_VERDICTS and verdict not in REJECTED_VERDICTS):
             continue
         truthful = target_is_true(correction["tool"], correction["arguments"], truth) if truth.get("known", True) else None
         label = None if truthful is None else (COMMIT_STATE if truthful else ROLLBACK_STATE)
         number = step.get("step")
-        decisions.append({
-            "contract": LIFECYCLE_CONTRACT,
+        disposals.append({
             "position": position,
             "step": int(number) if isinstance(number, int) and not isinstance(number, bool) else position,
             "tool": tool,
             "verdict": str(verdict),
-            "declined": tool == ROLLBACK_STATE,
             "correction_position": correction["position"],
             "correction_tool": correction["tool"],
             "arguments": correction["arguments"],
@@ -146,6 +154,40 @@ def lifecycle_decisions(trace: Sequence[Mapping[str, Any]], truth: Mapping[str, 
             "label": label,
             "agrees": None if label is None else (tool == label),
         })
+    return disposals
+
+
+def _accepted_record(disposal: Mapping[str, Any]) -> dict[str, Any]:
+    return {"contract": LIFECYCLE_CONTRACT, **disposal, "declined": disposal["tool"] == ROLLBACK_STATE}
+
+
+def _rejected_record(disposal: Mapping[str, Any]) -> dict[str, Any]:
+    return {"contract": REJECTED_CONTRACT, **disposal, "kept": disposal["tool"] == COMMIT_STATE}
+
+
+def lifecycle_decisions(trace: Sequence[Mapping[str, Any]], truth: Mapping[str, Any], *,
+                        rejected_choice: bool = False) -> list[dict[str, Any]]:
+    """Every decision of an episode on an accepted candidate, with the audit's label.
+
+    ``position`` indexes the policy steps (the trajectory's step records);
+    ``step`` is the trace step's own number.  ``label`` is the tool the audit
+    would choose, ``agrees`` whether the policy chose it; both are ``None``
+    when the correction names no target the truth can be read for.
+
+    ``rejected_choice`` says the episode ran with the commit rule lifted, so
+    keeping or rolling back a rejected or inconclusive candidate was a choice
+    as well: those decisions are returned too, in the episode's order, as
+    :func:`rejected_candidate_decisions` records them (``kept`` in place of
+    ``declined``).  With the rule in place every such candidate is rolled
+    back and nothing is chosen, which is the default.
+    """
+
+    decisions: list[dict[str, Any]] = []
+    for disposal in _candidate_disposals(trace, truth):
+        if disposal["verdict"] in ACCEPTED_VERDICTS:
+            decisions.append(_accepted_record(disposal))
+        elif rejected_choice:
+            decisions.append(_rejected_record(disposal))
     return decisions
 
 
@@ -160,49 +202,47 @@ def rejected_candidate_decisions(trace: Sequence[Mapping[str, Any]], truth: Mapp
     only where the rule is lifted.  ``kept`` is a successful ``commit_state``;
     the other fields are those of :func:`lifecycle_decisions`.
 
-    A measurement for the evaluation records: no row term reads it.
+    The evaluation records read these apart from the accepted candidates; a
+    sampled rollout under the lifted rule carries them among its decisions
+    (``lifecycle_decisions(..., rejected_choice=True)``), where the row terms
+    train them.
     """
 
-    decisions: list[dict[str, Any]] = []
-    open_correction: dict[str, Any] | None = None
-    for position, step in enumerate(policy_trace_steps(trace)):
-        action = step.get("action") if isinstance(step.get("action"), Mapping) else {}
-        tool = str(action.get("tool") or "")
-        status = step.get("execution_status")
-        if tool in CORRECTION_TOOLS:
-            if status == "success":
-                arguments = action.get("arguments") if isinstance(action.get("arguments"), Mapping) else {}
-                open_correction = {
-                    "position": position,
-                    "tool": tool,
-                    "arguments": {str(key): value for key, value in arguments.items() if key != "state_id"},
-                }
-            continue
-        if tool not in DECISION_TOOLS or status != "success":
-            continue
-        verdict = step.get("candidate_disposition_offline")
-        correction = open_correction
-        open_correction = None
-        if verdict not in REJECTED_VERDICTS or correction is None:
-            continue
-        truthful = target_is_true(correction["tool"], correction["arguments"], truth) if truth.get("known", True) else None
-        label = None if truthful is None else (COMMIT_STATE if truthful else ROLLBACK_STATE)
-        number = step.get("step")
-        decisions.append({
-            "contract": REJECTED_CONTRACT,
-            "position": position,
-            "step": int(number) if isinstance(number, int) and not isinstance(number, bool) else position,
-            "tool": tool,
-            "verdict": str(verdict),
-            "kept": tool == COMMIT_STATE,
-            "correction_position": correction["position"],
-            "correction_tool": correction["tool"],
-            "arguments": correction["arguments"],
-            "target_is_true": truthful,
-            "label": label,
-            "agrees": None if label is None else (tool == label),
-        })
-    return decisions
+    return [_rejected_record(disposal) for disposal in _candidate_disposals(trace, truth)
+            if disposal["verdict"] in REJECTED_VERDICTS]
+
+
+def is_rejected_candidate(decision: Mapping[str, Any]) -> bool:
+    """Whether a decision record is of a candidate the acceptance check did not accept (a choice under the open rules)."""
+
+    return decision.get("contract") == REJECTED_CONTRACT or str(decision.get("verdict")) in REJECTED_VERDICTS
+
+
+def accepted_decisions(decisions: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The decisions on accepted candidates, in order."""
+
+    return [decision for decision in decisions if not is_rejected_candidate(decision)]
+
+
+def rejected_decisions(decisions: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The decisions on rejected or inconclusive candidates, in order."""
+
+    return [decision for decision in decisions if is_rejected_candidate(decision)]
+
+
+def accepted_before(decisions: Sequence[Mapping[str, Any]], index: int) -> int:
+    """How many decisions on accepted candidates come before ``decisions[index]``: the ordinal the strata and the
+    diagnostics count candidates by, which a rejected candidate does not move."""
+
+    return sum(1 for earlier in decisions[:index] if not is_rejected_candidate(earlier))
+
+
+def kept_wrong_targets(decisions: Sequence[Mapping[str, Any]]) -> int:
+    """Corrections an episode kept on components that are not truly faulted: accepted candidates committed and,
+    under the lifted commit rule, rejected ones kept.  What the reward's audit of kept targets is given."""
+
+    return (summarize_decisions(decisions)["wrong_target_committed"]
+            + summarize_rejected(rejected_decisions(decisions))["wrong_target_kept"])
 
 
 def summarize_rejected(decisions: Sequence[Mapping[str, Any]]) -> dict[str, int]:
@@ -240,7 +280,8 @@ def decision_sign(decision: Mapping[str, Any]) -> float | None:
 
 
 def summarize_decisions(decisions: Sequence[Mapping[str, Any]]) -> dict[str, int]:
-    """Counts of an episode's (or a store's) decisions: commits, declines, agreement with the audit."""
+    """Counts of an episode's (or a store's) decisions on accepted candidates: commits, declines, agreement with
+    the audit.  Decisions on rejected candidates are left to :func:`summarize_rejected`."""
 
     summary = {
         "decisions": 0,
@@ -253,7 +294,7 @@ def summarize_decisions(decisions: Sequence[Mapping[str, Any]]) -> dict[str, int
         "wrong_target_committed": 0,
         "wrong_target_declined": 0,
     }
-    for decision in decisions:
+    for decision in accepted_decisions(decisions):
         summary["decisions"] += 1
         declined = bool(decision.get("declined"))
         summary["declines" if declined else "commits"] += 1
@@ -281,10 +322,15 @@ __all__ = [
     "LIFECYCLE_CONTRACT",
     "REJECTED_CONTRACT",
     "REJECTED_VERDICTS",
+    "accepted_before",
+    "accepted_decisions",
     "decision_sign",
+    "is_rejected_candidate",
+    "kept_wrong_targets",
     "lifecycle_decisions",
     "policy_trace_steps",
     "rejected_candidate_decisions",
+    "rejected_decisions",
     "summarize_rejected",
     "scenario_truth",
     "summarize_decisions",

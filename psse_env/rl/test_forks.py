@@ -44,7 +44,7 @@ from psse_env.rl.forks import (
 from psse_env.rl.lifecycle import scenario_truth
 from psse_env.rl.prompt_digest import prompt_token_digest
 from psse_env.rl.reward import RewardWeights
-from psse_env.rl.rollout import TrajectoryStore, rollout_group
+from psse_env.rl.rollout import Trajectory, TrajectoryStore, rollout_group
 
 LINES = (3, 7, 9)
 
@@ -263,6 +263,20 @@ class ForkTests(unittest.TestCase):
         # The same state under the two observation modes: the complete one adds the transitions before it.
         self.assertNotIn("observable_history", state.observation(BOUNDED_HISTORY))
         self.assertEqual(state.observation(COMPLETE_HISTORY)["observable_history"]["events"], state.transitions)
+
+    def test_a_decision_on_a_rejected_candidate_is_not_a_fork_state(self) -> None:
+        # An episode sampled with the commit rule lifted also records its decisions on rejected candidates; branches
+        # fork accepted candidates only, and the accepted candidate keeps its ordinal.
+        trajectory = Trajectory.from_dict(self.trajectory.as_dict())
+        rejected = {"contract": "rl_rejected_candidate_decisions_v1", "position": 0, "tool": COMMIT_STATE, "verdict": "REJECT",
+                    "kept": True, "target_is_true": False, "label": ROLLBACK_STATE, "agrees": False}
+        trajectory.lifecycle = [rejected, *trajectory.lifecycle]
+        self.assertEqual(decision_states(trajectory), decision_states(self.trajectory))
+        self.assertEqual([group.stratum for group in candidate_states([("r1", [trajectory])])], ["wrong_target"])
+        # A branch with no rejected candidate in it scores the same whether or not the commit rule is lifted.
+        plain = branch(self.evaluator, self.root, self.state, COMMIT_STATE, Scripted(lines=(7,)))
+        lifted = branch(self.evaluator, self.root, self.state, COMMIT_STATE, Scripted(lines=(7,)), rejected_choice=True)
+        self.assertEqual((lifted["reward"], lifted["lifecycle"]), (plain["reward"], plain["lifecycle"]))
 
     def test_declining_the_wrong_candidate_and_continuing_solves_the_case(self) -> None:
         declined = branch(self.evaluator, self.root, self.state, ROLLBACK_STATE, Scripted(lines=(7,)))

@@ -66,6 +66,48 @@ for label, folder, path in runs:
     else:
         print("        evaluation.json: not yet")
 PY
+echo "=== the RL arm (the run the clone's baseline began)"
+python3 - "$OUT/baseline_clone_open" <<'PY'
+import glob, json, os, sys
+run = sys.argv[1]
+manifest = f"{run}/manifest.json"
+if not os.path.isfile(manifest):
+    print("    no manifest yet")
+    raise SystemExit(0)
+state = json.load(open(manifest))
+print(f"    manifest: iteration {state.get('iteration')} phase {state.get('phase')} adapter {state.get('current_adapter')}")
+for folder in sorted(glob.glob(f"{run}/iteration_*")):
+    name = os.path.basename(folder)
+    groups = len(glob.glob(f"{folder}/trajectories/groups/*.jsonl"))
+    episodes = len(glob.glob(f"{folder}/evaluation/episodes/*.json"))
+    files = [item for item in ("rollout_summary.json", "decision_values.json", "update_report.json", "integrity_failure.json",
+                               "evaluation.json") if os.path.isfile(f"{folder}/{item}")]
+    print(f"    {name}: rollout groups {groups}, evaluation episodes {episodes}, files {files}")
+    checkpoint = f"{folder}/update_checkpoint/state.json"
+    if os.path.isfile(checkpoint) and "update_report.json" not in files:
+        saved = json.load(open(checkpoint))
+        print("        update checkpoint:", json.dumps({key: saved.get(key) for key in ("row_count", "planned_steps", "chunk_index",
+                                                                                      "chunk_rows_done", "steps_done")}))
+    if "rollout_summary.json" in files:
+        store = (json.load(open(f"{folder}/rollout_summary.json")).get("store") or {})
+        print("        rollout:", json.dumps({key: store.get(key) for key in ("episodes", "success_rate", "mean_calls",
+                                                                              "groups_with_reward_spread", "lifecycle",
+                                                                              "rejected_candidates")}, sort_keys=True)[:900])
+    if "update_report.json" in files:
+        report = json.load(open(f"{folder}/update_report.json"))
+        integrity = report.get("integrity") or {}
+        rows = report.get("rows") or {}
+        print("        update:", json.dumps({"integrity_ok": integrity.get("ok"), "failures": integrity.get("failures"),
+                                             "rows": rows.get("rows"), "supervised_rows": rows.get("supervised_rows"),
+                                             "supervised_rows_on_rejected_candidates": rows.get("supervised_rows_on_rejected_candidates"),
+                                             "target_renderer": rows.get("target_renderer")}, sort_keys=True)[:900])
+    if "evaluation.json" in files:
+        summary = json.load(open(f"{folder}/evaluation.json")).get("summary") or {}
+        print("        evaluation:", json.dumps({key: summary.get(key) for key in ("truth_audited_task_success", "clean_success",
+                                                                                   "healthy_component_corrupted", "invalid_action_count",
+                                                                                   "loop_episodes", "mean_steps", "lifecycle")},
+                                                 sort_keys=True)[:900])
+PY
 echo "=== logs: preemptions, and lines that name a failure"
 for log in "$LOGS"/orc-*.out; do
   [ -f "$log" ] || continue

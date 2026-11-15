@@ -77,7 +77,7 @@ if str(REPO_ROOT) not in sys.path:
 from psse_env.actions import COMMIT_STATE, CORRECT_PARAMETERS, ROLLBACK_STATE  # noqa: E402
 from psse_env.dagger.observation_modes import BOUNDED_HISTORY, COMPLETE_HISTORY, OBSERVATION_MODES  # noqa: E402
 from psse_env.rl.forks import CHOICES, DecisionState, branch_seed, capture_fork_view, decision_states, run_branch  # noqa: E402
-from psse_env.rl.lifecycle import CORRECTION_TOOLS, scenario_truth  # noqa: E402
+from psse_env.rl.lifecycle import CORRECTION_TOOLS, accepted_decisions, scenario_truth  # noqa: E402
 from psse_env.rl.rollout import TrajectoryStore, scenario_root  # noqa: E402
 
 PROBE_CONTRACT = "rl_fork_probe_v1"
@@ -197,7 +197,9 @@ def candidate_records(*, episodes: Iterable[str | Path] = (), stores: Iterable[s
         for root, group in TrajectoryStore(directory).iter_groups():
             name = compound_class(suite[root]) if suite is not None and root in suite else None
             for trajectory in group:
-                for decision in trajectory.lifecycle:
+                # Accepted candidates only: a store sampled with the commit rule lifted also holds the decisions on
+                # rejected ones, which this audit does not count.
+                for decision in accepted_decisions(trajectory.lifecycle):
                     records.append({"class": name, "tool": decision.get("correction_tool"),
                                     "target_is_true": decision.get("target_is_true"), "declined": bool(decision.get("declined"))})
     return records

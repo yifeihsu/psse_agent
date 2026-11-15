@@ -19,6 +19,7 @@ from psse_env.rl.train import (
     load_manifest,
     load_suite,
     phase_evaluate,
+    rejected_choice,
     run_phase,
     score_groups,
     status,
@@ -248,6 +249,60 @@ class TrainDriverTests(unittest.TestCase):
             self.assertEqual(len(informative), 1)
             self.assertEqual(informative[0].root, "a")
             self.assertEqual(summary["lifecycle"]["decisions"], 0)
+
+    def test_the_lifted_commit_rule_makes_the_rejected_candidates_a_choice_of_the_run(self) -> None:
+        import psse_env.rl.train as train_module
+
+        with tempfile.TemporaryDirectory() as directory:
+            cases = ((None, False), ({"lifecycle_choice": 1}, False), ({"open_rules": 1}, True),
+                     ({"open_rules": "commit_rejected_candidate+correction_outside_context"}, True),
+                     ({"open_rules": "correction_after_estimator_passes"}, False), ({"open_rules": 0}, False))
+            for options, expected in cases:
+                config = _config(directory, **({} if options is None else {"environment_options": options}))
+                self.assertEqual(rejected_choice(config), expected, options)
+            # The rollout is told, so its episodes record and label those decisions.
+            train = Path(directory) / "train.json"
+            train.write_text(json.dumps([{"execution": {"scenario_id": "t1"}, "grouping": {"scenario_family": "parameter"}}]),
+                             encoding="utf-8")
+            seen = []
+            originals = (train_module.rollout_roots, train_module.configure_research_environment,
+                         train_module.sampling_policy_factory, train_module.apply_prompt_limits)
+
+            def rollout_roots(scenarios, **kwargs):
+                seen.append(kwargs["rejected_choice"])
+                return {"completed_groups": 0}
+
+            train_module.rollout_roots = rollout_roots
+            train_module.configure_research_environment = lambda config: (lambda **_kwargs: None)
+            train_module.sampling_policy_factory = lambda config, adapter, env_factory=None: (lambda seed: None)
+            train_module.apply_prompt_limits = lambda config: {}
+            try:
+                for name, options in (("open", {"open_rules": 1}), ("closed", {})):
+                    config = _config(str(Path(directory) / name), training_suite=str(train), environment_options=options)
+                    run_phase(config, "rollout")
+            finally:
+                (train_module.rollout_roots, train_module.configure_research_environment,
+                 train_module.sampling_policy_factory, train_module.apply_prompt_limits) = originals
+            self.assertEqual(seen, [True, False])
+
+    def test_score_groups_reads_the_rejected_candidates_apart(self) -> None:
+        accepted = {"contract": "rl_lifecycle_decisions_v1", "position": 0, "tool": "commit_state", "verdict": "ACCEPT_FINAL",
+                    "declined": False, "target_is_true": False, "label": "rollback_state", "agrees": False}
+        kept = {"contract": "rl_rejected_candidate_decisions_v1", "position": 0, "tool": "commit_state", "verdict": "REJECT",
+                "kept": True, "target_is_true": True, "label": "commit_state", "agrees": True}
+        with tempfile.TemporaryDirectory() as directory:
+            store = TrajectoryStore(Path(directory) / "trajectories")
+            store.write_group("a", [_trajectory("a", 0, 1.0, success=True, calls=4, lifecycle=[kept, accepted]),
+                                    _trajectory("a", 1, 0.0, success=False, calls=6)])
+            _groups, summary = score_groups(_config(directory), store)
+            self.assertEqual((summary["lifecycle"]["decisions"], summary["lifecycle"]["commits"],
+                              summary["lifecycle"]["wrong_target_committed"], summary["lifecycle"]["labelled_decisions_paired"]),
+                             (1, 1, 1, 2))
+            self.assertEqual((summary["rejected_candidates"]["decisions"], summary["rejected_candidates"]["true_target_kept"]), (1, 1))
+            store = TrajectoryStore(Path(directory) / "closed")
+            store.write_group("a", [_trajectory("a", 0, 1.0, success=True, calls=4, lifecycle=[accepted]),
+                                    _trajectory("a", 1, 0.0, success=False, calls=6)])
+            self.assertNotIn("rejected_candidates", score_groups(_config(directory), store)[1])
 
     def test_score_groups_counts_the_labelled_decisions_of_paired_trajectories(self) -> None:
         decline = {"position": 0, "tool": "rollback_state", "declined": True, "agrees": False, "target_is_true": True}

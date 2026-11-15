@@ -7,6 +7,8 @@
 #   wsl -- ssh torch bash -s -- pass [LINKS]          < ...   the row gate on a CPU node, then the pass (links from the rows)
 #   wsl -- ssh torch bash -s -- clone [LINKS] [AFTER_JOB] < ...   the cloned adapter's baseline (default 2 links)
 #   wsl -- ssh torch bash -s -- all                   < ...   S0's baseline; and the row gate, the pass, the clone's baseline
+#   wsl -- ssh torch bash -s -- arm [LINKS] [TARGET]  < ...   the RL arm from the cloned adapter in the open environment
+#                                                            (default 6 links, target 2 iterations)
 #
 # smoke submits the training smoke (two optimizer steps on about 200 rows, the longest first, after timing the row
 # gate on them) and the baseline smoke (S0 on eight development cases in the open environment); they are independent.
@@ -14,12 +16,18 @@
 # it (afterany), resumes from what is on disk, and exits at once when nothing is left; a chain's dependents wait for
 # its last link to end well (afterok).  Nothing here pins a card type or a partition.  ALLOW_DUPLICATE=1 lifts the
 # refusal of a job name already queued.
+#
+# arm continues the run the clone's baseline began (configs/baseline_clone_open.json: arm A's config in the open
+# environment from the cloned adapter), so it needs that baseline closed.  TARGET is the manifest iteration at which
+# the run is complete, the series' stopping rule in practice: 2 for the screen, a third iteration a new submission
+# made only to resolve a concrete uncertain signal, more than three only with ALLOW_LONG=1.  Six links cover two
+# iterations of about 14 GPU-hours each with their preemptions; spare links exit at once.
 set -euo pipefail
 export PATH=/opt/slurm/bin:$PATH
 WORK=/scratch/yx3882/clone_open_rules_20261112
 # shellcheck source=cell.env
 source "$WORK/source/research/hpc/clone_open_rules_20261112/cell.env"
-COMMAND=${1:?smoke, smoke_baseline, s0, pass, clone or all}
+COMMAND=${1:?smoke, smoke_baseline, s0, pass, clone, all or arm}
 [[ -d "$CELL" ]] || { echo "no source at $CELL: deploy first" >&2; exit 2; }
 mkdir -p "$LOGS" "$OUT/clone"
 
@@ -98,6 +106,30 @@ submit_clone() {
   record "orc-baseline-clone_open links=$ids${after:+ after=$after}"
 }
 
+ARM_CONFIG=baseline_clone_open.json
+submit_arm() {
+  local links=${1:-6} target=${2:-2}
+  positive "$links" LINKS
+  positive "$target" TARGET
+  if (( target > 3 )) && [[ -z "${ALLOW_LONG:-}" ]]; then
+    echo "the series' stopping rule ends an arm after three iterations without a paired gain; ALLOW_LONG=1 lifts this for a promoted arm" >&2
+    exit 2
+  fi
+  not_queued orc-arm
+  not_queued orc-baseline-clone_open
+  local run=$OUT/${ARM_CONFIG%.json}
+  [[ -s "$CONFIG_DIR/$ARM_CONFIG" ]] || { echo "no config $CONFIG_DIR/$ARM_CONFIG: deploy it first" >&2; exit 2; }
+  [[ -s "$OUT/clone/training.done" ]] || { echo "no training receipt $OUT/clone/training.done: the pass has not finished" >&2; exit 2; }
+  [[ -s "$run/baseline/evaluation.json" ]] || { echo "the clone's baseline has not closed ($run/baseline/evaluation.json): submit clone first" >&2; exit 2; }
+  # The update must label the choice on a rejected candidate, which the commit rule's lifting gives the policy.
+  grep -q "def rejected_choice" "$SRC/psse_env/rl/train.py" \
+    || { echo "the source at $SRC does not label the choice on rejected candidates: deploy the arm's commit first" >&2; exit 2; }
+  [[ -z "$(git -C "$SRC" status --porcelain --untracked-files=no)" ]] || { echo "the source at $SRC has uncommitted changes" >&2; exit 2; }
+  local ids
+  ids=$(chain orc-arm "$links" stage_arm.sbatch "" "ALL,ARM_CONFIG=$ARM_CONFIG,ITERATIONS=$target,TARGET_ITERATIONS=$target")
+  record "orc-arm config=$ARM_CONFIG links=$ids target_iterations=$target"
+}
+
 case "$COMMAND" in
   smoke)
     check_rows
@@ -128,6 +160,7 @@ case "$COMMAND" in
     submit_pass ""
     submit_clone 2 "$PASS_LAST"
     ;;
-  *) echo "unknown command $COMMAND (smoke, smoke_baseline, s0, pass, clone or all)" >&2; exit 2 ;;
+  arm) submit_arm "${2:-6}" "${3:-2}" ;;
+  *) echo "unknown command $COMMAND (smoke, smoke_baseline, s0, pass, clone, all or arm)" >&2; exit 2 ;;
 esac
 squeue -u "$USER" -o "%.12i %.28j %.9T %.10M %.26E %.20R"

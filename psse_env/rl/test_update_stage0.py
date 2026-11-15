@@ -585,6 +585,21 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(summary["auc_wrong_above_true"], 1.0)
         self.assertEqual(summary["true_target"]["p_decline_above_half"], 1)
         self.assertEqual(summary["true_target_after_a_decline"]["decisions"], 1)
+        self.assertNotIn("rejected_candidates", summary)
+        # Decisions on rejected candidates (a run with the commit rule lifted) are read apart, by the chance of keeping.
+        mixed = decision_summary([{"p_decline": 0.9, "target_is_true": False, "ordinal": 0, "candidate": "accepted"},
+                                  {"p_decline": 0.2, "target_is_true": True, "ordinal": 0, "candidate": "accepted"},
+                                  {"p_decline": 0.3, "target_is_true": True, "ordinal": 0, "candidate": "rejected"},
+                                  {"p_decline": 0.8, "target_is_true": False, "ordinal": 1, "candidate": "rejected"},
+                                  {"p_decline": 0.1, "target_is_true": None, "ordinal": 1, "candidate": "rejected"}])
+        self.assertEqual((mixed["decisions"], mixed["true_target"]["decisions"], mixed["wrong_target"]["decisions"],
+                          mixed["wrong_target_later_candidate"]["decisions"], mixed["auc_wrong_above_true"]), (2, 1, 1, 0, 1.0))
+        block = mixed["rejected_candidates"]
+        self.assertEqual((block["decisions"], block["true_target"]["decisions"], block["wrong_target"]["decisions"]), (2, 1, 1))
+        self.assertAlmostEqual(block["true_target"]["mean_p_keep"], 0.7)
+        self.assertAlmostEqual(block["wrong_target"]["mean_p_keep"], 0.2)
+        self.assertEqual((block["true_target"]["p_keep_above_half"], block["wrong_target"]["p_keep_above_half"],
+                          block["auc_true_above_wrong"]), (1, 0, 1.0))
 
     def test_a_preempted_step_keeps_its_diagnostics(self) -> None:
         rows = self._batch()

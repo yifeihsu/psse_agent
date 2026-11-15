@@ -77,7 +77,9 @@ from psse_env.rl.decision_credit import (
 from psse_env.rl.forks import CHOICES, branch_seed, run_branch
 from psse_env.rl.integrity import MARKER_FILE, IntegrityError, update_integrity
 from psse_env.rl.lifecycle import (
+    kept_wrong_targets,
     lifecycle_decisions,
+    rejected_decisions,
     rejected_candidate_decisions,
     scenario_truth,
     summarize_decisions,
@@ -571,6 +573,17 @@ def sampling_policy_factory(config: RLConfig, adapter: str, env_factory: Callabl
     return factory
 
 
+def rejected_choice(config: RLConfig) -> bool:
+    """Whether the run's environment lifts the commit rule, so that keeping a rejected candidate is the policy's choice.
+
+    Sampled episodes then record their decisions on rejected candidates with the audit's label
+    (:func:`psse_env.rl.lifecycle.lifecycle_decisions`), the lifecycle terms train them with the decisions on
+    accepted ones, and a rejected candidate kept on a healthy component is charged as a wrong correction kept.
+    """
+
+    return OPEN_RULE_COMMIT_REJECTED_CANDIDATE in normalize_open_rules(config.environment_options.get("open_rules"))
+
+
 def iteration_dir(config: RLConfig, iteration: int) -> Path:
     return Path(config.output_dir) / f"iteration_{iteration:03d}"
 
@@ -650,6 +663,7 @@ def phase_rollout(
         expert_reference=reference or None,
         progress=progress,
         evaluator_options=config.evaluator_options(),
+        rejected_choice=rejected_choice(config),
     )
     summary.update(adapter=manifest.current_adapter, iteration=manifest.iteration, roots=len(scenarios),
                    shard=None if shard is None else f"{shard[0]}/{shard[1]}", observation_mode=config.observation_mode)
@@ -737,6 +751,7 @@ def phase_continuation(
                     continuation=policy_factory(seed), continuation_index=index, seed=seed,
                     env_factory=env_factory, max_steps=config.max_steps, case_loader=deterministic_case_loader,
                     weights=weights, observation_mode=config.observation_mode,
+                    rejected_choice=rejected_choice(config),
                 )
                 record.update(adapter=manifest.current_adapter, iteration=manifest.iteration, stratum=group.stratum)
                 _write_json(_branch_path(branch_dir, state.name, choice, index), record)
@@ -803,15 +818,20 @@ def score_groups(config: RLConfig, store: TrajectoryStore) -> tuple[list[tuple[l
         1 for trajectories, _ in groups for trajectory in trajectories if trajectory.evaluation.get("truth_audited_task_success")
     )
     episodes = sum(len(trajectories) for trajectories, _ in groups)
+    decisions = [decision for ts, _ in groups for t in ts for decision in t.lifecycle]
+    rejected = rejected_decisions(decisions)
     summary.update(
         episodes=episodes,
         success_rate=(successes / episodes) if episodes else None,
         mean_calls=(sum(int(t.reward.get("calls") or 0) for ts, _ in groups for t in ts) / episodes) if episodes else None,
         unpaired_trajectories=sum(1 for ts, _ in groups for t in ts if not t.pairing_ok),
+        # The counts are of accepted candidates; the labelled decisions that pair include those on rejected
+        # candidates, which only a run with the commit rule lifted records.
         lifecycle={
-            **summarize_decisions([decision for ts, _ in groups for t in ts for decision in t.lifecycle]),
+            **summarize_decisions(decisions),
             "labelled_decisions_paired": sum(t.labelled_decisions for ts, _ in groups for t in ts if t.pairing_ok),
         },
+        **({"rejected_candidates": summarize_rejected(rejected)} if rejected else {}),
     )
     return groups, summary
 
@@ -1324,8 +1344,7 @@ def _greedy_evaluation(
                 rejected = (rejected_candidate_decisions(episode.get("trace") or [], scenario_truth(scenario))
                             if OPEN_RULE_COMMIT_REJECTED_CANDIDATE in lifted else [])
                 reward = episode_reward(episode, family=family, expert_reference_calls=reference.get(root), weights=weights,
-                                        kept_wrong_targets=summarize_decisions(decisions)["wrong_target_committed"]
-                                        + summarize_rejected(rejected)["wrong_target_kept"])
+                                        kept_wrong_targets=kept_wrong_targets([*decisions, *rejected]))
                 _write_json(episodes_dir / f"{_safe_name(root)}.json",
                             _compact_evaluation(episode, root=root, family=family, reward=reward.as_dict(), lifecycle=decisions,
                                                 scenario=scenario, telemetry=telemetry.as_dict(),

@@ -336,6 +336,41 @@ class LifecycleRowTests(unittest.TestCase):
                           report["supervised_rows_disagreeing"], report["supervised_tokens"], report["lifecycle_rows"], report["lifecycle_only_rows"],
                           report["rows"]), ("supervised", 2, 2, 1, 1, 4, 0, 0, 6))
 
+    def test_a_decision_on_a_rejected_candidate_is_trained_like_one_on_an_accepted_candidate(self) -> None:
+        # An episode sampled with the commit rule lifted: a rejected true target rolled back (the audit would keep
+        # it), then an accepted true target committed.
+        a0 = _trajectory("a", 0, steps=3)
+        for position, tool in ((0, "rollback_state"), (2, "commit_state")):
+            a0.steps[position].tool = tool
+            a0.steps[position].action = {"tool": tool, "arguments": {}}
+        a0.lifecycle = [
+            {"contract": "rl_rejected_candidate_decisions_v1", "position": 0, "tool": "rollback_state", "verdict": "REJECT",
+             "kept": False, "target_is_true": True, "label": "commit_state", "agrees": False, "correction_tool": "correct_parameters"},
+            {"contract": "rl_lifecycle_decisions_v1", "position": 2, "tool": "commit_state", "verdict": "ACCEPT_PARTIAL",
+             "declined": False, "target_is_true": True, "label": "commit_state", "agrees": True, "correction_tool": "correct_parameters"},
+        ]
+        groups = [([a0, _trajectory("a", 1, steps=1)], group_advantages([1.0, 0.0], root="a"))]
+        asked = []
+
+        def render_target(observation, text, decision):
+            asked.append((observation["active_state_id"], decision["label"]))
+            return [11, 12]
+
+        rows, report = build_rows(groups, render_prompt=_render, prompt_token_ids=_tokenize, max_length=64,
+                                  lifecycle_credit=0.25, lifecycle_form="supervised", render_target=render_target)
+        supervised = {row.step: row for row in rows if row.supervised}
+        self.assertEqual(sorted(supervised), [0, 2])
+        self.assertEqual(asked, [("a:s0", "commit_state"), ("a:s2", "commit_state")])
+        self.assertEqual((supervised[0].decision["candidate"], supervised[0].decision["verdict"], supervised[0].decision["agrees"]),
+                         ("rejected", "REJECT", False))
+        # The accepted candidate is still the episode's first: a rejected one moves neither the ordinal nor the declines.
+        self.assertEqual((supervised[2].decision["candidate"], supervised[2].decision["ordinal"], supervised[2].decision["earlier_declines"]),
+                         ("accepted", 0, 0))
+        self.assertEqual((report["supervised_rows"], report["supervised_rows_on_rejected_candidates"], report["supervised_rows_agreeing"],
+                          report["supervised_rows_disagreeing"], report["lifecycle_decisions_labelled"]), (2, 1, 1, 1, 2))
+        # The sampled form scores it too: the rollback of a true target disagrees with the audit.
+        self.assertEqual(decision_terms(a0, 0.25), {0: -0.25, 2: 0.25})
+
     def test_supervised_rows_follow_the_prompt_checks_and_count_unrenderable_targets(self) -> None:
         def failing(observation, text, decision):
             if decision["tool"] == "commit_state":  # a0's decision

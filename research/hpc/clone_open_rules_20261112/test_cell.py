@@ -19,8 +19,8 @@ from research.hpc.rl_improvement_20261110 import make_configs
 
 CELL = Path(__file__).resolve().parent
 BOUNDED_CELL = CELL.parent / "compound_cloning_20261106"
-SCRIPTS = ("cell.env", "stage_row_gate.sbatch", "stage_clone_train.sbatch", "stage_baseline.sbatch", "submit_cell.sh", "status_cell.sh",
-           "deploy_from_windows.sh")
+SCRIPTS = ("cell.env", "stage_row_gate.sbatch", "stage_clone_train.sbatch", "stage_baseline.sbatch", "stage_arm.sbatch", "submit_cell.sh",
+           "status_cell.sh", "deploy_from_windows.sh")
 
 
 def _settings(path: Path) -> dict[str, str]:
@@ -95,7 +95,7 @@ class CellFilesTests(unittest.TestCase):
                 self.assertIn(f'source "$WORK/source/research/hpc/{CELL.name}/cell.env"', text, name)
 
     def test_gpu_stages_take_any_large_card_and_may_be_preempted(self) -> None:
-        for name in ("stage_clone_train.sbatch", "stage_baseline.sbatch"):
+        for name in ("stage_clone_train.sbatch", "stage_baseline.sbatch", "stage_arm.sbatch"):
             text = (CELL / name).read_text(encoding="utf-8")
             self.assertIn("#SBATCH --constraint=a100|h100|h200|rtx6000", text, name)
             self.assertIn("#SBATCH --requeue", text, name)
@@ -116,6 +116,30 @@ class CellFilesTests(unittest.TestCase):
         # The pass waits for the row gate, the clone's baseline for the pass.
         self.assertIn('"afterok:$gate"', submit)
         self.assertIn('"${after:+afterok:$after}"', submit)
+
+    def test_the_arm_continues_the_clones_baseline_and_holds_the_series_stopping_rule(self) -> None:
+        submit = (CELL / "submit_cell.sh").read_text(encoding="utf-8")
+        stage = (CELL / "stage_arm.sbatch").read_text(encoding="utf-8")
+        series = (CELL.parent / "rl_improvement_20261110" / "rl.sbatch").read_text(encoding="utf-8")
+        # One config, the clone's baseline config: the arm's run folder is the one that baseline closed in.
+        self.assertIn(f"ARM_CONFIG={baseline_config.FILES['clone_open']}", submit)
+        self.assertIn(f"ARM_CONFIG=${{ARM_CONFIG:-{baseline_config.FILES['clone_open']}}}", stage)
+        self.assertIn('"ALL,ARM_CONFIG=$ARM_CONFIG,ITERATIONS=$target,TARGET_ITERATIONS=$target"', submit)
+        self.assertIn("local links=${1:-6} target=${2:-2}", submit)
+        self.assertIn("if (( target > 3 )) && [[ -z \"${ALLOW_LONG:-}\" ]]; then", submit)
+        for text in (submit, stage):
+            self.assertIn("baseline/evaluation.json", text)  # no arm before its paired baseline
+            self.assertIn('grep -q "def rejected_choice" "$SRC/psse_env/rl/train.py"', text)  # nor on a source that labels less
+        self.assertIn("not_queued orc-arm", submit)
+        # The baseline is never run by the arm's job; the other phases are the series' loop, line for line.
+        self.assertIn("for phase in rollout continuation update evaluate; do", stage)
+        self.assertNotIn("--phase baseline", stage)
+        for line in ('"$PY" -m psse_env.rl.train --config "$CFG" --phase "$phase" --shard "$s/$RL_WORKERS" \\',
+                     'if ! "$PY" -m psse_env.rl.train --config "$CFG" --phase "$phase"; then',
+                     '(( ${gpu_mib:-0} >= 70000 )) && RL_WORKERS=2',
+                     'reached_target() { [[ -n "$TARGET_ITERATIONS" ]] && (( $(status_field iteration) >= TARGET_ITERATIONS )); }'):
+            self.assertIn(line, stage)
+            self.assertIn(line, series)
 
     def test_the_shell_files_parse(self) -> None:
         try:
@@ -174,6 +198,23 @@ class BaselineConfigTests(unittest.TestCase):
         outputs = [config["output_dir"] for config in self.configs.values()]
         self.assertEqual(len(set(outputs)), 3)
         self.assertTrue(all(output.startswith(work + "/out/") for output in outputs))
+
+    def test_the_arms_config_trains_the_choices_the_open_rules_give(self) -> None:
+        from psse_env.rl.train import RLConfig, initial_phase, iteration_phases, rejected_choice
+
+        arm = RLConfig(**self.clone)
+        arm.validate()
+        # Arm A's update, rewards and root draws, from the cloned adapter with the rules lifted: nothing else differs.
+        self.assertEqual(make_configs.differing_fields(self.clone, self.arm_a), ["environment_options", "initial_adapter"])
+        for field in ("update", "reward", "rows", "root_sampling", "roots_per_iteration", "samples_per_root", "seed", "temperature",
+                      "training_suite", "reserved_roots", "observation_mode", "max_steps", "decision_credit"):
+            self.assertEqual(self.clone[field], self.arm_a[field], field)
+        self.assertEqual((arm.reward["lifecycle_credit"], arm.reward["lifecycle_form"]), (0.25, "supervised"))
+        self.assertEqual((initial_phase(arm), iteration_phases(arm)), ("baseline", ("rollout", "update", "evaluate")))
+        # The commit rule is lifted, so the rollouts record and label the choice on a rejected candidate; arm A's do not.
+        self.assertTrue(rejected_choice(arm))
+        self.assertFalse(rejected_choice(RLConfig(**self.arm_a)))
+        self.assertTrue(arm.stop_on_integrity_failure)
 
     def test_the_open_config_builds_an_environment_with_every_rule_lifted(self) -> None:
         import scripts.run_dagger_research as research

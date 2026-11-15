@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
 from psse_env.rl.advantages import GroupAdvantages
-from psse_env.rl.lifecycle import decision_sign
+from psse_env.rl.lifecycle import accepted_before, decision_sign, is_rejected_candidate
 from psse_env.rl.prompt_digest import prompt_token_digest
 from psse_env.rl.reward import LIFECYCLE_FORMS
 from psse_env.rl.rollout import Trajectory
@@ -264,6 +264,9 @@ def decision_record(trajectory: Trajectory, index: int) -> dict[str, Any]:
     ``ordinal`` counts the episode's decisions on accepted candidates from
     zero, so ``ordinal == 0`` is the first accepted candidate, and
     ``earlier_declines`` how many of the earlier ones the policy declined.
+    ``candidate`` is ``rejected`` for a decision on a candidate the
+    acceptance check did not accept (a choice only where the commit rule is
+    lifted); such a decision moves neither count.
     Read by the update's decision diagnostics and the reports only.
     """
 
@@ -276,8 +279,9 @@ def decision_record(trajectory: Trajectory, index: int) -> dict[str, Any]:
         "verdict": decision.get("verdict"),
         "correction_tool": decision.get("correction_tool"),
         "position": decision.get("position"),
-        "ordinal": int(index),
+        "ordinal": accepted_before(trajectory.lifecycle, index),
         "earlier_declines": sum(1 for earlier in trajectory.lifecycle[:index] if earlier.get("declined")),
+        "candidate": "rejected" if is_rejected_candidate(decision) else "accepted",
     }
 
 
@@ -416,6 +420,8 @@ def build_rows(
         "supervised_rows_disagreeing": 0,
         "supervised_rows_unrenderable": 0,
         "supervised_tokens": 0,
+        # Of the supervised rows, those on a rejected candidate the policy kept or rolled back (the commit rule lifted).
+        "supervised_rows_on_rejected_candidates": 0,
         "decision_credit_weight": weight if values else 0.0,
         "decision_values": len(values),
         "decision_credit_rows": 0,
@@ -602,6 +608,7 @@ def build_rows(
             report["supervised_rows"] += 1
             report["supervised_tokens"] += row.completion_tokens
             report["supervised_rows_agreeing" if sign > 0.0 else "supervised_rows_disagreeing"] += 1
+            report["supervised_rows_on_rejected_candidates"] += int(is_rejected_candidate(decision))
         return built
 
     decision_rows_wanted = sampled_credit > 0.0 or bool(values)

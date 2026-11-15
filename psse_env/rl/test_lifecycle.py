@@ -12,10 +12,16 @@ from psse_env.actions import (
     VERIFY_CANDIDATE,
 )
 from psse_env.rl.lifecycle import (
+    LIFECYCLE_CONTRACT,
     REJECTED_CONTRACT,
+    accepted_before,
+    accepted_decisions,
     decision_sign,
+    is_rejected_candidate,
+    kept_wrong_targets,
     lifecycle_decisions,
     rejected_candidate_decisions,
+    rejected_decisions,
     scenario_truth,
     summarize_decisions,
     summarize_rejected,
@@ -190,6 +196,41 @@ class RejectedCandidateTests(unittest.TestCase):
             "true_target_rolled_back": 0, "wrong_target_rolled_back": 0,
         })
         self.assertEqual(summarize_rejected([])["decisions"], 0)
+
+    def test_the_lifted_commit_rule_puts_them_among_the_episodes_decisions(self) -> None:
+        trace = [
+            _step(CORRECT_PARAMETERS, {"line_index": 7}, number=1),
+            _step(ROLLBACK_STATE, disposition="REJECT", number=2),  # a rejected true target rolled back: disagrees
+            _step(CORRECT_PARAMETERS, {"line_index": 7}, number=3),
+            _step(COMMIT_STATE, disposition="ACCEPT_PARTIAL", number=4),  # accepted, true, committed: agrees
+            _step(CORRECT_PARAMETERS, {"line_index": 8}, number=5),
+            _step(COMMIT_STATE, disposition="INCONCLUSIVE", number=6),  # a rejected wrong target kept: disagrees
+            _step(CORRECT_MEASUREMENTS, {"suspect_group": [5]}, number=7),
+            _step(COMMIT_STATE, disposition="ACCEPT_FINAL", number=8),  # accepted, wrong, committed: disagrees
+            _step(CORRECT_MEASUREMENTS, {"suspect_group": [6]}, number=9),
+            _step(ROLLBACK_STATE, disposition="ACCEPT_FINAL", number=10),  # accepted, wrong, declined: agrees
+        ]
+        closed = lifecycle_decisions(trace, TRUTH)
+        self.assertEqual([d["position"] for d in closed], [3, 7, 9])  # the rule in place: nothing chosen at a rejected one
+        decisions = lifecycle_decisions(trace, TRUTH, rejected_choice=True)
+        self.assertEqual([d["position"] for d in decisions], [1, 3, 5, 7, 9])  # the episode's order
+        self.assertEqual([d["contract"] for d in decisions],
+                         [REJECTED_CONTRACT, LIFECYCLE_CONTRACT, REJECTED_CONTRACT, LIFECYCLE_CONTRACT, LIFECYCLE_CONTRACT])
+        self.assertEqual([is_rejected_candidate(d) for d in decisions], [True, False, True, False, False])
+        self.assertEqual([d["label"] for d in decisions], [COMMIT_STATE, COMMIT_STATE, ROLLBACK_STATE, ROLLBACK_STATE, ROLLBACK_STATE])
+        self.assertEqual([decision_sign(d) for d in decisions], [-1.0, 1.0, -1.0, -1.0, 1.0])
+        # Each kind is the record its own reader gives: nothing is lost or renamed by reading them together.
+        self.assertEqual(accepted_decisions(decisions), closed)
+        self.assertEqual(rejected_decisions(decisions), rejected_candidate_decisions(trace, TRUTH))
+        self.assertEqual([(d.get("kept"), d.get("declined")) for d in decisions],
+                         [(False, None), (None, False), (True, None), (None, False), (None, True)])
+        # The decline counts and the ordinals stay those of accepted candidates.
+        self.assertEqual(summarize_decisions(decisions), summarize_decisions(closed))
+        self.assertEqual(summarize_decisions(decisions)["decisions"], 3)
+        self.assertEqual([accepted_before(decisions, index) for index in range(5)], [0, 0, 1, 1, 2])
+        # A wrong correction kept is one whichever way the acceptance check went.
+        self.assertEqual((kept_wrong_targets(closed), kept_wrong_targets(decisions)), (1, 2))
+        self.assertEqual(kept_wrong_targets([]), 0)
 
 
 if __name__ == "__main__":

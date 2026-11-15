@@ -588,6 +588,8 @@ class StepDiagnostics:
             "ordinal": decision.get("ordinal"),
             "earlier_declines": decision.get("earlier_declines"),
             "correction_tool": decision.get("correction_tool"),
+            # "rejected" for a candidate the acceptance check did not accept (a choice with the commit rule lifted).
+            "candidate": decision.get("candidate"),
         })
 
     def add_components(self, parts: Mapping[str, Sequence[Any]]) -> None:
@@ -746,6 +748,12 @@ def decision_summary(decisions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     A decision that has both a sampled row and a supervised row in the step
     is counted once, by its supervised row (the probability of the audit's
     choice); ``rows`` says how many rows of each kind were read.
+
+    Decisions on rejected candidates (a run with the commit rule lifted has
+    them) are read apart, under ``rejected_candidates``: there the minority
+    choice is keeping, so the groups give the probability of keeping and
+    ``auc_true_above_wrong`` the chance a true target gets a higher one than
+    a wrong target.  Every other field is of accepted candidates, as before.
     """
 
     rows_by_kind: dict[str, int] = {}
@@ -755,7 +763,8 @@ def decision_summary(decisions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         key = tuple(item["key"]) if item.get("key") is not None else ("row", position)
         if key not in unique or item.get("kind") == "supervised":
             unique[key] = item
-    decisions = list(unique.values())
+    rejected = [item for item in unique.values() if item.get("candidate") == "rejected"]
+    decisions = [item for item in unique.values() if item.get("candidate") != "rejected"]
 
     def group(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         values = [float(item["p_decline"]) for item in items]
@@ -765,12 +774,30 @@ def decision_summary(decisions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "p_decline_above_half": sum(1 for value in values if value > 0.5),
         }
 
+    def keep_group(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        values = [1.0 - float(item["p_decline"]) for item in items]
+        return {
+            "decisions": len(values),
+            "mean_p_keep": (sum(values) / len(values)) if values else None,
+            "p_keep_above_half": sum(1 for value in values if value > 0.5),
+        }
+
     labelled = [item for item in decisions if item.get("target_is_true") is not None]
     true = [item for item in labelled if item["target_is_true"]]
     wrong = [item for item in labelled if not item["target_is_true"]]
     first = lambda items: [item for item in items if not item.get("ordinal")]  # noqa: E731
     later = lambda items: [item for item in items if item.get("ordinal")]  # noqa: E731
+    rejected_true = [item for item in rejected if item.get("target_is_true") is True]
+    rejected_wrong = [item for item in rejected if item.get("target_is_true") is False]
+    rejected_block = {"rejected_candidates": {
+        "decisions": len(rejected_true) + len(rejected_wrong),
+        "true_target": keep_group(rejected_true),
+        "wrong_target": keep_group(rejected_wrong),
+        "auc_true_above_wrong": _auc([1.0 - float(item["p_decline"]) for item in rejected_true],
+                                     [1.0 - float(item["p_decline"]) for item in rejected_wrong]),
+    }} if rejected else {}
     return {
+        **rejected_block,
         "decisions": len(labelled),
         "rows": dict(sorted(rows_by_kind.items())),
         "true_target": group(true),

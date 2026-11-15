@@ -46,10 +46,11 @@ from psse_env.dagger.observation_modes import (
 )
 from psse_env.rl.lifecycle import (
     CORRECTION_TOOLS,
+    is_rejected_candidate,
+    kept_wrong_targets,
     lifecycle_decisions,
     policy_trace_steps,
     scenario_truth,
-    summarize_decisions,
     target_is_true,
 )
 from psse_env.rl.reward import RewardWeights, episode_reward
@@ -204,6 +205,11 @@ def decision_states(trajectory: Trajectory) -> list[DecisionState]:
     observation of every step up to it (an evaluation stored without its
     trace), or when the episode began with interventions other than the
     evaluator's own (which a replay through the same contract repeats).
+
+    A decision on a rejected candidate (an episode sampled with the commit
+    rule lifted records them) is not a state here: branches fork accepted
+    candidates only, and the ordinal and the earlier declines count accepted
+    candidates as before.
     """
 
     trace = trajectory.evaluation.get("trace") or []
@@ -212,7 +218,11 @@ def decision_states(trajectory: Trajectory) -> list[DecisionState]:
     trace_index = [index for index, row in enumerate(trace) if isinstance(row, Mapping) and not row.get("intervention")]
     states: list[DecisionState] = []
     declines = 0
-    for ordinal, decision in enumerate(trajectory.lifecycle):
+    ordinal = -1
+    for decision in trajectory.lifecycle:
+        if is_rejected_candidate(decision):
+            continue
+        ordinal += 1
         position = decision.get("position")
         usable = (
             decision.get("agrees") is not None
@@ -446,12 +456,17 @@ def run_branch(
     observation_mode: str = BOUNDED_HISTORY,
     evaluator: Callable[..., Any] | None = None,
     keep_trace: bool = False,
+    rejected_choice: bool = False,
 ) -> dict[str, Any]:
     """One branch of a decision state: the prefix replayed, ``forced_tool`` forced, ``continuation`` to the end.
 
     The record is valid when the replay showed the policy what the recorded
     episode showed it at every step and the environment executed the forced
     choice; only valid branches carry a return anyone should use.
+    ``rejected_choice`` says the environment lifts the commit rule: a
+    rejected candidate the branch kept on a healthy component is then charged
+    as in a sampled episode.  The record's ``lifecycle`` stays the decisions
+    on accepted candidates.
     """
 
     if scenario_root(scenario) != state.root:
@@ -488,7 +503,8 @@ def run_branch(
     truth = scenario_truth(scenario)
     decisions = lifecycle_decisions(trace, truth)
     reward = episode_reward(episode, family=family, expert_reference_calls=None, weights=weights,
-                            kept_wrong_targets=summarize_decisions(decisions)["wrong_target_committed"])
+                            kept_wrong_targets=kept_wrong_targets(
+                                lifecycle_decisions(trace, truth, rejected_choice=rejected_choice)))
     forced_step = steps[state.position] if state.position < len(steps) else None
     forced_action = forced_step.get("action") if isinstance(forced_step, Mapping) and isinstance(forced_step.get("action"), Mapping) else {}
     forced_executed = bool(
