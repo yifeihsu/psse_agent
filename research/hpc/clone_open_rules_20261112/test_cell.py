@@ -141,6 +141,16 @@ class CellFilesTests(unittest.TestCase):
             self.assertIn(line, stage)
             self.assertIn(line, series)
 
+    def test_no_remote_command_substitution_goes_through_the_wsl_shell(self) -> None:
+        # ``wsl --`` runs its arguments through a shell of its own: a ``\\$(...)`` meant for torch inside an ssh command
+        # string is expanded on the WSL side.  The row guard compared a checksum taken there, of a file that is not
+        # there, and refused a redeploy with identical rows.  Such commands go in through stdin (a here-document).
+        text = (CELL / "deploy_from_windows.sh").read_text(encoding="utf-8")
+        for number, line in enumerate(text.splitlines(), start=1):
+            if "wsl -- ssh" in line and "<<" not in line:
+                self.assertNotIn("\\$(", line, f"deploy_from_windows.sh line {number}")
+        self.assertIn('[[ "$(remote_sha "$WORK/data/rows/selection.train_view.jsonl")" == "$(sha256sum "$TRAIN_LOCAL" | cut -d\' \' -f1)" ]]', text)
+
     def test_the_shell_files_parse(self) -> None:
         try:
             done = subprocess.run(["bash", "--version"], capture_output=True, text=True, timeout=30)

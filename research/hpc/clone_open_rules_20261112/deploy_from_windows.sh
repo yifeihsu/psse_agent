@@ -78,9 +78,14 @@ upload_verified() {
 }
 
 wsl -- ssh -o NumberOfPasswordPrompts=0 torch "echo ssh_ok" || { echo "no SSH master: run scripts/start_torch_ssh_master.ps1 first" >&2; exit 2; }
-# Replacing the rows under a pass that has checkpoints would resume it on other rows.
-wsl -- ssh torch "if ls -d $WORK/out/clone/training/checkpoint-* >/dev/null 2>&1 && [ \"\$(sha256sum $WORK/data/rows/selection.train_view.jsonl 2>/dev/null | cut -d' ' -f1)\" != \"$(sha256sum "$TRAIN_LOCAL" | cut -d' ' -f1)\" ]; then echo rows_differ_under_checkpoints; fi" \
-  | grep -q rows_differ_under_checkpoints && { echo "the pass on torch has checkpoints on other rows: remove $WORK/out/clone first" >&2; exit 2; }
+# Replacing the rows under a pass that has checkpoints would resume it on other rows.  Two plain calls and a
+# comparison here: wsl -- runs its arguments through a shell of its own, so a command substitution meant for torch
+# inside an ssh command string is expanded on the WSL side, where the rows are not, and the two checksums always
+# differed once the pass had checkpoints (the deploy of 2026-11-14 was refused so, with identical rows).
+if [[ -n "$(wsl -- ssh torch "ls -d $WORK/out/clone/training/checkpoint-* 2>/dev/null | head -n 1" || true)" ]]; then
+  [[ "$(remote_sha "$WORK/data/rows/selection.train_view.jsonl")" == "$(sha256sum "$TRAIN_LOCAL" | cut -d' ' -f1)" ]] \
+    || { echo "the pass on torch has checkpoints on other rows: remove $WORK/out/clone first" >&2; exit 2; }
+fi
 wsl -- ssh torch "set -e; mkdir -p $WORK/logs $WORK/out $WORK/configs $WORK/data/rows $WORK/data/suites; if [ ! -d $WORK/source/.git ]; then git clone -q $SOURCE_CELL/source $WORK/source; fi; echo source_ready"
 REMOTE_HEAD=$(wsl -- ssh torch "git -C $WORK/source rev-parse HEAD")
 if [[ "$REMOTE_HEAD" == "$COMMIT" ]]; then
