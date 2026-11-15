@@ -74,7 +74,10 @@ def tool_schemas_for_observation(tools: Iterable[Mapping[str, Any]], observation
     so (``_with_lifecycle_choice``), and where it lifted the commit's verdict
     lock the commit schema does (``_with_open_rules``).
     """
-    return _with_open_rules(_with_lifecycle_choice(_profile_tool_schemas(tools, observation), observation), observation)
+    return _with_complete_evidence(
+        _with_open_rules(_with_lifecycle_choice(_profile_tool_schemas(tools, observation), observation), observation),
+        observation,
+    )
 
 
 def _profile_tool_schemas(tools: Iterable[Mapping[str, Any]], observation: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -118,6 +121,84 @@ DETAILED_EVIDENCE_PROMPT_PARAGRAPH = (
     "own target metric and the largest normalized residual and multiplier on the lines "
     "and buses that meet it, before and after the edit. An accepted correction keeps its "
     "verification numbers under commit_record."
+)
+#: The part of the detailed-evidence paragraph about corrections and verifications, which holds under the
+#: complete evidence too (its first sentences describe the tables of the alarm's neighbourhood).
+DETAILED_EVIDENCE_CORRECTION_SENTENCES = DETAILED_EVIDENCE_PROMPT_PARAGRAPH[
+    DETAILED_EVIDENCE_PROMPT_PARAGRAPH.index(" A correction reports what it wrote"):
+]
+COMPLETE_EVIDENCE_PROMPT_PARAGRAPH = (
+    " Complete evidence: the estimator's output is given whole, with no threshold, cut or ranking, and "
+    "without a list of supported corrections. Which component to correct is yours to judge from the "
+    "numbers, and a correction and its verification are how a hypothesis is tested. A table is written "
+    "once as its columns and then one row of values per entry, in the order of the columns. "
+    "fresh_context_evidence.wls holds the active case's solve: its chi-square statistic and threshold, "
+    "bus_table with every bus's estimated voltage magnitude in per unit (v) and angle in degrees (angle) "
+    "and the normalized residuals of its voltage magnitude (vm) and its P and Q "
+    "injections (p, q; null at a zero-injection bus), and branch_table with every line's normalized "
+    "residuals of the P and Q flows at both ends (pf, qf, pt, qt) and the normalized multipliers of its "
+    "series R and X (lr, lx). A residual is signed: measured minus estimated, in standard deviations. "
+    "The solve of a candidate reports the same two tables under wls_summary. The "
+    "measurement context adds meter_table: every measurement with its index (the number a measurement "
+    "correction takes in suspect_group), its channel, where it sits (at: the bus number for Vm, "
+    "Pinj and Qinj; the line number for Pf and Qf at the from end and Pt and Qt at the to end), the measured "
+    "value in per unit and its normalized residual. The parameter context adds line_table: every "
+    "line with its buses, the model's series r and x in per unit and their normalized multipliers (a "
+    "parameter correction takes the line's number). The topology context adds "
+    "node_breaker_estimate, the chi-square test of the substation estimate, and breaker_table: every "
+    "breaker with its reported status, its normalized multipliers (theta, vm) and their score, what "
+    "flipping it would do to the operator model (flip_effect, with the line or the bus it concerns) and, "
+    "for the breakers the estimator re-estimated with the flip applied, whether that estimate converged, "
+    "its chi-square (flip_chi_square) and the share of the chi-square the flip removes (flip_progress). "
+    "A topology correction takes the breaker's name, the status to set and, where the flip concerns a "
+    "line, that line's number."
+)
+#: The topology correction's line argument under the complete evidence: the breaker table says whether a
+#: flip concerns a line, where the supported correction used to.
+COMPLETE_EVIDENCE_TOPOLOGY_LINE_DESCRIPTION = (
+    "1-based branch row index; include it exactly when the breaker table gives the breaker's flip a line."
+)
+#: The complete tables (``psse_env.providers.complete_evidence``), written in the prompt as columns and rows.
+COMPLETE_EVIDENCE_TABLE_KEYS = frozenset({"bus_table", "branch_table", "meter_table", "line_table", "breaker_table"})
+#: What the rule expert's screens concluded from a solve or a context: the few largest entries above a
+#: threshold, the dominance and ambiguity verdicts, the route and hypothesis confidences, the open-terminal
+#: cue, the trial screening of the proposed breaker flips, and the corrections those screens support.  Under
+#: the complete evidence the model-visible view holds the numbers these were read from and none of these.
+#: The environment's own observation keeps them all: the controller and the rule expert read them there.
+RULE_SCREEN_KEYS = frozenset(
+    {
+        "supported_corrections",
+        "route_status",
+        "route_status_reason",
+        "finding_count",
+        "measurement_findings",
+        "parameter_findings",
+        "topology_findings",
+        "top_residuals",
+        "top_lagrange",
+        "parameter_ranking_contract",
+        "parameter_ranking_distinct_lines",
+        "parameter_ranking_top_abs_lambda",
+        "parameter_ranking_runner_up_abs_lambda",
+        "parameter_ranking_dominance_ratio",
+        "parameter_ranking_dominance_threshold",
+        "parameter_ranking_singleton",
+        "parameter_ranking_dominant",
+        "parameter_ranking_ambiguous",
+        "parameter_ranking_candidate_lines",
+        "parameter_flow_at_noise_lines",
+        "flow_at_noise_lines",
+        "route_confidence",
+        "hypothesis_confidence",
+        "topology_candidate_screening",
+        "physical_vm_joint_targets",
+        "verified_terminal_measurement_closure_targets",
+        "verified_terminal_measurement_closure_evidence",
+        "accepted_target_refinement",
+        "anomaly_breadth",
+        "dominant_residual_block",
+        "unresolved_signatures",
+    }
 )
 COMPLETE_HISTORY_PROMPT_PARAGRAPH = (
     " Complete history: history_window lists every tool call of this episode in order "
@@ -181,15 +262,27 @@ OPEN_RULES_PROMPT_SENTENCES = {
 }
 
 
-def open_rules_prompt_paragraph(rules: Iterable[str]) -> str:
-    """The paragraph naming the lifted rules, in the order of ``psse_env.actions.OPEN_RULES``; empty for no rule."""
+#: The lifted rules whose sentences speak of what a context lists or reports about its route.  Under the
+#: complete evidence the model reads neither, and the complete-evidence paragraph already says that the
+#: choice of component is its own; the rules stay lifted in the environment all the same.
+OPEN_RULES_SCREEN_SENTENCES = frozenset({"correction_outside_context", "correction_on_closed_route"})
+
+
+def open_rules_prompt_paragraph(rules: Iterable[str], *, complete: bool = False) -> str:
+    """The paragraph naming the lifted rules, in the order of ``psse_env.actions.OPEN_RULES``; empty for no rule.
+
+    ``complete`` is the complete evidence: the sentences about a context's list and route report are left
+    out, and the hand-off sentence does not speak of listed corrections.
+    """
     from psse_env.actions import OPEN_RULES
 
     named = set(rules)
-    sentences = [OPEN_RULES_PROMPT_SENTENCES[rule] for rule in OPEN_RULES if rule in named]
+    sentences = [OPEN_RULES_PROMPT_SENTENCES[rule] for rule in OPEN_RULES
+                 if rule in named and not (complete and rule in OPEN_RULES_SCREEN_SENTENCES)]
     if not sentences:
         return ""
-    return " Open rules: these controller rules are lifted here. " + " ".join(sentences)
+    text = " Open rules: these controller rules are lifted here. " + " ".join(sentences)
+    return text.replace("before every listed correction has been tried", "at any step") if complete else text
 
 
 def _with_open_rules(schemas: list[dict[str, Any]], observation: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -203,6 +296,26 @@ def _with_open_rules(schemas: list[dict[str, Any]], observation: Mapping[str, An
         function = tool.get("function") if isinstance(tool, dict) else None
         if isinstance(function, dict) and CANONICAL_TO_INTERNAL_TOOL.get(str(function.get("name")), str(function.get("name"))) == COMMIT_STATE:
             function["description"] = OPEN_RULES_COMMIT_DESCRIPTION
+    return schemas
+
+
+def _with_complete_evidence(schemas: list[dict[str, Any]], observation: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The topology correction's line argument points at the breaker table under the complete evidence; every
+    other observation is untouched."""
+    from psse_env.actions import CORRECT_TOPOLOGY
+    from psse_env.dagger.protocol_bridge import CANONICAL_TO_INTERNAL_TOOL
+
+    if not complete_evidence_view(observation):
+        return schemas
+    for tool in schemas:
+        function = tool.get("function") if isinstance(tool, dict) else None
+        if not isinstance(function, dict):
+            continue
+        if CANONICAL_TO_INTERNAL_TOOL.get(str(function.get("name")), str(function.get("name"))) != CORRECT_TOPOLOGY:
+            continue
+        line = ((function.get("parameters") or {}).get("properties") or {}).get("line_index1")
+        if isinstance(line, dict) and "supported correction" in str(line.get("description")):
+            line["description"] = COMPLETE_EVIDENCE_TOPOLOGY_LINE_DESCRIPTION
     return schemas
 
 
@@ -294,7 +407,12 @@ def system_prompt_for_observation(system_prompt: str, observation: Mapping[str, 
     from psse_env.actions import DETAILED_EVIDENCE_CONTRACT
 
     record = observation.get("detailed_evidence")
-    if isinstance(record, Mapping) and record.get("contract") == DETAILED_EVIDENCE_CONTRACT:
+    detailed = isinstance(record, Mapping) and record.get("contract") == DETAILED_EVIDENCE_CONTRACT
+    if complete_evidence_view(observation):
+        # The complete tables take the place of the tables of the alarm's
+        # neighbourhood; what a correction and a verification report is as before.
+        text += COMPLETE_EVIDENCE_PROMPT_PARAGRAPH + (DETAILED_EVIDENCE_CORRECTION_SENTENCES if detailed else "")
+    elif detailed:
         text += DETAILED_EVIDENCE_PROMPT_PARAGRAPH
     history_record = observation.get(HISTORY_RECORD_KEY)
     if isinstance(history_record, Mapping) and history_record.get("contract") == COMPLETE_HISTORY:
@@ -309,7 +427,24 @@ def system_prompt_for_observation(system_prompt: str, observation: Mapping[str, 
             if OPEN_RULE_COMMIT_REJECTED_CANDIDATE in rules
             else LIFECYCLE_CHOICE_PROMPT_PARAGRAPH
         )
-    return text + open_rules_prompt_paragraph(rules) if rules else text
+    return text + open_rules_prompt_paragraph(rules, complete=complete_evidence_view(observation)) if rules else text
+
+
+def complete_evidence_view(observation: Any) -> bool:
+    """Whether an observation was made under the complete evidence (``psse_env.actions.COMPLETE_EVIDENCE_CONTRACT``)."""
+    from psse_env.actions import COMPLETE_EVIDENCE_CONTRACT
+
+    record = observation.get("complete_evidence") if isinstance(observation, Mapping) else None
+    return isinstance(record, Mapping) and record.get("contract") == COMPLETE_EVIDENCE_CONTRACT
+
+
+def without_rule_screens(value: Any) -> Any:
+    """Copy ``value`` without what the rule expert's screens concluded (:data:`RULE_SCREEN_KEYS`), at any depth."""
+    if isinstance(value, Mapping):
+        return {str(key): without_rule_screens(item) for key, item in value.items() if str(key) not in RULE_SCREEN_KEYS}
+    if isinstance(value, (list, tuple)):
+        return [without_rule_screens(item) for item in value]
+    return value
 
 
 def _profile_system_prompt(system_prompt: str, observation: Mapping[str, Any]) -> str:
@@ -1348,7 +1483,7 @@ def _compact_hif_evidence(key: str, value: Any) -> dict[str, Any]:
 WLS_SUMMARY_TABLE_KEYS = ("bus_table", "branch_table", "omitted")
 
 
-def _bounded_history_metric(key: str, value: Any, *, history_event: bool = False) -> Any:
+def _bounded_history_metric(key: str, value: Any, *, history_event: bool = False, complete: bool = False) -> Any:
     if key in {"hif_conditioning", "hif_meter_nonregression"}:
         return _compact_hif_evidence(key, value)
     if key == "wls_summary" and history_event and isinstance(value, Mapping):
@@ -1358,7 +1493,8 @@ def _bounded_history_metric(key: str, value: Any, *, history_event: bool = False
         max_depth=6 if key in CONTEXT_DETAIL_KEYS else 3,
         # A WLS summary with tables holds a row per bus or branch of the alarm's
         # neighbourhood (at most 10 and 12) with up to eleven fields each.
-        max_items=24 if key == "gnn_screen" else 32 if key == "wls_summary" else 8,
+        # Under the complete evidence the tables hold every bus and line of the network.
+        max_items=24 if key == "gnn_screen" else (10**6 if complete else 32) if key == "wls_summary" else 8,
         max_text_chars=160,
     )
 
@@ -1487,7 +1623,7 @@ def _without_history(value: Any) -> Any:
     return copy.deepcopy(value)
 
 
-def _compact_last_tool_output(value: Any) -> dict[str, Any]:
+def _compact_last_tool_output(value: Any, *, complete: bool = False) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         return {}
     metrics = value.get("tool_metrics")
@@ -1511,7 +1647,7 @@ def _compact_last_tool_output(value: Any) -> dict[str, Any]:
         if key in value
     }
     compact_metrics = {
-        key: _bounded_history_metric(key, _first_mapping_value((metrics, value), key))
+        key: _bounded_history_metric(key, _first_mapping_value((metrics, value), key), complete=complete)
         for key in HISTORY_METRIC_KEYS
         if _first_mapping_value((metrics, value), key) is not None
     }
@@ -1587,6 +1723,12 @@ def prepare_model_policy_observation(
     # environment's observation keeps them for its own stale-fit checks.
     raw_observation = without_controller_fingerprints(raw_observation)
     source_history = without_controller_fingerprints(source_history)
+    complete = complete_evidence_view(raw_observation)
+    if complete:
+        # The numbers stay, what the screens concluded from them goes, before
+        # any budget is spent on it.
+        raw_observation = without_rule_screens(raw_observation)
+        source_history = without_rule_screens(source_history)
     # Opt-in replay-stable view: IDs and mapping insertion order must not decide
     # which evidence survives the character/item budgets. Legacy exports retain
     # their original compaction order unless this contract is requested.
@@ -1605,7 +1747,7 @@ def prepare_model_policy_observation(
     observation = _without_history(raw_observation)
     if "last_tool_output" in observation:
         observation["last_tool_output"] = _compact_last_tool_output(
-            observation["last_tool_output"]
+            observation["last_tool_output"], complete=complete
         )
     # The controller reports the internal tool name; the model reads and
     # writes the canonical protocol.  Unknown names pass through unchanged.
@@ -1645,6 +1787,8 @@ def prepare_model_policy_observation(
         )
     if not isinstance(aliased, Mapping):
         raise ValueError("Prepared policy observation must remain a mapping.")
+    if complete:
+        aliased = _complete_evidence_tables(dict(aliased))
     return dict(aliased), {
         "state_aliases": state_aliases,
         "episode_aliases": episode_aliases,
@@ -1652,6 +1796,41 @@ def prepare_model_policy_observation(
         "source_history_events": len(source_history),
         "exported_history_events": len(history_window),
     }
+
+
+def _write_complete_tables(value: Any) -> Any:
+    """``value`` with every complete table written as its columns and rows (:func:`records_to_table`)."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): records_to_table(item) if str(key) in COMPLETE_EVIDENCE_TABLE_KEYS and isinstance(item, list)
+            else _write_complete_tables(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_write_complete_tables(item) for item in value]
+    return value
+
+
+def _complete_evidence_tables(observation: dict[str, Any]) -> dict[str, Any]:
+    """The model-visible view's complete tables, each once and as columns and rows.
+
+    A solve of the active case is the ledger's ``fresh_context_evidence.wls``;
+    where the last tool output repeats those very tables it points at them.
+    A candidate's solve differs from them and stays where it is.
+    """
+    ledger = (observation.get("fresh_context_evidence") or {}).get("wls")
+    output = observation.get("last_tool_output")
+    metrics = output.get("observable_metrics") if isinstance(output, Mapping) else None
+    summary = metrics.get("wls_summary") if isinstance(metrics, Mapping) else None
+    if isinstance(ledger, Mapping) and isinstance(summary, Mapping):
+        same = ("bus_table", "branch_table")
+        # Both tables or neither: a candidate's solve can leave one of them as it was.
+        if all(key in summary and summary[key] == ledger.get(key) for key in same):
+            summary = {key: item for key, item in summary.items() if key not in same}
+            summary["tables"] = {"same_as": "fresh_context_evidence.wls"}
+            observation = {**observation, "last_tool_output": {
+                **output, "observable_metrics": {**metrics, "wls_summary": summary}}}
+    return _write_complete_tables(observation)
 
 
 #: What the newest event of a complete history carries in place of its evidence: the same evidence is the
@@ -1907,11 +2086,11 @@ def _key_sorted(value: Any) -> Any:
     return value
 
 
-def _compact_state_fields(observation: dict[str, Any]) -> None:
+def _compact_state_fields(observation: dict[str, Any], *, complete: bool = False) -> None:
     """Compact the state summary of a model-visible view in place, as :func:`prepare_model_policy_observation` does."""
 
     if "last_tool_output" in observation:
-        observation["last_tool_output"] = _compact_last_tool_output(observation["last_tool_output"])
+        observation["last_tool_output"] = _compact_last_tool_output(observation["last_tool_output"], complete=complete)
     last_tool = observation.get("last_tool")
     if isinstance(last_tool, str):
         observation["last_tool"] = INTERNAL_TO_CANONICAL_TOOL.get(last_tool, last_tool)
@@ -1943,8 +2122,12 @@ def prepare_complete_history_observation(
         {key: value for key, value in raw_observation.items() if key != OBSERVABLE_HISTORY_KEY}
     )
     source_history = without_controller_fingerprints([dict(item) for item in events if isinstance(item, Mapping)])
+    complete = complete_evidence_view(raw_observation)
+    if complete:
+        raw_observation = without_rule_screens(raw_observation)
+        source_history = without_rule_screens(source_history)
     observation = _without_history(raw_observation)
-    _compact_state_fields(observation)
+    _compact_state_fields(observation, complete=complete)
     history_events = complete_history_events(source_history)
     observation["history_window"] = history_events
     observation[CANDIDATE_EXPERIMENTS_KEY] = candidate_experiments(source_history)
@@ -1961,6 +2144,8 @@ def prepare_complete_history_observation(
         raise ValueError("Prepared policy observation must remain a mapping.")
     aliased = dict(aliased)
     aliased["history_window"] = compact_event_evidence(aliased["history_window"])
+    if complete:
+        aliased = _complete_evidence_tables(aliased)
     return aliased, {
         "state_aliases": state_aliases,
         "episode_aliases": episode_aliases,

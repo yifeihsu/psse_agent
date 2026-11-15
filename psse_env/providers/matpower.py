@@ -84,6 +84,7 @@ from psse_env.evidence_profile import (
 )
 from psse_env.oracle.process_validity import current_family_suspicion, current_wls_alarm
 from psse_env.actions import UNEXPLAINED_DISCREPANCY_REQUEST
+from psse_env.providers import complete_evidence as _complete
 from psse_env.providers import detailed_evidence as _detailed
 from psse_env.providers.wls_tables import wls_tables
 from psse_env.providers.hif_continuation import (
@@ -504,6 +505,7 @@ class MatpowerDeploymentProviders:
         flow_at_noise_cue: bool = False,
         pair_refit_adjacent: bool = False,
         detailed_evidence: bool = False,
+        complete_evidence: bool = False,
         target_first_partial: bool = False,
         chi2_alpha: float = 0.05,
         normalized_residual_threshold: float | None = None,
@@ -610,6 +612,12 @@ class MatpowerDeploymentProviders:
         # for every correction kind, no truth.  Off by default: every recorded
         # output is unchanged.
         self.detailed_evidence = bool(detailed_evidence)
+        # The user's direction of 2026-11-15: every solve and every context is
+        # reported whole, one row per bus, line, meter and breaker, with no
+        # threshold, cut or ranking (``psse_env.providers.complete_evidence``).
+        # From solves made anyway, no truth.  Off by default: every recorded
+        # output is unchanged.
+        self.complete_evidence = bool(complete_evidence)
         #: The last solves' views by state id, so a verification can read the parent's solve without another one.
         self._solve_views: dict[str, dict[str, Any]] = {}
         # Stage 2 item 4: the verifier keeps a target-fixed correction with
@@ -690,6 +698,21 @@ class MatpowerDeploymentProviders:
             )
 
     # ------------------------------------------------------------------ wiring
+
+    def _complete_tables(self, **builders: Any) -> dict[str, Any]:
+        """The named complete tables of a context when this bundle reports the evidence whole, else nothing.
+
+        A table that cannot be built is left out; the context itself is unchanged either way.
+        """
+        if not self.complete_evidence:
+            return {}
+        tables: dict[str, Any] = {}
+        for name, build in builders.items():
+            try:
+                tables[name] = build()
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue
+        return tables
 
     def env_kwargs(self) -> dict[str, Any]:
         """Keyword arguments wiring this bundle into ``TransactionalPSSEEnv``."""
@@ -1983,6 +2006,16 @@ class MatpowerDeploymentProviders:
                 if len(self._solve_views) >= 64:
                     self._solve_views.clear()
                 self._solve_views[str(state["state_id"])] = evidence_view
+        if self.complete_evidence:
+            # Every bus and every line of this solve, in place of the tables
+            # of the alarm's neighbourhood.
+            try:
+                summary.update(_complete.solve_tables(
+                    _complete.signed_residuals(payload), payload.get("lambdaN") or [], solved["ppc"],
+                    vm_estimate=payload.get("vm_est_pu"), angle_estimate_rad=payload.get("theta_est_rad")))
+                summary.pop("omitted", None)
+            except (KeyError, TypeError, ValueError):
+                pass
         max_abs_residual = max((abs(value) for value in residuals), default=0.0)
         # Observable anomaly signatures drive expert routing.  Signatures this
         # runner derives from its own solve carry the ``wls_`` prefix and are
@@ -2520,6 +2553,8 @@ class MatpowerDeploymentProviders:
             "measurement_route_blocked_by_branch_dominance": branch_dominance_block,
             "finding_count": len(evidence),
             "measurement_findings": evidence,
+            **self._complete_tables(meter_table=lambda: _complete.meter_table(
+                solved["z"], _complete.signed_residuals(payload), solved["ppc"])),
             "supported_corrections": supported,
             "physical_vm_joint_targets": physical_vm_joint_targets,
             "physical_vm_closure_targets": physical_vm_closure_targets,
@@ -3223,6 +3258,7 @@ class MatpowerDeploymentProviders:
             "three_phase_screening_pending": screening_pending,
             "finding_count": len(findings),
             "parameter_findings": findings,
+            **self._complete_tables(line_table=lambda: _complete.line_table(solved["payload"].get("lambdaN") or [], solved["ppc"])),
             "parameter_scans_available": scans_usable,
             "parameter_scan_count": scan_count,
             "parameter_ranking_contract": PARAMETER_RANKING_CONTRACT,
@@ -4064,6 +4100,12 @@ class MatpowerDeploymentProviders:
                 "max_normalized_residual": float(estimate.get("max_normalized_residual", 0.0)),
             },
             "breaker_findings": breaker_findings,
+            **self._complete_tables(breaker_table=lambda: _complete.breaker_table(
+                estimate["ranking"],
+                {str(item["cb_name"]): self._breaker_effect(
+                    model, reference, labels, item["cb_name"], item["reported_status"] != "closed")
+                 for item in estimate["ranking"]},
+                flips, reported_chi_square)),
             "breaker_candidate_count": int(self.breaker_candidate_count),
             # Item 7 step 2: the route confidence refined by this context's
             # own breaker multipliers, only when a run reads the cue.

@@ -371,6 +371,10 @@ LIFECYCLE_CHOICE_CONTRACT = "lifecycle_choice_v1"
 #: The detailed evidence of corrections and verifications (``psse_env.providers.detailed_evidence``).  The
 #: name lives here so the environment can report the contract without importing the providers package.
 DETAILED_EVIDENCE_CONTRACT = "detailed_evidence_v1"
+#: The complete evidence (the user's direction of 2026-11-15): the estimator's output reaches the policy whole,
+#: one row per bus, line, meter and breaker, and the model-visible view drops what the rule expert's screens
+#: concluded from it (``psse_env.providers.complete_evidence``).  Reported only by an environment built with it.
+COMPLETE_EVIDENCE_CONTRACT = "complete_evidence_v1"
 #: ``rejection_kind`` of the rejected-hypothesis record a decline leaves.
 DECLINED_REJECTION_KIND = "declined_by_policy"
 ACCEPTED_DISPOSITIONS = frozenset({"ACCEPT_PARTIAL", "ACCEPT_FINAL"})

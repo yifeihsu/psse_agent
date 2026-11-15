@@ -48,6 +48,7 @@ from .actions import (
     REVERTED_REJECTION_KIND,
     ACCEPTED_DISPOSITIONS,
     DECLINED_REJECTION_KIND,
+    COMPLETE_EVIDENCE_CONTRACT,
     DETAILED_EVIDENCE_CONTRACT,
     lifecycle_choice_record,
     OPEN_RULE_COMMIT_REJECTED_CANDIDATE,
@@ -503,6 +504,7 @@ class TransactionalPSSEEnv:
         route_comparison: bool = False,
         lifecycle_choice: bool = False,
         detailed_evidence: bool = False,
+        complete_evidence: bool = False,
         open_rules: Any = None,
     ) -> None:
         self.evidence_profile = validate_evidence_profile(evidence_profile)
@@ -511,6 +513,14 @@ class TransactionalPSSEEnv:
         # keeps its verification numbers in the ledger.  Off by default: the
         # observation and the ledger are exactly as before.
         self.detailed_evidence = bool(detailed_evidence)
+        # The complete evidence (the user's direction of 2026-11-15): the
+        # estimator's output reaches the policy whole.  The active case's
+        # solve keeps its bus and line tables in the ledger, each context
+        # keeps its table of every meter, line or breaker, and the
+        # observation carries the contract, by which the prompt builder
+        # drops what the rule expert's screens concluded.  Off by default:
+        # the observation is exactly as before.
+        self.complete_evidence = bool(complete_evidence)
         # The lifecycle choice (RL plan of 2026-11-05): the policy may decline a
         # candidate the verifier accepted, by rolling it back.  Off by default:
         # the verdict fixes the step and the observation carries no
@@ -928,6 +938,16 @@ class TransactionalPSSEEnv:
             ):
                 if key in wls:
                     contexts["wls"][key] = wls[key]
+            if self.complete_evidence:
+                # The active case's solve, whole: it stays in view while the
+                # case is active, not only on the step after the solve.
+                tables = wls.get("wls_summary")
+                for key in ("chi_square_statistic", "chi_square_threshold"):
+                    if key in wls:
+                        contexts["wls"][key] = wls[key]
+                for key in ("bus_table", "branch_table"):
+                    if isinstance(tables, Mapping) and key in tables:
+                        contexts["wls"][key] = policy_safe_copy(tables[key])
         if self.revert_fruitless_cycles:
             summary["revert_ledger"] = self._revert_ledger(active_id)
         if self.route_comparison:
@@ -938,6 +958,8 @@ class TransactionalPSSEEnv:
             summary["open_rules"] = open_rules_record(self._open_rules())
         if self.detailed_evidence:
             summary["detailed_evidence"] = {"contract": DETAILED_EVIDENCE_CONTRACT}
+        if self.complete_evidence:
+            summary["complete_evidence"] = {"contract": COMPLETE_EVIDENCE_CONTRACT}
         return self._sanitize_observation(summary) if is_strict_boundary(self.evidence_profile) else summary
 
     def _open_rules(self) -> tuple[str, ...]:
@@ -1260,6 +1282,10 @@ class TransactionalPSSEEnv:
             detailed_evidence=(
                 policy_safe_copy(dict(summary["detailed_evidence"]))
                 if isinstance(summary.get("detailed_evidence"), Mapping) else None
+            ),
+            complete_evidence=(
+                policy_safe_copy(dict(summary["complete_evidence"]))
+                if isinstance(summary.get("complete_evidence"), Mapping) else None
             ),
             open_rules=(
                 policy_safe_copy(dict(summary["open_rules"]))
@@ -4509,6 +4535,11 @@ class TransactionalPSSEEnv:
             "hypothesis_confidence",
             "route_status",
             "route_status_reason",
+        ) + (
+            # The complete evidence: each context's table of every meter,
+            # line or breaker, and the substation estimate's own test.
+            ("meter_table", "line_table", "breaker_table", "node_breaker_estimate")
+            if self.complete_evidence else ()
         ):
             if key in metrics:
                 durable_metrics[key] = policy_safe_copy(metrics[key])

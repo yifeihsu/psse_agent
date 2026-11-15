@@ -195,6 +195,10 @@ class PolicyObservation:
     # observation otherwise.
     lifecycle_choice: dict[str, Any] | None = None
     detailed_evidence: dict[str, Any] | None = None
+    # The user's direction of 2026-11-15: the complete-evidence contract.
+    # Reported only by an environment built with it and absent from the
+    # serialized observation otherwise.
+    complete_evidence: dict[str, Any] | None = None
     # The user's direction of 2026-11-12: the rules this environment lifted
     # for the policy (``psse_env.actions.open_rules_of``).  Reported only by
     # an environment built with ``open_rules`` and absent from the serialized
@@ -203,7 +207,8 @@ class PolicyObservation:
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
-        for optional in ("revert_ledger", "research_tools", "lifecycle_choice", "detailed_evidence", "open_rules"):
+        for optional in ("revert_ledger", "research_tools", "lifecycle_choice", "detailed_evidence", "complete_evidence",
+                         "open_rules"):
             if payload.get(optional) is None:
                 payload.pop(optional, None)
         forbidden = find_forbidden_policy_paths(payload)

@@ -130,6 +130,7 @@ ENVIRONMENT_OPTION_KEYS = (
     "lifecycle_choice",
     "open_rules",
     "detailed_evidence",
+    "complete_evidence",
     "pair_refit_adjacent",
     "flow_at_noise_cue",
     "route_comparison",

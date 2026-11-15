@@ -319,6 +319,9 @@ def research_diagnostic_environment_factory(
         pair_refit_adjacent=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("pair_refit_adjacent", False)),
         # RL plan of 2026-11-05: off unless a run names it (--env-option detailed_evidence=1).
         detailed_evidence=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("detailed_evidence", False)),
+        # The user's direction of 2026-11-15: the estimator's output whole.
+        # Off unless a run names it (--env-option complete_evidence=1).
+        complete_evidence=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("complete_evidence", False)),
         target_first_partial=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("target_first_partial", False)),
         # The teacher's own signal (item 1): on when the run names it, else
         # whatever the run's teacher variant needs.
@@ -350,6 +353,7 @@ def research_diagnostic_environment_factory(
         # Off unless a run names it (--env-option lifecycle_choice=1).
         lifecycle_choice=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("lifecycle_choice")),
         detailed_evidence=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("detailed_evidence", False)),
+        complete_evidence=bool(RESEARCH_ENVIRONMENT_OPTIONS.get("complete_evidence", False)),
         # The user's direction of 2026-11-12: rules of the controller lifted
         # for the policy.  None unless a run names them (--env-option
         # open_rules=1 for all, or rule names joined by "+").
