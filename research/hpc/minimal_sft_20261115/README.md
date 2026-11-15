@@ -4,8 +4,16 @@ Trains an adapter on the truth-built demonstrations executed through `psse_env/m
 development cases in that environment. Background and numbers: `docs/minimal_env_20261115.md`; the environment's
 contract: `psse_env/minimal/README.md`.
 
-**State: prepared only.** Not deployed, nothing submitted, and no script of this cell has run on the cluster. Each
-of deploy, smoke and submission needs the user's word.
+**State: deployed, nothing submitted.** Deployed on the user's word on 2026-11-15 (23:16 to 23:29 UTC) at commit
+ea5e9a2: `/scratch/yx3882/minimal_sft_20261115/source` is at that commit, and the rows, their manifest and the
+selection report are under `data/rows`. No job of this cell has been submitted, and no script of it has run with the
+model. The smoke and the submission each need the user's word.
+
+Checked on torch after the deploy (one read-only call): the source is at ea5e9a2 with no tracked change; the seven
+scripts parse and hold no carriage return; the four uploaded files have the local checksums (training view
+`582349e2...`, 14,823 rows; validation view `e55689a6...`, 256 rows); the 25 Python files of `psse_env/minimal`,
+`research/minimal_env` and this cell compile under the jobs' Python 3.12.13; R1, the development suite, the
+reference and the base model's cache are where the cell reads them; no `msf-` job is queued.
 
 ## What it runs
 
