@@ -71,7 +71,8 @@ pipeline beside the old one, not as more switches on it.
 - No observation holds a private key, and no prompt holds `ACCEPT`, `REJECT`, `supported_corrections`,
   `route_status` or `valid_next_actions` (unit test).
 
-51 tests: `python -m pytest psse_env/minimal research/minimal_env -q` (about 4 minutes).
+66 tests: `python -m pytest psse_env/minimal research/minimal_env -q` (about 3 minutes). The cell's 17 run apart:
+`python -m pytest research/hpc/minimal_sft_20261115/test_cell.py -q`.
 
 ## 4. Reference numbers on the 300 development cases
 
@@ -206,11 +207,12 @@ Checksums: training view `582349e2...`, validation view `e55689a6...` (`selectio
 ## 9. Not done
 
 - **No model was trained.** The rows, the selection and the trainer entry point exist; the trainer entry point has
-  not run, and the tokenizer row gate (cluster) has not run on these rows.
+  not run, and the tokenizer row gate (cluster) has not run on these rows. The cell for the pass is prepared
+  (`research/hpc/minimal_sft_20261115/`, section 11), not deployed.
 - **No RL run, and no RL driver for this environment.** `psse_env/rl/train.py` drives the old environment. What the
   driver needs from this side exists and is tested without a model: grouped rollouts in the RL record format, the
   reward, the model policy.
-- **No cluster cell** for either.
+- **No cluster cell for RL.**
 - **IEEE 118** is not handled: no breaker model there (the line-status form of `correct_topology` exists and is
   untested on that system), and a version's meter table is about 1,100 rows.
 - **The waveform families** (HIF, unbalance, harmonics) are outside this environment.
@@ -234,3 +236,23 @@ commit, so their manifests name the parent commit (ce6c0e6); the code that made 
 recorded episodes were read from the worktree `nostalgic-kalam-be5f7a`
 (`output/compound_rl_20261107/ieee14_dev300.json`, `output/compound_rl_20261106/reference_ieee14/teacher/episodes.jsonl`);
 the training suite from the main checkout (`output/compound_rl_20261106/train_ieee14/suite.json`).
+
+## 11. The cell for the supervised pass (prepared 2026-11-15, not deployed)
+
+`research/hpc/minimal_sft_20261115/` (its README has the order of work). Three jobs: the tokenizer row gate on a CPU
+node, the pass on the 14,823 training rows (3,706 optimizer steps), and the evaluation of its adapter on the 300
+development cases in the minimal environment, greedy and in bf16.
+
+**The start is the base model** (the user's choice of 2026-11-15): a new LoRA, nothing inherited from the rule
+expert's demonstrations. The cell can also start from R1, the adapter every earlier cloning pass started from, and
+keeps the two apart. Two trainer settings follow the start: no initial adapter, and a learning rate of 1e-4 instead
+of 3e-5. 1e-4 is what BC0, the project's one earlier pass from the base model, trained at; 3e-5 is the rate of every
+pass that continued an adapter. Everything else is the cloning passes' setting, one for one.
+
+The evaluation's summary splits the 300 cases as the review reads a result (`dev300_reference.json`, built from the
+two runs of section 4): the 184 the rule expert's recorded episodes solve, the 63 only the truth-built sequence
+repairs, and the 53 neither repairs.
+
+My estimate for the pass is 41 to 62 GPU-hours (40 to 60 s per step for prompts of about 9,900 tokens with their
+tools), 7 links of 12 hours as submitted; the evaluation 2 to 4 hours. Nothing in the cell has run with the model or
+its tokenizer. The smoke is the first time the rows meet the chat template.

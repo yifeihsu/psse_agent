@@ -12,9 +12,10 @@
 #SBATCH --comment=preemption=yes;requeue=true
 #SBATCH --open-mode=append
 #SBATCH --output=/scratch/yx3882/minimal_sft_20261115/logs/%x-%j.out
-# The supervised pass on the minimal environment's rows: the trainer and every trainer setting of the earlier
+# The supervised pass on the minimal environment's rows: the trainer and the trainer settings of the earlier
 # cloning passes (research/hpc/compound_cloning_20261106), entered through research/minimal_env/train_sft.py, which
-# keeps each row's own six tools.  SFT_START names where the pass starts (cell.env): r1 or base.  max-steps is
+# keeps each row's own six tools.  SFT_START names where the pass starts (cell.env): base or r1.  Two settings
+# follow the start: a new LoRA on the base model takes no --initial-adapter and BC0's learning rate.  max-steps is
 # ceil(rows / 4), read from the row file here.
 #
 # SFT_MODE=smoke runs the same path on about 200 rows for two optimizer steps, the longest row of the view first,
@@ -54,7 +55,7 @@ TRAIN_COMMAND=("$PY" "$TOOLS/train_sft.py")
 TRAIN_DIR=$STAGE_DIR/training
 RECEIPT=$STAGE_DIR/training.done
 echo "[train:$MODE:$START_NAME] job ${SLURM_JOB_ID:-manual} restart ${SLURM_RESTART_COUNT:-0} node ${SLURMD_NODENAME:-?} $(date -u +%FT%TZ)"
-echo "[train:$MODE:$START_NAME] source $(git -C "$SRC" rev-parse HEAD) row limit $TRAIN_MAX_LENGTH tokens"
+echo "[train:$MODE:$START_NAME] source $(git -C "$SRC" rev-parse HEAD) row limit $TRAIN_MAX_LENGTH tokens learning rate $START_LEARNING_RATE"
 if [[ -s "$RECEIPT" ]]; then
   echo "[train:$MODE:$START_NAME] receipt present; nothing to train"
   echo "msf-train-$MODE-$START_NAME-complete"
@@ -133,7 +134,7 @@ if [[ ! -s "$TRAIN_DIR/lora/adapter_model.safetensors" || ! -s "$TRAIN_DIR/resea
     --strict-prompt-length \
     --batch-size 1 \
     --gradient-accumulation-steps 4 \
-    --learning-rate "$SFT_LEARNING_RATE" \
+    --learning-rate "$START_LEARNING_RATE" \
     --epochs 1 \
     --max-steps "$TRAIN_MAX_STEPS" \
     --logging-steps 1 \
@@ -157,7 +158,7 @@ if [[ "$MODE" == smoke ]]; then
 else
   prune_checkpoints "$TRAIN_DIR"
 fi
-"$PY" - "$TRAIN_DIR" "$RECEIPT" "$MODE" "$TRAIN_ROW_COUNT" "$TRAIN_MAX_STEPS" "$START_NAME" "$R1_ADAPTER" "$ROWS_MANIFEST" "$SAVE_STEPS" "$EVAL_STEPS" <<'PY'
+"$PY" - "$TRAIN_DIR" "$RECEIPT" "$MODE" "$TRAIN_ROW_COUNT" "$TRAIN_MAX_STEPS" "$START_NAME" "$R1_ADAPTER" "$ROWS_MANIFEST" "$SAVE_STEPS" "$EVAL_STEPS" "$START_LEARNING_RATE" <<'PY'
 import json
 import os
 import sys
@@ -183,6 +184,7 @@ payload = {
     "eval_steps": int(sys.argv[10]),
     "global_step": state.get("global_step"),
     "start": start,
+    "learning_rate": float(sys.argv[11]),
     "start_adapter_path": sys.argv[7] if start == "r1" else None,
     "start_adapter_tree_sha256": checkpoint_tree_sha256(sys.argv[7]) if start == "r1" else None,
     "adapter_path": str(train_dir / "lora"),
@@ -200,6 +202,6 @@ with os.fdopen(fd, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, indent=2, sort_keys=True)
     handle.write("\n")
 os.replace(temporary, output)
-print(json.dumps({key: payload[key] for key in ("mode", "start", "train_rows", "max_steps", "global_step", "research_run_passed")}))
+print(json.dumps({key: payload[key] for key in ("mode", "start", "learning_rate", "train_rows", "max_steps", "global_step", "research_run_passed")}))
 PY
 echo "msf-train-$MODE-$START_NAME-complete"

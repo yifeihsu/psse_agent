@@ -708,5 +708,81 @@ class RolloutTests(unittest.TestCase):
         self.assertEqual(episode["score"]["actions"], 0)
 
 
+class EvaluationTests(unittest.TestCase):
+    """The evaluation a cluster cell runs, with a scripted policy in the model's place."""
+
+    def _policy(self, cases: dict) -> object:
+        class Scripted:
+            """Repairs a case by its own true corrections, read from the test's table by the case it is shown."""
+
+            def __init__(self) -> None:
+                self.queue: list[dict] = []
+                self.last_action_metrics = {"prompt_tokens": 100, "original_prompt_tokens": 100, "generated_tokens": 9}
+
+            def act(self, observation: dict) -> dict:
+                if not observation["history"]:
+                    meters = len(observation["versions"][0]["estimate"]["meters"])
+                    first = observation["versions"][0]["estimate"]["chi_square"]
+                    self.queue = copy.deepcopy(cases[(meters, round(first, 3))])
+                return self.queue.pop(0) if self.queue else {"tool": "finish", "arguments": {"outcome": "resolved"}}
+
+        return Scripted()
+
+    def test_cases_are_stored_one_by_one_and_a_later_start_skips_them(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from research.minimal_env import evaluate
+
+        names = ("control_meter", "meter_on_rx", "rx_cb_meter")
+        roots = [ROOTS[name] for name in names]
+        cases = {}
+        for root in roots:
+            first = _env().reset(root)["versions"][0]["estimate"]
+            cases[(len(first["meters"]), round(first["chi_square"], 3))] = truth.orders(truth.truth_corrections(root), 1)[0]
+        built: list[int] = []
+
+        def policy_factory():
+            built.append(1)
+            return self._policy(cases)
+
+        with tempfile.TemporaryDirectory() as folder:
+            episodes = Path(folder) / "episodes"
+            ran = evaluate.evaluate_cases(roots, policy_factory=policy_factory, env_factory=_env, episodes_dir=episodes, shard=(0, 2))
+            self.assertEqual(ran, 2)  # the cases at positions 0 and 2
+            self.assertEqual(len(list(episodes.glob("*.json"))), 2)
+            records, missing = evaluate.read_episodes(roots, episodes)
+            self.assertEqual(missing, [roots[1]["execution"]["scenario_id"]])
+            self.assertEqual(evaluate.evaluate_cases(roots, policy_factory=policy_factory, env_factory=_env, episodes_dir=episodes), 1)
+            # Everything is there: nothing runs and no policy is built.
+            before = len(built)
+            self.assertEqual(evaluate.evaluate_cases(roots, policy_factory=policy_factory, env_factory=_env, episodes_dir=episodes), 0)
+            self.assertEqual(len(built), before)
+            records, missing = evaluate.read_episodes(roots, episodes)
+        self.assertEqual(missing, [])
+        self.assertEqual([record["compound_class"] for record in records], list(names))
+        self.assertTrue(all("observation" not in step for record in records for step in record["steps"]))
+        self.assertEqual(records[0]["steps"][0]["policy_metrics"]["original_prompt_tokens"], 100)
+        reference = {record["scenario_id"]: {"expert": index == 0, "truth": True} for index, record in enumerate(records)}
+        summary = evaluate.summarize(records, reference)
+        solved = sum(1 for record in records if record["score"]["solved"])
+        self.assertEqual(summary["totals"]["cases"], 3)
+        self.assertEqual(summary["totals"]["solved"], solved)
+        self.assertGreaterEqual(solved, 2)  # the three-error case needs its breakers inspected by no rule: it is repaired too
+        self.assertEqual(summary["by_reference"]["rule expert solves"]["cases"], 1)
+        self.assertEqual(summary["by_reference"]["only the truth-built sequence repairs"]["cases"], 2)
+
+    def test_an_unreadable_call_keeps_the_models_words(self) -> None:
+        class Talker:
+            def act(self, observation: dict) -> object:
+                return "I think line 4 is wrong." if not observation["history"] else {"tool": "finish", "arguments": {"outcome": "unresolved"}}
+
+        episode = run_episode(_env(), ROOTS["control_meter"], Talker())
+        first = episode["steps"][0]
+        self.assertEqual(first["result"]["error_code"], ERROR_UNPARSEABLE)
+        self.assertEqual(first["raw_output"], "I think line 4 is wrong.")
+        self.assertEqual(episode["score"]["tool_errors"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

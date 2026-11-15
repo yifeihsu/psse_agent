@@ -16,7 +16,7 @@ tail -n 12 "$WORK/submitted_jobs.txt" 2>/dev/null | sed 's/^/    /'
 echo "=== queue"
 squeue -u "$USER" -h -o "%i %j %T %M %R" | grep -E "msf-" | sed 's/^/    /'
 [ -s "$OUT/row_gate.json" ] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("=== row gate:", d.get("rows_gated"), "rows in", d.get("gate_seconds"), "s; lengths", json.dumps(d.get("length_audit"))[:700]); print("    actions", json.dumps(d.get("action_distribution")))' "$OUT/row_gate.json"
-for stage in smoke_r1 smoke_base pass_r1 pass_base; do
+for stage in smoke_base smoke_r1 pass_base pass_r1; do
   dir=$OUT/$stage
   [ -d "$dir/training" ] || continue
   echo "=== $stage"
@@ -38,7 +38,7 @@ for path in ([f"{stage}/training/trainer_state.json"] if os.path.isfile(f"{stage
 receipt = f"{stage}/training.done"
 if os.path.isfile(receipt):
     done = json.load(open(receipt))
-    print("    receipt:", json.dumps({key: done.get(key) for key in ("mode", "start", "train_rows", "max_steps", "global_step", "research_run_passed",
+    print("    receipt:", json.dumps({key: done.get(key) for key in ("mode", "start", "learning_rate", "train_rows", "max_steps", "global_step", "research_run_passed",
                                                                     "validation_losses", "adapter_tree_sha256")})[:900])
 PY
 done
@@ -48,7 +48,7 @@ import json, os, sys
 out = sys.argv[1]
 KEYS = ("cases", "solved", "strict_solved", "solved_and_declared_resolved", "solved_but_not_declared", "false_resolved", "declared_unresolved",
         "episodes_with_a_damaged_healthy_object", "tool_errors", "budget_exhausted", "prompt_limit", "estimator_passes_at_end")
-for label, name in (("the pass from R1", "eval_dev300_r1"), ("the pass from the base model", "eval_dev300_base"), ("smoke: R1 on eight cases", "eval_smoke")):
+for label, name in (("the pass from the base model", "eval_dev300_base"), ("the pass from R1", "eval_dev300_r1"), ("smoke: R1 on eight cases", "eval_smoke")):
     folder = f"{out}/{name}"
     if not os.path.isdir(folder):
         continue

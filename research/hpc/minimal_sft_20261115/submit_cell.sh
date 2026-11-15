@@ -6,7 +6,7 @@
 #   wsl -- ssh torch bash -s -- eval [START] [LINKS] [AFTER_JOB] < ...   the pass's adapter on the 300 development cases (default 2 links)
 #   wsl -- ssh torch bash -s -- all [START]                < ...   the row gate, the pass, its evaluation
 #
-# START is where the pass starts, r1 or base (cell.env; default r1).  The two starts keep their output apart, so
+# START is where the pass starts, base or r1 (cell.env; default base).  The two starts keep their output apart, so
 # both can be submitted.
 #
 # smoke submits the training smoke (two optimizer steps on about 200 rows, the longest first, after timing the row

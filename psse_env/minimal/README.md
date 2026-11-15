@@ -171,8 +171,14 @@ python -m research.minimal_env.select_rows --demonstrations <dir> --output-dir <
 python -m research.minimal_env.expert_baseline --suite <suite.json> --episodes <rule expert episodes.jsonl> --output-dir <dir>
 ```
 
+```bash
+python -m research.minimal_env.evaluate --suite <suite.json> --adapter <adapter dir> --output-dir <dir>
+```
+
 `research/minimal_env/train_sft.py` runs the stock `research-train` on these rows (it keeps each row's own six
-tools instead of the old registry). It has not been run: training needs the cluster.
+tools instead of the old registry), `row_gate.py` runs the trainer's tokenizer gate alone, and `evaluate.py` runs a
+trained adapter on a suite. All three need the model or its tokenizer and have not run; the cluster cell that calls
+them is `research/hpc/minimal_sft_20261115/` (prepared, not deployed).
 
 ## Settings a model run needs
 
@@ -187,7 +193,7 @@ environment variables (`psse_env/dagger/preliminary_e2b_eval.py`):
 
 ## Not built yet
 
-- A training cell for the supervised pass, and the pass itself.
+- The supervised pass itself. Its cell is prepared (`research/hpc/minimal_sft_20261115/`), not deployed.
 - The RL driver loop for this environment. The parts it needs exist and are tested without a model: sampled
   episodes in the RL series' record format (`rollout.py`), the reward, and the model policy (`policy.py`).
   `psse_env/rl/train.py` still drives the old environment only.
