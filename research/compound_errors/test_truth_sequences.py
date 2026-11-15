@@ -331,6 +331,28 @@ class EvidenceTests(unittest.TestCase):
         split = {"tool": CORRECT_TOPOLOGY, "arguments": {"state_id": "S", "cb_name": "CB_4_BUS", "status": 1}}
         self.assertEqual(ts.target_evidence(line_only, split), ts.EVIDENCE_ABSENT)
 
+    def test_a_complete_table_names_what_it_holds(self) -> None:
+        # Under the complete evidence there is no list of supported corrections: a component is named by its
+        # row in a table, written as columns and rows in the prompt or as records before it is rendered.
+        state = {"fresh_context_evidence": {
+            "wls": {"branch_table": {"columns": ["line", "from", "to", "pf"], "rows": [[1, 1, 2, 0.4], [7, 4, 5, -3.1]]}},
+            "measurement": {"meter_table": {"columns": ["index", "channel", "at", "value", "residual"],
+                                            "rows": [[44, "Pf", 3, 0.2, 5.0], [78, "Qf", 17, 0.1, -9.0]]}},
+            "topology": {"breaker_table": [{"cb": "CB_4_N6_B2", "status": "closed", "score": 31.9},
+                                           {"cb": "CB_4_N4_B2", "status": "closed", "score": 79.9}]},
+        }}
+        line = {"tool": CORRECT_PARAMETERS, "arguments": {"state_id": "s", "line_index": 7}}
+        self.assertEqual(ts.target_evidence(state, line), ts.EVIDENCE_NAMED)
+        self.assertEqual(ts.target_evidence(state, {"tool": CORRECT_PARAMETERS, "arguments": {"line_index": 9}}), ts.EVIDENCE_ABSENT)
+        meters = {"tool": CORRECT_MEASUREMENTS, "arguments": {"state_id": "s", "suspect_group": [78, 44]}}
+        self.assertEqual(ts.target_evidence(state, meters), ts.EVIDENCE_NAMED)
+        self.assertEqual(ts.target_evidence(state, {"tool": CORRECT_MEASUREMENTS, "arguments": {"suspect_group": [78, 9]}}),
+                         ts.EVIDENCE_PARTLY_NAMED)
+        breaker = {"tool": CORRECT_TOPOLOGY, "arguments": {"state_id": "s", "cb_name": "CB_4_N6_B2", "status": 0}}
+        self.assertEqual(ts.target_evidence(state, breaker), ts.EVIDENCE_NAMED)
+        other = {"tool": CORRECT_TOPOLOGY, "arguments": {"state_id": "s", "cb_name": "CB_9_B1_N3", "status": 0}}
+        self.assertEqual(ts.target_evidence(state, other), ts.EVIDENCE_ABSENT)
+
     def test_only_a_correction_has_a_target(self) -> None:
         self.assertIsNone(ts.target_evidence({}, {"tool": COMMIT_STATE, "arguments": {"candidate_state_id": "c"}}))
         self.assertIsNone(ts.target_evidence({}, {"tool": RUN_WLS, "arguments": {"state_id": "s"}}))

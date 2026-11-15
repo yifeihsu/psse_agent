@@ -321,6 +321,31 @@ def _named(node: Any, lines: set[int], meters: set[int], breakers: set[str], key
         meters.update(int(match.group(1)) for match in _METER_SIGNATURE.finditer(node))
 
 
+#: The complete tables of a shown state (``psse_env.providers.complete_evidence``) and the column that names
+#: a component in each: a line by its number, a measurement by its index, a breaker by its name.
+_COMPLETE_TABLE_COLUMNS = (("branch_table", "line"), ("line_table", "line"), ("meter_table", "index"), ("breaker_table", "cb"))
+
+
+def _named_in_complete_tables(evidence: Mapping[str, Any], lines: set[int], meters: set[int], breakers: set[str]) -> None:
+    """The lines, meters and breakers the complete tables of the shown state hold, written as records or as
+    columns and rows.  A state without such a table (every state before the option existed) names none here."""
+    from psse_env.dagger.dataset_builder import table_to_records
+
+    for record in evidence.values():
+        if not isinstance(record, Mapping):
+            continue
+        for key, column in _COMPLETE_TABLE_COLUMNS:
+            table = table_to_records(record.get(key))
+            for row in table if isinstance(table, list) else []:
+                value = row.get(column) if isinstance(row, Mapping) else None
+                if value is None or isinstance(value, bool):
+                    continue
+                if column == "cb":
+                    breakers.add(str(value))
+                elif isinstance(value, int):
+                    (lines if column == "line" else meters).add(value)
+
+
 def target_evidence(state: Mapping[str, Any], action: Mapping[str, Any]) -> str | None:
     """Whether the state a correction row shows names the correction's target (module docstring, "The evidence").
 
@@ -339,6 +364,7 @@ def target_evidence(state: Mapping[str, Any], action: Mapping[str, Any]) -> str 
     breakers: set[str] = set()
     _named(evidence, lines, meters, breakers)
     _named(list(state.get("unresolved_signatures") or []), lines, meters, breakers)
+    _named_in_complete_tables(evidence, lines, meters, breakers)
     if tool == CORRECT_PARAMETERS:
         line = arguments.get("line_index")
         if any(item.get("line_index") == line for item in supported):
