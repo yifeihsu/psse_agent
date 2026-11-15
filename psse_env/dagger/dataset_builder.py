@@ -153,6 +153,15 @@ COMPLETE_EVIDENCE_PROMPT_PARAGRAPH = (
     "A topology correction takes the breaker's name, the status to set and, where the flip concerns a "
     "line, that line's number."
 )
+#: The line comparison under the complete evidence, where a correction may name any line (the outside-context
+#: rule lifted): the policy chooses the lines, and the reply carries no ranking.
+COMPLETE_EVIDENCE_COMPARISON_DESCRIPTION = (
+    "Compare two or three lines of your choice before correcting one. Each line's parameter correction and "
+    "its verification solve run on an isolated copy of the active case; the reply lists every line's "
+    "observable verdict (candidate disposition, chi-square after the refit, global progress), by line. One "
+    "action; no candidate is opened and no state changes."
+)
+COMPLETE_EVIDENCE_COMPARISON_LINES_DESCRIPTION = "Two or three distinct 1-based line indices: any lines of the line table."
 #: The topology correction's line argument under the complete evidence: the breaker table says whether a
 #: flip concerns a line, where the supported correction used to.
 COMPLETE_EVIDENCE_TOPOLOGY_LINE_DESCRIPTION = (
@@ -198,6 +207,11 @@ RULE_SCREEN_KEYS = frozenset(
         "anomaly_breadth",
         "dominant_residual_block",
         "unresolved_signatures",
+        # The line comparison's own ranking of its verdicts.  Each compared
+        # line's numbers stay, listed by line.
+        "best_line_index",
+        "ranked_line_indices",
+        "comparison_rank",
     }
 )
 COMPLETE_HISTORY_PROMPT_PARAGRAPH = (
@@ -300,22 +314,30 @@ def _with_open_rules(schemas: list[dict[str, Any]], observation: Mapping[str, An
 
 
 def _with_complete_evidence(schemas: list[dict[str, Any]], observation: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """The topology correction's line argument points at the breaker table under the complete evidence; every
+    """Under the complete evidence the topology correction's line argument points at the breaker table, and
+    where a correction may name any line the line comparison says the lines are the policy's to choose; every
     other observation is untouched."""
-    from psse_env.actions import CORRECT_TOPOLOGY
+    from psse_env.actions import COMPARE_PARAMETER_CANDIDATES, CORRECT_TOPOLOGY, OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT, open_rules_of
     from psse_env.dagger.protocol_bridge import CANONICAL_TO_INTERNAL_TOOL
 
     if not complete_evidence_view(observation):
         return schemas
+    any_line = OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT in open_rules_of(observation)
     for tool in schemas:
         function = tool.get("function") if isinstance(tool, dict) else None
         if not isinstance(function, dict):
             continue
-        if CANONICAL_TO_INTERNAL_TOOL.get(str(function.get("name")), str(function.get("name"))) != CORRECT_TOPOLOGY:
-            continue
-        line = ((function.get("parameters") or {}).get("properties") or {}).get("line_index1")
-        if isinstance(line, dict) and "supported correction" in str(line.get("description")):
-            line["description"] = COMPLETE_EVIDENCE_TOPOLOGY_LINE_DESCRIPTION
+        name = CANONICAL_TO_INTERNAL_TOOL.get(str(function.get("name")), str(function.get("name")))
+        properties = (function.get("parameters") or {}).get("properties") or {}
+        if name == CORRECT_TOPOLOGY:
+            line = properties.get("line_index1")
+            if isinstance(line, dict) and "supported correction" in str(line.get("description")):
+                line["description"] = COMPLETE_EVIDENCE_TOPOLOGY_LINE_DESCRIPTION
+        elif name == COMPARE_PARAMETER_CANDIDATES and any_line:
+            function["description"] = COMPLETE_EVIDENCE_COMPARISON_DESCRIPTION
+            lines = properties.get("line_indices")
+            if isinstance(lines, dict):
+                lines["description"] = COMPLETE_EVIDENCE_COMPARISON_LINES_DESCRIPTION
     return schemas
 
 
@@ -439,9 +461,20 @@ def complete_evidence_view(observation: Any) -> bool:
 
 
 def without_rule_screens(value: Any) -> Any:
-    """Copy ``value`` without what the rule expert's screens concluded (:data:`RULE_SCREEN_KEYS`), at any depth."""
+    """Copy ``value`` without what the rule expert's screens concluded (:data:`RULE_SCREEN_KEYS`), at any depth.
+
+    A line comparison's record lists its lines best first; without the ranking it lists them by line.
+    """
     if isinstance(value, Mapping):
-        return {str(key): without_rule_screens(item) for key, item in value.items() if str(key) not in RULE_SCREEN_KEYS}
+        from psse_env.actions import PARAMETER_COMPARISON_CONTRACT
+
+        kept = {str(key): without_rule_screens(item) for key, item in value.items() if str(key) not in RULE_SCREEN_KEYS}
+        candidates = kept.get("candidates")
+        if value.get("contract") == PARAMETER_COMPARISON_CONTRACT and isinstance(candidates, list) and all(
+            isinstance(item, Mapping) and isinstance(item.get("line_index"), int) for item in candidates
+        ):
+            kept["candidates"] = sorted(candidates, key=lambda item: item["line_index"])
+        return kept
     if isinstance(value, (list, tuple)):
         return [without_rule_screens(item) for item in value]
     return value

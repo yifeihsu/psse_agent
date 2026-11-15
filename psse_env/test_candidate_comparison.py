@@ -456,5 +456,57 @@ class ExpertComparisonTests(unittest.TestCase):
         self.assertEqual(narrow[0]["tool"], CORRECT_PARAMETERS)
 
 
+class OpenLineChoiceTests(unittest.TestCase):
+    """With the outside-context rule lifted the policy chooses the lines a comparison fits (2026-11-15)."""
+
+    def setUp(self) -> None:
+        from psse_env.actions import OPEN_RULE_COMMIT_REJECTED_CANDIDATE, OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT, open_rules_record
+
+        self.rule = OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT
+        self.opened = open_rules_record([OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT])
+        self.other = open_rules_record([OPEN_RULE_COMMIT_REJECTED_CANDIDATE])
+        self.gate = ProcessGateTests()
+        self.gate.setUp()
+
+    def test_the_gate_admits_a_line_the_context_does_not_support(self) -> None:
+        self.assertEqual(self.gate._check([3, 9])["error_detail"], "comparison_candidate_not_supported")
+        self.assertTrue(self.gate._check([3, 9], open_rules=self.opened)["process_valid"])
+        self.assertTrue(self.gate._check([9, 2, 5], open_rules=self.opened)["process_valid"])
+        # Another lifted rule does not open it, and the bound of two or three lines a call stays.
+        self.assertEqual(self.gate._check([3, 9], open_rules=self.other)["error_detail"], "comparison_candidate_not_supported")
+        self.assertEqual(self.gate._check([3, 6, 7, 9], open_rules=self.opened)["error_code"], "schema_error")
+        self.assertEqual(self.gate._check([9], open_rules=self.opened)["error_code"], "schema_error")
+        self.assertEqual(self.gate._check([3, 9], open_rules=self.opened, has_fresh_parameter_context=False)["error_detail"],
+                         "parameter_context_missing")
+
+    def test_the_environment_fits_the_chosen_lines_and_names_the_rule_it_needed(self) -> None:
+        from psse_env.actions import normalize_open_rules
+
+        closed = _env()
+        active = _prepared(closed)
+        self.assertEqual(closed.step(_compare(active, [TRUE_LINE, 2]))[1]["error_detail"], "comparison_candidate_not_supported")
+
+        env = _env()
+        env.open_rules = normalize_open_rules(self.rule)
+        active = _prepared(env)
+        before_hash = env.store.episode_hash()
+        _, output = env.step(_compare(active, [2, TRUE_LINE]))
+        self.assertEqual(output["execution_status"], "success", output)
+        self.assertEqual(env.last_open_rules_used, [self.rule])
+        record = output["tool_metrics"]
+        self.assertEqual(record["requested_line_indices"], [2, TRUE_LINE])
+        self.assertEqual(record["line_indices"], [2, TRUE_LINE])
+        verdicts = {item["line_index"]: item["verification_verdict"] for item in record["candidates"]}
+        self.assertEqual(verdicts[TRUE_LINE], "ACCEPT_FINAL")
+        self.assertNotEqual(verdicts[2], "ACCEPT_FINAL")
+        # One action, nothing opened, nothing changed.
+        self.assertIsNone(env.current_candidate_id)
+        self.assertEqual(env.store.episode_hash(), before_hash)
+        # A comparison of lines the context supports leans on no lifted rule.
+        _, listed = env.step(_compare(active, [WRONG_LINE, TRUE_LINE]))
+        self.assertEqual(listed["execution_status"], "success", listed)
+        self.assertEqual(env.last_open_rules_used, [])
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

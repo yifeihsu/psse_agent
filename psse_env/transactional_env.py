@@ -52,6 +52,7 @@ from .actions import (
     DETAILED_EVIDENCE_CONTRACT,
     lifecycle_choice_record,
     OPEN_RULE_COMMIT_REJECTED_CANDIDATE,
+    OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT,
     OPEN_RULE_HANDOFF_WITHOUT_EXHAUSTION,
     REJECTED_DISPOSITIONS,
     normalize_open_rules,
@@ -4837,7 +4838,10 @@ class TransactionalPSSEEnv:
                 line = normalized["arguments"].get("line_index")
                 if normalized["tool"] == CORRECT_PARAMETERS and isinstance(line, int) and not isinstance(line, bool):
                     supported_lines.add(int(line))
-        if not set(lines) <= supported_lines:
+        # With the outside-context rule lifted the policy chooses the lines:
+        # a line the context does not support is fitted like any other, and a
+        # fit that cannot run is that line's verdict.
+        if not set(lines) <= supported_lines and OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT not in self._open_rules():
             return self._standard_output(
                 execution_status="failure", error_code="missing_precondition",
                 error_detail="comparison_candidate_not_supported", state_mutated=False,

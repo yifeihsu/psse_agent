@@ -538,7 +538,10 @@ class ProcessValidityOracle:
                 }
                 compared = parameter_comparison_evidence(state)
                 compared_lines = set(parameter_comparison_ranked_lines(state)) if compared is not None else set()
-                if not set(lines) <= supported_lines:
+                # Where a correction may name a line the context does not
+                # list, so may a comparison: it fits those corrections on copies.
+                outside_context_open = _actions.OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT in _actions.open_rules_of(state)
+                if not set(lines) <= supported_lines and not outside_context_open:
                     error_code, error_detail = "missing_precondition", "comparison_candidate_not_supported"
                 elif set(lines) <= compared_lines:
                     error_code, error_detail = "missing_precondition", "parameter_comparison_already_recorded"

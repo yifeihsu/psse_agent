@@ -347,3 +347,61 @@ def test_the_open_rules_paragraph_does_not_speak_of_a_list_the_model_no_longer_r
                              complete_evidence={"contract": COMPLETE_EVIDENCE_CONTRACT}).as_dict()
     assert system_prompt_for_observation(CANONICAL_DAGGER_SYSTEM_PROMPT, opened).endswith(plain)
     assert system_prompt_for_observation(CANONICAL_DAGGER_SYSTEM_PROMPT, both).endswith(complete)
+
+
+def test_the_line_comparison_is_the_policys_to_aim_where_a_correction_may_name_any_line():
+    from psse_env.actions import OPEN_RULE_COMMIT_REJECTED_CANDIDATE, OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT, open_rules_record
+    from psse_env.dagger.dataset_builder import (
+        COMPLETE_EVIDENCE_COMPARISON_DESCRIPTION,
+        COMPLETE_EVIDENCE_COMPARISON_LINES_DESCRIPTION,
+        tool_schemas_for_observation,
+    )
+    from psse_env.dagger.protocol_bridge import unified_tool_schemas
+
+    registry = unified_tool_schemas()
+
+    def comparison(**fields):
+        observation = PolicyObservation(active_state_id="s0", evidence_profile=SCADA_ONLY_PROFILE, **fields).as_dict()
+        schemas = tool_schemas_for_observation(registry, observation)
+        return next(tool["function"] for tool in schemas if tool["function"]["name"] == "compare_parameter_candidates")
+
+    contract = {"contract": COMPLETE_EVIDENCE_CONTRACT}
+    lifted = open_rules_record([OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT])
+    plain = comparison()
+    assert "offered by the current parameter context" in plain["description"]
+    free = comparison(complete_evidence=contract, open_rules=lifted)
+    assert free["description"] == COMPLETE_EVIDENCE_COMPARISON_DESCRIPTION
+    assert free["parameters"]["properties"]["line_indices"]["description"] == COMPLETE_EVIDENCE_COMPARISON_LINES_DESCRIPTION
+    assert (free["parameters"]["properties"]["line_indices"]["minItems"], free["parameters"]["properties"]["line_indices"]["maxItems"]) == (2, 3)
+    # Without the lifted rule the gate still holds the lines to the context's list, and the schema says so.
+    assert comparison(complete_evidence=contract)["description"] == plain["description"]
+    assert comparison(complete_evidence=contract, open_rules=open_rules_record([OPEN_RULE_COMMIT_REJECTED_CANDIDATE]))["description"] == plain["description"]
+    assert comparison(open_rules=lifted)["description"] == plain["description"]
+
+
+def test_a_comparisons_verdicts_are_listed_by_line_without_its_ranking():
+    from psse_env.actions import PARAMETER_COMPARISON_CONTRACT
+
+    observation = _observation(complete=True)
+    observation["fresh_context_evidence"]["parameter_comparison"] = {
+        "contract": PARAMETER_COMPARISON_CONTRACT, "context_tool": "compare_parameter_candidates", "state_id": "ep:s0",
+        "line_indices": [1, 3], "requested_line_indices": [3, 1], "ranked_line_indices": [3, 1], "best_line_index": 3,
+        "candidates": [
+            {"line_index": 3, "request_rank": 0, "comparison_rank": 1, "verification_verdict": "ACCEPT_FINAL", "chi_square_statistic": 12.0},
+            {"line_index": 1, "request_rank": 1, "comparison_rank": 2, "verification_verdict": "ACCEPT_PARTIAL", "chi_square_statistic": 240.0},
+        ],
+    }
+    view, _ = prepare_model_policy_observation(observation)
+    record = view["fresh_context_evidence"]["parameter_comparison"]
+    assert "best_line_index" not in record and "ranked_line_indices" not in record
+    assert [item["line_index"] for item in record["candidates"]] == [1, 3]
+    assert all("comparison_rank" not in item for item in record["candidates"])
+    # Each line keeps its numbers and the verifier's verdict.
+    assert record["candidates"][1] == {"line_index": 3, "request_rank": 0, "verification_verdict": "ACCEPT_FINAL", "chi_square_statistic": 12.0}
+    assert record["requested_line_indices"] == [3, 1]
+    # Without the contract the record is as the environment wrote it.
+    plain = _observation(complete=False)
+    plain["fresh_context_evidence"]["parameter_comparison"] = copy.deepcopy(observation["fresh_context_evidence"]["parameter_comparison"])
+    kept, _ = prepare_model_policy_observation(plain)
+    assert kept["fresh_context_evidence"]["parameter_comparison"]["best_line_index"] == 3
+    assert [item["line_index"] for item in kept["fresh_context_evidence"]["parameter_comparison"]["candidates"]] == [3, 1]

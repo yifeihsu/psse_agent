@@ -405,7 +405,9 @@ def lifecycle_choice_of(observation: Mapping[str, Any] | Any) -> Mapping[str, An
 #: audit still scores the final case.  The observation carries the record
 #: below only in such an environment, so every other contract is as it was.
 OPEN_RULES_CONTRACT = "open_rules_v1"
-#: A correction may name a target the fresh context on the active state does not list.
+#: A correction may name a target the fresh context on the active state does not list.  So may the lines of
+#: a parameter comparison, which fits corrections on copies of the state (the user's direction of 2026-11-15:
+#: the policy decides which lines to compare; the bound of two or three lines a call stays).
 OPEN_RULE_CORRECTION_OUTSIDE_CONTEXT = "correction_outside_context"
 #: A correction may be issued on a route its context reports as not actionable
 #: (a complete negative screen, or the meter route shut by branch dominance).
