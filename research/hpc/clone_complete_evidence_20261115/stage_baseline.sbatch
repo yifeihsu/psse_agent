@@ -85,12 +85,14 @@ if [[ "$(status_field phase)" != baseline ]]; then
   echo "cec-baseline-$BASELINE_NAME-complete"
   exit 0
 fi
-# As rl.sbatch: on a card of 70 GB or more two processes share it, each taking every second case, and the unsharded
-# call then finishes what is left and closes the phase.
+# As rl.sbatch, two processes share a large card, each taking every second case, and the unsharded call then
+# finishes what is left and closes the phase.  The bar is 90 GB here, not the series' 70: with these prompts two
+# processes peaked at 69.2 GB on eight cases (the smoke, job 23274634), which an 80 GB card does not hold with
+# room for a longer prompt.  An 80 GB card runs one process.
 if [[ -z "${RL_WORKERS:-}" ]]; then
   gpu_mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 | tr -dc '0-9')
   RL_WORKERS=1
-  (( ${gpu_mib:-0} >= 70000 )) && RL_WORKERS=2
+  (( ${gpu_mib:-0} >= 90000 )) && RL_WORKERS=2
 fi
 echo "[baseline:$BASELINE_NAME] $RL_WORKERS worker(s) $(date -u +%FT%TZ)"
 if [[ "$RL_WORKERS" -gt 1 ]]; then

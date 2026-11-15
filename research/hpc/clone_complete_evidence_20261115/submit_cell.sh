@@ -2,6 +2,7 @@
 # Submit the complete-evidence clone's jobs.  Run on torch, or through ssh stdin:
 #
 #   wsl -- ssh torch bash -s -- smoke                 < research/hpc/clone_complete_evidence_20261115/submit_cell.sh
+#   wsl -- ssh torch bash -s -- smoke_train           < ...   the training smoke alone, again (it resumes what the earlier one left)
 #   wsl -- ssh torch bash -s -- smoke_baseline        < ...   the baseline smoke alone, again (an earlier one is moved aside)
 #   wsl -- ssh torch bash -s -- pass [LINKS]          < ...   the row gate on a CPU node, then the pass (links from the rows)
 #   wsl -- ssh torch bash -s -- clone [LINKS] [AFTER_JOB] < ...   the cloned adapter's baseline (default 2 links)
@@ -18,7 +19,7 @@ export PATH=/opt/slurm/bin:$PATH
 WORK=/scratch/yx3882/clone_complete_evidence_20261115
 # shellcheck source=cell.env
 source "$WORK/source/research/hpc/clone_complete_evidence_20261115/cell.env"
-COMMAND=${1:?smoke, smoke_baseline, pass, clone or all}
+COMMAND=${1:?smoke, smoke_train, smoke_baseline, pass, clone or all}
 [[ -d "$CELL" ]] || { echo "no source at $CELL: deploy first" >&2; exit 2; }
 mkdir -p "$LOGS" "$OUT/clone"
 
@@ -99,6 +100,19 @@ case "$COMMAND" in
     id=$(sbatch --parsable --time=03:00:00 --job-name=cec-baseline-smoke_complete --export=ALL,BASELINE_NAME=smoke_complete "$CELL/stage_baseline.sbatch")
     record "cec-baseline-smoke_complete job=${id%%;*}"
     ;;
+  smoke_train)
+    # The training smoke again: a finished one (a receipt) is renamed with the time, never removed; an unfinished one
+    # keeps its rows and its row gate result, and the stage goes on from them.
+    check_rows
+    not_queued cec-smoke
+    if [[ -s "$OUT/smoke/training.done" ]]; then
+      aside="$OUT/smoke.before_$(date -u +%Y%m%dT%H%M%SZ)"
+      mv "$OUT/smoke" "$aside"
+      echo "moved the earlier training smoke to $aside"
+    fi
+    id=$(chain cec-smoke 1 stage_clone_train.sbatch "" ALL,CLONE_MODE=smoke)
+    record "cec-smoke job=$id"
+    ;;
   smoke_baseline)
     # The baseline smoke again, on the same eight cases (data/suites keeps the slice): a finished one has left its
     # manifest past the baseline, so its output is renamed with the time, never removed.
@@ -117,6 +131,6 @@ case "$COMMAND" in
     submit_pass ""
     submit_clone 2 "$PASS_LAST"
     ;;
-  *) echo "unknown command $COMMAND (smoke, smoke_baseline, pass, clone or all)" >&2; exit 2 ;;
+  *) echo "unknown command $COMMAND (smoke, smoke_train, smoke_baseline, pass, clone or all)" >&2; exit 2 ;;
 esac
 squeue -u "$USER" -o "%.12i %.28j %.9T %.10M %.26E %.20R"

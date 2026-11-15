@@ -82,6 +82,9 @@ class ResearchTrainerSettings:
     load_best_model_at_end: bool = False
     metric_for_best_model: str | None = None
     greater_is_better: bool | None = None
+    #: Compute the loss from the logits of the supervised span alone (``psse_env.sft.supervised_logits``): the same
+    #: loss, without a vocabulary row for every prompt position.  Off by default: every earlier pass ran without it.
+    supervised_logits_only: bool = False
 
     def resolved_model_spec(self) -> ResearchModelSpec:
         try:
@@ -673,6 +676,12 @@ def run_research_training(
     model, attachment = attach_research_adapter(
         model, settings=settings, lora=lora
     )
+    supervised_logits: dict[str, Any] | None = None
+    if settings.supervised_logits_only:
+        from .supervised_logits import keep_supervised_logits
+
+        # Before the optimizer smoke: its first row is where a whole-sequence loss runs out of memory.
+        supervised_logits = keep_supervised_logits(model)
     pristine = _snapshot_trainable_parameters(model)
     smoke = run_training_smoke(
         model,
@@ -702,7 +711,13 @@ def run_research_training(
         trainer_kwargs["processing_class"] = processor
     elif "tokenizer" in signature:
         trainer_kwargs["tokenizer"] = processor
-    trainer = SFTTrainer(**trainer_kwargs)
+    trainer_class = SFTTrainer
+    if supervised_logits is not None:
+        from .supervised_logits import supervised_span_trainer
+
+        # The stock trainer reads whole-sequence logits for its own log; the span has none to give.
+        trainer_class = supervised_span_trainer(SFTTrainer)
+    trainer = trainer_class(**trainer_kwargs)
     trainer.data_collator = AssistantOnlyCollator(processor)
     train_kwargs = {}
     if settings.resume_from_checkpoint is not None:
@@ -730,6 +745,9 @@ def run_research_training(
         "training_metrics": _jsonable(metrics),
         "adapter_delta": delta,
     }
+    if supervised_logits is not None:
+        # How the forward was called over the whole run: a refused or ignored span means the saving was not real.
+        training_stage["supervised_logits"] = dict(supervised_logits)
     _write_report(training_stage_path, training_stage)
 
     staging_output = output_dir / f".lora.tmp-{os.getpid()}"
@@ -809,6 +827,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--output-dir", required=True, type=Path)
     result.add_argument("--max-length", type=int, default=16384)
     result.add_argument("--strict-prompt-length", action="store_true")
+    result.add_argument("--supervised-logits-only", action="store_true",
+                        help="compute the loss from the logits of the supervised span alone (the same loss, far less memory)")
     result.add_argument("--batch-size", type=int, default=1)
     result.add_argument("--gradient-accumulation-steps", type=int, default=4)
     result.add_argument("--learning-rate", type=float, default=3e-5)
@@ -881,6 +901,7 @@ def main(argv: list[str] | None = None) -> int:
             local_files_only=not args.allow_download,
             trust_remote_code=args.trust_remote_code,
             allow_prompt_truncation=not args.strict_prompt_length,
+            supervised_logits_only=args.supervised_logits_only,
             report_to=args.report_to,
             run_name=args.run_name,
             initial_adapter_path=(
