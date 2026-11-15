@@ -1,0 +1,119 @@
+{
+  "by_class": {
+    "cb2_dangling": {
+      "train_cases": 113,
+      "validation_cases": 7
+    },
+    "cb2_mixed": {
+      "train_cases": 85,
+      "validation_cases": 5
+    },
+    "cb2_split": {
+      "train_cases": 85,
+      "validation_cases": 5
+    },
+    "control_cb": {
+      "train_cases": 94,
+      "validation_cases": 6
+    },
+    "control_meter": {
+      "train_cases": 94,
+      "validation_cases": 6
+    },
+    "control_rx": {
+      "train_cases": 94,
+      "validation_cases": 6
+    },
+    "meter_on_rx": {
+      "train_cases": 141,
+      "validation_cases": 9
+    },
+    "meter_rx2": {
+      "train_cases": 282,
+      "validation_cases": 18
+    },
+    "rx2_adjacent": {
+      "train_cases": 282,
+      "validation_cases": 18
+    },
+    "rx2_distant": {
+      "train_cases": 282,
+      "validation_cases": 18
+    },
+    "rx_cb_distant": {
+      "train_cases": 282,
+      "validation_cases": 18
+    },
+    "rx_cb_meter": {
+      "train_cases": 282,
+      "validation_cases": 18
+    },
+    "rx_cb_same_line": {
+      "train_cases": 141,
+      "validation_cases": 9
+    },
+    "rx_cb_shared_bus": {
+      "train_cases": 141,
+      "validation_cases": 9
+    }
+  },
+  "cases": {
+    "beyond_the_tools": 459,
+    "repaired": 2091,
+    "taken": 2550,
+    "train": 2398,
+    "validation": 152,
+    "with_a_recovery_path": 1853
+  },
+  "contract": "minimal_row_selection_v1",
+  "demonstrations": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\.claude\\worktrees\\dreamy-bassi-27849a\\output\\minimal_env_20261115\\demonstrations_train_ieee14",
+  "rows_dropped": {
+    "unresolved_finish_on_a_passing_estimate": 305
+  },
+  "rows_read": 16077,
+  "settings": {
+    "excluded_roots": 0,
+    "seed": 20261115,
+    "solved_only": false,
+    "validation_rows": 256,
+    "validation_share": 0.06
+  },
+  "sha256": {
+    "train": "582349e24eec21edc82c55371adce995c91ee586d45146d92e2d389c3bafa64e",
+    "validation": "e55689a671685eab72babfd4b0610929a9f225c912a009dbe16d30db8e4a4aff"
+  },
+  "train_prompt_characters": {
+    "max": 21824,
+    "median": 13474,
+    "p95": 17924
+  },
+  "train_rows": 14823,
+  "train_rows_by_kind": {
+    "recovery:correction": 1699,
+    "recovery:finish": 1738,
+    "recovery:inspect": 124,
+    "recovery:undo": 1738,
+    "success:correction": 4722,
+    "success:finish": 2112,
+    "success:inspect": 2690
+  },
+  "train_rows_by_tool": {
+    "correct_measurements": 1213,
+    "correct_parameters": 3219,
+    "correct_topology": 1989,
+    "finish": 3850,
+    "inspect": 2814,
+    "undo": 1738
+  },
+  "validation_pool_rows": 944,
+  "validation_rows": 256,
+  "validation_rows_by_kind": {
+    "recovery:correction": 42,
+    "recovery:finish": 42,
+    "recovery:inspect": 8,
+    "recovery:undo": 41,
+    "success:correction": 41,
+    "success:finish": 41,
+    "success:inspect": 41
+  }
+}

@@ -1,0 +1,147 @@
+{
+  "cases": 2550,
+  "code": {
+    "head": "ce6c0e6c495e22db1492e737164902e22fa6e5f2",
+    "uncommitted_paths": 2
+  },
+  "contract": "minimal_demonstration_build_v1",
+  "prompt_characters": {
+    "max": 21824,
+    "median": 13463,
+    "p95": 17914
+  },
+  "rows": 16077,
+  "rows_by_kind": {
+    "recovery:correction": 1799,
+    "recovery:finish": 1855,
+    "recovery:inspect": 132,
+    "recovery:undo": 1855,
+    "success:correction": 5025,
+    "success:finish": 2550,
+    "success:inspect": 2861
+  },
+  "seconds": 1257.9,
+  "settings": {
+    "export_rows": true,
+    "max_actions": 16,
+    "max_orders": 6,
+    "opening_inspection": true,
+    "provider_options": {
+      "complete_evidence": true,
+      "evidence_profile": "scada_only",
+      "normalized_residual_threshold": 4.0,
+      "pair_refit_adjacent": true
+    },
+    "recoveries": 1,
+    "seed": 20261115,
+    "table_versions": 2
+  },
+  "suite": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\output\\compound_rl_20261106\\train_ieee14\\suite.json",
+  "summary": {
+    "by_class": {
+      "cb2_dangling": {
+        "recovery_sequences": 107,
+        "recovery_solved": 107,
+        "success_sequences": 120,
+        "success_solved": 120
+      },
+      "cb2_mixed": {
+        "recovery_sequences": 67,
+        "recovery_solved": 67,
+        "success_sequences": 90,
+        "success_solved": 90
+      },
+      "cb2_split": {
+        "recovery_sequences": 67,
+        "recovery_solved": 67,
+        "success_sequences": 90,
+        "success_solved": 90
+      },
+      "control_cb": {
+        "recovery_sequences": 83,
+        "recovery_solved": 83,
+        "success_sequences": 100,
+        "success_solved": 100
+      },
+      "control_meter": {
+        "recovery_sequences": 100,
+        "recovery_solved": 100,
+        "success_sequences": 100,
+        "success_solved": 100
+      },
+      "control_rx": {
+        "recovery_sequences": 81,
+        "recovery_solved": 81,
+        "success_sequences": 100,
+        "success_solved": 93
+      },
+      "meter_on_rx": {
+        "recovery_sequences": 122,
+        "recovery_solved": 122,
+        "success_sequences": 150,
+        "success_solved": 130
+      },
+      "meter_rx2": {
+        "recovery_sequences": 193,
+        "recovery_solved": 193,
+        "success_sequences": 300,
+        "success_solved": 201
+      },
+      "rx2_adjacent": {
+        "recovery_sequences": 160,
+        "recovery_solved": 160,
+        "success_sequences": 300,
+        "success_solved": 177
+      },
+      "rx2_distant": {
+        "recovery_sequences": 180,
+        "recovery_solved": 180,
+        "success_sequences": 300,
+        "success_solved": 201
+      },
+      "rx_cb_distant": {
+        "recovery_sequences": 236,
+        "recovery_solved": 236,
+        "success_sequences": 300,
+        "success_solved": 273
+      },
+      "rx_cb_meter": {
+        "recovery_sequences": 230,
+        "recovery_solved": 230,
+        "success_sequences": 300,
+        "success_solved": 254
+      },
+      "rx_cb_same_line": {
+        "recovery_sequences": 126,
+        "recovery_solved": 126,
+        "success_sequences": 150,
+        "success_solved": 150
+      },
+      "rx_cb_shared_bus": {
+        "recovery_sequences": 103,
+        "recovery_solved": 103,
+        "success_sequences": 150,
+        "success_solved": 114
+      }
+    },
+    "mean_actions_success_path": 4.26,
+    "totals": {
+      "estimator_passes_at_end": 2272,
+      "healthy_objects_damaged": 0,
+      "measurement_repairs": 850,
+      "orders_beyond_first": 48,
+      "parameter_fits": 3592,
+      "recovery_sequences": 1855,
+      "recovery_solved": 1855,
+      "solved_and_strict_agree": 2548,
+      "solved_with_estimator_alarm": 126,
+      "strict_solved": 2091,
+      "substation_solves": 25749,
+      "success_sequences": 2550,
+      "success_solved": 2093,
+      "tool_seconds_x1000": 11526580,
+      "unsolved_with_estimator_passing": 305,
+      "wls_solves": 7575
+    }
+  }
+}

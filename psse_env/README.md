@@ -1,5 +1,10 @@
 # Constrained recovery-aware DAgger
 
+> **A second environment since 2026-11-15.** `psse_env/minimal/` runs an episode with six actions and no
+> controller: the tools compute, the model decides, and the truth only builds training data and scores the
+> result. This document describes the transactional environment, which is unchanged and reproduces every
+> earlier result. See `psse_env/minimal/README.md`.
+
 `psse_env` is the transactional DAgger layer for PSSE diagnosis. Its central
 contract is:
 

@@ -1,0 +1,135 @@
+{
+  "cases": 300,
+  "code": {
+    "head": "ce6c0e6c495e22db1492e737164902e22fa6e5f2",
+    "uncommitted_paths": 0
+  },
+  "contract": "minimal_demonstration_build_v1",
+  "prompt_characters": null,
+  "rows": 0,
+  "rows_by_kind": {},
+  "seconds": 189.5,
+  "settings": {
+    "export_rows": false,
+    "max_actions": 16,
+    "max_orders": 6,
+    "opening_inspection": true,
+    "provider_options": {
+      "complete_evidence": true,
+      "evidence_profile": "scada_only",
+      "normalized_residual_threshold": 4.0,
+      "pair_refit_adjacent": true
+    },
+    "recoveries": 1,
+    "seed": 20261115,
+    "table_versions": null
+  },
+  "suite": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\.claude\\worktrees\\nostalgic-kalam-be5f7a\\output\\compound_rl_20261107\\ieee14_dev300.json",
+  "summary": {
+    "by_class": {
+      "cb2_dangling": {
+        "recovery_sequences": 14,
+        "recovery_solved": 14,
+        "success_sequences": 14,
+        "success_solved": 14
+      },
+      "cb2_mixed": {
+        "recovery_sequences": 8,
+        "recovery_solved": 8,
+        "success_sequences": 11,
+        "success_solved": 11
+      },
+      "cb2_split": {
+        "recovery_sequences": 6,
+        "recovery_solved": 6,
+        "success_sequences": 10,
+        "success_solved": 10
+      },
+      "control_cb": {
+        "recovery_sequences": 11,
+        "recovery_solved": 11,
+        "success_sequences": 12,
+        "success_solved": 12
+      },
+      "control_meter": {
+        "recovery_sequences": 12,
+        "recovery_solved": 12,
+        "success_sequences": 12,
+        "success_solved": 12
+      },
+      "control_rx": {
+        "recovery_sequences": 7,
+        "recovery_solved": 7,
+        "success_sequences": 12,
+        "success_solved": 11
+      },
+      "meter_on_rx": {
+        "recovery_sequences": 16,
+        "recovery_solved": 16,
+        "success_sequences": 18,
+        "success_solved": 16
+      },
+      "meter_rx2": {
+        "recovery_sequences": 17,
+        "recovery_solved": 17,
+        "success_sequences": 35,
+        "success_solved": 20
+      },
+      "rx2_adjacent": {
+        "recovery_sequences": 21,
+        "recovery_solved": 21,
+        "success_sequences": 35,
+        "success_solved": 26
+      },
+      "rx2_distant": {
+        "recovery_sequences": 22,
+        "recovery_solved": 22,
+        "success_sequences": 35,
+        "success_solved": 24
+      },
+      "rx_cb_distant": {
+        "recovery_sequences": 27,
+        "recovery_solved": 27,
+        "success_sequences": 35,
+        "success_solved": 30
+      },
+      "rx_cb_meter": {
+        "recovery_sequences": 28,
+        "recovery_solved": 28,
+        "success_sequences": 35,
+        "success_solved": 29
+      },
+      "rx_cb_same_line": {
+        "recovery_sequences": 15,
+        "recovery_solved": 15,
+        "success_sequences": 18,
+        "success_solved": 18
+      },
+      "rx_cb_shared_bus": {
+        "recovery_sequences": 13,
+        "recovery_solved": 13,
+        "success_sequences": 18,
+        "success_solved": 14
+      }
+    },
+    "mean_actions_success_path": 4.24,
+    "totals": {
+      "estimator_passes_at_end": 274,
+      "healthy_objects_damaged": 0,
+      "measurement_repairs": 100,
+      "orders_beyond_first": 7,
+      "parameter_fits": 427,
+      "recovery_sequences": 217,
+      "recovery_solved": 217,
+      "solved_and_strict_agree": 300,
+      "solved_with_estimator_alarm": 13,
+      "strict_solved": 247,
+      "substation_solves": 3015,
+      "success_sequences": 300,
+      "success_solved": 247,
+      "tool_seconds_x1000": 1092796,
+      "unsolved_with_estimator_passing": 40,
+      "wls_solves": 889
+    }
+  }
+}

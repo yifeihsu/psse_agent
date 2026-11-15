@@ -1,0 +1,117 @@
+{
+  "by_class": {
+    "cb2_dangling": {
+      "cases": 14,
+      "recorded_solved": 9,
+      "replay_solved": 9,
+      "replay_strict_solved": 9
+    },
+    "cb2_mixed": {
+      "cases": 11,
+      "recorded_solved": 6,
+      "replay_solved": 7,
+      "replay_strict_solved": 6
+    },
+    "cb2_split": {
+      "cases": 10,
+      "recorded_solved": 6,
+      "replay_solved": 6,
+      "replay_strict_solved": 6
+    },
+    "control_cb": {
+      "cases": 12,
+      "recorded_solved": 11,
+      "replay_solved": 11,
+      "replay_strict_solved": 11
+    },
+    "control_meter": {
+      "cases": 12,
+      "recorded_solved": 12,
+      "replay_solved": 12,
+      "replay_strict_solved": 12
+    },
+    "control_rx": {
+      "cases": 12,
+      "recorded_solved": 11,
+      "replay_solved": 11,
+      "replay_strict_solved": 11
+    },
+    "meter_on_rx": {
+      "cases": 18,
+      "recorded_solved": 4,
+      "replay_solved": 4,
+      "replay_strict_solved": 4
+    },
+    "meter_rx2": {
+      "cases": 35,
+      "recorded_solved": 16,
+      "replay_solved": 16,
+      "replay_strict_solved": 16
+    },
+    "rx2_adjacent": {
+      "cases": 35,
+      "recorded_solved": 20,
+      "replay_solved": 21,
+      "replay_strict_solved": 20
+    },
+    "rx2_distant": {
+      "cases": 35,
+      "recorded_solved": 15,
+      "replay_solved": 15,
+      "replay_strict_solved": 15
+    },
+    "rx_cb_distant": {
+      "cases": 35,
+      "recorded_solved": 25,
+      "replay_solved": 25,
+      "replay_strict_solved": 25
+    },
+    "rx_cb_meter": {
+      "cases": 35,
+      "recorded_solved": 21,
+      "replay_solved": 21,
+      "replay_strict_solved": 21
+    },
+    "rx_cb_same_line": {
+      "cases": 18,
+      "recorded_solved": 16,
+      "replay_solved": 16,
+      "replay_strict_solved": 16
+    },
+    "rx_cb_shared_bus": {
+      "cases": 18,
+      "recorded_solved": 12,
+      "replay_solved": 13,
+      "replay_strict_solved": 12
+    }
+  },
+  "contract": "minimal_expert_replay_v1",
+  "episodes": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\.claude\\worktrees\\nostalgic-kalam-be5f7a\\output\\compound_rl_20261106\\reference_ieee14\\teacher\\episodes.jsonl",
+  "max_actions": 40,
+  "mean_actions": {
+    "minimal_interface": 6.53,
+    "old_interface": 12.97
+  },
+  "outcome_agreement": {
+    "agree": 300,
+    "disagree": [],
+    "replayed": 300
+  },
+  "seconds": 72.5,
+  "suite": "C:\\Users\\Holiday\\Documents\\ChatGPT\\PSSE_Agent\\.claude\\worktrees\\nostalgic-kalam-be5f7a\\output\\compound_rl_20261107\\ieee14_dev300.json",
+  "totals": {
+    "cases": 300,
+    "recorded_solved": 184,
+    "recorded_wls_calls": 1040,
+    "replay_budget_exhausted": 0,
+    "replay_false_resolved": 69,
+    "replay_healthy_damaged": 26,
+    "replay_measurement_repairs": 121,
+    "replay_parameter_fits": 966,
+    "replay_solved": 187,
+    "replay_strict_solved": 184,
+    "replay_substation_solves": 1953,
+    "replay_success_declared": 176,
+    "replay_wls_solves": 1257
+  }
+}
