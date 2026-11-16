@@ -1,12 +1,12 @@
-# RL in the minimal environment (prepared 2026-11-16)
+# RL in the minimal environment (deployed 2026-11-16)
 
 Runs `research/minimal_env/rl_train.py` on the cluster: sampled episodes of `psse_env/minimal`, the outcome reward,
 one on-policy update per iteration with a KL penalty to the supervised model, and the greedy evaluation on the 300
 development cases. What an iteration does and why its settings are what they are:
 `docs/minimal_env_20261115.md`, section 12.
 
-**State: prepared, not deployed. Nothing has run and nothing is submitted.** Deploying, the smoke and the run each
-need the user's word. The run also needs the supervised pass to finish
+**State: deployed on 2026-11-16 at 15:44 UTC, source at e82026b. Nothing is submitted and no job has run.** The
+smoke and the run each need the user's word. The run also needs the supervised pass to finish
 (`research/hpc/minimal_sft_20261115/README.md`); the smoke does not.
 
 ## What it runs
@@ -92,6 +92,27 @@ wsl -- ssh torch bash -s -- run 3 < research/hpc/minimal_rl_20261116/submit_cell
 
 The `3` is an example: the count is named at submission and has no default.
 
+## The deploy of 2026-11-16
+
+`deploy_from_windows.sh` cloned the supervised cell's source into `/scratch/yx3882/minimal_rl_20261116/source` and
+moved the clone to e82026b with a bundle of 60,956 bytes. It found both suites with the planned checksums, the
+reference and the job's Python in place, and the supervised pass and its evaluation not finished. It submitted
+nothing.
+
+Read on the cluster afterwards (15:50 UTC):
+
+- the source is at e82026b with no tracked change; the supervised cell's source is still at 9c80d9a, under its
+  running jobs;
+- the four scripts parse under the cluster's bash and hold no carriage return;
+- the suites and the reference both configs name exist; the run's adapter and baseline folder do not yet (the pass
+  is running), and the smoke's adapter is copied by the smoke itself;
+- `newest_complete_checkpoint` names `checkpoint-816` of the running pass (3,706 steps in all);
+- the driver imports under the job's Python (3.12.13) with the cell's environment;
+- `status_cell.sh` ran there for the first time, on the empty cell: source, no receipt, no job.
+
+Commits on the branch after e82026b are records alone (the READMEs and the notes): the deployed source is not
+behind in code.
+
 ## What the smoke has to show before a run
 
 The smoke starts from a checkpoint early in the pass, so what it solves says nothing about the supervised model.
@@ -143,6 +164,8 @@ checks them again.
 
 ## Not checked
 
-Nothing in this cell has run on the cluster. The stage's shell has run only against the stub; the submit, status
-and deploy scripts have been parsed, and the status script's reader has run on a stand-in run. The driver has not
-met the model. The smoke is the first time any of it meets the model, the tokenizer or Slurm.
+No job of this cell has run. The stage's shell has run only against the stub. The deploy script has run once
+(above); the submit script has only been parsed; the status script has run on the cluster on the empty cell, and
+its reader on a stand-in run locally. The driver's `--check` has not run on the cluster: the login node's 3 GB
+cannot hold the suites, so the smoke's first step is the first time. The driver has not met the model. The smoke
+is the first time any of it meets the model, the tokenizer or Slurm.

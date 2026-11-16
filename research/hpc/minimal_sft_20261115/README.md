@@ -59,6 +59,29 @@ gate's cache in 84 s and resumed from `checkpoint-208`, the newest complete one,
 resume the smoke could not exercise. The rate on the new card is not read yet (the first interval holds the
 restart).
 
+**Seven preemptions by 12:02 UTC, then a steady stretch** (read 15:53 UTC). Between 06:05 and 12:02 UTC the job
+was preempted seven times, six of them on an H200, and each time it resumed from its newest complete checkpoint
+(432, 480, 512 and 560 for the last four). In those six hours it went from step 208 to step 560: 60 s a step,
+restarts included. Since 12:06 UTC it has run on an RTX PRO 6000 (gr102) without a preemption: step 816 of 3,706
+at 15:47 UTC, 12 h 5 min after the start.
+
+- Rate on the RTX PRO 6000: 40 to 52 s a step between checkpoints, 83 to 95 where a validation fell (a validation
+  takes 592 s there against 361 to 366 s on an H200). From step 560 to 816: 52 s a step, the restart and two
+  validations included.
+- Training loss by block of 64 steps from step 193: 0.101, 0.095, 0.100, 0.095, 0.097, 0.108, 0.080, 0.071, 0.111,
+  and 0.094 over steps 769 to 816. It has stayed near 0.10 since step 130.
+- Validation loss at steps 128, 256, 384, 512, 640 and 768: 0.104, 0.083, 0.098, 0.074, 0.120, 0.072; token
+  accuracy 0.960, 0.971, 0.973, 0.979, 0.971, 0.975. No trend after step 256.
+- Gradient norms before clipping reached 10,413 (steps 321 to 384) and 13,030 (steps 577 to 640); no loss that is
+  not finite in the 816 logged steps.
+- 22.4 GB peak card memory, 91% mean utilization.
+- Slurm's clock for the job starts over at each requeue (3 h 48 min elapsed at the read), so the first link's
+  12-hour limit now falls at 00:05 UTC on 2026-11-17 if it is not preempted first.
+
+The 2,890 steps left take about 42 hours at this card's rate (my arithmetic): the pass would end near 10:00 UTC on
+2026-11-18, later with more preemptions. What the flat loss means for the cases solved is not known before the
+evaluation.
+
 ## The smoke of 2026-11-15
 
 Both jobs started two minutes after submission on one node (RTX PRO 6000, 97,887 MiB).
@@ -219,5 +242,5 @@ real selection (14,823 and 256 rows, checksums as the selection report).
 
 Before the full run every stage had run with the model on the smoke's sizes only: eight training rows, 32
 validation rows, eight evaluation cases. The row gate has since passed on all 15,079 rows, and the pass has been
-preempted, requeued and resumed from its newest checkpoint once (above). Not exercised yet: the hand-over from one
+preempted, requeued and resumed from its newest checkpoint seven times (above). Not exercised yet: the hand-over from one
 link to the next at the 12-hour limit, the evaluation on all 300 cases, and training on an A100 or H100.
