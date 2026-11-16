@@ -201,6 +201,20 @@ def summarize(records: Sequence[Mapping[str, Any]], reference: Mapping[str, Mapp
     return summary
 
 
+def evaluation_payload(records: Sequence[Mapping[str, Any]], *, suite: str, adapter: str, settings: Mapping[str, Any],
+                       reference: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
+    """What ``evaluation.json`` holds: the settings, the summary and one line per case."""
+    return {
+        "contract": EVALUATION_CONTRACT, "suite": str(suite), "adapter": str(adapter), "settings": dict(settings),
+        "summary": summarize(records, reference),
+        "episodes": [{"scenario_id": record["scenario_id"], "class": record.get("compound_class"),
+                      "solved": bool(record["score"]["solved"]), "strict_solved": bool(record["score"]["strict"]["solved"]),
+                      "declared": record["score"].get("declared"), "outcome": record.get("outcome"),
+                      "actions": [str((step.get("action") or {}).get("tool")) for step in record.get("steps") or []],
+                      "reward": (record.get("reward") or {}).get("total")} for record in records],
+    }
+
+
 def model_policy_factory(adapter: str, *, model_choice: str, load_in_4bit: bool) -> Callable[[], Any]:
     def factory() -> Any:
         from psse_env.minimal.policy import minimal_policy_factory
@@ -254,20 +268,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if missing:
         raise SystemExit(f"{len(missing)} cases have no episode after the run: {missing[:5]}")
     reference = json.loads(args.reference.read_text(encoding="utf-8")) if args.reference is not None else None
-    summary = summarize(records, reference)
-    payload = {
-        "contract": EVALUATION_CONTRACT, "suite": str(args.suite), "adapter": str(args.adapter),
-        "settings": {"model_choice": args.model_choice, "load_in_4bit": bool(args.load_in_4bit), "decoding": "greedy",
-                     "max_actions": int(args.max_actions), "table_versions": table_versions,
-                     "max_input_tokens": os.environ.get("RESEARCH_MAX_INPUT_TOKENS"),
-                     "max_new_tokens": os.environ.get("RESEARCH_MAX_NEW_TOKENS")},
-        "summary": summary,
-        "episodes": [{"scenario_id": record["scenario_id"], "class": record.get("compound_class"),
-                      "solved": bool(record["score"]["solved"]), "strict_solved": bool(record["score"]["strict"]["solved"]),
-                      "declared": record["score"].get("declared"), "outcome": record.get("outcome"),
-                      "actions": [str((step.get("action") or {}).get("tool")) for step in record.get("steps") or []],
-                      "reward": (record.get("reward") or {}).get("total")} for record in records],
-    }
+    payload = evaluation_payload(
+        records, suite=str(args.suite), adapter=str(args.adapter), reference=reference,
+        settings={"model_choice": args.model_choice, "load_in_4bit": bool(args.load_in_4bit), "decoding": "greedy",
+                  "max_actions": int(args.max_actions), "table_versions": table_versions,
+                  "max_input_tokens": os.environ.get("RESEARCH_MAX_INPUT_TOKENS"),
+                  "max_new_tokens": os.environ.get("RESEARCH_MAX_NEW_TOKENS")})
+    summary = payload["summary"]
     _write_json(args.output_dir / "evaluation.json", payload)
     print(json.dumps({**summary["totals"], "mean_actions": summary["mean_actions"], "mean_reward": summary["mean_reward"],
                       **({"by_reference": summary["by_reference"]} if reference is not None else {})}, sort_keys=True))

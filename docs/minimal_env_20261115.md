@@ -48,8 +48,8 @@ pipeline beside the old one, not as more switches on it.
 | Oracle sequences never mixed into RL groups | `rollout.rollout_group` holds only sampled episodes | built |
 | KL reference = the new supervised model | the update's reference is the run's starting adapter; an RL run started from the new adapter has it | by construction, no run yet |
 | The expert under the new interface, by mechanical translation | `expert.py`, replayed on the 300 development cases | built, run |
-| Train the new supervised model | `research/minimal_env/train_sft.py`, rows and selection | data built; **not trained** |
-| RL from that checkpoint | reward, rollouts in the RL record format, model policy | **driver loop not built** |
+| Train the new supervised model | `research/minimal_env/train_sft.py`, rows and selection | data built; the pass was submitted on 2026-11-16 and is **not finished** (the cell's README) |
+| RL from that checkpoint | `research/minimal_env/rl_train.py`: rollout, update, evaluation (section 12) | driver built and tested with stand-ins for the model; **no run** |
 
 ## 3. Checks
 
@@ -71,7 +71,7 @@ pipeline beside the old one, not as more switches on it.
 - No observation holds a private key, and no prompt holds `ACCEPT`, `REJECT`, `supported_corrections`,
   `route_status` or `valid_next_actions` (unit test).
 
-66 tests: `python -m pytest psse_env/minimal research/minimal_env -q` (about 3 minutes). The cell's 17 run apart:
+77 tests: `python -m pytest psse_env/minimal research/minimal_env -q` (about 3 minutes). The cell's 17 run apart:
 `python -m pytest research/hpc/minimal_sft_20261115/test_cell.py -q`.
 
 ## 4. Reference numbers on the 300 development cases
@@ -206,12 +206,9 @@ Checksums: training view `582349e2...`, validation view `e55689a6...` (`selectio
 
 ## 9. Not done
 
-- **No model was trained.** The rows, the selection and the trainer entry point exist; the trainer entry point has
-  not run, and the tokenizer row gate (cluster) has not run on these rows. The cell for the pass is prepared
-  (`research/hpc/minimal_sft_20261115/`, section 11), not deployed.
-- **No RL run, and no RL driver for this environment.** `psse_env/rl/train.py` drives the old environment. What the
-  driver needs from this side exists and is tested without a model: grouped rollouts in the RL record format, the
-  reward, the model policy.
+- **No trained model yet.** The supervised pass was submitted on 2026-11-16 after its row gate passed on all 15,079
+  rows; its state is in `research/hpc/minimal_sft_20261115/README.md`.
+- **No RL run.** The driver exists (section 12) and has run with stand-ins for the model only.
 - **No cluster cell for RL.**
 - **IEEE 118** is not handled: no breaker model there (the line-status form of `correct_topology` exists and is
   untested on that system), and a version's meter table is about 1,100 rows.
@@ -223,7 +220,7 @@ Checksums: training view `582349e2...`, validation view `e55689a6...` (`selectio
 | What | Where |
 | --- | --- |
 | Environment and tests | `psse_env/minimal/` |
-| Builders, baseline, selection, trainer entry point | `research/minimal_env/` |
+| Builders, baseline, selection, trainer entry point, evaluation, RL driver | `research/minimal_env/` |
 | Truth reference, 300 development cases | `output/minimal_env_20261115/truth_reference_dev300/` |
 | Rule expert replay, 300 development cases | `output/minimal_env_20261115/expert_dev300/` |
 | Demonstrations and rows, 2,550 training cases | `output/minimal_env_20261115/demonstrations_train_ieee14/` |
@@ -237,7 +234,10 @@ recorded episodes were read from the worktree `nostalgic-kalam-be5f7a`
 (`output/compound_rl_20261107/ieee14_dev300.json`, `output/compound_rl_20261106/reference_ieee14/teacher/episodes.jsonl`);
 the training suite from the main checkout (`output/compound_rl_20261106/train_ieee14/suite.json`).
 
-## 11. The cell for the supervised pass (prepared 2026-11-15, not deployed)
+## 11. The cell for the supervised pass (prepared 2026-11-15)
+
+This section is the cell as it was prepared. It has since been deployed, smoked and submitted (2026-11-16); what
+ran and what it showed is in the cell's README.
 
 `research/hpc/minimal_sft_20261115/` (its README has the order of work). Three jobs: the tokenizer row gate on a CPU
 node, the pass on the 14,823 training rows (3,706 optimizer steps), and the evaluation of its adapter on the 300
@@ -256,3 +256,75 @@ repairs, and the 53 neither repairs.
 My estimate for the pass is 41 to 62 GPU-hours (40 to 60 s per step for prompts of about 9,900 tokens with their
 tools), 7 links of 12 hours as submitted; the evaluation 2 to 4 hours. Nothing in the cell has run with the model or
 its tokenizer. The smoke is the first time the rows meet the chat template.
+
+## 12. The RL driver (built 2026-11-16, no run)
+
+`research/minimal_env/rl_train.py`, with an example config beside it (`rl_config_example.json`).
+
+| Phase | What it does | What it leaves in `iteration_NNN/` |
+| --- | --- | --- |
+| `rollout` | K sampled episodes of every drawn training case, the current adapter choosing every action | `trajectories/`, one file per case; `rollout_summary.json` |
+| `update` | one policy-gradient update on the sampled tokens; an episode's advantage is its reward less the mean reward of its case's samples | `adapter/`, `advantages.json`, `update_report.json` |
+| `evaluate` | the updated adapter, greedy, on the development cases, written as the supervised pass's evaluation is | `evaluation.json`, with the cases gained and lost against the run's baseline |
+
+A run can start with a `baseline` phase: the starting adapter evaluated the same way. `manifest.json` holds the
+phase the run is at and moves on only when a phase completes, so every phase resumes after a preemption. The
+rollout and the evaluations split over worker processes (`--shard i/n`); the call without a shard finishes what is
+left and closes the phase.
+
+**What is reused and what is new.** The trajectory store, the group advantages, the row builder, the update with
+its checkpoint and carried optimizer, and the integrity checks are the RL series' (`psse_env/rl`), called as they
+are, so the repairs of 2026-11-09 to 11 are in. The episode, the reward, the prompt and the tools are this
+environment's. There is no lifecycle label, no decision credit and no supervised target: a correction is kept or
+undone by the model's own later action and credited by the episode's outcome. Truth-built sequences are never part
+of a group. No old module was changed.
+
+**Settings of the example config, and why.**
+
+1. **The advantage is not divided by the group's spread.** Samples of a case that all repair it still differ by an
+   action or two. Dividing by the spread would turn that 0.01 of cost into an advantage as large as the one between
+   a repair and a failure.
+2. **One optimizer step per update, the optimizer carried from update to update, no clip.** Two steps of a new
+   AdamW move every weight the way the first half of the batch points (measured on the first arm, 2026-11-09). With
+   one step there is nothing for a clip to bound, and its stored baseline differs between card types.
+3. **Every sampled token weighs the same (`dapo`).** It is the one normalization under which what a case's samples
+   share cancels exactly.
+4. **A KL penalty to the run's starting adapter**, the supervised model, never to the adapter of the iteration
+   before. Cases whose samples all scored the same add rows for this term alone.
+5. **Only what was sampled is trained.** A case counts only with all its samples, and a step only if its stored
+   observation renders again to the prompt it was sampled from (same token digest, never cut). A step that fails
+   this stops the run; it does not shrink the batch quietly.
+6. **bf16 for the rollouts, the update and the evaluations**, and sampling at temperature 1 from the model's whole
+   distribution (no nucleus or top-k cut, which the update could not account for).
+
+Carried over from the first arm without a new decision: 64 cases by 4 samples per iteration, drawn by class with
+that arm's counts, a learning rate of 1e-5 and a KL weight of 0.04. These are yours to set when a cell is prepared.
+
+**Checked.** 11 tests (`research/minimal_env/test_rl_train.py`) on generated cases. The environment, the scoring,
+the store, the row builder, the update and the integrity checks are the real ones; the policy, the tokenizer and
+the trained model are stand-ins. They cover one whole iteration from the baseline to the next rollout with sharded
+calls; an update cut after its first step and resumed to the same weights; samples that all score the same (the
+adapter is carried over and not evaluated again); a prompt that does not render back (the run stops and stays
+stopped); the KL reference; the seeds and the adapter of the second iteration; and the real prompt renderer, which
+hands the template this environment's messages and six tools from a stored step. 16 faults put into the driver by
+hand each fail a test. The example config's class counts fit the real training suite (2,550 cases, 14 classes):
+three iterations draw 192 different cases, and the development cases share none with it.
+
+**Not checked: everything that needs the model.** A first smoke has to show:
+
+- every sampled step carries its token probabilities, and the share of steps whose tokens are all above 0.99 (a
+  policy that peaked samples the same episode K times and gives the update nothing);
+- every stored step renders back to its sampled prompt under the model's own tokenizer (no digest mismatch);
+- the gap between the sampler's log-probabilities and the update's first pass (the on-policy check);
+- the update's memory on rows of 15,000 tokens with the reference adapter loaded (the first arm's update took
+  about 24 GB plus 1 MB per prompt token, so about 40 GB is my expectation);
+- how many cases have both a repaired and an unrepaired sample: that contrast is what an update can learn a repair
+  from, and `rollout_summary.json` counts it.
+
+**Cost, my estimate.** It rests on the supervised cell's smoke rates; the update's rate in bf16 is not measured.
+Per iteration of 64 cases by 4 samples: the rollout 2 to 4 hours with one process (256 episodes of 4 to 7
+actions, half that with two processes on a card); the update 4 to 7 hours (one row per sampled step, about 10 s a
+row plus the reference's forward pass); the evaluation 1.5 to 3 hours. Together roughly 8 to 14 GPU-hours.
+
+**Not built.** The cluster cell (job scripts, paths, two processes per card), and recovery rows from the model's
+own failed episodes, which the rollouts will hold.

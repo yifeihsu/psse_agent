@@ -177,8 +177,13 @@ python -m research.minimal_env.evaluate --suite <suite.json> --adapter <adapter 
 
 `research/minimal_env/train_sft.py` runs the stock `research-train` on these rows (it keeps each row's own six
 tools instead of the old registry), `row_gate.py` runs the trainer's tokenizer gate alone, and `evaluate.py` runs a
-trained adapter on a suite. All three need the model or its tokenizer and have not run; the cluster cell that calls
-them is `research/hpc/minimal_sft_20261115/` (prepared, not deployed).
+trained adapter on a suite. All three need the model or its tokenizer; the cluster cell that calls them is
+`research/hpc/minimal_sft_20261115/`, whose README holds its state.
+
+`research/minimal_env/rl_train.py` is the RL driver: sampled episodes of this environment (`rollout.py`), the
+outcome reward of `scoring.py`, and the update of the RL series (`psse_env/rl`) on the sampled tokens, with the
+supervised model as the KL reference (docs/minimal_env_20261115.md, section 12). It has run with stand-ins for the
+model only.
 
 ## Settings a model run needs
 
@@ -193,9 +198,7 @@ environment variables (`psse_env/dagger/preliminary_e2b_eval.py`):
 
 ## Not built yet
 
-- The supervised pass itself. Its cell is prepared (`research/hpc/minimal_sft_20261115/`), not deployed.
-- The RL driver loop for this environment. The parts it needs exist and are tested without a model: sampled
-  episodes in the RL series' record format (`rollout.py`), the reward, and the model policy (`policy.py`).
-  `psse_env/rl/train.py` still drives the old environment only.
+- A trained supervised model: the pass was submitted on 2026-11-16 (`research/hpc/minimal_sft_20261115/README.md`).
+- An RL run and its cluster cell. The driver exists (`research/minimal_env/rl_train.py`) and has not met the model.
 - A paging mode for large systems. On IEEE 118 one version's meter table alone is about 1,100 rows.
 - Recovery paths from a model's own failed episodes.
