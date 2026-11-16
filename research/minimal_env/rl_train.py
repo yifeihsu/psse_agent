@@ -1,6 +1,7 @@
 """The RL iteration driver of the minimal environment: sample, score, update, evaluate.
 
     python -m research.minimal_env.rl_train --config rl.json --status
+    python -m research.minimal_env.rl_train --config rl.json --check                       # read the inputs, run nothing
     python -m research.minimal_env.rl_train --config rl.json --phase rollout --shard 0/2   # one worker's slice
     python -m research.minimal_env.rl_train --config rl.json --phase rollout               # closes the phase
     python -m research.minimal_env.rl_train --config rl.json --iterations 1                # the next iteration, whole
@@ -43,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import time
@@ -104,6 +106,8 @@ class MinimalRLConfig:
     #: The adapter the run starts from, and the reference of the KL penalty: the supervised model.
     initial_adapter: str
     development_suite: str | None = None
+    #: The first N development cases only (a smoke); null is the whole suite.
+    development_limit: int | None = None
     #: ``{case: {"expert": bool, "truth": bool}}``: the split every evaluation of the run is also read by
     #: (``research.minimal_env.evaluate``).
     reference: str | None = None
@@ -142,6 +146,11 @@ class MinimalRLConfig:
     #: Evaluate the starting adapter on the development suite before the first rollout, by this driver's own
     #: loader and precision.
     baseline_evaluation: bool = False
+    #: A folder ``research.minimal_env.evaluate`` wrote for the starting adapter (``evaluation.json`` and
+    #: ``episodes/``).  When it holds a finished evaluation under this run's settings, the baseline takes its
+    #: episodes instead of running them again, so the supervised model has one number; when it holds none yet, the
+    #: baseline is evaluated here.  An evaluation of another adapter or under other settings is refused.
+    baseline_from: str | None = None
     evaluate_every_iteration: bool = True
     #: Do not advance past an update that shows a stop condition of ``psse_env.rl.integrity`` (a prompt that is
     #: not the sampled one, a row without its sampling record, a nonfinite loss, duplicated or missing work).
@@ -195,6 +204,11 @@ class MinimalRLConfig:
             raise ValueError("update_checkpoint_rows must be positive")
         if self.baseline_evaluation and not self.development_suite:
             raise ValueError("baseline_evaluation needs a development suite to evaluate the starting adapter on")
+        if self.baseline_from and not self.baseline_evaluation:
+            raise ValueError("baseline_from names where the baseline evaluation may be taken from; set baseline_evaluation")
+        limit = self.development_limit
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+            raise ValueError("development_limit must be a positive integer (null: the whole development suite)")
         group_advantages([0.0, 1.0], method=self.advantage_method, scale=self.advantage_scale)
         RewardWeights.from_mapping(self.reward)
         UpdateSettings(**self.update).validate()
@@ -236,6 +250,12 @@ def load_suite(path: str | Path) -> list[dict[str, Any]]:
     if not roots:
         raise ValueError(f"suite {path} holds no case")
     return roots
+
+
+def development_roots(config: MinimalRLConfig) -> list[dict[str, Any]]:
+    """The cases every evaluation of the run is made on."""
+    roots = load_suite(config.development_suite)
+    return roots if config.development_limit is None else roots[: int(config.development_limit)]
 
 
 def select_iteration_roots(config: MinimalRLConfig, scenarios: Sequence[Mapping[str, Any]], iteration: int) -> list[dict[str, Any]]:
@@ -540,7 +560,7 @@ def greedy_evaluation(config: MinimalRLConfig, *, adapter: str, out: Path, shard
     ``out/evaluation.json`` in the form of ``research.minimal_env.evaluate``, with the case-by-case change against
     the run's baseline where the run has one.
     """
-    roots = load_suite(config.development_suite)
+    roots = development_roots(config)
     limits = apply_prompt_limits(config)
     try:
         ran = evaluate.evaluate_cases(roots, policy_factory=greedy_policy_factory(config, adapter),
@@ -573,13 +593,59 @@ def greedy_evaluation(config: MinimalRLConfig, *, adapter: str, out: Path, shard
     return brief
 
 
+def adopt_baseline(config: MinimalRLConfig, out: Path) -> dict[str, Any] | None:
+    """Take a finished evaluation of the starting adapter (``baseline_from``) as the run's baseline.
+
+    ``None`` when the config names none or the folder holds no finished evaluation.  The evaluation must be of
+    the run's starting adapter under the run's model, precision, episode and prompt limits; anything else is
+    refused rather than compared with.  Each episode file is copied whole and in one move, so shards that start
+    together can both do it.
+    """
+    if not config.baseline_from:
+        return None
+    source = Path(config.baseline_from)
+    if not (source / "evaluation.json").is_file():
+        return None
+    found = json.loads((source / "evaluation.json").read_text(encoding="utf-8"))
+    settings = found.get("settings") if isinstance(found.get("settings"), Mapping) else {}
+    limits = apply_prompt_limits(config)
+    mine = {**{key: value for key, value in environment_record(config).items() if key != "precision"},
+            "load_in_4bit": bool(config.load_in_4bit), "max_input_tokens": int(limits["max_input_tokens"]),
+            "max_new_tokens": int(limits["max_new_tokens"])}
+    theirs = {key: settings.get(key) for key in mine}
+    for key in ("max_input_tokens", "max_new_tokens"):
+        theirs[key] = int(theirs[key]) if theirs[key] is not None else None
+    different = {key: {"evaluation": theirs[key], "run": mine[key]} for key in mine if theirs[key] != mine[key]}
+    if Path(str(found.get("adapter") or "")).resolve() != Path(config.initial_adapter).resolve():
+        different["adapter"] = {"evaluation": found.get("adapter"), "run": config.initial_adapter}
+    if different:
+        raise ValueError(f"{source} is not an evaluation of this run's starting adapter under its settings: {different}")
+    episodes = out / "evaluation" / "episodes"
+    episodes.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for root in development_roots(config):
+        name = f"{evaluate._safe_name(evaluate.case_id(root))}.json"
+        if (episodes / name).is_file():
+            continue
+        if not (source / "episodes" / name).is_file():
+            raise ValueError(f"{source} has no episode of the development case {evaluate.case_id(root)}")
+        temporary = episodes / f".{name}.tmp-{os.getpid()}"
+        shutil.copyfile(source / "episodes" / name, temporary)
+        os.replace(temporary, episodes / name)
+        copied += 1
+    return {"adopted_from": str(source), "episodes_copied": copied}
+
+
 def phase_baseline(config: MinimalRLConfig, manifest: Manifest, *, shard: tuple[int, int] | None = None,
                    progress: Callable[[Mapping[str, Any]], None] | None = None) -> dict[str, Any]:
+    """The starting adapter on the development suite: taken from ``baseline_from`` where that holds it, else run here."""
     del manifest
     if not config.development_suite:
         raise ValueError("the baseline evaluation needs a development suite")
-    return greedy_evaluation(config, adapter=config.initial_adapter, out=Path(config.output_dir) / "baseline", shard=shard,
-                             head={"baseline": True}, progress=progress)
+    out = Path(config.output_dir) / "baseline"
+    adopted = adopt_baseline(config, out)
+    head = {"baseline": True, "baseline_source": adopted["adopted_from"] if adopted else "evaluated by this run"}
+    return greedy_evaluation(config, adapter=config.initial_adapter, out=out, shard=shard, head=head, progress=progress)
 
 
 def phase_evaluate(config: MinimalRLConfig, manifest: Manifest, *, shard: tuple[int, int] | None = None,
@@ -658,6 +724,42 @@ def status(config: MinimalRLConfig) -> dict[str, Any]:
     return asdict(load_manifest(config))
 
 
+def check(config: MinimalRLConfig) -> dict[str, Any]:
+    """What a run of this config would start from, read without running anything.
+
+    The suites are loaded and the first iteration's cases drawn (a class count that does not fit the suite is
+    refused there); ``problems`` names what a run would trip over later: an adapter folder that holds no adapter,
+    cases in both suites, development cases the reference does not know.
+    """
+    training = load_suite(config.training_suite)
+    drawn = select_iteration_roots(config, training, 0)
+    development = development_roots(config) if config.development_suite else []
+    adapter = Path(config.initial_adapter)
+    adapter_found = (adapter / "adapter_config.json").is_file() and any(
+        (adapter / name).is_file() for name in ("adapter_model.safetensors", "adapter_model.bin"))
+    shared = {scenario_root(root) for root in training} & {scenario_root(root) for root in development}
+    unknown: list[str] = []
+    if config.reference:
+        reference = json.loads(Path(config.reference).read_text(encoding="utf-8"))
+        unknown = [evaluate.case_id(root) for root in development if evaluate.case_id(root) not in reference]
+    problems = []
+    if not adapter_found:
+        problems.append(f"no adapter at {adapter} (adapter_config.json and its weights)")
+    if shared:
+        problems.append(f"{len(shared)} cases are in the training suite and in the development suite")
+    if unknown:
+        problems.append(f"{len(unknown)} development cases are not in the reference (first: {unknown[0]})")
+    manifest = load_manifest(config)
+    return {
+        "ok": not problems, "problems": problems,
+        "training_cases": len(training), "cases_drawn_for_the_first_iteration": len(drawn),
+        "episodes_per_iteration": len(drawn) * int(config.samples_per_root), "development_cases": len(development),
+        "initial_adapter": str(adapter), "kl_reference": config.initial_adapter if config.update_settings(0).beta_kl > 0.0 else None,
+        "environment": environment_record(config), "prompt_limits": apply_prompt_limits(config),
+        "run_is_at": {"iteration": manifest.iteration, "phase": manifest.phase},
+    }
+
+
 def _print_progress(record: Mapping[str, Any]) -> None:
     print(json.dumps(dict(record), default=str), flush=True)
 
@@ -670,11 +772,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="'i/n': this worker's slice of the baseline, rollout or evaluation phase; the unsharded call closes it")
     parser.add_argument("--iterations", type=int, default=1, help="iterations to run when no phase is given")
     parser.add_argument("--status", action="store_true")
+    parser.add_argument("--check", action="store_true",
+                        help="load the suites, draw the first iteration's cases and look for the adapter; run nothing")
     args = parser.parse_args(argv)
     config = MinimalRLConfig.load(args.config)
     if args.status:
         print(json.dumps(status(config), indent=2))
         return 0
+    if args.check:
+        found = check(config)
+        print(json.dumps(found, indent=2, default=str))
+        return 0 if found["ok"] else 2
     if args.phase:
         run_phase(config, args.phase, progress=_print_progress, shard=parse_shard(args.shard))
         return 0

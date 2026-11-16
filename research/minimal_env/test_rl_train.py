@@ -28,7 +28,7 @@ from psse_env.rl.integrity import MARKER_FILE, IntegrityError
 from psse_env.rl.prompt_digest import prompt_token_digest
 from psse_env.rl.rollout import TrajectoryStore, sample_seed
 from psse_env.rl.train import OPTIMIZER_FILE, Manifest, iteration_dir
-from research.minimal_env import rl_train
+from research.minimal_env import evaluate, rl_train
 from research.minimal_env.rl_train import DRIVER_CONTRACT, MinimalRLConfig
 
 try:
@@ -247,6 +247,41 @@ class ConfigTests(unittest.TestCase):
                 names = [item["audit"]["compound"]["class"] for item in rl_train.select_iteration_roots(by_class, cases, iteration)]
                 self.assertEqual((names.count("a"), names.count("b")), (3, 1))
 
+    def test_the_check_reads_what_a_run_would_start_from_and_runs_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            train, development, reference, adapter = root / "train.json", root / "dev.json", root / "reference.json", root / "lora"
+            train.write_text(json.dumps(ROOTS[:1]), encoding="utf-8")
+            development.write_text(json.dumps(ROOTS[1:]), encoding="utf-8")
+            reference.write_text(json.dumps({ROOTS[1]["execution"]["scenario_id"]: {"expert": True, "truth": True}}), encoding="utf-8")
+            adapter.mkdir()
+            (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+            (adapter / "adapter_model.safetensors").write_bytes(b"0")
+            settings = dict(training_suite=str(train), development_suite=str(development), reference=str(reference),
+                            initial_adapter=str(adapter), update={"beta_kl": 0.04})
+            found = rl_train.check(_config(folder, **settings))
+            self.assertEqual((found["ok"], found["problems"]), (True, []))
+            self.assertEqual((found["training_cases"], found["cases_drawn_for_the_first_iteration"], found["episodes_per_iteration"],
+                              found["development_cases"]), (1, 1, 2, 1))
+            self.assertEqual((found["kl_reference"], found["run_is_at"]), (str(adapter), {"iteration": 0, "phase": "rollout"}))
+            self.assertFalse((root / "run").exists())  # nothing was written
+            # What a run would trip over: no weights, a case in both suites, a case the reference does not know.
+            (adapter / "adapter_model.safetensors").unlink()
+            reference.write_text("{}", encoding="utf-8")
+            problems = rl_train.check(_config(folder, **{**settings, "development_suite": str(train)}))["problems"]
+            self.assertEqual(len(problems), 3)
+            self.assertRegex(" ".join(problems), "no adapter at .*1 cases are in the training suite.*1 development cases are not")
+            path = root / "rl.json"
+            path.write_text(json.dumps(_config(folder, **settings).as_dict()), encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()) as printed:
+                self.assertEqual(rl_train.main(["--config", str(path), "--check"]), 2)
+            self.assertFalse(json.loads(printed.getvalue())["ok"])
+            # A class count that does not fit the suite is refused when the cases are drawn.
+            by_class = _config(folder, **settings, roots_per_iteration=1,
+                               root_sampling={"mode": "stratified", "key": "compound_class", "counts": {"no_such_class": 1}})
+            with self.assertRaisesRegex(ValueError, "must name exactly the suite's strata"):
+                rl_train.check(by_class)
+
     def test_a_run_folder_of_the_old_driver_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             config = _config(folder)
@@ -402,6 +437,63 @@ class IterationTests(unittest.TestCase):
             manifest = rl.load_manifest(config)
             self.assertEqual((manifest.phase, manifest.iteration, len(manifest.history)), ("rollout", 1, 1))
             self.assertEqual(rl.status(config)["baseline"]["evaluation"]["solved"], 0)
+
+    def test_a_finished_evaluation_of_the_starting_adapter_is_taken_as_the_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, _stand_ins({}) as rl:
+            plain = _config(folder, baseline_evaluation=True)
+            earlier = Path(folder) / "supervised_evaluation"
+            limits = rl.apply_prompt_limits(plain)
+
+            def write(**changed) -> None:
+                """The supervised cell's evaluation of the starting adapter, as research.minimal_env.evaluate writes it."""
+                records, missing = evaluate.read_episodes(ROOTS, earlier / "episodes")
+                self.assertEqual(missing, [])
+                settings = {"model_choice": "12b", "load_in_4bit": False, "decoding": "greedy", "max_actions": 16, "table_versions": 2,
+                            "max_input_tokens": str(limits["max_input_tokens"]), "max_new_tokens": str(limits["max_new_tokens"])}
+                payload = evaluate.evaluation_payload(records, suite=plain.development_suite, adapter=plain.initial_adapter,
+                                                      settings={**settings, **changed.pop("settings", {})})
+                (earlier / "evaluation.json").write_text(json.dumps({**payload, **changed}), encoding="utf-8")
+
+            def config_in(name: str) -> MinimalRLConfig:
+                return _config(folder, baseline_evaluation=True, baseline_from=str(earlier), output_dir=str(Path(folder) / name))
+
+            # No finished evaluation there yet: the baseline is evaluated here (the starting adapter repairs nothing).
+            here = _run(config_in("run_before"), "baseline")
+            self.assertEqual((here["solved"], here["baseline_source"]), (0, "evaluated by this run"))
+            # The evaluation, by a policy that repairs: its episodes are the baseline's, and no policy is built.
+            env = MinimalDiagnosisEnv(KERNEL)
+            evaluate.evaluate_cases(ROOTS, policy_factory=lambda: _Scripted(repair=True), env_factory=lambda: env,
+                                    episodes_dir=earlier / "episodes")
+            write()
+
+            def no_policy(config, adapter):
+                def build():
+                    raise AssertionError("the baseline was run again")
+                return build
+
+            with mock.patch.object(rl, "greedy_policy_factory", no_policy):
+                config = config_in("run_adopting")
+                self.assertEqual(_run(config, "baseline", shard=(0, 2)), {"shard": "0/2", "evaluated": 0})
+                adopted = _run(config, "baseline")
+            self.assertEqual((adopted["solved"], adopted["baseline_source"]), (sum(REPAIRED), str(earlier)))
+            self.assertEqual(_json(Path(config.output_dir) / "baseline" / "evaluation.json")["baseline_source"], str(earlier))
+            # An evaluation under another episode length, or of another adapter, is refused.
+            for label, changed in (("another budget", {"settings": {"max_actions": 20}}),
+                                   ("another adapter", {"adapter": str(Path(folder) / "another")})):
+                write(**changed)
+                with self.assertRaisesRegex(ValueError, "not an evaluation of this run's starting adapter", msg=label):
+                    _run(config_in(f"run_{label.replace(' ', '_')}"), "baseline")
+            with self.assertRaises(ValueError):
+                _config(folder, baseline_from=str(earlier))  # without baseline_evaluation there is nothing to take it for
+
+    def test_a_development_limit_keeps_the_first_cases_only(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, _stand_ins({}):
+            config = _config(folder, baseline_evaluation=True, development_limit=1)
+            self.assertEqual(_run(config, "baseline")["cases"], 1)
+            written = _json(Path(config.output_dir) / "baseline" / "evaluation.json")
+            self.assertEqual([episode["scenario_id"] for episode in written["episodes"]], [ROOTS[0]["execution"]["scenario_id"]])
+            with self.assertRaises(ValueError):
+                _config(folder, development_limit=0)
 
     def test_samples_that_all_score_the_same_leave_the_adapter_as_it_was(self) -> None:
         holder = {"never_repair": True}
