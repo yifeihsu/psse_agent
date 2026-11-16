@@ -52,6 +52,13 @@ it in 83 s.
 At that rate the 3,706 steps take 38 hours and the 28 validations 3 more: about 41 hours on this card (my
 arithmetic), so the fourth link should finish the pass if the later links get a card of the same speed.
 
+**First preemption, and the first resume** (read 06:38 UTC). The job was preempted at 06:05 UTC at step 214, after
+2 h 23 min on the H200. Slurm requeued it; it started again 7 minutes later on an RTX PRO 6000, loaded the row
+gate's cache in 84 s and resumed from `checkpoint-208`, the newest complete one, so six steps were run twice.
+`checkpoint-224` was written at 06:28 UTC; the loss over steps 193 to 224 averages 0.098. This is the requeue and
+resume the smoke could not exercise. The rate on the new card is not read yet (the first interval holds the
+restart).
+
 ## The smoke of 2026-11-15
 
 Both jobs started two minutes after submission on one node (RTX PRO 6000, 97,887 MiB).
@@ -211,6 +218,6 @@ real selection (14,823 and 256 rows, checksums as the selection report).
 ## Not checked
 
 Before the full run every stage had run with the model on the smoke's sizes only: eight training rows, 32
-validation rows, eight evaluation cases. The row gate has since passed on all 15,079 rows. Not exercised yet: a
-preemption requeue and the resume it triggers (the smoke only names the checkpoint a resume would take), and
-training on an A100 or H100.
+validation rows, eight evaluation cases. The row gate has since passed on all 15,079 rows, and the pass has been
+preempted, requeued and resumed from its newest checkpoint once (above). Not exercised yet: the hand-over from one
+link to the next at the 12-hour limit, the evaluation on all 300 cases, and training on an A100 or H100.
