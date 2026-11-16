@@ -4,11 +4,11 @@ Trains an adapter on the truth-built demonstrations executed through `psse_env/m
 development cases in that environment. Background and numbers: `docs/minimal_env_20261115.md`; the environment's
 contract: `psse_env/minimal/README.md`.
 
-**State: the smoke ran; its training half failed and is fixed here, not yet on torch.** Deployed on the user's word
-on 2026-11-15 (23:16 to 23:29 UTC) at commit ea5e9a2, and the smoke submitted on their word at 23:40 UTC. The
-evaluation smoke passed. The training smoke ran out of card memory at its first step (below). The fix is committed
-in this branch; torch still has ea5e9a2. A redeploy, the training smoke again and the submission of the pass each
-need the user's word.
+**State: both smokes have passed; the pass is not submitted.** Deployed on the user's word on 2026-11-15 (23:16 to
+23:29 UTC) at commit ea5e9a2, and the smoke submitted on their word at 23:40 UTC. The evaluation smoke passed. The
+training smoke ran out of card memory at its first step; the fix was redeployed on the user's word on 2026-11-16
+(00:51 to 00:59 UTC, torch at 9c80d9a) and the training smoke passed on its second run (below). Submitting the row
+gate, the pass and its evaluation needs the user's word.
 
 ## The smoke of 2026-11-15
 
@@ -36,17 +36,29 @@ x 4 bytes); the model's own loss holds several such copies. No checkpoint and no
 
 This limit was known. The complete-evidence clone met it four hours earlier (job 23274632) and its fix,
 `--supervised-logits-only`, was committed as 5726b52 on `claude/open-rules-20261112`, after this branch had left
-that one. The cell was prepared without it. Fixed here: that commit is brought in (2f8660e), the training stage
-passes the option, and the deploy refuses a commit without it. The option computes the same loss from the logits
-of the target's span alone (`psse_env/sft/supervised_logits.py`); it has not yet run with the model in either
-cell, so the training smoke has to run again, and `status_cell.sh` prints how the forward was called (`kept_calls`
-must equal the calls with labels; `ignored_calls` or `refused_calls` above zero means the memory was not saved).
+that one. The cell was prepared without it. Fixed: that commit is brought in (2f8660e), the training stage passes
+the option, and the deploy refuses a commit without it (9c80d9a). The option computes the same loss from the
+logits of the target's span alone (`psse_env/sft/supervised_logits.py`), and `status_cell.sh` prints how the
+forward was called (`ignored_calls` or `refused_calls` above zero would mean the memory was not saved).
 
-`submit_cell.sh smoke` submits the training smoke alone now: it finds the evaluation smoke's `evaluation.json`
-and leaves it. The smoke rows and the gate's timing are on disk and are reused.
+**Training smoke again, `msf-smoke-base` 23290175 (2026-11-16, source 9c80d9a): completed in 6 min 16 s on an
+H200.** It started 24 minutes after submission. `submit_cell.sh smoke` submitted it alone (the evaluation smoke's
+`evaluation.json` was found and left); the smoke rows were reused and the row gate's result was loaded from its
+cache.
 
-Still to be shown by the training smoke: a finite loss over two optimizer steps from the base model at 1e-4, a
-checkpoint a restart would resume from, the seconds per step, and the card memory at the longest row.
+- Two optimizer steps from the base model at 1e-4: loss 2.104 and 1.944, token accuracy 0.80 and 0.85, gradient
+  norms 35.5 and 201.6 before clipping (the cell sets no clipping of its own; the trainer's default applies).
+  Validation after the second step, 32 rows: loss 1.241, token accuracy 0.87. These are the first two steps of a
+  new adapter, not a result. For scale: the complete-evidence clone's smoke, which continues R1, began at 0.49.
+- `checkpoint-1` and `checkpoint-2` were saved, a resume would start from `checkpoint-2`, the receipt is written,
+  `research_run.json` passed, and the reloaded adapter produced a parseable tool call (not the target's, after two
+  steps).
+- The span-only loss was used on every forward with labels: 41 kept (one optimizer smoke, eight training rows,
+  32 validation rows), none ignored, none refused; at most 34 logits kept of 15,237 positions.
+- Memory, sampled each minute: 34.7 GB at the highest sample, 21.9 GB during the two steps. The first run had
+  80.55 GiB allocated when it failed.
+- Rate: 45 s a step on the smoke's eight rows (44,500 tokens a step, about 1.0 ms a token) and 1.6 s a validation
+  row.
 
 Checked on torch after the deploy (one read-only call): the source is at ea5e9a2 with no tracked change; the seven
 scripts parse and hold no carriage return; the four uploaded files have the local checksums (training view
@@ -92,12 +104,14 @@ One difference from BC0 is kept on purpose: BC0 chose its checkpoint by validati
 step, as the cloning passes did. The rows are seen once, and validation loss was a poor guide the last time (the
 open-rules clone reached 0.019 and lost 23 cases).
 
-## Estimates (mine, not measured)
+## Estimates (mine, from the smokes' rates)
 
-Prompts are 9,956 tokens with their tools at the median (the row gate's count on the smoke rows), against about
-5,800 for the open-rules pass, which took 25 to 27 s per step. At 40 to 60 s per step the pass is 41 to 62
-GPU-hours; `submit_cell.sh` counts 60 s and submits 7 links of 12 hours. The seconds per step are still unmeasured:
-the training smoke stopped before its first step.
+Prompts are 9,956 tokens with their tools at the median (the row gate's count on the smoke rows), about 145
+million tokens over the 14,823 rows, so about 39,000 tokens a step. At the smoke's rate on an H200 (1.0 ms a
+token) that is 40 s a step and 41 hours for the 3,706 steps, plus 28 validations of 7 minutes: about 44 GPU-hours.
+At the rate the complete-evidence clone's smoke measured on an RTX PRO 6000 (1.3 ms a token) it is about 57. The
+A100 and H100 are not measured. `submit_cell.sh` counts 60 s a step and submits 7 links of 12 hours, which covers
+both; a pass that ran short would resume with one more link.
 
 The evaluation, from the smoke's timing (my arithmetic): an adapter that stops after 4 to 7 actions, as the
 demonstrations do, should take 1.5 to 3 hours for the 300 cases with two processes on a card; one that uses all 16
@@ -132,7 +146,7 @@ worktree `dreamy-bassi-27849a`, so from another checkout name the folder with `S
 - The row gate passes on the smoke rows. These rows have never met the tokenizer, and the gate reads each tool call
   back from the template's rendering. **Shown 2026-11-15.**
 - Two optimizer steps run from the base model at 1e-4 with a finite loss, and a resume would find a checkpoint.
-  **Not shown: out of memory before the first step; fixed here, to be run again.**
+  **Shown 2026-11-16 on the second run** (the first ran out of memory before its first step).
 - The evaluation smoke writes eight episode files and `evaluation.json`, with no `prompt_limit` outcome.
   **Shown 2026-11-15.**
 
@@ -154,6 +168,6 @@ real selection (14,823 and 256 rows, checksums as the selection report).
 
 ## Not checked
 
-The trainer has not taken a step on these rows, and `--supervised-logits-only` has not run with the model: the
-training smoke is where both are first exercised. The row gate, the model policy and the evaluation have run with
-the model (the smoke above).
+Every stage has now run with the model, on the smoke's sizes only: eight training rows, 32 validation rows, eight
+evaluation cases. Not exercised: a preemption requeue and the resume it triggers (the smoke only names the
+checkpoint a resume would take), the row gate on all 15,079 rows (232 so far), and training on an A100 or H100.
