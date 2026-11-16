@@ -71,7 +71,7 @@ pipeline beside the old one, not as more switches on it.
 - No observation holds a private key, and no prompt holds `ACCEPT`, `REJECT`, `supported_corrections`,
   `route_status` or `valid_next_actions` (unit test).
 
-77 tests: `python -m pytest psse_env/minimal research/minimal_env -q` (about 3 minutes). The cell's 17 run apart:
+80 tests: `python -m pytest psse_env/minimal research/minimal_env -q` (about 3 minutes). The cell's 17 run apart:
 `python -m pytest research/hpc/minimal_sft_20261115/test_cell.py -q`.
 
 ## 4. Reference numbers on the 300 development cases
@@ -208,8 +208,8 @@ Checksums: training view `582349e2...`, validation view `e55689a6...` (`selectio
 
 - **No trained model yet.** The supervised pass was submitted on 2026-11-16 after its row gate passed on all 15,079
   rows; its state is in `research/hpc/minimal_sft_20261115/README.md`.
-- **No RL run.** The driver exists (section 12) and has run with stand-ins for the model only.
-- **No cluster cell for RL.**
+- **No RL run.** The driver exists (section 12) and has run with stand-ins for the model only; its cluster cell
+  is prepared (`research/hpc/minimal_rl_20261116/`), not deployed.
 - **IEEE 118** is not handled: no breaker model there (the line-status form of `correct_topology` exists and is
   untested on that system), and a version's meter table is about 1,100 rows.
 - **The waveform families** (HIF, unbalance, harmonics) are outside this environment.
@@ -300,7 +300,7 @@ of a group. No old module was changed.
 Carried over from the first arm without a new decision: 64 cases by 4 samples per iteration, drawn by class with
 that arm's counts, a learning rate of 1e-5 and a KL weight of 0.04. These are yours to set when a cell is prepared.
 
-**Checked.** 11 tests (`research/minimal_env/test_rl_train.py`) on generated cases. The environment, the scoring,
+**Checked.** 14 tests (`research/minimal_env/test_rl_train.py`) on generated cases. The environment, the scoring,
 the store, the row builder, the update and the integrity checks are the real ones; the policy, the tokenizer and
 the trained model are stand-ins. They cover one whole iteration from the baseline to the next rollout with sharded
 calls; an update cut after its first step and resumed to the same weights; samples that all score the same (the
@@ -326,5 +326,10 @@ Per iteration of 64 cases by 4 samples: the rollout 2 to 4 hours with one proces
 actions, half that with two processes on a card); the update 4 to 7 hours (one row per sampled step, about 10 s a
 row plus the reference's forward pass); the evaluation 1.5 to 3 hours. Together roughly 8 to 14 GPU-hours.
 
-**Not built.** The cluster cell (job scripts, paths, two processes per card), and recovery rows from the model's
-own failed episodes, which the rollouts will hold.
+**The cluster cell** is `research/hpc/minimal_rl_20261116/` (prepared 2026-11-16, not deployed): one stage that
+runs the phase the manifest is at, two processes per large card for the rollout and the evaluations, a smoke of
+one small iteration from a checkpoint of the running supervised pass, and a chain for the run. The run starts from
+the supervised pass's adapter and takes that cell's evaluation of it as its baseline (`baseline_from`), so the
+supervised model has one number. Its README has the order of work and what the smoke has to show.
+
+**Not built.** Recovery rows from the model's own failed episodes, which the rollouts will hold.
