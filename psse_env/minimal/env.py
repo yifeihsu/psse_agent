@@ -75,6 +75,13 @@ def execution_part(scenario: Mapping[str, Any]) -> dict[str, Any]:
     return copy.deepcopy(dict(scenario))
 
 
+def _tool_error_text(output: Mapping[str, Any]) -> str:
+    """A failed tool's own code and, where it gave one, its reason (a fit that finds nothing gives none)."""
+    code = str(output.get("error_code") or "tool_failure")
+    detail = output.get("error_detail")
+    return code if detail in (None, "") else f"{code}: {detail}"
+
+
 class MinimalDiagnosisEnv:
     """Saved states, six actions, the numerical kernel; no controller."""
 
@@ -207,7 +214,7 @@ class MinimalDiagnosisEnv:
         flips = list(dict.fromkeys(self._flips.get(version, []) + list(arguments.get("flip") or [])))
         output = self.kernel.substation(state, flips)
         if not output.get("ok"):
-            raise ActionError(ERROR_TOOL, f"{output.get('error_code')}: {output.get('error_detail')}")
+            raise ActionError(ERROR_TOOL, _tool_error_text(output))
         self._flips[version] = flips
         self._substations[version] = {key: value for key, value in output.items() if key != "ok"}
         self._touch(version)
@@ -240,8 +247,7 @@ class MinimalDiagnosisEnv:
             raise ActionError(ERROR_ARGUMENTS, str(tool))
         if not output.get("ok"):
             code = str(output.get("error_code") or "")
-            raise ActionError(ERROR_NO_CHANGE if code.endswith("_no_change") else ERROR_TOOL,
-                              f"{code}: {output.get('error_detail')}")
+            raise ActionError(ERROR_NO_CHANGE if code.endswith("_no_change") else ERROR_TOOL, _tool_error_text(output))
         parent = store.current
         try:
             child = store.apply(output["modification"], step=self._steps)

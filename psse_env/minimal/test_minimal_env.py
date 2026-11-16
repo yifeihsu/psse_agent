@@ -183,6 +183,7 @@ class ExecutionContractTests(unittest.TestCase):
         self.assertIn(result["status"], ("ok", "error"))
         if result["status"] == "error":  # the fit itself may fail; that is the tool, never a refusal of the target
             self.assertEqual(result["error_code"], "tool_failure")
+            self.assertNotIn("None", str(result["error_detail"]))  # a fit with no reason to give names its code alone
 
     def test_a_refused_call_changes_nothing_and_still_counts(self) -> None:
         env = _env()

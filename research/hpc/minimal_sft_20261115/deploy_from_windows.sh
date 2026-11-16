@@ -38,12 +38,16 @@ cd "$REPO"
 for path in "$CELL_REL/cell.env" "$CELL_REL/stage_row_gate.sbatch" "$CELL_REL/stage_train.sbatch" "$CELL_REL/stage_eval.sbatch" \
             "$CELL_REL/submit_cell.sh" "$CELL_REL/status_cell.sh" "$CELL_REL/dev300_reference.json" \
             research/minimal_env/train_sft.py research/minimal_env/row_gate.py research/minimal_env/evaluate.py \
-            psse_env/minimal/env.py psse_env/minimal/observation.py psse_env/minimal/policy.py psse_env/minimal/scoring.py; do
+            psse_env/minimal/env.py psse_env/minimal/observation.py psse_env/minimal/policy.py psse_env/minimal/scoring.py \
+            psse_env/sft/supervised_logits.py; do
   git cat-file -e "$COMMIT:$path" 2>/dev/null || { echo "$path is not in $COMMIT: commit the cell first" >&2; exit 2; }
 done
 # The trainer entry with the cached row gate and the evaluation that stores each case must be in the deployed source.
 git grep -q MINIMAL_GATE_CACHE "$COMMIT" -- research/minimal_env/train_sft.py || { echo "$COMMIT's trainer entry has no row gate cache" >&2; exit 2; }
 git grep -q "def evaluate_cases" "$COMMIT" -- research/minimal_env/evaluate.py || { echo "$COMMIT has no minimal evaluation" >&2; exit 2; }
+# The pass must compute its loss from the target's span: without it the first row runs out of a 95 GB card.
+git grep -q -e "--supervised-logits-only" "$COMMIT" -- "$CELL_REL/stage_train.sbatch" || { echo "$COMMIT's training stage lacks --supervised-logits-only" >&2; exit 2; }
+git grep -q -e "--supervised-logits-only" "$COMMIT" -- psse_env/sft/research_cli.py || { echo "$COMMIT's trainer has no --supervised-logits-only" >&2; exit 2; }
 
 [[ -d "$SELECTION_DIR" ]] || { echo "no selection at $SELECTION_DIR: name it with SELECTION_DIR (the rows were built in the worktree dreamy-bassi-27849a)" >&2; exit 2; }
 TRAIN_LOCAL=$SELECTION_DIR/train.jsonl

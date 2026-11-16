@@ -179,9 +179,20 @@ class TrainerSettingsTests(unittest.TestCase):
                    '--learning-rate "$CLONE_LEARNING_RATE"': '--learning-rate "$START_LEARNING_RATE"',
                    '--seed "$CLONE_SEED"': '--seed "$SFT_SEED"',
                    '--run-name "$CLONE_RUN_NAME-$MODE"': '--run-name "$SFT_RUN_NAME-$MODE-$START_NAME"'}
-        self.assertEqual(options, [renamed.get(option, option) for option in theirs])  # the trainer's options, one for one
+        # One option is this cell's own: the loss from the logits of the target's span (the same loss; the smoke of
+        # 2026-11-15 ran out of a 95 GB card without it).  It follows the prompt-length option.
+        span = "--supervised-logits-only"
+        self.assertEqual(options[options.index("--strict-prompt-length") + 1], span)
+        self.assertEqual(options.count(span), 1)
+        options.remove(span)
+        self.assertEqual(options, [renamed.get(option, option) for option in theirs])  # the rest, one for one
         self.assertEqual(len(options), 23)
         self.assertIn("--strict-prompt-length", options)  # a prompt over the limit is refused, never cut
+        # The complete-evidence clone's pass, which met the same limit first, passes the same option.
+        sibling = _trainer_options((CELL.parent / "clone_complete_evidence_20261115" / "stage_clone_train.sbatch").read_text(encoding="utf-8"))
+        self.assertIn(span, sibling)
+        from psse_env.sft.research_cli import parser
+        self.assertTrue(parser().parse_args(["--train", "t", "--validation", "v", "--output-dir", "o", span]).supervised_logits_only)
 
     def test_the_evaluation_reads_the_prompt_the_rows_were_built_with(self) -> None:
         settings = _settings(CELL / "cell.env")

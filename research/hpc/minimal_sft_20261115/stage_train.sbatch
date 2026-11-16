@@ -18,6 +18,12 @@
 # follow the start: a new LoRA on the base model takes no --initial-adapter and BC0's learning rate.  max-steps is
 # ceil(rows / 4), read from the row file here.
 #
+# One trainer option is not the cloning passes': --supervised-logits-only (psse_env/sft/supervised_logits.py), the
+# loss computed from the logits of the target's span alone.  It is the same loss.  Without it the model projects
+# every prompt position onto the vocabulary, about 1 MB a position, several copies at once: the first smoke of this
+# cell (job 23284023, 2026-11-15) ran out of a 95 GB card on its first row, 15,237 tokens with a target of a few
+# dozen.
+#
 # SFT_MODE=smoke runs the same path on about 200 rows for two optimizer steps, the longest row of the view first,
 # saving at each step and validating at the second, and first times the row gate on them.
 #
@@ -132,6 +138,7 @@ if [[ ! -s "$TRAIN_DIR/lora/adapter_model.safetensors" || ! -s "$TRAIN_DIR/resea
     --output-dir "$TRAIN_DIR" \
     --max-length "$TRAIN_MAX_LENGTH" \
     --strict-prompt-length \
+    --supervised-logits-only \
     --batch-size 1 \
     --gradient-accumulation-steps 4 \
     --learning-rate "$START_LEARNING_RATE" \

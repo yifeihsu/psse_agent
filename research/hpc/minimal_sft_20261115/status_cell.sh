@@ -35,6 +35,10 @@ for path in ([f"{stage}/training/trainer_state.json"] if os.path.isfile(f"{stage
     recent = losses[-64:]
     print(f"    step {state.get('global_step')} of {state.get('max_steps')}; training loss, last {len(recent)} steps: "
           f"{sum(recent) / max(1, len(recent)):.4f}; validation losses {evaluations[-6:]}")
+report = f"{stage}/training/training_stage.json"
+if os.path.isfile(report):
+    # How the forward was called: "kept" got the target's span alone; "ignored" or "refused" means the memory was not saved.
+    print("    supervised-span loss:", json.dumps(json.load(open(report)).get("supervised_logits"), sort_keys=True))
 receipt = f"{stage}/training.done"
 if os.path.isfile(receipt):
     done = json.load(open(receipt))
