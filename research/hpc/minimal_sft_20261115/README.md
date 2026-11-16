@@ -26,7 +26,20 @@ The first training link starts only if the row gate ends well, so a failed gate 
 dependency that cannot be met: read the gate's log and cancel them. The complete-evidence clone's training chain
 (`cec-train`, another cell) had one card when this was submitted; the two share this user's card limit.
 
-Nothing is read yet.
+**Row gate, 23308022: passed in 5 min 44 s** (read 03:45 UTC). All 15,079 rows rendered through the model's chat
+template with their six tools and tokenized; every tool call read back; no prompt and no target cut; no row without
+a supervised token; no row changed. 0.021 s a row and 15.7 GB of memory at the peak (the smoke's 0.23 s a row was
+mostly start-up, and my hour for this job was wrong by that factor). The cache is 2.8 GB and a training link loads
+it in 83 s.
+
+| Tokens with the tools | Median | 95% | 99% | Longest |
+| --- | --- | --- | --- | --- |
+| Training rows (14,823) | 9,896 | 12,558 | 14,826 | 15,237 |
+| Validation rows (256) | 9,912 | 12,564 | 14,908 | 15,099 |
+| Target, training rows | 13 | 31 | 37 | 37 |
+
+**The pass, first link 23308024:** started at 03:42 UTC on an H200, 90 seconds after the gate ended. Not read
+further yet.
 
 ## The smoke of 2026-11-15
 
@@ -186,6 +199,7 @@ real selection (14,823 and 256 rows, checksums as the selection report).
 
 ## Not checked
 
-Every stage has now run with the model, on the smoke's sizes only: eight training rows, 32 validation rows, eight
-evaluation cases. Not exercised: a preemption requeue and the resume it triggers (the smoke only names the
-checkpoint a resume would take), the row gate on all 15,079 rows (232 so far), and training on an A100 or H100.
+Before the full run every stage had run with the model on the smoke's sizes only: eight training rows, 32
+validation rows, eight evaluation cases. The row gate has since passed on all 15,079 rows. Not exercised yet: a
+preemption requeue and the resume it triggers (the smoke only names the checkpoint a resume would take), and
+training on an A100 or H100.
