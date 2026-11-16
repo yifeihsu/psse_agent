@@ -38,8 +38,19 @@ it in 83 s.
 | Validation rows (256) | 9,912 | 12,564 | 14,908 | 15,099 |
 | Target, training rows | 13 | 31 | 37 | 37 |
 
-**The pass, first link 23308024:** started at 03:42 UTC on an H200, 90 seconds after the gate ended. Not read
-further yet.
+**The pass, first link 23308024:** started at 03:42 UTC on an H200, 90 seconds after the gate ended. Read at
+05:52 UTC, 2 h 10 min in: step 192 of 3,706, no preemption, no loss that is not finite.
+
+- Validation at step 128 (256 rows, 6 minutes): loss 0.104, token accuracy 0.960. The smoke's 1.241 was after two
+  steps.
+- Training loss by block of 64 steps: 0.271, 0.131, 0.102; token accuracy 0.937, 0.958, 0.970.
+- Gradient norms before clipping average 84 to 146 a block and reach about 1,080; the trainer's default clip
+  applies, as in the smoke.
+- 37 s a step between checkpoints (35 to 40; 62 where the validation fell), 22.2 GB of card memory, 90% mean
+  utilization.
+
+At that rate the 3,706 steps take 38 hours and the 28 validations 3 more: about 41 hours on this card (my
+arithmetic), so the fourth link should finish the pass if the later links get a card of the same speed.
 
 ## The smoke of 2026-11-15
 
