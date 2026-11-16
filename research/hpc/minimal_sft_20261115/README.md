@@ -4,11 +4,29 @@ Trains an adapter on the truth-built demonstrations executed through `psse_env/m
 development cases in that environment. Background and numbers: `docs/minimal_env_20261115.md`; the environment's
 contract: `psse_env/minimal/README.md`.
 
-**State: both smokes have passed; the pass is not submitted.** Deployed on the user's word on 2026-11-15 (23:16 to
-23:29 UTC) at commit ea5e9a2, and the smoke submitted on their word at 23:40 UTC. The evaluation smoke passed. The
-training smoke ran out of card memory at its first step; the fix was redeployed on the user's word on 2026-11-16
-(00:51 to 00:59 UTC, torch at 9c80d9a) and the training smoke passed on its second run (below). Submitting the row
-gate, the pass and its evaluation needs the user's word.
+**State: the full run is submitted (2026-11-16 03:34 UTC, below); nothing is trained yet.** Deployed on the user's
+word on 2026-11-15 (23:16 to 23:29 UTC) at commit ea5e9a2, and the smoke submitted on their word at 23:40 UTC. The
+evaluation smoke passed. The training smoke ran out of card memory at its first step; the fix was redeployed on the
+user's word on 2026-11-16 (00:51 to 00:59 UTC, torch at 9c80d9a) and the training smoke passed on its second run.
+The row gate, the pass and its evaluation were then submitted on the user's word.
+
+## The full run, submitted 2026-11-16
+
+`submit_cell.sh all` at 03:34 UTC, source 9c80d9a, start `base`. Read on torch in one call before it: the source at
+9c80d9a with no tracked change, 14,823 and 256 rows, no row gate result yet, `out/pass_base` empty, no `msf-` job
+queued.
+
+| Job | Ids | Starts after |
+| --- | --- | --- |
+| `msf-row-gate` (CPU, 3-hour limit) | 23308022 | nothing |
+| `msf-train-base`, 7 links | 23308024 to 23308030 | the row gate ending well; then each link after the one before it |
+| `msf-eval-dev300-base`, 2 links | 23308031, 23308032 | the last training link ending well; then the second after the first |
+
+The first training link starts only if the row gate ends well, so a failed gate leaves both chains queued with a
+dependency that cannot be met: read the gate's log and cancel them. The complete-evidence clone's training chain
+(`cec-train`, another cell) had one card when this was submitted; the two share this user's card limit.
+
+Nothing is read yet.
 
 ## The smoke of 2026-11-15
 
