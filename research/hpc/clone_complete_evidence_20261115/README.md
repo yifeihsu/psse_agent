@@ -86,9 +86,18 @@ from the logits of the target's span alone. It is the same loss. Without it the 
 onto the vocabulary, about 1 MB a position, and the first training smoke (job 23274632, 2026-11-15) ran out of a
 95 GB card on the longest row, 20,390 tokens. The earlier passes ran without the option and are not changed.
 
+With the option the training smoke passed (job 23285899, 2026-11-16, an RTX PRO 6000): all 41 forwards with labels
+kept the span, at most 60 logits of 20,390 positions; the card's sampled peak was 28.6 GB; two steps, two
+checkpoints, a resume would start from the second. The first steps look like the earlier passes' (gradient norms 33
+and 90 against 19 to 140 there, token accuracy 0.94 and 0.96). The validation loss after two steps is 0.34 on 32
+rows, against 0.21 and 0.22 in the two earlier smokes.
+
 One optimizer step takes four rows. The rows are about half as long again as the open-rules rows (see the numbers
-in `render_manifest.json`; token counts there are a sibling tokenizer's estimate), so the pass is estimated at 22 to
-38 GPU-hours against 16 to 27, and `submit_cell.sh` counts 60 s a step when it sizes the chain.
+in `render_manifest.json`; token counts there are a sibling tokenizer's estimate), so the pass was estimated at 22
+to 38 GPU-hours against 16 to 27, and `submit_cell.sh` counts 60 s a step when it sizes the chain. The smoke
+measured 54 s a step on its eight rows (the longest first, 41,400 tokens a step) and 2.2 s a validation row. At that
+rate the view's 34,800 tokens a step give about 35 GPU-hours for the 2,766 steps, and each of the 21 validations
+takes 7 minutes: 37 GPU-hours in all on that card.
 
 ## The baselines
 
