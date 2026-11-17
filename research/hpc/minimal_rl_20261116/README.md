@@ -5,9 +5,9 @@ one on-policy update per iteration with a KL penalty to the supervised model, an
 development cases. What an iteration does and why its settings are what they are:
 `docs/minimal_env_20261115.md`, section 12.
 
-**State: deployed on 2026-11-16 at 15:44 UTC, source at e82026b. Nothing is submitted and no job has run.** The
-smoke and the run each need the user's word. The run also needs the supervised pass to finish
-(`research/hpc/minimal_sft_20261115/README.md`); the smoke does not.
+**State: the smoke is submitted (`mrl-smoke` 23435096, 2026-11-17 at 05:08 UTC, source e82026b), not read yet.
+The run is not submitted.** The run needs the user's word, and the supervised pass to finish
+(`research/hpc/minimal_sft_20261115/README.md`); the smoke did not.
 
 ## What it runs
 
@@ -113,6 +113,15 @@ Read on the cluster afterwards (15:50 UTC):
 Commits on the branch after e82026b are records alone (the READMEs and the notes): the deployed source is not
 behind in code.
 
+## The smoke of 2026-11-17
+
+Submitted at 05:08 UTC on the user's word, one job, `mrl-smoke` 23435096, from the source at e82026b. Read just
+before: no job of this cell queued, the cell's `out`, `data` and `logs` empty, and the supervised pass running
+with `checkpoint-1648` (of 3,706 steps) its newest complete one. The smoke copies whichever checkpoint is newest
+when it starts and writes its name to `data/smoke_adapter/SOURCE.txt`.
+
+Outcome: not read yet.
+
 ## What the smoke has to show before a run
 
 The smoke starts from a checkpoint early in the pass, so what it solves says nothing about the supervised model.
@@ -164,8 +173,8 @@ checks them again.
 
 ## Not checked
 
-No job of this cell has run. The stage's shell has run only against the stub. The deploy script has run once
-(above); the submit script has only been parsed; the status script has run on the cluster on the empty cell, and
-its reader on a stand-in run locally. The driver's `--check` has not run on the cluster: the login node's 3 GB
+No job of this cell has finished. The stage's shell has run only against the stub. The deploy script has run once
+(above); the submit script has run once, for the smoke, and its `run` branch has only been parsed; the status
+script has run on the cluster on the empty cell, and its reader on a stand-in run locally. The driver's `--check` has not run on the cluster: the login node's 3 GB
 cannot hold the suites, so the smoke's first step is the first time. The driver has not met the model. The smoke
 is the first time any of it meets the model, the tokenizer or Slurm.

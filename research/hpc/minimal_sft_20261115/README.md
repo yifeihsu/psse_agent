@@ -82,6 +82,26 @@ The 2,890 steps left take about 42 hours at this card's rate (my arithmetic): th
 2026-11-18, later with more preemptions. What the flat loss means for the cases solved is not known before the
 evaluation.
 
+**Step 1,648 after sixteen preemptions** (read 2026-11-17 05:09 UTC). `checkpoint-1648` was written at 04:41 UTC,
+25 hours after the start: 55 s a step over the whole pass, restarts and validations included. Nine more
+preemptions since the read above, on H200, A100 and RTX PRO 6000 cards; every one resumed from the newest
+complete checkpoint, no traceback, no loss that is not finite in the 1,648 logged steps. The job is still the
+first link, 23308024: no link has reached its 12-hour limit, because each requeue starts Slurm's clock again (the
+limit now falls at 16:49 UTC on 2026-11-17).
+
+- The loss rose and came back. Training loss by block of 64 steps: 0.119 and 0.102 (steps 833 to 960), then 0.157,
+  0.159, 0.181 (steps 961 to 1,152), 0.119, and from step 1,217 on 0.058, 0.071, 0.078, 0.061, 0.068, 0.051, and
+  0.046 over steps 1,601 to 1,648, the lowest so far.
+- Validation loss at steps 896, 1,024, 1,152, 1,280, 1,408 and 1,536: 0.083, 0.156, 0.150, 0.090, 0.086, 0.071;
+  token accuracy 0.976, 0.951, 0.957, 0.975, 0.977, 0.980. The validation rows show the same rise at steps 1,024
+  and 1,152, so it was the model and not the order of the training rows. I have not looked for its cause.
+- Gradient norms before clipping reached 4,310 in the block where the rise began (steps 961 to 1,024) and stayed
+  under 1,700 after it.
+- 22.5 GB peak card memory, 91% mean utilization.
+
+The 2,058 steps left take about 31 hours at the pass's overall rate (my arithmetic): it would end near 12:00 UTC
+on 2026-11-18.
+
 ## The smoke of 2026-11-15
 
 Both jobs started two minutes after submission on one node (RTX PRO 6000, 97,887 MiB).
@@ -242,5 +262,6 @@ real selection (14,823 and 256 rows, checksums as the selection report).
 
 Before the full run every stage had run with the model on the smoke's sizes only: eight training rows, 32
 validation rows, eight evaluation cases. The row gate has since passed on all 15,079 rows, and the pass has been
-preempted, requeued and resumed from its newest checkpoint seven times (above). Not exercised yet: the hand-over from one
-link to the next at the 12-hour limit, the evaluation on all 300 cases, and training on an A100 or H100.
+preempted, requeued and resumed from its newest checkpoint sixteen times (above), on A100 cards among them. Not
+exercised yet: the hand-over from one link to the next at the 12-hour limit, the evaluation on all 300 cases, and
+training on an H100.
