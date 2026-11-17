@@ -107,9 +107,12 @@ class CellFilesTests(unittest.TestCase):
             self.assertNotIn("orc-", text, name)
 
     def test_gpu_stages_take_any_large_card_and_may_be_preempted(self) -> None:
-        for name in ("stage_clone_train.sbatch", "stage_baseline.sbatch"):
+        # The pass also takes a B200 (the user's word of 2026-11-17).  The baseline stays off it: with two workers
+        # it runs at about 80% of a card, and the B200's low-utilization lines are 70% and 80%.
+        cards = {"stage_clone_train.sbatch": "a100|h100|h200|rtx6000|b200", "stage_baseline.sbatch": "a100|h100|h200|rtx6000"}
+        for name, constraint in cards.items():
             text = (CELL / name).read_text(encoding="utf-8")
-            self.assertIn("#SBATCH --constraint=a100|h100|h200|rtx6000", text, name)
+            self.assertEqual(re.findall(r"^#SBATCH --constraint=(\S+)$", text, flags=re.MULTILINE), [constraint], name)
             self.assertIn("#SBATCH --requeue", text, name)
             self.assertIn("#SBATCH --comment=preemption=yes;requeue=true", text, name)
             self.assertNotIn("--partition", text, name)

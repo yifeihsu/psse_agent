@@ -123,6 +123,21 @@ The clone's baseline is read against, on the same 300 cases:
 Read it by the split of the open-rules clone's result: the cases the rule expert solves (184) and the cases only the
 truth-built sequences solve (63), with wrong corrections kept.
 
+## Cards
+
+Both GPU stages name no partition, may be preempted and are requeued. The pass asks for
+`a100|h100|h200|rtx6000|b200`, the baseline for `a100|h100|h200|rtx6000`.
+
+The B200 is in the pass's list since 2026-11-17 (the user's word). Checked on torch that day: the scheduler takes the
+list for this account (`sbatch --test-only`, which submits nothing), the jobs' torch build (2.10.0, CUDA 12.8) covers
+the card, and the pass runs at 95% of a card with the model loaded and 27 GB, above the B200's low-utilization lines
+(cancel below 70%, warning below 80%). The baseline is left off the B200: with two workers its smoke ran at 80% with
+the model loaded.
+
+The chain submitted on 2026-11-16 keeps the four-type list: a queued job's request cannot be changed on torch. The
+wider list holds from the next deploy and submission. It adds cards to choose from. The seat is still a preemptible
+one in the card type's base partition, so it does not lower the rate of preemptions.
+
 ## Files
 
 | File | What it does |

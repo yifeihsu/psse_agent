@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=cec-train
 #SBATCH --account=torch_pr_627_general
-#SBATCH --constraint=a100|h100|h200|rtx6000
+#SBATCH --constraint=a100|h100|h200|rtx6000|b200
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -27,6 +27,11 @@
 # Output-guarded and resumable.  A preemption requeue restarts this script, which resumes from the newest complete
 # checkpoint.  --requeue does not restart a job that reaches its time limit, so the pass runs as a chain of these
 # jobs (submit_cell.sh); each link does the same.
+#
+# Cards (2026-11-17, the user's word): the pass also takes a B200.  It trains at about 95% of the card with the model
+# loaded, above the B200's low-utilization lines (cancel below 70%, warning below 80%), and the jobs' torch build
+# covers the card.  The baseline does not ask for one: with two workers it ran at 80%.  A wider list adds cards to
+# choose from; the seat stays a preemptible one.
 set -euo pipefail
 WORK=/scratch/yx3882/clone_complete_evidence_20261115
 # shellcheck source=cell.env
