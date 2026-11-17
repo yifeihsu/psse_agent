@@ -209,8 +209,8 @@ Checksums: training view `582349e2...`, validation view `e55689a6...` (`selectio
 - **No trained model yet.** The supervised pass was submitted on 2026-11-16 after its row gate passed on all 15,079
   rows; its state is in `research/hpc/minimal_sft_20261115/README.md`.
 - **No RL run.** The driver exists (section 12) and has run with stand-ins for the model only; its cluster cell
-  is deployed (`research/hpc/minimal_rl_20261116/`, source e82026b) and its smoke was submitted on 2026-11-17; the
-  run is not submitted.
+  is deployed (`research/hpc/minimal_rl_20261116/`, source e82026b) and its smoke passed on 2026-11-17 (every
+  phase once, every check of the update held); the run is not submitted.
 - **IEEE 118** is not handled: no breaker model there (the line-status form of `correct_topology` exists and is
   untested on that system), and a version's meter table is about 1,100 rows.
 - **The waveform families** (HIF, unbalance, harmonics) are outside this environment.
@@ -327,8 +327,16 @@ Per iteration of 64 cases by 4 samples: the rollout 2 to 4 hours with one proces
 actions, half that with two processes on a card); the update 4 to 7 hours (one row per sampled step, about 10 s a
 row plus the reference's forward pass); the evaluation 1.5 to 3 hours. Together roughly 8 to 14 GPU-hours.
 
-**The cluster cell** is `research/hpc/minimal_rl_20261116/` (deployed 2026-11-16 at e82026b; the smoke submitted 2026-11-17, not read; the run not submitted): one stage that
-runs the phase the manifest is at, two processes per large card for the rollout and the evaluations, a smoke of
+**After the smoke (2026-11-17).** Measured on an H200: 4.7 s a sampled step, 9.2 s an update row, 4.9 s an
+evaluated step, two processes together 63.4 GB, the update 36.5 GB. From those rates an iteration of 64 by 4 is 3
+to 6.5 GPU-hours on an H200 (my arithmetic). Every check of the update held. Two things for the run's first
+iteration, from six and eight cases at a checkpoint 44% through the supervised pass: five of six cases sampled
+the same episode twice and none had a repaired and an unrepaired sample; and an update with a gradient norm of
+0.08 changed three of eight greedy episodes, which I read as the sign step a new AdamW takes. The cell's README
+has both in full.
+
+**The cluster cell** is `research/hpc/minimal_rl_20261116/` (deployed 2026-11-16 at e82026b; the smoke passed 2026-11-17
+in 22 minutes; the run not submitted): one stage that runs the phase the manifest is at, two processes per large card for the rollout and the evaluations, a smoke of
 one small iteration from a checkpoint of the running supervised pass, and a chain for the run. The run starts from
 the supervised pass's adapter and takes that cell's evaluation of it as its baseline (`baseline_from`), so the
 supervised model has one number. Its README has the order of work and what the smoke has to show.

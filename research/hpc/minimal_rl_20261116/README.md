@@ -5,9 +5,10 @@ one on-policy update per iteration with a KL penalty to the supervised model, an
 development cases. What an iteration does and why its settings are what they are:
 `docs/minimal_env_20261115.md`, section 12.
 
-**State: the smoke is submitted (`mrl-smoke` 23435096, 2026-11-17 at 05:08 UTC, source e82026b), not read yet.
-The run is not submitted.** The run needs the user's word, and the supervised pass to finish
-(`research/hpc/minimal_sft_20261115/README.md`); the smoke did not.
+**State: the smoke passed (`mrl-smoke` 23435096, 2026-11-17, 22 minutes on an H200, source e82026b): every phase
+ran once and every check of the update held. The run is not submitted.** The run needs the user's word, and the
+supervised pass to finish (`research/hpc/minimal_sft_20261115/README.md`); the smoke did not. Two things the smoke
+showed about the run itself are under "What the smoke showed that the run should know".
 
 ## What it runs
 
@@ -62,15 +63,24 @@ There is no stop rule in the cell. A run goes to the iteration count it was subm
 `run 3` takes it two further. An update that fails an integrity check stops the run where it is and leaves
 `integrity_failure.json` beside its report; later links then exit at once.
 
-## Estimates (mine; nothing here is measured)
+## Estimates (my arithmetic from the smoke's rates)
 
-Per iteration of 64 cases by 4 samples, from the supervised cell's smoke rates: the rollout 1 to 2 hours with two
-processes on a card, the update 4 to 7 hours, the evaluation 1.5 to 3 hours: roughly 8 to 14 GPU-hours. The
-update's rate in bf16 is the least certain part. `submit_cell.sh` counts 14 hours an iteration and 11 hours of
-each 12-hour link, plus a spare: 3 links for one iteration, 4 for two, 5 for three.
+Per iteration of 64 cases by 4 samples on an H200 with two processes on the card:
 
-The smoke: about an hour (four model loads, 8 and 8 evaluated cases, 12 sampled episodes, an update of about 60
-rows).
+- rollout, 256 episodes of 4 to 9 actions at 4.7 s a step: 40 to 90 minutes;
+- update at 9.2 s a row: 1.3 to 3.3 hours if 20 to 64 of the 64 cases are informative (about five rows a sampled
+  episode, plus up to 120 rows for the KL term), under an hour if few are;
+- evaluation, 300 cases of 5 to 9 actions at 4.9 s a step: 1 to 2 hours.
+
+Together 3 to 6.5 GPU-hours an iteration on an H200. The supervised pass ran 1.4 times slower on an RTX PRO 6000;
+at that ratio 4 to 9 hours there. Before the smoke I had estimated 8 to 14. The update rate is from 27 rows, and
+no card but an H200 has run any of it.
+
+`submit_cell.sh` still counts 14 hours an iteration and 11 hours of each 12-hour link, plus a spare: 3 links for
+one iteration, 4 for two, 5 for three. That is more links than the rates above need; a link that finds the target
+reached exits at once.
+
+The smoke took 22 minutes; I had estimated an hour.
 
 ## Order of work
 
@@ -120,7 +130,69 @@ before: no job of this cell queued, the cell's `out`, `data` and `logs` empty, a
 with `checkpoint-1648` (of 3,706 steps) its newest complete one. The smoke copies whichever checkpoint is newest
 when it starts and writes its name to `data/smoke_adapter/SOURCE.txt`.
 
-Outcome: not read yet.
+**Completed in 21 min 52 s** on one H200 (gh104), started 6 minutes after submission, no preemption, no traceback,
+last line `mrl-smoke-complete`. It copied `checkpoint-1648`. The manifest stands at iteration 1, phase rollout.
+
+Against the list below ("What the smoke has to show before a run"):
+
+| Item | Result |
+| --- | --- |
+| The dry check, first run on the cluster | ok: 2,550 training cases, 6 drawn, 8 development cases, adapter found |
+| Every sampled step carries its token probabilities | 45 of 45 steps; rows without a record 0 |
+| Steps whose tokens are all above 0.99 | 24 of 45 (53%) |
+| Every stored step renders back to its sampled prompt | 27 of 27 rows: no length or digest mismatch, no cut prompt |
+| Sampler against the update's first pass | mean gap 0.0006 in log-probability; 0.010 on the 24 uncertain tokens, largest 0.116; no token beyond the limit (the batch is refused above a mean of 0.2) |
+| Integrity of the update | ok, no failure, no warning; each row used once; one optimizer step |
+| Card memory | two processes together 63.4 GB (baseline), 63.2 GB (rollout), 63.0 GB (evaluation); the update alone 36.5 GB, prompts up to 12,203 tokens |
+| One pass through the phases | baseline 6 min 19 s, rollout 3 min 43 s, update 5 min 38 s, evaluation 5 min, loading included |
+
+Rates: 4.9 s a generated step (4.7 s when sampling); a sampled episode 17.6 s (3.75 actions on average); an
+evaluated episode 50 s (9.4 actions); the update 9.2 s a row (27 rows in 249 s). Prompts ran from 5,221 to 12,694
+tokens. Loading the model took one to two minutes a process.
+
+**What the episodes were.** The six training cases were of six classes, the eight development cases all of one
+(`cb2_dangling`, two breaker errors: `development_limit` takes the suite's first eight, and the suite is ordered
+by class). The two sets cannot be compared with each other.
+
+- Rollout, 12 sampled episodes: 8 solved, 4 declared resolved with an error left. Five of the six cases gave the
+  same episode twice. The sampled episodes' own probabilities were 0.85, 0.81, 0.89, 0.94 and 0.56 for those five,
+  and 0.45 and 0.04 for the two episodes of the sixth, which differed by one refused call (a breaker name with a
+  part missing). No case had one repaired and one unrepaired sample.
+- So the update had one informative case of six: 9 policy rows with advantages of plus and minus 0.015 (the cost
+  of one action and one refused call), 18 rows for the KL term, gradient norm 0.08, policy loss -0.0002. The KL
+  term was exactly 0, as it must be in the first iteration (the reference is the adapter the update starts from).
+- Baseline, greedy, 8 cases: 1 solved. The first breaker correction was a true error in 6 of 8; the second breaker
+  error was found in 1. After the first correction the model went on to parameter fits and meter repairs, and in 6
+  of 8 it declared the case resolved (5 of them wrongly). 17 refused calls, all parameter fits that found nothing:
+  10 of them one call repeated in one episode, which ran out its 16 actions; 2 a fit that failed inside the tool
+  (`parameter scan 0 must contain 125 finite values`, on lines the model had just cut off), which the environment
+  reported to the model as a refused call.
+- Evaluation after the update, greedy, the same 8 cases: 0 solved. Five episodes are the baseline's step for step;
+  three differ, from step 3, 3 and 7, and the one solved case is lost.
+
+This is the supervised model 44% through its pass, on eight cases of one class: it is not a reading of the
+supervised model.
+
+## What the smoke showed that the run should know
+
+Both are from six and eight cases at a checkpoint in the middle of the pass. They are things to look at in the
+run's first iteration, not conclusions.
+
+1. **The policy samples one episode most of the time.** With four samples a case and episode probabilities like
+   the smoke's, about 3.5 of 6 cases would hold two different episodes at all (my arithmetic: one less the fourth
+   power of each probability), and a different episode is not yet a different outcome: the smoke's one such case
+   had none. An update learns a repair only from cases with a repaired and an unrepaired sample. The count is
+   `groups_with_repaired_and_unrepaired_samples` in the rollout's summary, printed by `status_cell.sh`. The
+   supervised pass's loss was still falling when the checkpoint was taken, so the finished model may sample less
+   widely than this one. Samples per case and the sampling temperature are the settings that bear on it.
+2. **An update with almost no gradient changed 3 of 8 greedy episodes.** The first step of a new AdamW is a sign
+   step: it moves every trained weight by the learning rate whatever the gradient's size (`build_optimizer` in
+   `psse_env/rl/update.py` says so), so a run's first update is as large with 9 rows of noise as with 1,000 rows
+   of signal. That this is what changed the three episodes is my reading: I have not separated it from
+   run-to-run variation of the evaluation itself (the two evaluations ran on the same card with the same split of
+   cases, and five of eight episodes repeated exactly). If the reading is right, part of the first iteration's
+   change in cases solved is this step's size, which the learning rate sets; from the second update on the
+   carried optimizer scales a weight's step by how steady its gradient's sign has been.
 
 ## What the smoke has to show before a run
 
@@ -173,8 +245,12 @@ checks them again.
 
 ## Not checked
 
-No job of this cell has finished. The stage's shell has run only against the stub. The deploy script has run once
-(above); the submit script has run once, for the smoke, and its `run` branch has only been parsed; the status
-script has run on the cluster on the empty cell, and its reader on a stand-in run locally. The driver's `--check` has not run on the cluster: the login node's 3 GB
-cannot hold the suites, so the smoke's first step is the first time. The driver has not met the model. The smoke
-is the first time any of it meets the model, the tokenizer or Slurm.
+The smoke has run every phase once with the model, on one H200. Not exercised on the cluster:
+
+- the `run` branch of `submit_cell.sh`, a chain's hand-over from link to link, and a preempted job's resume (the
+  resume has run locally only: the stage's shell against the stub, the update's checkpoint in the driver's tests);
+- taking the supervised cell's evaluation as the baseline (`baseline_from`): the smoke ran its own;
+- a second iteration: the KL term away from zero, the optimizer carried from one update to the next, the draw of
+  new cases;
+- an update of more than 27 rows, a prompt over 12,700 tokens, and any card but an H200 (two processes need
+  63.4 GB together; the stage starts two from 70 GB of card memory).

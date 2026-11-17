@@ -200,7 +200,7 @@ environment variables (`psse_env/dagger/preliminary_e2b_eval.py`):
 
 - A trained supervised model: the pass was submitted on 2026-11-16 (`research/hpc/minimal_sft_20261115/README.md`).
 - An RL run. The driver (`research/minimal_env/rl_train.py`) and its cluster cell
-  (`research/hpc/minimal_rl_20261116/`, deployed; its smoke submitted 2026-11-17 and not read) have not met the
-  model in a finished job.
+  (`research/hpc/minimal_rl_20261116/`) have met the model in a smoke alone (2026-11-17: one small iteration,
+  every check of the update held).
 - A paging mode for large systems. On IEEE 118 one version's meter table alone is about 1,100 rows.
 - Recovery paths from a model's own failed episodes.
