@@ -67,6 +67,10 @@ for label, name in (("the pass from the base model", "eval_dev300_base"), ("the 
     print("        " + ", ".join(f"{key} {totals.get(key, 0)}" for key in KEYS))
     print(f"        mean actions {summary.get('mean_actions')}, mean reward {summary.get('mean_reward')}, prompt tokens {json.dumps(summary.get('prompt_tokens'))}")
     print(f"        actions by tool {json.dumps(summary.get('actions_by_tool'), sort_keys=True)}")
+    solvable = [cell for group, cell in (summary.get("by_reference") or {}).items() if group != "neither repairs"]
+    if solvable:
+        print(f"        of the cases a truth-built sequence repairs: solved {sum(cell.get('solved', 0) for cell in solvable)} of "
+              f"{sum(cell.get('cases', 0) for cell in solvable)}")
     for group, cell in (summary.get("by_reference") or {}).items():
         print(f"        {group}: solved {cell.get('solved', 0)} of {cell.get('cases', 0)} (strict {cell.get('strict_solved', 0)})")
     errors = {key[6:]: value for key, value in totals.items() if key.startswith("error:")}

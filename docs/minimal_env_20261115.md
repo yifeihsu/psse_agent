@@ -89,6 +89,9 @@ These are the comparisons the review asks to keep. Two rows are still empty.
 
 For orientation, in the old environment with the rules lifted: S0 186, the clone 163.
 
+**The basis from 2026-11-18 on is the 247 cases a truth-built sequence repairs**, not the 300 (the user's rule):
+supervised model 198 of 247 (80%), rule expert 184 of 247 (74%), 49 left.
+
 **The supervised model (2026-11-18): 198.** It solves 161 of the 184 cases the rule expert solves, 37 of the 63
 only the truth-built sequence repairs, and none of the 53 neither repairs: 37 gained and 23 lost against the
 expert, in 4.45 actions a case against the expert's 6.53. The lead of 14 is from one greedy pass (two-sided sign

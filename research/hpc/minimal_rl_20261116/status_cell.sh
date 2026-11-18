@@ -47,6 +47,10 @@ def evaluation_line(label, payload):
             "budget_exhausted", "prompt_limit", "episodes_with_a_damaged_healthy_object", "tool_errors")
     print(f"    {label}: " + ", ".join(f"{key} {totals.get(key, 0)}" for key in keys)
           + f"; mean actions {summary.get('mean_actions')}, mean reward {summary.get('mean_reward')}")
+    solvable = [cell for group, cell in (summary.get("by_reference") or {}).items() if group != "neither repairs"]
+    if solvable:
+        print(f"        of the cases a truth-built sequence repairs: solved {sum(cell.get('solved', 0) for cell in solvable)} of "
+              f"{sum(cell.get('cases', 0) for cell in solvable)}")
     for group, cell in (summary.get("by_reference") or {}).items():
         print(f"        {group}: solved {cell.get('solved', 0)} of {cell.get('cases', 0)}")
     against = payload.get("against_baseline")

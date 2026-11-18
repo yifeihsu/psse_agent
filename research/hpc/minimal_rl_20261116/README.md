@@ -243,9 +243,13 @@ It is read for what only the model can show:
 
 ## How to read the run
 
+**The number a run is read by is cases solved of the 247 a truth-built sequence repairs** (the user's rule of
+2026-11-18): the supervised model starts at 198 of 247, the rule expert is at 184, and 49 are left. The 53
+cases neither reference repairs stay in the evaluation but not in that number.
+
 Per iteration `status_cell.sh` prints the rollout (cases with both a repaired and an unrepaired sample are the
 ones an update can learn a repair from), the update (rows, losses, the first-step gap, integrity) and the
-evaluation: cases solved, the split by reference (the 184 cases the rule expert's recorded episodes solve, the 63
+evaluation: cases solved, how many of the 247, the split by reference (the 184 cases the rule expert's recorded episodes solve, the 63
 only the truth-built sequence repairs, the 53 neither repairs), and the cases gained and lost against the
 baseline. In the earlier cells one greedy pass over these cases moved by a few cases between card types, so a gain
 is read from several iterations and from which cases moved, not from one count.

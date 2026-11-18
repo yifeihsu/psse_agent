@@ -159,6 +159,11 @@ tokens, median 9,670); 6.4 s a generated step.
 **The supervised model solves 198 of the 300 development cases**, the same 198 by the object-level audit and by
 the strict one.
 
+**Read against the 247 cases a truth-built sequence repairs** (the basis from 2026-11-18 on, the user's rule: the
+other 53 are not repaired by these tools with the true corrections applied, and no policy here has solved one):
+the supervised model 198 of 247 (80%), the rule expert 184 of 247 (74%), and 49 cases left that the model fails
+and a truth-built sequence repairs. Every case the model or the expert solves is among the 247.
+
 | Policy, in the minimal environment | Solved | Actions per case |
 | --- | --- | --- |
 | Rule expert, replayed | 184 strict, 187 object level | 6.53 |
