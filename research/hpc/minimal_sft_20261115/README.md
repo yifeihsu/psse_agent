@@ -102,6 +102,31 @@ limit now falls at 16:49 UTC on 2026-11-17).
 The 2,058 steps left take about 31 hours at the pass's overall rate (my arithmetic): it would end near 12:00 UTC
 on 2026-11-18.
 
+**Step 3,472, and the first hand-over between links** (read 2026-11-18 05:19 UTC). `checkpoint-3472` was written
+at 05:14 UTC, 49.5 hours after the start: 51 s a step over the whole pass.
+
+- The first link, 23308024, was preempted 22 times in all. From 12:32 UTC on 2026-11-17 it ran 11 h 52 min on one
+  H200 without a preemption, from step 2,096 to step 3,157 at 40 s a step, until Slurm ended it at its 12-hour
+  limit at 00:32 UTC on 2026-11-18 (state `TIMEOUT`).
+- The second link, 23308025, started 69 seconds later and resumed from `checkpoint-3152`, so five steps ran
+  twice. This is the hand-over the chain exists for, exercised for the first time. The link was preempted twice
+  in its first 80 minutes (on an RTX PRO 6000 at step 3,194, on an A100 during the validation at step 3,200) and
+  has run on an H200 since 01:51 UTC at 35 to 40 s a step. The pass has now trained on H200, RTX PRO 6000 and
+  A100 cards.
+- Training loss by block of 64 steps: 0.05 to 0.06 over steps 1,601 to 2,048; 0.038 to 0.047 over steps 2,049 to
+  2,432; 0.025 to 0.043 from step 2,497 on, 0.031 over the last whole block (steps 3,393 to 3,456).
+- Validation loss at steps 1,664 to 3,456, every 128: 0.080, 0.058, 0.061, 0.060, 0.078, 0.052, 0.056, 0.058,
+  0.046, 0.036, 0.044, 0.044, 0.042, 0.042, 0.046; token accuracy from 0.979 to 0.989. The lowest is 0.036 at step
+  2,816; since step 2,944 it has stayed between 0.042 and 0.046.
+- No traceback, no loss that is not finite in the 3,472 logged steps; one gradient norm of 7,113 before clipping
+  (steps 3,009 to 3,072), otherwise under 1,200 since step 2,049.
+- Checkpoints are pruned when a job starts, not while it trains: every checkpoint since 3,152 is on disk (21 of
+  them beside the every-128th ones, about 17 GB) until the next start or the end of the pass.
+
+The 234 steps left and one more validation take about 2.6 hours on this card (my arithmetic): the pass would end
+near 08:00 UTC on 2026-11-18 if it is not preempted. The five training links still queued then each start and
+leave at once, and the evaluation on the 300 cases follows them.
+
 ## The smoke of 2026-11-15
 
 Both jobs started two minutes after submission on one node (RTX PRO 6000, 97,887 MiB).
@@ -262,6 +287,6 @@ real selection (14,823 and 256 rows, checksums as the selection report).
 
 Before the full run every stage had run with the model on the smoke's sizes only: eight training rows, 32
 validation rows, eight evaluation cases. The row gate has since passed on all 15,079 rows, and the pass has been
-preempted, requeued and resumed from its newest checkpoint sixteen times (above), on A100 cards among them. Not
-exercised yet: the hand-over from one link to the next at the 12-hour limit, the evaluation on all 300 cases, and
-training on an H100.
+preempted, requeued and resumed from its newest checkpoint 24 times (above), on A100 cards among them, and one
+link has handed over to the next at the 12-hour limit. Not exercised yet: the end of the pass (the adapter and the
+receipt), the queued links leaving at once after it, the evaluation on all 300 cases, and training on an H100.
