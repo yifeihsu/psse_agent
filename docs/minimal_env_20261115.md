@@ -220,7 +220,8 @@ Checksums: training view `582349e2...`, validation view `e55689a6...` (`selectio
   15 times).
 - **No RL run.** The driver exists (section 12) and has run with stand-ins for the model only; its cluster cell
   is deployed (`research/hpc/minimal_rl_20261116/`, source e82026b) and its smoke passed on 2026-11-17 (every
-  phase once, every check of the update held); the run is not submitted.
+  phase once, every check of the update held); the run was submitted to one iteration on 2026-11-18 and is not
+  read.
 - **IEEE 118** is not handled: no breaker model there (the line-status form of `correct_topology` exists and is
   untested on that system), and a version's meter table is about 1,100 rows.
 - **The waveform families** (HIF, unbalance, harmonics) are outside this environment.
@@ -346,7 +347,7 @@ the same episode twice and none had a repaired and an unrepaired sample; and an 
 has both in full.
 
 **The cluster cell** is `research/hpc/minimal_rl_20261116/` (deployed 2026-11-16 at e82026b; the smoke passed 2026-11-17
-in 22 minutes; the run not submitted): one stage that runs the phase the manifest is at, two processes per large card for the rollout and the evaluations, a smoke of
+in 22 minutes; the run submitted to one iteration on 2026-11-18, not read): one stage that runs the phase the manifest is at, two processes per large card for the rollout and the evaluations, a smoke of
 one small iteration from a checkpoint of the running supervised pass, and a chain for the run. The run starts from
 the supervised pass's adapter and takes that cell's evaluation of it as its baseline (`baseline_from`), so the
 supervised model has one number. Its README has the order of work and what the smoke has to show.

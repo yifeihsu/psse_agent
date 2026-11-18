@@ -6,7 +6,8 @@ development cases. What an iteration does and why its settings are what they are
 `docs/minimal_env_20261115.md`, section 12.
 
 **State: the smoke passed (`mrl-smoke` 23435096, 2026-11-17, 22 minutes on an H200, source e82026b): every phase
-ran once and every check of the update held. The run is not submitted.** The run needs the user's word, and the
+ran once and every check of the update held. The run is submitted to one iteration (`mrl-run` 23608433,
+23608439, 23608441; 2026-11-18 at 17:12 UTC), not read yet.** The run needed the user's word, and the
 supervised pass to finish (`research/hpc/minimal_sft_20261115/README.md`), which it did on 2026-11-18 at 07:54
 UTC. Its evaluation is read: 198 of 300 (rule expert 184, truth-built sequences 247). That evaluation was made
 under this run's settings (compared with its recorded settings under the cell's environment), so the run takes
@@ -175,6 +176,31 @@ by class). The two sets cannot be compared with each other.
 
 This is the supervised model 44% through its pass, on eight cases of one class: it is not a reading of the
 supervised model.
+
+## The run, submitted 2026-11-18
+
+`submit_cell.sh run 1` at 17:12:55 UTC on the user's word, source e82026b: one iteration, asked for first so that
+the two things the smoke left open are read with the finished model before more is spent.
+
+| Job | Ids | Starts after |
+| --- | --- | --- |
+| `mrl-run`, 3 links | 23608433, 23608439, 23608441 | each after the one before it |
+
+Read just before: the source at e82026b with no tracked change; no job of this user queued; `out/ieee14` not
+there; the supervised pass's receipt and adapter present; the supervised evaluation present with its 300
+episodes; both suites and the reference in place.
+
+What it is read for:
+
+- the rollout: of the 64 cases, how many have a repaired and an unrepaired sample among their four
+  (`groups_with_repaired_and_unrepaired_samples`), how many differ in reward at all, and the share of steps whose
+  tokens are all above 0.99;
+- the baseline taken from the supervised cell's evaluation (198 of 300), the first time that path runs on the
+  cluster;
+- the update at full size: rows, seconds a row, memory, the gap between the sampler and the first pass;
+- the evaluation after the first update: cases gained and lost against the 198.
+
+Outcome: not read yet.
 
 ## What the smoke showed that the run should know
 
