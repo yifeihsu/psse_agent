@@ -355,4 +355,17 @@ one small iteration from a checkpoint of the running supervised pass, and a chai
 the supervised pass's adapter and takes that cell's evaluation of it as its baseline (`baseline_from`), so the
 supervised model has one number. Its README has the order of work and what the smoke has to show.
 
-**Not built.** Recovery rows from the model's own failed episodes, which the rollouts will hold.
+**The focused run (built 2026-11-18, not deployed).** After the supervised model's evaluation the user set the
+basis to the 247 cases a truth-built sequence repairs and asked for a run aimed at the solvable cases the model
+fails. `focus` in the driver's config does three things: it draws an iteration from the 2,093 training cases
+with a truth-built sequence, 24 the supervised model leaves unrepaired and 8 it repairs (its greedy pass over
+them decides); it takes eight samples a case; and where none of a case's samples is repaired it replays the
+case's truth-built sequence and trains its actions as supervised rows, weighted by the sequence's reward above
+the samples' mean (the user's "Yes, include them"). That last part is imitation of the truth-built sequence on
+the cases the model fails, not on-policy data, and the driver keeps it apart: no sampling record, no advantage,
+no part in the KL term or the on-policy check. 25 driver tests and 17 hand-made faults, each caught; nothing of
+it has met the model. The cell's README has the jobs, the order of work and what its smoke has to show.
+
+**Not built.** Recovery rows from the model's own failed episodes, which the rollouts will hold: truth-built
+continuations from the state a failed episode reached. The focused run's examples start from the case's first
+state.

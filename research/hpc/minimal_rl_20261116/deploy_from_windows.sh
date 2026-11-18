@@ -31,8 +31,10 @@ cd "$REPO"
   || { echo "commit the sources first (tracked modifications under research/, psse_env/, scripts/ or tools/)" >&2; exit 2; }
 for path in "$CELL_REL/cell.env" "$CELL_REL/stage_rl.sbatch" "$CELL_REL/submit_cell.sh" "$CELL_REL/status_cell.sh" \
             "$CELL_REL/rl_ieee14.json" "$CELL_REL/rl_smoke.json" \
+            "$CELL_REL/stage_train_pass.sbatch" "$CELL_REL/rl_focus.json" "$CELL_REL/rl_focus_smoke.json" \
+            "$CELL_REL/train_truth_sequences.json" \
             research/hpc/minimal_sft_20261115/dev300_reference.json \
-            research/minimal_env/rl_train.py research/minimal_env/evaluate.py \
+            research/minimal_env/rl_train.py research/minimal_env/evaluate.py research/minimal_env/truth_sequences.py \
             psse_env/minimal/env.py psse_env/minimal/observation.py psse_env/minimal/policy.py psse_env/minimal/rollout.py \
             psse_env/minimal/scoring.py psse_env/rl/update.py psse_env/rl/rows.py psse_env/rl/integrity.py; do
   git cat-file -e "$COMMIT:$path" 2>/dev/null || { echo "$path is not in $COMMIT: commit the cell first" >&2; exit 2; }
@@ -41,9 +43,14 @@ done
 git grep -q -e '"--check"' "$COMMIT" -- research/minimal_env/rl_train.py || { echo "$COMMIT's driver has no --check" >&2; exit 2; }
 git grep -q "baseline_from" "$COMMIT" -- research/minimal_env/rl_train.py || { echo "$COMMIT's driver cannot take the supervised evaluation as its baseline" >&2; exit 2; }
 git grep -q "development_limit" "$COMMIT" -- research/minimal_env/rl_train.py || { echo "$COMMIT's driver has no development_limit (the smoke's eight cases)" >&2; exit 2; }
-# Both configs load under this checkout's driver.  Their paths are torch's; loading opens none of them.
+git grep -q "demonstration_weight" "$COMMIT" -- research/minimal_env/rl_train.py || { echo "$COMMIT's driver has no focus (the focused run's draw and its truth-built examples)" >&2; exit 2; }
+git grep -q -e '"--cases"' "$COMMIT" -- research/minimal_env/evaluate.py || { echo "$COMMIT's evaluation has no --cases (the training pass)" >&2; exit 2; }
+# Every config loads under this checkout's driver.  Their paths are torch's; loading opens none of them.
 "$PYTHON" -c 'import sys; from research.minimal_env.rl_train import MinimalRLConfig; [MinimalRLConfig.load(path) for path in sys.argv[1:]]; print("configs load")' \
-  "$CELL_REL/rl_ieee14.json" "$CELL_REL/rl_smoke.json"
+  "$CELL_REL/rl_ieee14.json" "$CELL_REL/rl_smoke.json" "$CELL_REL/rl_focus.json" "$CELL_REL/rl_focus_smoke.json"
+# The file of truth-built sequences is the one this checkout's loader reads.
+"$PYTHON" -c 'import sys; from research.minimal_env import truth_sequences; print("truth-built sequences:", len(truth_sequences.load(sys.argv[1])), "cases")' \
+  "$CELL_REL/train_truth_sequences.json"
 
 remote_sha() { wsl -- ssh torch "sha256sum $1 2>/dev/null | cut -d' ' -f1" || true; }
 
@@ -103,4 +110,11 @@ deployed; nothing submitted.  The order of work (README.md of the cell), each st
   2. status:  wsl -- ssh torch bash -s < $CELL_REL/status_cell.sh
   3. the run, once the supervised pass has finished and its evaluation is read:
               wsl -- ssh torch bash -s -- run ITERATIONS < $CELL_REL/submit_cell.sh
+The focused run (README.md, "The focused run"), each step on the user's word:
+  a. the supervised model on the training cases a truth-built sequence repairs:
+              wsl -- ssh torch bash -s -- train-pass < $CELL_REL/submit_cell.sh
+  b. its smoke, once that pass has written its evaluation:
+              wsl -- ssh torch bash -s -- focus-smoke < $CELL_REL/submit_cell.sh
+  c. the focused run:
+              wsl -- ssh torch bash -s -- focus ITERATIONS < $CELL_REL/submit_cell.sh
 EOF

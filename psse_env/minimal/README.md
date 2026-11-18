@@ -204,4 +204,5 @@ environment variables (`psse_env/dagger/preliminary_e2b_eval.py`):
   (`research/hpc/minimal_rl_20261116/`) have met the model in a smoke alone (2026-11-17: one small iteration,
   every check of the update held).
 - A paging mode for large systems. On IEEE 118 one version's meter table alone is about 1,100 rows.
-- Recovery paths from a model's own failed episodes.
+- Recovery paths from a model's own failed episodes. (The focused RL run, built 2026-11-18, teaches a failed case's
+  truth-built sequence from its first state: `research/hpc/minimal_rl_20261116/README.md`.)

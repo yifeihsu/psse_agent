@@ -19,7 +19,7 @@ from psse_env.minimal import observation as view
 from psse_env.minimal.actions import validate
 from psse_env.sft import research_cli
 from psse_env.sft.gates import GateError, ParsedToolCall, parse_tool_call
-from research.minimal_env import evaluate, row_gate, train_sft
+from research.minimal_env import evaluate, row_gate, train_sft, truth_sequences
 
 #: The six actions as Gemma 4's chat template writes a tool call: bare keys, ``<|"|>`` around strings.
 WIRE_CALLS = (
@@ -226,6 +226,76 @@ class EvaluationSummaryTests(unittest.TestCase):
         for bad in ("4/4", "a/2", "1", "-1/2"):
             with self.assertRaises(ValueError):
                 evaluate.parse_shard(bad)
+
+    def test_a_case_file_keeps_the_cases_it_names_in_the_suites_order(self) -> None:
+        roots = [{"execution": {"scenario_id": name}} for name in ("a", "b", "c", "d")]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "cases.json"
+            for payload in (["c", "a"], {"c": 1, "a": 2}, {"cases": ["a", "c"]}, {"cases": {"a": {}, "c": {}}}):
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                self.assertEqual([evaluate.case_id(root) for root in evaluate.keep_cases(roots, path)], ["a", "c"], payload)
+            path.write_text(json.dumps(["a", "z"]), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "1 cases of .* are not in the suite"):
+                evaluate.keep_cases(roots, path)
+            path.write_text("[]", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "names no case"):
+                evaluate.keep_cases(roots, path)
+
+
+class TruthSequenceTests(unittest.TestCase):
+    """The file of truth-built sequences: the repaired success paths of a demonstration build, and nothing else."""
+
+    @staticmethod
+    def _record(case: str, *, solved: bool = True, kind: str = "success", actions=None, status: str = "ok") -> dict:
+        actions = actions if actions is not None else [("correct_parameters", {"line": 6}), ("finish", {"outcome": "resolved"})]
+        return {"scenario_id": case, "demonstration": kind, "solved": solved, "compound_class": "rx2_adjacent",
+                "steps": [{"step": number, "action": {"tool": tool, "arguments": arguments}, "result": {"status": status}}
+                          for number, (tool, arguments) in enumerate(actions, start=1)]}
+
+    def test_the_file_holds_the_repaired_success_paths_and_reads_back(self) -> None:
+        records = [self._record("b"), self._record("a", solved=False), self._record("b", kind="recovery"),
+                   self._record("c", actions=[("inspect", {"view": "breakers"}), ("correct_topology", {"breaker": "CB_1", "status": "open"}),
+                                              ("finish", {"outcome": "resolved"})])]
+        payload = truth_sequences.build(records)
+        self.assertEqual(payload["counts"], {"kept": 2, "not_repaired": 1, "success_paths": 3})
+        self.assertEqual((list(payload["cases"]), payload["by_class"]), (["b", "c"], {"rx2_adjacent": 2}))
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "sequences.json"
+            truth_sequences.dump(payload, path)
+            text = path.read_bytes()
+            self.assertNotIn(b"\r", text)
+            self.assertEqual(text.count(b"\n"), 4 + 2 + 2 + 1)  # the head, a case a line, the closing lines
+            loaded = truth_sequences.load(path)
+            self.assertEqual(loaded["c"], [{"tool": "inspect", "arguments": {"view": "breakers"}},
+                                           {"tool": "correct_topology", "arguments": {"breaker": "CB_1", "status": "open"}},
+                                           {"tool": "finish", "arguments": {"outcome": "resolved"}}])
+            self.assertEqual(truth_sequences.case_ids(path), {"b", "c"})
+            path.write_text(json.dumps({"cases": {}}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "not a file of truth-built sequences"):
+                truth_sequences.load(path)
+
+    def test_a_path_that_is_not_a_clean_repair_is_refused(self) -> None:
+        for label, records in (
+                ("two success paths", [self._record("a"), self._record("a")]),
+                ("a refused call", [self._record("a", status="error")]),
+                ("no declaration", [self._record("a", actions=[("correct_parameters", {"line": 6})])]),
+                ("declared unresolved", [self._record("a", actions=[("finish", {"outcome": "unresolved"})])])):
+            with self.assertRaises(ValueError, msg=label):
+                truth_sequences.build(records)
+
+    def test_the_cells_file_is_what_the_training_demonstrations_repair(self) -> None:
+        path = Path(evaluate.REPO_ROOT, "research", "hpc", "minimal_rl_20261116", "train_truth_sequences.json")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["counts"], {"kept": 2093, "not_repaired": 457, "success_paths": 2550})
+        sequences = truth_sequences.load(path)
+        self.assertEqual(len(sequences), 2093)
+        tools = view.tools({"breaker_model": True})
+        names = {item["function"]["name"] for item in tools}
+        for case, actions in sequences.items():
+            self.assertEqual(actions[-1], {"tool": "finish", "arguments": {"outcome": "resolved"}}, case)
+            self.assertTrue({action["tool"] for action in actions} <= names, case)
+            for action in actions:
+                validate(action, breakers=True)
 
 
 if __name__ == "__main__":

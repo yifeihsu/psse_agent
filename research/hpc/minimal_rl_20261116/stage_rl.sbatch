@@ -18,6 +18,10 @@
 #   smoke   one iteration on six training cases and eight development cases, from the cell's own copy of the pass's
 #           adapter or, while the pass is running, of its newest complete checkpoint.  Read for what only the model
 #           can show (README.md), not for a score.
+#   focus   the focused run: from the same adapter, on the training cases a truth-built sequence repairs and that
+#           adapter does not, with the sequence as the example of a case none of whose samples is repaired.  It
+#           also needs the adapter's greedy pass over those cases (stage_train_pass.sbatch).
+#   focus_smoke  one small iteration of the focused run, on eight development cases.
 #
 # RL_TARGET is the iteration count at which the job stops.  The job runs whatever phase the run's manifest is at,
 # one process per phase, until the manifest reaches the target or the time runs out; a later link or a preemption
@@ -28,11 +32,11 @@ WORK=/scratch/yx3882/minimal_rl_20261116
 # shellcheck source=cell.env
 source "$WORK/source/research/hpc/minimal_rl_20261116/cell.env"
 cell_environment
-: "${RL_RUN:?RL_RUN must be ieee14 or smoke}"
+: "${RL_RUN:?RL_RUN must be ieee14, smoke, focus or focus_smoke}"
 : "${RL_TARGET:?RL_TARGET must be the iteration count at which the job stops}"
 case "$RL_RUN" in
-  ieee14|smoke) ;;
-  *) echo "RL_RUN must be ieee14 or smoke, got $RL_RUN" >&2; exit 2 ;;
+  ieee14|smoke|focus|focus_smoke) ;;
+  *) echo "RL_RUN must be ieee14, smoke, focus or focus_smoke, got $RL_RUN" >&2; exit 2 ;;
 esac
 [[ "$RL_TARGET" =~ ^[0-9]+$ && "$RL_TARGET" -ge 1 ]] || { echo "RL_TARGET must be a positive integer, got $RL_TARGET" >&2; exit 2; }
 CFG=$CELL/rl_$RL_RUN.json
@@ -44,8 +48,13 @@ echo "[rl:$RL_RUN] job ${SLURM_JOB_ID:-manual} restart ${SLURM_RESTART_COUNT:-0}
 echo "[rl:$RL_RUN] source $(git -C "$SRC" rev-parse HEAD) target $RL_TARGET iteration(s) prompt limit $RESEARCH_MAX_INPUT_TOKENS tokens"
 [[ -s "$CFG" ]] || { echo "no config $CFG" >&2; exit 2; }
 
-if [[ "$RL_RUN" == ieee14 ]]; then
+if [[ "$RL_RUN" != smoke ]]; then
   [[ -s "$PASS/training.done" ]] || { echo "no training receipt $PASS/training.done: the supervised pass has not finished" >&2; exit 2; }
+  if [[ "$RL_RUN" == focus* ]]; then
+    # What the focused run draws by: the starting adapter's greedy pass over the cases with a truth-built sequence.
+    [[ -s "$TRAIN_PASS/evaluation.json" ]] \
+      || { echo "no training pass $TRAIN_PASS/evaluation.json: the supervised model's pass over the training cases has not finished" >&2; exit 2; }
+  fi
 elif [[ ! -s "$SMOKE_ADAPTER/adapter_model.safetensors" ]]; then
   # The smoke's adapter, copied once: the two files an adapter folder of the pass holds, so that the processor
   # comes from the base model as it will in the run (a checkpoint also carries the tokenizer's files).

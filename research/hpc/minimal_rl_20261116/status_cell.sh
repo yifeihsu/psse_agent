@@ -18,7 +18,28 @@ echo "=== submitted"
 tail -n 12 "$WORK/submitted_jobs.txt" 2>/dev/null | sed 's/^/    /'
 echo "=== queue"
 squeue -u "$USER" -h -o "%i %j %T %M %R" | grep -E "mrl-" | sed 's/^/    /'
-for run in smoke ieee14; do
+if [ -d "$OUT/train_pass" ]; then
+  echo "=== the training pass: the supervised model on the training cases a truth-built sequence repairs"
+  python3 - "$OUT/train_pass" <<'PASSPY'
+import glob, json, os, sys
+
+folder = sys.argv[1]
+print(f"    episodes written {len(glob.glob(f'{folder}/episodes/*.json'))}")
+path = f"{folder}/evaluation.json"
+if not os.path.isfile(path):
+    print("    evaluation.json: not yet")
+else:
+    summary = json.load(open(path)).get("summary") or {}
+    totals = summary.get("totals") or {}
+    cases, solved = int(totals.get("cases", 0)), int(totals.get("solved", 0))
+    print(f"    cases {cases}, repaired {solved}, left unrepaired {cases - solved}; false_resolved {totals.get('false_resolved', 0)}, "
+          f"declared_unresolved {totals.get('declared_unresolved', 0)}, budget_exhausted {totals.get('budget_exhausted', 0)}, "
+          f"prompt_limit {totals.get('prompt_limit', 0)}, tool_errors {totals.get('tool_errors', 0)}; mean actions {summary.get('mean_actions')}")
+    for name, cell in (summary.get("by_class") or {}).items():
+        print(f"        {name}: repaired {cell.get('solved', 0)} of {cell.get('cases', 0)}")
+PASSPY
+fi
+for run in smoke ieee14 focus_smoke focus; do
   dir=$OUT/$run
   [ -s "$dir/manifest.json" ] || continue
   echo "=== $run"
@@ -83,6 +104,19 @@ for folder in sorted(glob.glob(f"{run}/iteration_*")):
         errors = {key[6:]: value for key, value in totals.items() if key.startswith("error:")}
         if errors:
             print(f"        rollout: refused calls by code {json.dumps(errors, sort_keys=True)}")
+        focus = rollout.get("focus") or {}
+        for name in ("left_unrepaired_by_the_starting_adapter", "repaired_by_the_starting_adapter"):
+            cell = focus.get(name)
+            if cell:
+                print(f"        focus, cases {name.replace('_', ' ')}: {cell.get('cases')} drawn of {(focus.get('available') or {}).get(name)}; "
+                      f"with a repaired sample {cell.get('cases_with_a_repaired_sample')} (and an unrepaired one "
+                      f"{cell.get('cases_with_a_repaired_and_an_unrepaired_sample')}), with none {cell.get('cases_with_no_sample_repaired')}; "
+                      f"episodes repaired {cell.get('episodes_repaired')} of {cell.get('episodes')}")
+        examples = rollout.get("truth_built_examples")
+        if examples:
+            print(f"        truth-built examples: {examples.get('examples')} kept for {examples.get('cases_without_a_repaired_sample')} cases "
+                  f"without a repaired sample; without a sequence {examples.get('without_a_sequence')}, "
+                  f"replays that did not repair {len(examples.get('replay_did_not_repair') or [])}")
     elif groups:
         print(f"        rollout: {groups} groups written, not closed")
     report = load(f"{folder}/update_report.json")
@@ -90,9 +124,15 @@ for folder in sorted(glob.glob(f"{run}/iteration_*")):
         rows = report.get("rows") or {}
         keys = ("rows", "policy_rows", "preservation_rows", "informative_groups", "groups_incomplete", "trajectories_unpaired",
                 "prompt_length_mismatches", "prompt_digest_mismatches", "prompt_digest_missing", "prompt_truncated_rows",
-                "rows_without_sampling_record_rejected")
+                "rows_without_sampling_record_rejected", "supervised_rows", "supervised_rows_unrenderable")
         print("        rows: " + ", ".join(f"{key} {rows.get(key, 0)}" for key in keys))
         update = report.get("update")
+        taught = rows.get("truth_built_examples")
+        if taught:
+            print(f"        truth-built examples in the update: {taught.get('rows')} rows of {taught.get('examples_with_rows')} examples "
+                  f"({taught.get('examples')} kept), row weights {json.dumps(taught.get('row_weights'))}, not above their samples "
+                  f"{taught.get('examples_not_above_their_samples')}, over the input limit {taught.get('prompt_over_the_input_limit')}; "
+                  f"supervised loss {(update or {}).get('supervised_loss')}")
         if update is None:
             print(f"        update: none ({report.get('note')})")
         else:
@@ -121,7 +161,7 @@ for log in "$LOGS"/mrl-*.out; do
   [ -f "$log" ] || continue
   echo "    $(basename "$log"): $(wc -l < "$log") lines; preemptions $(grep -c 'DUE TO PREEMPTION' "$log"); 'Traceback' $(grep -c 'Traceback' "$log"); last: $(grep -vE 'Warning|warnings.warn|^\s*$' "$log" | tail -1 | cut -c1-200)"
 done
-for samples in "$LOGS"/gpu-util-rl-*.csv; do
+for samples in "$LOGS"/gpu-util-rl-*.csv "$LOGS"/gpu-util-train-pass-*.csv; do
   [ -f "$samples" ] || continue
   awk -F', ' -v name="$(basename "$samples")" '{gsub(/ MiB/,"",$3); if ($3+0>m) m=$3+0; gsub(/ %/,"",$2); s+=$2; n++} END {if (n) printf "    %s: %d samples, peak memory %d MiB, mean utilization %.0f%%\n", name, n, m, s/n}' "$samples"
 done

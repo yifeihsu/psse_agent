@@ -28,8 +28,10 @@ except Exception:  # pragma: no cover - torch is optional for the file checks
 CELL = Path(__file__).resolve().parent
 REPO = CELL.parents[2]
 SFT_CELL = CELL.parent / "minimal_sft_20261115"
-SCRIPTS = ("cell.env", "stage_rl.sbatch", "submit_cell.sh", "status_cell.sh", "deploy_from_windows.sh")
-CONFIGS = ("rl_ieee14.json", "rl_smoke.json")
+SCRIPTS = ("cell.env", "stage_rl.sbatch", "stage_train_pass.sbatch", "submit_cell.sh", "status_cell.sh", "deploy_from_windows.sh")
+CONFIGS = ("rl_ieee14.json", "rl_smoke.json", "rl_focus.json", "rl_focus_smoke.json")
+RUNS = ("ieee14", "smoke", "focus", "focus_smoke")
+GPU_STAGES = ("stage_rl.sbatch", "stage_train_pass.sbatch")
 WORK = "/scratch/yx3882/minimal_rl_20261116"
 SFT_WORK = "/scratch/yx3882/minimal_sft_20261115"
 
@@ -92,8 +94,11 @@ class CellFilesTests(unittest.TestCase):
         self.assertIn("#SBATCH --account=torch_pr_627_general", stage)
         self.assertIn(f'source "$WORK/source/research/hpc/{CELL.name}/cell.env"', stage)
         self.assertIn("CFG=$CELL/rl_$RL_RUN.json", stage)
-        for run in ("ieee14", "smoke"):
+        for run in RUNS:
             self.assertTrue((CELL / f"rl_{run}.json").is_file())
+            self.assertIn(run, stage[stage.index('case "$RL_RUN" in'):stage.index("esac")])
+        for name in GPU_STAGES:
+            self.assertIn(f"#SBATCH --output={WORK}/logs/%x-%j.out", (CELL / name).read_text(encoding="utf-8"))
 
     def test_the_supervised_cell_is_read_and_never_written_to(self) -> None:
         self.assertEqual(_expanded(CELL / "cell.env", "PASS"), f"{SFT_WORK}/out/pass_base")
@@ -110,12 +115,13 @@ class CellFilesTests(unittest.TestCase):
         self.assertIn("git clone -q $SOURCE_CELL/source $WORK/source", deploy)  # a source of its own, cloned
 
     def test_the_gpu_stage_takes_any_large_card_and_may_be_preempted(self) -> None:
-        stage = (CELL / "stage_rl.sbatch").read_text(encoding="utf-8")
-        self.assertIn("#SBATCH --constraint=a100|h100|h200|rtx6000", stage)
-        self.assertIn("#SBATCH --gres=gpu:1", stage)
-        self.assertIn("#SBATCH --requeue", stage)
-        self.assertIn("#SBATCH --comment=preemption=yes;requeue=true", stage)
-        self.assertNotIn("--partition", stage)
+        for name in GPU_STAGES:
+            stage = (CELL / name).read_text(encoding="utf-8")
+            self.assertIn("#SBATCH --constraint=a100|h100|h200|rtx6000", stage, name)
+            self.assertIn("#SBATCH --gres=gpu:1", stage, name)
+            self.assertIn("#SBATCH --requeue", stage, name)
+            self.assertIn("#SBATCH --comment=preemption=yes;requeue=true", stage, name)
+            self.assertNotIn("--partition", stage, name)
 
     def test_the_stage_drives_the_minimal_environments_own_driver(self) -> None:
         stage = (CELL / "stage_rl.sbatch").read_text(encoding="utf-8")
@@ -206,6 +212,61 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(mine[name], supervised[name], name)
 
 
+class FocusConfigTests(unittest.TestCase):
+    """The focused run: the driver's focus example on the cluster's paths, drawn by a pass made under its own settings."""
+
+    def test_the_focused_run_is_the_drivers_focus_example_on_the_clusters_paths(self) -> None:
+        run = _config("rl_focus.json")
+        example = json.loads((REPO / "research" / "minimal_env" / "rl_focus_config_example.json").read_text(encoding="utf-8"))
+        differing = sorted(key for key in set(run) | set(example) if run.get(key) != example.get(key))
+        self.assertEqual(differing, ["baseline_from", "development_suite", "focus", "initial_adapter", "output_dir", "reference",
+                                     "training_suite"])
+        self.assertEqual(sorted(key for key in run["focus"] if run["focus"][key] != example["focus"][key]), ["evaluation", "truth_sequences"])
+        # Against the plain run it differs in its draw alone: the same start, baseline, episode, update and row checks.
+        plain = _config("rl_ieee14.json")
+        self.assertEqual(sorted(key for key in set(run) | set(plain) if run.get(key) != plain.get(key)),
+                         ["focus", "output_dir", "root_sampling", "roots_per_iteration", "samples_per_root", "seed"])
+        self.assertEqual((run["focus"]["failed_per_iteration"] + run["focus"]["solved_per_iteration"]) * run["samples_per_root"],
+                         plain["roots_per_iteration"] * plain["samples_per_root"])  # as many sampled episodes an iteration
+        self.assertEqual(run["output_dir"], f"{WORK}/out/focus")
+
+    def test_the_focused_smoke_differs_from_the_focused_run_in_size_alone(self) -> None:
+        run, smoke = _config("rl_focus.json"), _config("rl_focus_smoke.json")
+        self.assertEqual(set(run), set(smoke))
+        self.assertEqual(sorted(key for key in run if run[key] != smoke[key]),
+                         ["baseline_from", "development_limit", "focus", "output_dir", "samples_per_root", "update_checkpoint_rows"])
+        self.assertEqual(sorted(key for key in run["focus"] if run["focus"][key] != smoke["focus"][key]),
+                         ["failed_per_iteration", "solved_per_iteration"])
+        self.assertEqual((smoke["focus"]["failed_per_iteration"], smoke["focus"]["solved_per_iteration"], smoke["samples_per_root"],
+                          smoke["development_limit"], smoke["output_dir"]), (6, 2, 2, 8, f"{WORK}/out/focus_smoke"))
+        self.assertEqual(smoke["initial_adapter"], run["initial_adapter"])  # the supervised model itself, not a checkpoint's copy
+        self.assertIsNone(smoke["baseline_from"])  # eight cases: its baseline is run by the smoke
+        self.assertGreater(smoke["focus"]["demonstration_weight"], 0.0)
+
+    def test_the_training_pass_is_made_where_and_how_the_focused_run_reads_it(self) -> None:
+        run = _config("rl_focus.json")
+        settings = _settings(CELL / "cell.env")
+        self.assertEqual(run["focus"]["truth_sequences"], _expanded(CELL / "cell.env", "TRUTH_SEQUENCES").replace("$CELL", f"{WORK}/source/research/hpc/{CELL.name}"))
+        self.assertEqual(run["focus"]["truth_sequences"], f"{WORK}/source/research/hpc/{CELL.name}/train_truth_sequences.json")
+        self.assertEqual(run["focus"]["evaluation"], _expanded(CELL / "cell.env", "TRAIN_PASS"))
+        self.assertEqual(run["training_suite"], settings["TRAIN_SUITE"])
+        # The driver refuses a pass made under another episode, model or adapter than the run's.
+        self.assertEqual((int(settings["RL_MAX_ACTIONS"]), int(settings["RL_TABLE_VERSIONS"]), settings["MODEL_CHOICE"]),
+                         (run["max_actions"], run["table_versions"], run["model_choice"]))
+        stage = (CELL / "stage_train_pass.sbatch").read_text(encoding="utf-8")
+        for needle in ('-m research.minimal_env.evaluate --suite "$TRAIN_SUITE" --adapter "$PASS_ADAPTER" --output-dir "$TRAIN_PASS"',
+                       '--cases "$TRUTH_SEQUENCES"', '--max-actions "$RL_MAX_ACTIONS"', '--table-versions "$RL_TABLE_VERSIONS"',
+                       '--model-choice "$MODEL_CHOICE"', "cell_environment"):
+            self.assertIn(needle, stage)
+        self.assertNotIn("--load-in-4bit", stage)
+        self.assertNotIn("--limit", stage)
+        self.assertEqual(run["initial_adapter"], _expanded(CELL / "cell.env", "PASS_ADAPTER"))
+        # The file the configs name is in the cell, with the cases the demonstrations repair.
+        payload = json.loads((CELL / "train_truth_sequences.json").read_text(encoding="utf-8"))
+        self.assertEqual((payload["contract"], len(payload["cases"])), ("minimal_truth_sequences_v1", 2093))
+        self.assertNotIn(b"\r", (CELL / "train_truth_sequences.json").read_bytes())
+
+
 class SubmitAndDeployTests(unittest.TestCase):
     def test_the_submit_script_names_both_jobs_and_what_they_run(self) -> None:
         submit = (CELL / "submit_cell.sh").read_text(encoding="utf-8")
@@ -217,8 +278,25 @@ class SubmitAndDeployTests(unittest.TestCase):
         # No run before the supervised pass has finished, and no default for how far it goes.
         self.assertIn('[[ -s "$PASS/training.done" ]] || { echo "no training receipt', submit)
         self.assertIn("target=${2:?how many iterations the run should reach in all}", submit)
-        for command in ("smoke)", "run)"):
+        for command in ("smoke)", "run)", "train-pass)", "focus-smoke)", "focus)"):
             self.assertIn(command, submit)
+
+    def test_the_focused_runs_jobs_wait_for_the_training_pass(self) -> None:
+        submit = (CELL / "submit_cell.sh").read_text(encoding="utf-8")
+        self.assertIn('--job-name=mrl-train-pass --export="ALL,PASS_PART=$part/$parts" "$CELL/stage_train_pass.sbatch"', submit)
+        self.assertIn('--dependency="afterany:$after" --job-name=mrl-train-pass-close --export=ALL,PASS_PART=close', submit)
+        self.assertIn("--job-name=mrl-focus-smoke --export=ALL,RL_RUN=focus_smoke,RL_TARGET=1", submit)
+        self.assertIn('chain mrl-focus "$links" "ALL,RL_RUN=focus,RL_TARGET=$target"', submit)
+        self.assertIn("target=${2:?how many iterations the focused run should reach in all}", submit)
+        for branch in ("focus-smoke)", "  focus)"):
+            body = submit[submit.index(branch):]
+            body = body[:body.index(";;")]
+            self.assertIn('[[ -s "$TRAIN_PASS/evaluation.json" ]] || { echo "no training pass', body, branch)
+            self.assertIn('[[ -s "$PASS/training.done" ]] || { echo "no training receipt', body, branch)
+        stage = (CELL / "stage_rl.sbatch").read_text(encoding="utf-8")
+        self.assertIn('[[ -s "$TRAIN_PASS/evaluation.json" ]]', stage)
+        # The pass is submitted once: not again when its evaluation is there.
+        self.assertIn('[[ ! -s "$TRAIN_PASS/evaluation.json" ]] || { echo "the training pass is done already', submit)
 
     def test_the_link_count_covers_fourteen_hours_an_iteration(self) -> None:
         submit = (CELL / "submit_cell.sh").read_text(encoding="utf-8")
@@ -243,9 +321,13 @@ class SubmitAndDeployTests(unittest.TestCase):
                 self.assertNotIn("$USER", line, line)
         # What the deploy asks of the driver is there.
         driver = (REPO / "research" / "minimal_env" / "rl_train.py").read_text(encoding="utf-8")
-        for needle in ('"--check"', "baseline_from", "development_limit"):
+        for needle in ('"--check"', "baseline_from", "development_limit", "demonstration_weight"):
             self.assertIn(needle, driver)
             self.assertIn(needle, deploy)
+        self.assertIn('"--cases"', (REPO / "research" / "minimal_env" / "evaluate.py").read_text(encoding="utf-8"))
+        self.assertIn('"--cases"', deploy)
+        for name in ("stage_train_pass.sbatch", "rl_focus.json", "rl_focus_smoke.json", "train_truth_sequences.json"):
+            self.assertIn(f'"$CELL_REL/{name}"', deploy)
         self.assertIn("the source is not moved under them", deploy)  # not under a queued or running job of the cell
 
 
@@ -287,6 +369,26 @@ path.write_text(json.dumps(manifest))
 '''
 
 
+#: A stand-in for the evaluation script, for the training-pass stage's control flow: it records every call and, on
+#: the call without a shard, writes the evaluation.
+STUB_EVALUATE = r'''
+import json, os, sys
+from pathlib import Path
+
+args = sys.argv[1:]
+out = Path(args[args.index("--output-dir") + 1])
+out.mkdir(parents=True, exist_ok=True)
+shard = args[args.index("--shard") + 1] if "--shard" in args else "close"
+named = {name: args[args.index(name) + 1] for name in ("--suite", "--adapter", "--cases", "--model-choice", "--max-actions", "--table-versions")}
+with open(out / "calls.txt", "a") as stream:
+    stream.write(json.dumps({"shard": shard, "threads": os.environ.get("OMP_NUM_THREADS"), **named}) + "\n")
+if os.environ.get("STUB_FAIL_SHARD") == shard:
+    sys.exit(1)
+if shard == "close":
+    (out / "evaluation.json").write_text(json.dumps({"summary": {}}))
+'''
+
+
 class StageFlowTests(unittest.TestCase):
     """The stage's shell on a copy of the cell under a temporary work directory, with a stub in the driver's place."""
 
@@ -302,6 +404,7 @@ class StageFlowTests(unittest.TestCase):
         for package in (stub.parent, stub):
             (package / "__init__.py").write_text("", encoding="utf-8")
         (stub / "rl_train.py").write_text(STUB_DRIVER, encoding="utf-8")
+        (stub / "evaluate.py").write_text(STUB_EVALUATE, encoding="utf-8")
         environment = (CELL / "cell.env").read_text(encoding="utf-8")
         for old, new in ((f"WORK={WORK}", f"WORK={self.work.as_posix()}"), (f"PASS={SFT_WORK}/out/pass_base", f"PASS={self.passed.as_posix()}"),
                          (f"PY={_settings(CELL / 'cell.env')['PY']}", f"PY={Path(sys.executable).as_posix()}")):
@@ -311,9 +414,15 @@ class StageFlowTests(unittest.TestCase):
         stage = (CELL / "stage_rl.sbatch").read_text(encoding="utf-8")
         self.assertEqual(stage.count(f"WORK={WORK}\n"), 1)
         (cell / "stage_rl.sbatch").write_text(stage.replace(f"WORK={WORK}\n", f"WORK={self.work.as_posix()}\n"), encoding="utf-8", newline="\n")
-        for run in ("smoke", "ieee14"):
+        train_pass = (CELL / "stage_train_pass.sbatch").read_text(encoding="utf-8")
+        self.assertEqual(train_pass.count(f"WORK={WORK}\n"), 1)
+        (cell / "stage_train_pass.sbatch").write_text(train_pass.replace(f"WORK={WORK}\n", f"WORK={self.work.as_posix()}\n"),
+                                                      encoding="utf-8", newline="\n")
+        (cell / "train_truth_sequences.json").write_text("{}", encoding="utf-8")
+        for run in RUNS:
             (cell / f"rl_{run}.json").write_text(json.dumps({"output_dir": (self.work / "out" / run).as_posix()}), encoding="utf-8")
         self.stage = cell / "stage_rl.sbatch"
+        self.train_pass = cell / "stage_train_pass.sbatch"
         # No card here: a stand-in that ends at once, so the stage's sampler leaves no process behind.
         self.bin = Path(self.folder.name) / "bin"
         self.bin.mkdir()
@@ -328,10 +437,18 @@ class StageFlowTests(unittest.TestCase):
         if whole:
             (folder / "trainer_state.json").write_text("{}", encoding="utf-8")
 
-    def _stage(self, **environment: str) -> subprocess.CompletedProcess:
+    def _stage(self, stage: Path | None = None, **environment: str) -> subprocess.CompletedProcess:
         assignments = " ".join(f'{name}="{value}"' for name, value in environment.items())
-        script = f'chmod +x "{self.bin.as_posix()}/nvidia-smi"; PATH="$(cd "{self.bin.as_posix()}" && pwd):$PATH" {assignments} bash "{self.stage.as_posix()}"'
+        script = (f'chmod +x "{self.bin.as_posix()}/nvidia-smi"; PATH="$(cd "{self.bin.as_posix()}" && pwd):$PATH" {assignments} '
+                  f'bash "{(stage or self.stage).as_posix()}"')
         return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+
+    def _receipt(self) -> None:
+        (self.passed / "training" / "lora").mkdir(parents=True, exist_ok=True)
+        (self.passed / "training.done").write_text("{}", encoding="utf-8")
+
+    def _pass_calls(self) -> list[dict]:
+        return [json.loads(line) for line in (self.work / "out" / "train_pass" / "calls.txt").read_text(encoding="utf-8").splitlines()]
 
     def _calls(self, run: str) -> list[str]:
         return (self.work / "out" / run / "calls.txt").read_text(encoding="utf-8").split("\n")[:-1]
@@ -394,6 +511,76 @@ class StageFlowTests(unittest.TestCase):
         self.assertIn("mrl-ieee14-complete", run.stdout)
         self.assertFalse((self.work / "data" / "smoke_adapter").exists())
 
+    def test_the_focused_run_waits_for_the_supervised_pass_and_for_the_training_pass(self) -> None:
+        for run in ("focus", "focus_smoke"):
+            early = self._stage(RL_RUN=run, RL_TARGET="1", RL_WORKERS="1")
+            self.assertEqual(early.returncode, 2, run)
+            self.assertIn("the supervised pass has not finished", early.stderr, run)
+        self._receipt()
+        for run in ("focus", "focus_smoke"):
+            waiting = self._stage(RL_RUN=run, RL_TARGET="1", RL_WORKERS="1")
+            self.assertEqual(waiting.returncode, 2, run)
+            self.assertIn("pass over the training cases has not finished", waiting.stderr, run)
+            self.assertFalse((self.work / "out" / run).exists(), run)
+        (self.work / "out" / "train_pass").mkdir(parents=True)
+        (self.work / "out" / "train_pass" / "evaluation.json").write_text("{}", encoding="utf-8")
+        for run in ("focus", "focus_smoke"):
+            done = self._stage(RL_RUN=run, RL_TARGET="1", RL_WORKERS="2", SLURM_CPUS_PER_TASK="16")
+            self.assertEqual(done.returncode, 0, done.stderr[-2000:])
+            self.assertIn(f"mrl-{run}-complete", done.stdout)
+            calls = self._calls(run)
+            self.assertEqual(calls[0], "check")
+            self.assertEqual([line.split()[1] for line in calls[1:] if line.split()[2] == "close"], ["baseline", "rollout", "update", "evaluate"])
+        self.assertFalse((self.work / "data" / "smoke_adapter").exists())  # the focused smoke starts from the pass's adapter itself
+
+    def test_the_training_pass_runs_its_two_shards_and_the_closing_job_writes_the_evaluation(self) -> None:
+        early = self._stage(self.train_pass, PASS_PART="0/4")
+        self.assertEqual(early.returncode, 2)
+        self.assertIn("the supervised pass has not finished", early.stderr)
+        self._receipt()
+        for bad in ("4/4", "1", "a/2", "0/0"):
+            refused = self._stage(self.train_pass, PASS_PART=bad)
+            self.assertEqual(refused.returncode, 2, bad)
+        self.assertEqual(self._stage(self.train_pass).returncode, 1)  # no part named
+        self.assertFalse((self.work / "out" / "train_pass" / "calls.txt").exists())
+
+        # Part 1 of 4 on a large card: shards 2 and 3 of 8 at once, half the threads each.
+        large = self._stage(self.train_pass, PASS_PART="1/4", PASS_WORKERS="2", SLURM_CPUS_PER_TASK="16")
+        self.assertEqual(large.returncode, 0, large.stderr[-2000:])
+        self.assertIn("mrl-train-pass-part-done", large.stdout)
+        calls = self._pass_calls()
+        self.assertEqual(sorted(call["shard"] for call in calls), ["2/8", "3/8"])
+        self.assertEqual({call["threads"] for call in calls}, {"8"})
+        expected = {"--adapter": f"{self.passed.as_posix()}/training/lora",
+                    "--cases": f"{self.work.as_posix()}/source/research/hpc/{CELL.name}/train_truth_sequences.json",
+                    "--model-choice": "12b", "--max-actions": "16", "--table-versions": "2"}
+        for call in calls:
+            self.assertEqual({name: call[name] for name in expected}, expected)
+            # The cluster's path; Git Bash on Windows puts its own root before an argument that starts with a slash.
+            self.assertTrue(call["--suite"].endswith(_settings(CELL / "cell.env")["TRAIN_SUITE"]), call["--suite"])
+        # Part 3 of 4 on a smaller card: shards 6 and 7, one after the other, all the threads.
+        small = self._stage(self.train_pass, PASS_PART="3/4", PASS_WORKERS="1", SLURM_CPUS_PER_TASK="16")
+        self.assertEqual(small.returncode, 0, small.stderr[-2000:])
+        self.assertEqual([(call["shard"], call["threads"]) for call in self._pass_calls()[2:]], [("6/8", "16"), ("7/8", "16")])
+        self.assertFalse((self.work / "out" / "train_pass" / "evaluation.json").exists())  # a part writes no evaluation
+        # A shard that fails fails its job.
+        failed = self._stage(self.train_pass, PASS_PART="0/4", PASS_WORKERS="2", STUB_FAIL_SHARD="1/8")
+        self.assertEqual(failed.returncode, 1)
+        self.assertNotIn("mrl-train-pass-part-done", failed.stdout)
+
+        # The closing job runs the call without a shard, which writes the evaluation; a later job finds it.
+        before = len(self._pass_calls())
+        closing = self._stage(self.train_pass, PASS_PART="close", SLURM_CPUS_PER_TASK="16")
+        self.assertEqual(closing.returncode, 0, closing.stderr[-2000:])
+        self.assertIn("mrl-train-pass-complete", closing.stdout)
+        self.assertEqual([(call["shard"], call["threads"]) for call in self._pass_calls()[before:]], [("close", "16")])
+        self.assertTrue((self.work / "out" / "train_pass" / "evaluation.json").is_file())
+        for part in ("2/4", "close"):
+            later = self._stage(self.train_pass, PASS_PART=part)
+            self.assertEqual(later.returncode, 0, later.stderr[-2000:])
+            self.assertIn("nothing to do", later.stdout)
+        self.assertEqual(len(self._pass_calls()), before + 1)
+
 
 @unittest.skipIf(torch is None, "torch is not installed")
 class StatusTests(unittest.TestCase):
@@ -432,6 +619,48 @@ class StatusTests(unittest.TestCase):
         tail = text[text.index("--- iteration_001"):]
         self.assertIn("rollout: groups 2, episodes 4", tail)
         self.assertNotIn("update:", tail)
+        self.assertNotIn("truth-built examples", text)  # a plain run has none
+
+    def test_the_status_reader_reads_a_focused_run_and_the_training_pass(self) -> None:
+        from research.minimal_env import test_rl_train as driver_tests
+
+        if not driver_tests.ROOTS:
+            driver_tests.setUpModule()
+        script = (CELL / "status_cell.sh").read_text(encoding="utf-8")
+        reader = script[script.index("<<'PY'\n") + len("<<'PY'\n"):script.index("\nPY\n")]
+        pass_reader = script[script.index("<<'PASSPY'\n") + len("<<'PASSPY'\n"):script.index("\nPASSPY\n")]
+        self.assertIn("for run in smoke ieee14 focus_smoke focus; do", script)
+        with tempfile.TemporaryDirectory() as folder, driver_tests._stand_ins({"never_repair": True}) as rl:
+            config = driver_tests._config(folder, focus=driver_tests._focus(folder), rows=driver_tests.FOCUS_ROWS)
+            with contextlib.redirect_stdout(io.StringIO()):
+                rl.run_phase(config, "rollout")
+                rl.run_phase(config, "update")
+            printed = subprocess.run([sys.executable, "-", config.output_dir], input=reader, capture_output=True, text=True, check=False)
+            # The training pass as research.minimal_env.evaluate writes it: three cases, two repaired.
+            passed = Path(folder) / "pass"
+            (passed / "episodes").mkdir(parents=True)
+            for name in ("a", "b", "c"):
+                (passed / "episodes" / f"{name}.json").write_text("{}", encoding="utf-8")
+            before = subprocess.run([sys.executable, "-", str(passed)], input=pass_reader, capture_output=True, text=True, check=False)
+            (passed / "evaluation.json").write_text(json.dumps({"summary": {
+                "totals": {"cases": 3, "solved": 2, "false_resolved": 1}, "mean_actions": 4.5,
+                "by_class": {"x": {"cases": 2, "solved": 2}, "y": {"cases": 1, "solved": 0}}}}), encoding="utf-8")
+            after = subprocess.run([sys.executable, "-", str(passed)], input=pass_reader, capture_output=True, text=True, check=False)
+        self.assertEqual(printed.returncode, 0, printed.stderr)
+        text = printed.stdout
+        self.assertIn("focus, cases left unrepaired by the starting adapter: 2 drawn of 2; with a repaired sample 0 (and an unrepaired one 0), "
+                      "with none 2; episodes repaired 0 of 4", text)
+        self.assertIn("truth-built examples: 2 kept for 2 cases without a repaired sample; without a sequence 0, replays that did not repair 0", text)
+        self.assertRegex(text, r"rows: rows 7, policy_rows 0, preservation_rows 2, .*supervised_rows 5, supervised_rows_unrenderable 0")
+        self.assertRegex(text, r"truth-built examples in the update: 5 rows of 2 examples \(2 kept\), row weights \{.*\}, not above their samples 0, "
+                               r"over the input limit 0; supervised loss \[\d")
+        self.assertIn("integrity: ok True; failures []", text)
+        self.assertEqual((before.returncode, after.returncode), (0, 0), before.stderr + after.stderr)
+        self.assertIn("episodes written 3", before.stdout)
+        self.assertIn("evaluation.json: not yet", before.stdout)
+        self.assertIn("cases 3, repaired 2, left unrepaired 1; false_resolved 1,", after.stdout)
+        self.assertIn("x: repaired 2 of 2", after.stdout)
+        self.assertIn("y: repaired 0 of 1", after.stdout)
 
 
 if __name__ == "__main__":

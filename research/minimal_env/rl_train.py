@@ -28,8 +28,19 @@ the same phase finishes whatever is left and closes it.
 What is this environment's own: the episode, the reward, the prompt and the tools.  What is the RL series'
 (``psse_env.rl``), used as it is: the trajectory store, the group advantages, the row builder, the update with its
 checkpoint and carried optimizer, and the integrity checks.  There is no lifecycle term, no decision credit and no
-supervised target here: a correction is kept or undone by the model's own later action and credited by the
-episode's outcome.  Truth-built sequences are never part of a group.
+supervised target on a sampled step: a correction is kept or undone by the model's own later action and credited
+by the episode's outcome.  Truth-built sequences are never part of a group.
+
+``focus`` (2026-11-18) aims a run at the training cases a truth-built sequence repairs and the starting adapter
+does not.  It names the file of those sequences (``research.minimal_env.truth_sequences``) and a greedy
+evaluation of the starting adapter on their cases; an iteration then draws ``failed_per_iteration`` of the cases
+that evaluation left unrepaired and ``solved_per_iteration`` of the repaired ones, and no case without a sequence.
+For a drawn case none of whose samples is repaired, the closing call of the rollout replays the case's sequence
+in the environment and keeps it beside the groups (``demonstrations/``).  The update trains the replayed actions
+as supervised rows: each action on the prompt the model would have read there, rendered as the supervised pass
+taught it, with weight ``demonstration_weight`` times how far the sequence's reward lies above the mean of the
+case's samples.  Those rows are imitation of the truth-built sequence, not on-policy data: they have no sampling
+record, no advantage and no part in the KL term or the on-policy check.
 
 Settings that carry what the earlier RL arms measured (``rl_config_example.json`` beside this file sets them;
 docs/minimal_env_20261115.md, section 12, has the reasons):
@@ -58,13 +69,22 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from psse_env.minimal.env import DEFAULT_MAX_ACTIONS, DEFAULT_TABLE_VERSIONS, MinimalDiagnosisEnv  # noqa: E402
-from psse_env.minimal.episode import OUTCOME_PROMPT_LIMIT  # noqa: E402
+from psse_env.minimal import rollout as minimal_rollout  # noqa: E402
+from psse_env.minimal.episode import OUTCOME_PROMPT_LIMIT, run_episode  # noqa: E402
 from psse_env.minimal.rollout import rollout_roots  # noqa: E402
 from psse_env.minimal.scoring import RewardWeights  # noqa: E402
 from psse_env.rl.advantages import GroupAdvantages, group_advantages, summarize_groups  # noqa: E402
 from psse_env.rl.integrity import MARKER_FILE, IntegrityError, update_integrity  # noqa: E402
-from psse_env.rl.rollout import Trajectory, TrajectoryStore, distinct_trajectories, reward_spread, scenario_root  # noqa: E402
-from psse_env.rl.rows import RowSettings, build_rows  # noqa: E402
+from psse_env.rl.rollout import (  # noqa: E402
+    StepRecord,
+    Trajectory,
+    TrajectoryStore,
+    distinct_trajectories,
+    reward_spread,
+    scenario_family,
+    scenario_root,
+)
+from psse_env.rl.rows import RowSettings, TrainingRow, build_rows, build_step_row  # noqa: E402
 from psse_env.rl.sampling import RootSampling, root_stratum, stratified_roots  # noqa: E402
 from psse_env.rl.train import (  # noqa: E402
     OPTIMIZER_FILE,
@@ -91,12 +111,67 @@ from psse_env.rl.update import (  # noqa: E402
     policy_gradient_update,
     save_optimizer_state,
 )
-from research.minimal_env import evaluate  # noqa: E402
+from research.minimal_env import evaluate, truth_sequences  # noqa: E402
 
 DRIVER_CONTRACT = "minimal_rl_driver_v1"
+#: A truth-built sequence replayed for a case none of whose samples was repaired.
+EXAMPLE_CONTRACT = "minimal_truth_built_example_v1"
+#: ``sample_index`` of such an example: beside the case's sampled episodes, never one of them.
+EXAMPLE_SAMPLE = 1000
 PHASES = ("baseline", "rollout", "update", "evaluate")
 ITERATION_PHASES = ("rollout", "update", "evaluate")
 SHARDED_PHASES = ("baseline", "rollout", "evaluate")
+
+
+@dataclass(frozen=True)
+class FocusSettings:
+    """A run aimed at the cases a truth-built sequence repairs and the starting adapter does not (the module docstring)."""
+
+    #: A file of ``research.minimal_env.truth_sequences``; null leaves the run's draw as ``root_sampling`` says.
+    truth_sequences: str | None = None
+    #: A folder ``research.minimal_env.evaluate`` wrote for the starting adapter on the file's cases.
+    evaluation: str | None = None
+    #: Cases of an iteration that the evaluation left unrepaired, and cases it repaired.
+    failed_per_iteration: int = 0
+    solved_per_iteration: int = 0
+    #: Weight of a truth-built example's rows, times the example's reward above the mean of its case's samples;
+    #: 0 adds no example.
+    demonstration_weight: float = 1.0
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any] | None) -> "FocusSettings":
+        payload = dict(payload or {})
+        unknown = sorted(set(payload) - set(cls.__dataclass_fields__))
+        if unknown:
+            raise ValueError(f"unknown focus fields: {unknown}")
+        settings = cls(**payload)
+        settings.validate()
+        return settings
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.truth_sequences)
+
+    @property
+    def examples(self) -> bool:
+        return self.enabled and float(self.demonstration_weight) > 0.0
+
+    def validate(self) -> None:
+        for name in ("failed_per_iteration", "solved_per_iteration"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"focus.{name} must be a nonnegative integer")
+        weight = self.demonstration_weight
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not 0.0 <= float(weight) < float("inf"):
+            raise ValueError("focus.demonstration_weight must be finite and nonnegative")
+        if not self.enabled:
+            if self.evaluation or self.failed_per_iteration or self.solved_per_iteration:
+                raise ValueError("focus needs truth_sequences: the cases it draws from are the ones that file names")
+            return
+        if not self.evaluation:
+            raise ValueError("focus needs evaluation: the starting adapter's greedy pass over the cases of truth_sequences")
+        if self.failed_per_iteration < 1:
+            raise ValueError("focus.failed_per_iteration must be at least 1")
 
 
 @dataclass
@@ -128,6 +203,9 @@ class MinimalRLConfig:
     #: ``psse_env.rl.sampling``: empty walks one seeded permutation; ``{"mode": "stratified", "key":
     #: "compound_class", "counts": {class: n}}`` fixes each class's share of every iteration.
     root_sampling: dict[str, Any] = field(default_factory=dict)
+    #: :class:`FocusSettings`; when it names ``truth_sequences`` it replaces ``roots_per_iteration`` and
+    #: ``root_sampling`` as the draw.
+    focus: dict[str, Any] = field(default_factory=dict)
     #: The longest training row, in tokens (prompt and completion).
     max_length: int = 32768
     #: The longest prompt the policy is given (null: the process's ``RESEARCH_MAX_INPUT_TOKENS``).  A longer prompt
@@ -214,12 +292,23 @@ class MinimalRLConfig:
         UpdateSettings(**self.update).validate()
         RootSampling.from_mapping(self.root_sampling).validate(self.roots_per_iteration)
         RowSettings.from_mapping(self.rows)
+        focus = FocusSettings.from_mapping(self.focus)
+        if focus.enabled and (self.root_sampling or self.roots_per_iteration is not None):
+            raise ValueError("focus draws an iteration's cases itself: leave root_sampling empty and roots_per_iteration null")
+        if focus.examples and RowSettings.from_mapping(self.rows).preservation == "none":
+            # An update of truth-built examples alone would have no sampled row: nothing for the KL term to hold,
+            # and nothing for the update's on-policy check to read.
+            raise ValueError("focus with truth-built examples needs rows.preservation 'one' or 'all': the sampled rows of the "
+                             "cases whose samples all scored the same")
 
     def row_settings(self, iteration: int) -> RowSettings:
         payload = {**self.rows, "seed": self.seed + int(iteration)}
         if self.update.get("clip_ratio") is not None:
             payload["require_sampling_records"] = True  # a clipped update needs every row's behaviour probabilities
         return RowSettings.from_mapping(payload)
+
+    def focus_settings(self) -> FocusSettings:
+        return FocusSettings.from_mapping(self.focus)
 
     def update_settings(self, iteration: int) -> UpdateSettings:
         return UpdateSettings(**{**self.update, "seed": self.seed + int(iteration), "temperature": float(self.temperature)})
@@ -258,8 +347,76 @@ def development_roots(config: MinimalRLConfig) -> list[dict[str, Any]]:
     return roots if config.development_limit is None else roots[: int(config.development_limit)]
 
 
+def evaluation_differences(config: MinimalRLConfig, found: Mapping[str, Any]) -> dict[str, Any]:
+    """Where an evaluation written by ``research.minimal_env.evaluate`` is not one of this run's starting adapter under
+    its model, precision, episode and prompt limits (empty: it is)."""
+    settings = found.get("settings") if isinstance(found.get("settings"), Mapping) else {}
+    limits = apply_prompt_limits(config)
+    mine = {**{key: value for key, value in environment_record(config).items() if key != "precision"},
+            "load_in_4bit": bool(config.load_in_4bit), "max_input_tokens": int(limits["max_input_tokens"]),
+            "max_new_tokens": int(limits["max_new_tokens"])}
+    theirs = {key: settings.get(key) for key in mine}
+    for key in ("max_input_tokens", "max_new_tokens"):
+        theirs[key] = int(theirs[key]) if theirs[key] is not None else None
+    different = {key: {"evaluation": theirs[key], "run": mine[key]} for key in mine if theirs[key] != mine[key]}
+    if Path(str(found.get("adapter") or "")).resolve() != Path(config.initial_adapter).resolve():
+        different["adapter"] = {"evaluation": found.get("adapter"), "run": config.initial_adapter}
+    return different
+
+
+def focus_cases(config: MinimalRLConfig, scenarios: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The training cases a focused run draws from, in the suite's order.
+
+    ``failed`` and ``solved``: the cases with a truth-built sequence that the starting adapter's greedy pass left
+    unrepaired and repaired; ``sequences``: every case's sequence.  A pass of another adapter or under other
+    settings, a case with a sequence that the pass did not run, and a sequence for a case the suite lacks are
+    refused: each would make the split something other than what the starting adapter does on these cases.
+    """
+    focus = config.focus_settings()
+    sequences = truth_sequences.load(focus.truth_sequences)
+    source = Path(str(focus.evaluation))
+    if not (source / "evaluation.json").is_file():
+        raise ValueError(f"focus.evaluation {source} holds no finished evaluation (evaluation.json)")
+    found = json.loads((source / "evaluation.json").read_text(encoding="utf-8"))
+    different = evaluation_differences(config, found)
+    if different:
+        raise ValueError(f"{source} is not an evaluation of this run's starting adapter under its settings: {different}")
+    repaired = {str(entry["scenario_id"]): bool(entry["solved"]) for entry in found.get("episodes") or []}
+    failed: list[dict[str, Any]] = []
+    solved: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for root in scenarios:
+        case = scenario_root(root)
+        if case not in sequences:
+            continue
+        seen.add(case)
+        if case not in repaired:
+            raise ValueError(f"{source} holds no episode of {case}, which {focus.truth_sequences} names")
+        (solved if repaired[case] else failed).append(dict(root))
+    absent = sorted(set(sequences) - seen)
+    if absent:
+        raise ValueError(f"{len(absent)} cases of {focus.truth_sequences} are not in the training suite (first: {absent[0]})")
+    if not failed:
+        raise ValueError(f"{source} leaves no case of {focus.truth_sequences} unrepaired: there is nothing to focus on")
+    return {"failed": failed, "solved": solved, "sequences": sequences}
+
+
+def focused_draw(config: MinimalRLConfig, cases: Mapping[str, Any], iteration: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The unrepaired and the repaired cases of one iteration: slices of two seeded permutations that cycle."""
+    focus = config.focus_settings()
+    failed = iteration_roots(cases["failed"], iteration=iteration, roots_per_iteration=int(focus.failed_per_iteration), seed=config.seed)
+    solved = (iteration_roots(cases["solved"], iteration=iteration, roots_per_iteration=int(focus.solved_per_iteration),
+                              seed=config.seed + 1)
+              if focus.solved_per_iteration and cases["solved"] else [])
+    return failed, solved
+
+
 def select_iteration_roots(config: MinimalRLConfig, scenarios: Sequence[Mapping[str, Any]], iteration: int) -> list[dict[str, Any]]:
-    """The cases one iteration samples: slices of one seeded permutation, or fixed counts per class."""
+    """The cases one iteration samples: slices of one seeded permutation, fixed counts per class, or (``focus``) the
+    cases the starting adapter leaves unrepaired with a share of those it repairs."""
+    if config.focus_settings().enabled:
+        failed, solved = focused_draw(config, focus_cases(config, scenarios), iteration)
+        return failed + solved
     sampling = RootSampling.from_mapping(config.root_sampling)
     if sampling.mode == "stratified":
         return stratified_roots(scenarios, iteration=iteration, counts=sampling.counts, key=sampling.key, seed=config.seed)
@@ -314,6 +471,46 @@ def prompt_functions(config: MinimalRLConfig, adapter: str, processor: Any) -> t
         return policy.render_prompt(observation)[0]
 
     return render, policy.prompt_token_ids
+
+
+def target_function(config: MinimalRLConfig, adapter: str, processor: Any) -> Callable[[Mapping[str, Any], Mapping[str, Any]], list[int]]:
+    """``render_target(observation, action)``: the tokens the supervised pass taught for ``action`` after ``observation``.
+
+    The action is appended to the observation's messages as the assistant turn of a supervised row
+    (``psse_env.minimal.observation.target_call``) and rendered through the chat template; the completion is what
+    that render adds to the generation prompt.  It is read back with the policy's own parser and schema check and
+    must be the action again; one that is not raises ``ValueError``.
+    """
+    from psse_env.dagger.release_factories import _ModelBundle, _validated_generated_action
+    from psse_env.minimal.policy import MinimalModelPolicy
+    from psse_env.rl.targets import TargetError, render_target_completion
+    from psse_env.sft.gates import GateError
+
+    bundle = _ModelBundle(model=None, processor=processor, model_id=config.base_model, model_revision=config.base_revision,
+                          adapter_snapshot_path=str(adapter))
+    policy = MinimalModelPolicy(bundle, architecture=config.architecture)
+
+    def render_target(observation: Mapping[str, Any], action: Mapping[str, Any]) -> list[int]:
+        wanted = {"tool": str(action["tool"]), "arguments": dict(action.get("arguments") or {})}
+        messages, tools, parameters = policy.render_messages(observation)
+        rendered = policy.render_prompt(observation)[0]
+        target = render_target_completion(processor, messages=messages, tools=tools, rendered_prompt=rendered, action=wanted)
+        try:
+            read_back = _validated_generated_action(target.text, parameters)
+        except GateError as exc:
+            raise TargetError(f"the rendered action does not parse back: {exc}") from exc
+        if read_back != wanted:
+            raise TargetError(f"the rendered action parses to {read_back}, not {wanted}")
+        return [int(value) for value in target.completion_ids]
+
+    return render_target
+
+
+def model_view(observation: Mapping[str, Any]) -> dict[str, Any]:
+    """An environment observation as the model policy records the one it decoded from (marked as a whole history)."""
+    from psse_env.minimal.policy import MinimalModelPolicy
+
+    return MinimalModelPolicy._whole(observation)
 
 
 def _release_models() -> None:
@@ -381,15 +578,102 @@ def rollout_summary(store: TrajectoryStore) -> dict[str, Any]:
     }
 
 
+class _ObservedScript:
+    """A fixed list of actions as a policy that keeps the observation each one was chosen on."""
+
+    def __init__(self, actions: Sequence[Mapping[str, Any]]) -> None:
+        self._actions = [{"tool": str(action["tool"]), "arguments": dict(action.get("arguments") or {})} for action in actions]
+        self.observations: list[dict[str, Any]] = []
+
+    def act(self, observation: Mapping[str, Any]) -> dict[str, Any]:
+        self.observations.append(model_view(observation))
+        # A sequence that ran out before the episode ended has not repaired the case: say so.
+        return self._actions.pop(0) if self._actions else {"tool": "finish", "arguments": {"outcome": "unresolved"}}
+
+
+def example_trajectory(config: MinimalRLConfig, root: Mapping[str, Any], actions: Sequence[Mapping[str, Any]],
+                       env: MinimalDiagnosisEnv, weights: RewardWeights) -> Trajectory:
+    """A truth-built sequence replayed on ``root``: its actions, the observation each was taken on, its score and reward.
+
+    The record is a trajectory with no sampled token: ``steps`` hold the observation and the action alone.
+    """
+    del config
+    script = _ObservedScript(actions)
+    episode = run_episode(env, root, script, weights=weights, keep_observations=False)
+    trace = minimal_rollout._trace(episode)
+    steps = [StepRecord(step=int(entry["step"]), model_observation=observation, prompt_tokens=0, original_prompt_tokens=0,
+                        completion_token_ids=[], text="", action=dict(entry["action"]), tool=str(entry["action"].get("tool") or ""),
+                        execution_status=entry["execution_status"], error_code=entry["error_code"])
+             for entry, observation in zip(trace, script.observations)]
+    score = episode["score"]
+    return Trajectory(
+        root=scenario_root(root), family=scenario_family(root), sample_index=EXAMPLE_SAMPLE, episode_seed=0, steps=steps,
+        reward={**episode["reward"], "calls": int(score["actions"])},
+        evaluation={"truth_audited_task_success": bool(score["success"]), "terminal_outcome": episode["outcome"], "trace": trace,
+                    "score": score, "seconds": episode["seconds"]},
+        pairing_ok=len(steps) == len(trace), pairing_note="a truth-built sequence, replayed",
+        policy_identity={"policy": "truth_built_sequence"}, lifecycle=[], contract=EXAMPLE_CONTRACT)
+
+
+def truth_built_examples(config: MinimalRLConfig, drawn: Sequence[Mapping[str, Any]], sequences: Mapping[str, Any],
+                         store: TrajectoryStore, out: Path, weights: RewardWeights) -> dict[str, Any]:
+    """For every drawn case none of whose samples is repaired: its truth-built sequence, replayed and kept under
+    ``out/demonstrations``.  A replay that does not repair the case here is not kept (the count says how many).
+
+    A case whose example is already there is not replayed again, so a closing call that runs twice writes once.
+    """
+    started = time.perf_counter()
+    kept = TrajectoryStore(out / "demonstrations")
+    counts: Counter = Counter()
+    not_repaired: list[str] = []
+    env: MinimalDiagnosisEnv | None = None
+    for root in drawn:
+        case = scenario_root(root)
+        if any(bool(trajectory.evaluation["score"]["solved"]) for trajectory in store.read_group(case)):
+            continue
+        counts["cases_without_a_repaired_sample"] += 1
+        if case not in sequences:
+            counts["without_a_sequence"] += 1
+            continue
+        if kept.has_group(case, 1):
+            counts["examples"] += 1
+            continue
+        env = env if env is not None else environment(config)
+        example = example_trajectory(config, root, sequences[case], env, weights)
+        if not example.evaluation["score"]["solved"] or not example.pairing_ok:
+            not_repaired.append(case)
+            continue
+        kept.write_group(case, [example])
+        counts["examples"] += 1
+        counts["examples_replayed_now"] += 1
+    return {**{name: int(counts[name]) for name in ("cases_without_a_repaired_sample", "examples", "examples_replayed_now",
+                                                     "without_a_sequence")},
+            "replay_did_not_repair": not_repaired, "seconds": round(time.perf_counter() - started, 1)}
+
+
 def phase_rollout(config: MinimalRLConfig, manifest: Manifest, *, progress: Callable[[Mapping[str, Any]], None] | None = None,
                   shard: tuple[int, int] | None = None) -> dict[str, Any]:
     """Sample the iteration's cases.  A shard samples its slice and writes no summary; the unsharded call finds
-    every finished group in the store, samples what is left and closes the phase."""
+    every finished group in the store, samples what is left and closes the phase.  In a focused run the closing
+    call also replays the truth-built sequence of every drawn case none of whose samples is repaired."""
     started = time.perf_counter()
     out = iteration_dir(config, manifest.iteration)
     out.mkdir(parents=True, exist_ok=True)
     sampling = RootSampling.from_mapping(config.root_sampling)
-    drawn = select_iteration_roots(config, load_suite(config.training_suite), manifest.iteration)
+    focus = config.focus_settings()
+    suite = load_suite(config.training_suite)
+    focused: dict[str, Any] | None = None
+    if focus.enabled:
+        cases = focus_cases(config, suite)
+        drawn_failed, drawn_solved = focused_draw(config, cases, manifest.iteration)
+        drawn = drawn_failed + drawn_solved
+        focused = {"available": {"left_unrepaired_by_the_starting_adapter": len(cases["failed"]),
+                                 "repaired_by_the_starting_adapter": len(cases["solved"])},
+                   "sequences": cases["sequences"], "failed": drawn_failed, "solved": drawn_solved}
+        del cases
+    else:
+        drawn = select_iteration_roots(config, suite, manifest.iteration)
+    del suite  # the drawn cases are all the phase needs of it
     if shard is None:
         (out / "roots.json").write_text(json.dumps([scenario_root(root) for root in drawn], indent=1) + "\n", encoding="utf-8")
     mine = shard_scenarios(drawn, shard)
@@ -417,8 +701,31 @@ def phase_rollout(config: MinimalRLConfig, manifest: Manifest, *, progress: Call
     if sampling.mode == "stratified":
         strata = Counter(root_stratum(root, sampling.key) for root in drawn)
         result["root_sampling"] = {"mode": sampling.mode, "key": sampling.key, "strata": dict(sorted(strata.items()))}
+    if focused is not None:
+        result["focus"] = focus_summary(store, focused["available"], focused["failed"], focused["solved"])
+        if focus.examples:
+            result["truth_built_examples"] = truth_built_examples(config, drawn, focused["sequences"], store, out, weights)
     _write_json(out / "rollout_summary.json", result)
     return result
+
+
+def focus_summary(store: TrajectoryStore, available: Mapping[str, Any], drawn_failed: Sequence[Mapping[str, Any]],
+                  drawn_solved: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """What a focused iteration's samples did on the cases the starting adapter left unrepaired and on those it repaired."""
+
+    def read(roots: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        solved = [[bool(trajectory.evaluation["score"]["solved"]) for trajectory in store.read_group(scenario_root(root))]
+                  for root in roots]
+        return {"cases": len(roots), "episodes": sum(len(group) for group in solved),
+                "episodes_repaired": sum(sum(group) for group in solved),
+                "cases_with_a_repaired_sample": sum(1 for group in solved if any(group)),
+                "cases_with_every_sample_repaired": sum(1 for group in solved if group and all(group)),
+                "cases_with_a_repaired_and_an_unrepaired_sample": sum(1 for group in solved if any(group) and not all(group)),
+                "cases_with_no_sample_repaired": sum(1 for group in solved if not any(group))}
+
+    return {"available": dict(available),
+            "left_unrepaired_by_the_starting_adapter": read(drawn_failed),
+            "repaired_by_the_starting_adapter": read(drawn_solved)}
 
 
 # ------------------------------------------------------------------ update
@@ -443,6 +750,98 @@ def score_groups(config: MinimalRLConfig, store: TrajectoryStore) -> tuple[list[
     return groups, summary
 
 
+def stored_examples(out: Path, groups: Sequence[tuple[Sequence[Trajectory], GroupAdvantages]]) -> list[tuple[Trajectory, float]]:
+    """The truth-built examples of an iteration with how far each one's reward lies above the mean of its case's samples.
+
+    Only the example of a case whose stored group holds no repaired sample: with a repaired sample the group has
+    its own contrast, and the example is left out even if one was written.
+    """
+    if not (out / "demonstrations" / "groups").is_dir():
+        return []
+    by_root = {advantages.root: (trajectories, advantages) for trajectories, advantages in groups}
+    found: list[tuple[Trajectory, float]] = []
+    for root, stored in TrajectoryStore(out / "demonstrations").iter_groups():
+        if root not in by_root or not stored:
+            continue
+        trajectories, advantages = by_root[root]
+        if any(bool(trajectory.evaluation["score"]["solved"]) for trajectory in trajectories):
+            continue
+        rewards = [float(value) for value in advantages.rewards]
+        found.append((stored[0], stored[0].total_reward - sum(rewards) / len(rewards)))
+    return found
+
+
+def example_rows(examples: Sequence[tuple[Trajectory, float]], *, weight: float, render_prompt: Callable[..., str],
+                 prompt_token_ids: Callable[..., Any], render_target: Callable[..., Sequence[int]], max_length: int,
+                 required_side_inputs: Sequence[str], settings: RowSettings) -> tuple[list[TrainingRow], dict[str, Any]]:
+    """The supervised rows of the truth-built examples: one per action the environment carried out.
+
+    A row is the action on the prompt the model would have read there, rendered as the supervised pass taught it,
+    with weight ``weight`` times the example's reward above the mean of its case's samples.  An example that is
+    not above that mean gives no row.  A prompt over the policy's input limit gives no row either (the model would
+    have been refused that prompt); an action that cannot be rendered is counted for the integrity check.
+    """
+    rows: list[TrainingRow] = []
+    report: dict[str, Any] = {"examples": len(examples), "examples_with_rows": 0, "examples_not_above_their_samples": 0,
+                              "rows": 0, "tokens": 0, "unrenderable": 0, "prompt_over_the_input_limit": 0,
+                              "prompt_truncated_rows": 0, "prompt_truncated_rows_rejected": 0, "weight": float(weight),
+                              "row_weights": None}
+    weights: list[float] = []
+    for example, gain in examples:
+        term = float(weight) * float(gain)
+        if not term > 0.0:
+            report["examples_not_above_their_samples"] += 1
+            continue
+        built: list[TrainingRow] = []
+        for step in example.steps:
+            if step.execution_status != "success":
+                continue
+            prompt_ids, original = prompt_token_ids(render_prompt(step.model_observation))
+            if int(original) != len(prompt_ids):
+                report["prompt_over_the_input_limit"] += 1
+                continue
+            try:
+                target_ids = [int(value) for value in render_target(step.model_observation, step.action)]
+            except ValueError:
+                target_ids = []
+            if not target_ids:
+                report["unrenderable"] += 1
+                continue
+            row = build_step_row(root=example.root, sample_index=example.sample_index, step=step.step, advantage=0.0,
+                                 prompt_ids=prompt_ids, completion_ids=target_ids, max_length=max_length,
+                                 required_side_inputs=required_side_inputs, lifecycle_term=term, supervised=True)
+            if row.prompt_truncated:
+                report["prompt_truncated_rows"] += 1
+                if settings.reject_truncated_prompts:
+                    report["prompt_truncated_rows_rejected"] += 1
+                    continue
+            row.trajectory_tokens = row.completion_tokens
+            built.append(row)
+        if built:
+            report["examples_with_rows"] += 1
+            weights.append(term)
+        rows.extend(built)
+    report["rows"] = len(rows)
+    report["tokens"] = sum(row.completion_tokens for row in rows)
+    if weights:
+        report["row_weights"] = {"min": min(weights), "mean": sum(weights) / len(weights), "max": max(weights)}
+    return rows, report
+
+
+def _count_example_rows(rows_report: dict[str, Any], report: Mapping[str, Any]) -> None:
+    """The examples' rows in the counts the row builder keeps and the integrity check reads."""
+    rows_report["rows"] = int(rows_report.get("rows") or 0) + int(report["rows"])
+    rows_report["completion_tokens"] = int(rows_report.get("completion_tokens") or 0) + int(report["tokens"])
+    rows_report["supervised_rows"] = int(rows_report.get("supervised_rows") or 0) + int(report["rows"])
+    rows_report["supervised_tokens"] = int(rows_report.get("supervised_tokens") or 0) + int(report["tokens"])
+    # A truth-built action that does not render as the student emits it is a stop condition, like a labelled choice.
+    rows_report["supervised_rows_unrenderable"] = int(rows_report.get("supervised_rows_unrenderable") or 0) + int(report["unrenderable"])
+    rows_report["prompt_truncated_rows"] = int(rows_report.get("prompt_truncated_rows") or 0) + int(report["prompt_truncated_rows"])
+    rows_report["prompt_truncated_rows_rejected"] = (int(rows_report.get("prompt_truncated_rows_rejected") or 0)
+                                                     + int(report["prompt_truncated_rows_rejected"]))
+    rows_report["truth_built_examples"] = dict(report)
+
+
 def phase_update(config: MinimalRLConfig, manifest: Manifest, *, progress: Callable[[Mapping[str, Any]], None] | None = None) -> dict[str, Any]:
     out = iteration_dir(config, manifest.iteration)
     marker = out / MARKER_FILE
@@ -463,9 +862,12 @@ def phase_update(config: MinimalRLConfig, manifest: Manifest, *, progress: Calla
     report["prompt_limits"] = apply_prompt_limits(config)
     informative_paired = any(
         trajectory.pairing_ok for trajectories, adv in groups if adv.informative for trajectory in trajectories)
-    if not informative_paired:
+    focus = config.focus_settings()
+    examples = stored_examples(out, groups) if focus.examples else []
+    if not informative_paired and not examples:
         report["update"] = None
-        report["note"] = "no case whose paired samples scored differently: the adapter is carried over unchanged"
+        report["note"] = ("no case whose paired samples scored differently" + (" and no truth-built example" if focus.examples else "")
+                          + ": the adapter is carried over unchanged")
         _carry_adapter_over(manifest.current_adapter, next_adapter)
         report["adapter_out"] = str(next_adapter)
         report["integrity"] = update_integrity(report)
@@ -482,14 +884,27 @@ def phase_update(config: MinimalRLConfig, manifest: Manifest, *, progress: Calla
     model, processor, side_inputs = load_trainable_model(config, start_adapter, reference_adapter=reference)
     try:
         render, prompt_ids = prompt_functions(config, manifest.current_adapter, processor)
+        row_settings = config.row_settings(manifest.iteration)
         rows, rows_report = build_rows(groups, render_prompt=render, prompt_token_ids=prompt_ids,
                                        max_length=int(config.max_length), required_side_inputs=side_inputs,
-                                       settings=config.row_settings(manifest.iteration))
+                                       settings=row_settings)
+        if examples:
+            taught, taught_report = example_rows(
+                examples, weight=float(focus.demonstration_weight), render_prompt=render, prompt_token_ids=prompt_ids,
+                render_target=target_function(config, manifest.current_adapter, processor), max_length=int(config.max_length),
+                required_side_inputs=side_inputs, settings=row_settings)
+            rows.extend(taught)
+            _count_example_rows(rows_report, taught_report)
         report["rows"] = rows_report
         report["resumed_from_checkpoint"] = str(resume_dir) if resume_dir is not None else None
         if not rows:
             report["update"] = None
             report["note"] = "no training row after the pairing and rendering checks"
+            _carry_adapter_over(manifest.current_adapter, next_adapter)
+        elif all(row.supervised for row in rows):
+            # Every sampled row was refused: the examples alone would be an update with nothing sampled in it.
+            report["update"] = None
+            report["note"] = "no sampled row after the pairing and rendering checks: the truth-built examples alone are not applied"
             _carry_adapter_over(manifest.current_adapter, next_adapter)
         else:
             optimizer = None
@@ -607,17 +1022,7 @@ def adopt_baseline(config: MinimalRLConfig, out: Path) -> dict[str, Any] | None:
     if not (source / "evaluation.json").is_file():
         return None
     found = json.loads((source / "evaluation.json").read_text(encoding="utf-8"))
-    settings = found.get("settings") if isinstance(found.get("settings"), Mapping) else {}
-    limits = apply_prompt_limits(config)
-    mine = {**{key: value for key, value in environment_record(config).items() if key != "precision"},
-            "load_in_4bit": bool(config.load_in_4bit), "max_input_tokens": int(limits["max_input_tokens"]),
-            "max_new_tokens": int(limits["max_new_tokens"])}
-    theirs = {key: settings.get(key) for key in mine}
-    for key in ("max_input_tokens", "max_new_tokens"):
-        theirs[key] = int(theirs[key]) if theirs[key] is not None else None
-    different = {key: {"evaluation": theirs[key], "run": mine[key]} for key in mine if theirs[key] != mine[key]}
-    if Path(str(found.get("adapter") or "")).resolve() != Path(config.initial_adapter).resolve():
-        different["adapter"] = {"evaluation": found.get("adapter"), "run": config.initial_adapter}
+    different = evaluation_differences(config, found)
     if different:
         raise ValueError(f"{source} is not an evaluation of this run's starting adapter under its settings: {different}")
     episodes = out / "evaluation" / "episodes"
@@ -732,7 +1137,20 @@ def check(config: MinimalRLConfig) -> dict[str, Any]:
     cases in both suites, development cases the reference does not know.
     """
     training = load_suite(config.training_suite)
-    drawn = select_iteration_roots(config, training, 0)
+    focus = config.focus_settings()
+    focused: dict[str, Any] | None = None
+    if focus.enabled:
+        cases = focus_cases(config, training)
+        drawn_failed, drawn_solved = focused_draw(config, cases, 0)
+        drawn = drawn_failed + drawn_solved
+        focused = {"cases_with_a_truth_built_sequence": len(cases["sequences"]),
+                   "left_unrepaired_by_the_starting_adapter": len(cases["failed"]),
+                   "repaired_by_the_starting_adapter": len(cases["solved"]),
+                   "drawn_for_the_first_iteration": {"left_unrepaired": len(drawn_failed), "repaired": len(drawn_solved)},
+                   "truth_built_examples": focus.examples, "demonstration_weight": float(focus.demonstration_weight),
+                   "evaluation": str(focus.evaluation), "truth_sequences": str(focus.truth_sequences)}
+    else:
+        drawn = select_iteration_roots(config, training, 0)
     development = development_roots(config) if config.development_suite else []
     adapter = Path(config.initial_adapter)
     adapter_found = (adapter / "adapter_config.json").is_file() and any(
@@ -757,6 +1175,7 @@ def check(config: MinimalRLConfig) -> dict[str, Any]:
         "initial_adapter": str(adapter), "kl_reference": config.initial_adapter if config.update_settings(0).beta_kl > 0.0 else None,
         "environment": environment_record(config), "prompt_limits": apply_prompt_limits(config),
         "run_is_at": {"iteration": manifest.iteration, "phase": manifest.phase},
+        **({"focus": focused} if focused is not None else {}),
     }
 
 

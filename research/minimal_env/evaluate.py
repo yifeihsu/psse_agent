@@ -1,7 +1,7 @@
 """A trained adapter, evaluated greedily on a suite in the minimal environment.
 
     python -m research.minimal_env.evaluate --suite SUITE.json --adapter ADAPTER_DIR --output-dir OUT \\
-        [--reference REFERENCE.json] [--shard S/N]
+        [--reference REFERENCE.json] [--shard S/N] [--cases CASES.json]
 
 The model reads the observation of ``psse_env.minimal.observation`` and answers with one
 tool call per step (``psse_env.minimal.policy``); the environment executes it; the
@@ -60,6 +60,18 @@ def case_id(root: Mapping[str, Any]) -> str:
 
 def class_of(root: Mapping[str, Any]) -> str:
     return str(((root.get("audit") or {}).get("compound") or {}).get("class") or (root.get("grouping") or {}).get("scenario_family") or "")
+
+
+def keep_cases(roots: Sequence[Mapping[str, Any]], path: Path) -> list[dict[str, Any]]:
+    """The cases of ``roots`` that the file at ``path`` names, in the suite's order; a named case the suite lacks is refused."""
+    from research.minimal_env.truth_sequences import case_ids
+
+    wanted = case_ids(path)
+    kept = [dict(root) for root in roots if case_id(root) in wanted]
+    absent = wanted - {case_id(root) for root in kept}
+    if absent:
+        raise ValueError(f"{len(absent)} cases of {path} are not in the suite (first: {sorted(absent)[0]})")
+    return kept
 
 
 def parse_shard(value: str | None) -> tuple[int, int] | None:
@@ -240,10 +252,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--reference", type=Path, default=None)
     parser.add_argument("--shard", default=None, help="S/N: evaluate every N-th case starting at S, write no summary")
     parser.add_argument("--limit", type=int, default=None, help="the first N cases only")
+    parser.add_argument("--cases", type=Path, default=None,
+                        help="evaluate these cases of the suite only: a JSON list of case ids, an object keyed by them, or a "
+                             "file of research.minimal_env.truth_sequences")
     args = parser.parse_args(argv)
 
     shard = parse_shard(args.shard)
     roots = load_suite(args.suite)
+    if args.cases is not None:
+        roots = keep_cases(roots, args.cases)
     if args.limit is not None:
         roots = roots[: int(args.limit)]
     if not roots:

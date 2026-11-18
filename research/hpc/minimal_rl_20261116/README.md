@@ -14,12 +14,17 @@ under this run's settings (compared with its recorded settings under the cell's 
 it as its baseline. Two things the smoke
 showed about the run itself are under "What the smoke showed that the run should know".
 
+**A focused run is built and not deployed (2026-11-18): "The focused run" below.** It draws from the training
+cases a truth-built sequence repairs and the supervised model does not, and teaches that sequence where no
+sample repairs. Its code is not on the cluster; the deployed source is still e82026b.
+
 ## What it runs
 
 | Job | What |
 | --- | --- |
 | `mrl-smoke` | one iteration on 6 training cases by 2 samples and 8 development cases, baseline included; 4-hour limit |
 | `mrl-run`, a chain | the run, to the iteration count named at submission; each link goes on from the run's manifest |
+| `mrl-train-pass`, `mrl-focus-smoke`, `mrl-focus` | the focused run's jobs ("The focused run") |
 
 One stage serves both (`stage_rl.sbatch`). It runs whatever phase the manifest is at, one process per phase, until
 the target is reached or the time runs out. On a card of 70 GB or more the rollout and the evaluations run as two
@@ -202,6 +207,110 @@ What it is read for:
 
 Outcome: not read yet.
 
+## The focused run (built 2026-11-18, not deployed)
+
+Asked for by the user on 2026-11-18, after the supervised model's evaluation: results are read against the 247
+development cases a truth-built sequence repairs, the model fails 49 of them, and the run should aim at such
+cases. The plain run above cannot: its draw spends most of an iteration on cases the model already repairs or
+that no sequence repairs, and on the cases the model fails its own samples seldom hold a repair to learn from (the
+smoke: five of six cases sampled one episode twice).
+
+**What it changes, against the plain run.** The start, the baseline, the reward, the learning rate, the KL
+weight, the one optimizer step and the row checks are the plain run's (`rl_focus.json` differs from
+`rl_ieee14.json` in `focus`, the draw, the samples per case, the seed and the output folder; a test holds that).
+
+1. **The draw.** Only the 2,093 training cases a truth-built sequence repairs (`train_truth_sequences.json`,
+   built from the local demonstration build by `research.minimal_env.truth_sequences`; the other 457 training
+   cases are never drawn). An iteration takes 24 of the cases the supervised model leaves unrepaired and 8 of
+   the ones it repairs. Which is which is read from the supervised model's own greedy pass over the 2,093 cases
+   (`mrl-train-pass`); the driver refuses a pass of another adapter or under other settings.
+2. **Eight samples a case** instead of four: 32 cases by 8 is the plain run's 256 sampled episodes.
+3. **A truth-built example where no sample repairs** (the user's "Yes, include them"). When none of a drawn
+   case's eight samples is repaired, the rollout's closing call replays that case's sequence in the environment
+   and keeps it under `iteration_NNN/demonstrations`, beside the groups and never in one. The update trains each
+   of its actions as a supervised row: the action, rendered as the supervised pass taught it, on the prompt the
+   model would have read at that point. A row's weight is `demonstration_weight` (1.0) times how far the
+   sequence's reward lies above the mean reward of the case's samples. A case with a repaired sample gets no
+   example: its group has its own contrast.
+
+**The third change is imitation, not RL.** Its rows have no sampling record and no advantage, and take no part in
+the KL term or the on-policy check; they are the truth-built sequence, taught on exactly the cases the model
+fails. The sampled rows of those cases stay in the update for the KL term (`rows.preservation`), and the driver
+refuses a config that would train examples with no sampled row beside them.
+
+**Mine to have chosen, yours to change** (`rl_focus.json`, and `rl_focus_config_example.json` beside the driver;
+a test holds the two equal): 24 and 8 cases, 8 samples, the weight 1.0, giving an example only when no sample
+repairs, and weighting it by its reward above the samples' mean.
+
+| Job | What |
+| --- | --- |
+| `mrl-train-pass`, 4 at once, then `mrl-train-pass-close` | the supervised model, greedy, on the 2,093 cases: each job two of eight shards, one file per case; the closing job writes `out/train_pass/evaluation.json` |
+| `mrl-focus-smoke` | one focused iteration: 6 unrepaired and 2 repaired cases by 2 samples, 8 development cases; 4-hour limit |
+| `mrl-focus`, a chain | the focused run, to the iteration count named at submission |
+
+Both focused jobs refuse to start before the training pass has written its evaluation.
+
+**Estimates (my arithmetic from measured rates).** The training pass: 2,093 episodes at the 30.5 s an episode of
+the supervised model's development evaluation (two processes on an RTX PRO 6000) is about 9 GPU-hours, a little
+over two hours of wall time if the four parts start together. A focused iteration: about the plain run's, with
+up to about 100 more update rows for the examples (24 cases by 4.1 actions a sequence; about 15 minutes at the
+smoke's 9.2 s a row).
+
+**Order of work**, each step on the user's word. The deploy refuses while a job of this cell is queued, so it
+waits for the plain run's three jobs to leave the queue.
+
+```bash
+bash research/hpc/minimal_rl_20261116/deploy_from_windows.sh "$(git rev-parse HEAD)"
+```
+
+```bash
+wsl -- ssh torch bash -s -- train-pass < research/hpc/minimal_rl_20261116/submit_cell.sh
+```
+
+```bash
+wsl -- ssh torch bash -s -- focus-smoke < research/hpc/minimal_rl_20261116/submit_cell.sh
+```
+
+```bash
+wsl -- ssh torch bash -s -- focus 3 < research/hpc/minimal_rl_20261116/submit_cell.sh
+```
+
+The `3` is an example, as for the plain run.
+
+**What the training pass is read for:** how many of the 2,093 cases the supervised model leaves unrepaired, and
+in which classes. 1,966 of them were in the supervised pass's training rows and 127 in its validation rows, so it
+may repair a larger share of them than the 80% of the development cases. If few are left, an iteration's 24 come
+round again sooner, and the run teaches the same cases more often; the pass's count says how often.
+
+**What the focused smoke has to show before a focused run:**
+
+- the dry check's `focus` block: 2,093 cases with a sequence, and the split the pass gave;
+- every replayed sequence repairs its case on the cluster (`replays that did not repair 0`): the sequences were
+  built on Windows, and a replay that does not repair there is not kept;
+- every truth-built action renders (`supervised_rows_unrenderable 0`, integrity `ok True`): the first time the
+  target renderer meets the model's own tokenizer and chat template;
+- the supervised loss is finite, and how many rows the per-row gradient cap of 1.0 clips;
+- the update's peak memory with the example rows, and one whole pass through the phases.
+
+**Checked locally.** The driver's tests (25) cover the draw, the refusals, a whole focused iteration with
+stand-ins for the model (examples kept only where no sample repairs, their rows and weights, the update's counts
+and integrity), a weight other than 1.0 scaling every example row, an action that does not render, a replay that
+does not repair, a preempted update with examples resuming to the same weights, the dry check, and the rendering
+of an action as the assistant turn of a supervised row (with a stand-in for the chat template that, like the
+12B's, adds the empty thought channel to a generation prompt only). 17 hand-made faults in the new driver code
+each fail one of them; the one that ignored the configured weight did so only once the weight test was added.
+The target renderer was also run once against a real chat template of the family (the Gemma 4 E2B tokenizer
+cached on the laptop): all six kinds of action rendered and read back as themselves, none refused. The cell's
+tests run the training-pass stage and the focused stage against stubs: a part runs its two shards (at once on a
+large card, one after the other on a smaller one), a failed shard fails its job, the closing job writes the
+evaluation and a later one finds it, and the focused jobs refuse to start without the supervised pass's receipt
+or without the training pass.
+
+**Not checked.** None of it has run on the cluster or met the model. The target renderer has not met the 12B's
+own processor: that is first exercised by the focused smoke. The replay of the 2,093 sequences on Linux is
+untested. Whether teaching the truth-built
+sequence on failed training cases repairs more of the 49 development cases is what the run is for.
+
 ## What the smoke showed that the run should know
 
 Both are from six and eight cases at a checkpoint in the middle of the pass. They are things to look at in the
@@ -256,7 +365,8 @@ is read from several iterations and from which cases moved, not from one count.
 
 ## Checked locally
 
-`python -m pytest research/hpc/minimal_rl_20261116/test_cell.py` (17 tests): every script parses and holds no
+`python -m pytest research/hpc/minimal_rl_20261116/test_cell.py` (24 tests, the focused run's among them): every
+script parses and holds no
 carriage return; scripts name only this cell's work directory and files that exist; nothing writes to the
 supervised cell; the run's config is the driver's example on the cluster's paths and the smoke differs in size and
 start alone; the episode and the limits are the ones the supervised cell evaluates under, so its evaluation can
@@ -270,7 +380,7 @@ for the baseline, the rollout and the evaluation, the update alone), a later job
 runs nothing, a higher target goes on from the manifest, an update that fails its checks stops that job and every
 later one, and the run refuses to start without the supervised pass's receipt.
 
-The driver's own tests: `python -m pytest research/minimal_env/test_rl_train.py` (14 tests).
+The driver's own tests: `python -m pytest research/minimal_env/test_rl_train.py` (25 tests).
 
 Both suites on the cluster have the checksums the RL series planned, and the local files the demonstrations were
 built from have the same ones (training `781c3d91...`, development `04e2ad09...`; read 2026-11-16). The deploy
