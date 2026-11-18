@@ -4,7 +4,8 @@ Trains an adapter on the truth-built demonstrations executed through `psse_env/m
 development cases in that environment. Background and numbers: `docs/minimal_env_20261115.md`; the environment's
 contract: `psse_env/minimal/README.md`.
 
-**State: the full run is submitted (2026-11-16 03:34 UTC, below); nothing is trained yet.** Deployed on the user's
+**State: the pass has finished (2026-11-18 07:54 UTC, step 3,706 of 3,706, adapter and receipt written); its
+evaluation on the 300 development cases is queued and not read.** Deployed on the user's
 word on 2026-11-15 (23:16 to 23:29 UTC) at commit ea5e9a2, and the smoke submitted on their word at 23:40 UTC. The
 evaluation smoke passed. The training smoke ran out of card memory at its first step; the fix was redeployed on the
 user's word on 2026-11-16 (00:51 to 00:59 UTC, torch at 9c80d9a) and the training smoke passed on its second run.
@@ -126,6 +127,25 @@ at 05:14 UTC, 49.5 hours after the start: 51 s a step over the whole pass.
 The 234 steps left and one more validation take about 2.6 hours on this card (my arithmetic): the pass would end
 near 08:00 UTC on 2026-11-18 if it is not preempted. The five training links still queued then each start and
 leave at once, and the evaluation on the 300 cases follows them.
+
+**The pass ended** (read 2026-11-18 07:58 UTC). The second link, 23308025, completed at 07:54 UTC after 6 h 4 min
+on one H200, with no further preemption: step 3,706 of 3,706, one pass over the 14,823 rows, last line
+`msf-train-full-base-complete`.
+
+- From the first step to the last: 52 h 12 min of wall time, 24 preemptions, two links.
+- The adapter is `out/pass_base/training/lora` (`adapter_model.safetensors`, 262,373,216 bytes, sha256
+  `173f99df...`); the receipt `out/pass_base/training.done` was written at 07:54:31 UTC with
+  `research_run_passed` true.
+- The adapter was loaded again on a fresh base model and its one canary row gave the expected action
+  (`correct_parameters`, line 3).
+- Final validation, step 3,706: loss 0.0445, token accuracy 0.9885. The two before it: 0.0465 (step 3,456) and
+  0.0441 (step 3,584). The lowest of the pass stays 0.036 at step 2,816; that checkpoint is on disk.
+- Training loss by block of 64 steps over the end: 0.032, 0.030, 0.034, and 0.038 over steps 3,649 to 3,706. The
+  learning rate fell linearly to zero over the pass (5e-8 at step 3,705).
+- Checkpoints left: every 128th, and 3,680, 3,696 and 3,706.
+
+The five later training links (23308026 to 23308030) and the two evaluation links were still queued at the read;
+the evaluation had not started.
 
 ## The smoke of 2026-11-15
 
@@ -288,5 +308,6 @@ real selection (14,823 and 256 rows, checksums as the selection report).
 Before the full run every stage had run with the model on the smoke's sizes only: eight training rows, 32
 validation rows, eight evaluation cases. The row gate has since passed on all 15,079 rows, and the pass has been
 preempted, requeued and resumed from its newest checkpoint 24 times (above), on A100 cards among them, and one
-link has handed over to the next at the 12-hour limit. Not exercised yet: the end of the pass (the adapter and the
-receipt), the queued links leaving at once after it, the evaluation on all 300 cases, and training on an H100.
+link has handed over to the next at the 12-hour limit, and the pass has ended with its adapter and receipt. Not
+exercised yet: the queued links leaving at once after it, the evaluation on all 300 cases, and training on an
+H100.
