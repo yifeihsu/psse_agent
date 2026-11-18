@@ -8,7 +8,9 @@ development cases. What an iteration does and why its settings are what they are
 **State: the smoke passed (`mrl-smoke` 23435096, 2026-11-17, 22 minutes on an H200, source e82026b): every phase
 ran once and every check of the update held. The run is not submitted.** The run needs the user's word, and the
 supervised pass to finish (`research/hpc/minimal_sft_20261115/README.md`), which it did on 2026-11-18 at 07:54
-UTC; its evaluation on the 300 cases is not read yet. Two things the smoke
+UTC. Its evaluation is read: 198 of 300 (rule expert 184, truth-built sequences 247). That evaluation was made
+under this run's settings (compared with its recorded settings under the cell's environment), so the run takes
+it as its baseline. Two things the smoke
 showed about the run itself are under "What the smoke showed that the run should know".
 
 ## What it runs

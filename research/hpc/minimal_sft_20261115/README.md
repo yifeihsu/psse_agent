@@ -4,8 +4,9 @@ Trains an adapter on the truth-built demonstrations executed through `psse_env/m
 development cases in that environment. Background and numbers: `docs/minimal_env_20261115.md`; the environment's
 contract: `psse_env/minimal/README.md`.
 
-**State: the pass has finished (2026-11-18 07:54 UTC, step 3,706 of 3,706, adapter and receipt written); its
-evaluation on the 300 development cases is queued and not read.** Deployed on the user's
+**State: the pass has finished (2026-11-18 07:54 UTC, step 3,706 of 3,706) and its adapter is evaluated: 198 of
+the 300 development cases solved, against 184 for the rule expert and 247 for the truth-built sequences ("The
+evaluation of 2026-11-18").** Deployed on the user's
 word on 2026-11-15 (23:16 to 23:29 UTC) at commit ea5e9a2, and the smoke submitted on their word at 23:40 UTC. The
 evaluation smoke passed. The training smoke ran out of card memory at its first step; the fix was redeployed on the
 user's word on 2026-11-16 (00:51 to 00:59 UTC, torch at 9c80d9a) and the training smoke passed on its second run.
@@ -146,6 +147,77 @@ on one H200, with no further preemption: step 3,706 of 3,706, one pass over the 
 
 The five later training links (23308026 to 23308030) and the two evaluation links were still queued at the read;
 the evaluation had not started.
+
+## The evaluation of 2026-11-18
+
+`msf-eval-dev300-base` 23308031 started 13 minutes after the pass ended and completed in 1 h 19 min on one RTX
+PRO 6000: two processes (66.8 GB together, 97% mean utilization), no preemption, no traceback. The five leftover
+training links each ran 13 to 16 seconds and left; the second evaluation link found the evaluation done and left.
+300 episodes, greedy, bf16, 16 actions, tables of two versions. No prompt was refused for length (largest 14,980
+tokens, median 9,670); 6.4 s a generated step.
+
+**The supervised model solves 198 of the 300 development cases**, the same 198 by the object-level audit and by
+the strict one.
+
+| Policy, in the minimal environment | Solved | Actions per case |
+| --- | --- | --- |
+| Rule expert, replayed | 184 strict, 187 object level | 6.53 |
+| Supervised model, one greedy pass | 198 | 4.45 |
+| Truth-built sequences | 247 | 4.24 |
+
+By the reference split (`dev300_reference.json`): 161 of the 184 cases the rule expert solves, 37 of the 63 only
+the truth-built sequence repairs, 0 of the 53 neither repairs. Against the rule expert case by case (strict
+audit): 37 gained, 23 lost. On 60 cases that differ, a split of 37 to 23 gives p = 0.09 in a two-sided sign test
+(my arithmetic), and in the earlier cells one greedy pass moved by a few cases between card types: the 14 cases
+are a lead on one pass, not yet a settled one.
+
+| Class | Cases | Model | Rule expert | Truth-built | Model only | Expert only |
+| --- | --- | --- | --- | --- | --- | --- |
+| `cb2_dangling` | 14 | 6 | 9 | 14 | 3 | 6 |
+| `cb2_mixed` | 11 | 4 | 6 | 11 | 1 | 3 |
+| `cb2_split` | 10 | 5 | 6 | 10 | 2 | 3 |
+| `control_cb` | 12 | 12 | 11 | 12 | 1 | 0 |
+| `control_meter` | 12 | 11 | 12 | 12 | 0 | 1 |
+| `control_rx` | 12 | 11 | 11 | 11 | 0 | 0 |
+| `meter_on_rx` | 18 | 13 | 4 | 16 | 9 | 0 |
+| `meter_rx2` | 35 | 15 | 16 | 20 | 1 | 2 |
+| `rx2_adjacent` | 35 | 20 | 20 | 26 | 4 | 4 |
+| `rx2_distant` | 35 | 21 | 15 | 24 | 7 | 1 |
+| `rx_cb_distant` | 35 | 26 | 25 | 30 | 1 | 0 |
+| `rx_cb_meter` | 35 | 25 | 21 | 29 | 6 | 2 |
+| `rx_cb_same_line` | 18 | 18 | 16 | 18 | 2 | 0 |
+| `rx_cb_shared_bus` | 18 | 11 | 12 | 14 | 0 | 1 |
+| All | 300 | 198 | 184 | 247 | 37 | 23 |
+
+The gains are in `meter_on_rx` (13 against the expert's 4) and `rx2_distant` (21 against 15). The three classes
+with two breaker errors are where the model is behind both references: 15 of 35, the expert 21, the truth-built
+sequences all 35.
+
+**How the episodes end.**
+
+| Declared | Solved | Not solved, estimator passing | Not solved, estimator failing |
+| --- | --- | --- | --- |
+| resolved (270) | 198 (13 of them with the estimator still failing) | 52 | 20 |
+| unresolved (27) | 0 | 0 | 27 |
+| nothing, 16 actions used (3) | 0 | 0 | 3 |
+
+**The 102 cases not solved.**
+
+- 53 are the cases neither reference repairs. The model declared 45 of them resolved (36 on a passing estimate, 9
+  on a failing one), 7 unresolved, and ran out of actions in 1.
+- 49 are cases the truth-built sequence repairs; the rule expert solves 23 of them. 20 of the 49 are in the three
+  two-breaker classes. The model declared 27 resolved (16 on a passing estimate, 11 on a failing one), 20
+  unresolved, and ran out of actions in 2. A healthy object was damaged in 21.
+- True errors repaired, by kind: meters 105 of 109, breakers 159 of 188, lines 256 of 346. What is left in the
+  unsolved cases is mostly one line (60 cases) or one breaker (20).
+
+**Refused calls: 88, in 36 episodes.** 47 parameter fits that found nothing; 11 parameter fits that failed inside
+the tool; 30 calls naming a breaker that does not exist (`CB_2R4_R5`; the breaker is `CB_2R4_2R5`). Those 30 are
+two episodes that repeated the one call 15 times and ran out of actions; a third episode ran out after 12 refused
+fits. The demonstrations hold no row that follows a refused call.
+
+**Damage.** 27 episodes end with a healthy object changed, 51 objects in all: 22 meters, 18 lines, 5 line
+statuses, 4 line ends, 2 operator models.
 
 ## The smoke of 2026-11-15
 
@@ -308,6 +380,6 @@ real selection (14,823 and 256 rows, checksums as the selection report).
 Before the full run every stage had run with the model on the smoke's sizes only: eight training rows, 32
 validation rows, eight evaluation cases. The row gate has since passed on all 15,079 rows, and the pass has been
 preempted, requeued and resumed from its newest checkpoint 24 times (above), on A100 cards among them, and one
-link has handed over to the next at the 12-hour limit, and the pass has ended with its adapter and receipt. Not
-exercised yet: the queued links leaving at once after it, the evaluation on all 300 cases, and training on an
-H100.
+link has handed over to the next at the 12-hour limit, the pass has ended with its adapter and receipt, the
+queued links left at once after it, and the evaluation ran on all 300 cases. Not exercised: training on an H100,
+and a second greedy pass of the evaluation (how far 198 moves on another card type is not measured).

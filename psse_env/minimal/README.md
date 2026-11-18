@@ -198,7 +198,8 @@ environment variables (`psse_env/dagger/preliminary_e2b_eval.py`):
 
 ## Not built yet
 
-- A trained supervised model: the pass was submitted on 2026-11-16 (`research/hpc/minimal_sft_20261115/README.md`).
+- The supervised model exists since 2026-11-18: 198 of the 300 development cases, rule expert 184, truth-built
+  sequences 247 (`research/hpc/minimal_sft_20261115/README.md`). What follows is still not built.
 - An RL run. The driver (`research/minimal_env/rl_train.py`) and its cluster cell
   (`research/hpc/minimal_rl_20261116/`) have met the model in a smoke alone (2026-11-17: one small iteration,
   every check of the update held).

@@ -84,10 +84,19 @@ These are the comparisons the review asks to keep. Two rows are still empty.
 | The same episodes, translated and replayed | minimal | 184 | 187 | 6.53 |
 | Truth-built sequences, recorded | old, five rules lifted | 247 | | 11.12 |
 | Truth-built sequences | minimal | 247 | 247 | 4.24 |
-| Supervised model on the new rows | minimal | not trained | | |
+| Supervised model on the new rows, one greedy pass (2026-11-18) | minimal | 198 | 198 | 4.45 |
 | RL from that model | minimal | not run | | |
 
 For orientation, in the old environment with the rules lifted: S0 186, the clone 163.
+
+**The supervised model (2026-11-18): 198.** It solves 161 of the 184 cases the rule expert solves, 37 of the 63
+only the truth-built sequence repairs, and none of the 53 neither repairs: 37 gained and 23 lost against the
+expert, in 4.45 actions a case against the expert's 6.53. The lead of 14 is from one greedy pass (two-sided sign
+test on the 60 differing cases, p = 0.09, my arithmetic). It is behind both references in the three two-breaker
+classes (15 of 35; the expert 21, the truth-built sequences 35). Of the 102 cases it does not solve, 53 are
+the ones neither reference repairs and 49 are ones the truth-built sequence repairs. It declared 72 unsolved
+cases resolved, 52 of them on a passing estimate. The classes, the endings and the refused calls are in
+`research/hpc/minimal_sft_20261115/README.md`.
 
 Reading the rows:
 
@@ -206,8 +215,9 @@ Checksums: training view `582349e2...`, validation view `e55689a6...` (`selectio
 
 ## 9. Not done
 
-- **No trained model yet.** The supervised pass was submitted on 2026-11-16 after its row gate passed on all 15,079
-  rows; its state is in `research/hpc/minimal_sft_20261115/README.md`.
+- **The supervised model is trained and evaluated once** (2026-11-18, section 4). Not done with it: a second
+  greedy pass on another card type, and rows that follow a refused call (two episodes repeated one refused call
+  15 times).
 - **No RL run.** The driver exists (section 12) and has run with stand-ins for the model only; its cluster cell
   is deployed (`research/hpc/minimal_rl_20261116/`, source e82026b) and its smoke passed on 2026-11-17 (every
   phase once, every check of the update held); the run is not submitted.
