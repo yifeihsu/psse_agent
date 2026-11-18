@@ -123,6 +123,59 @@ The clone's baseline is read against, on the same 300 cases:
 Read it by the split of the open-rules clone's result: the cases the rule expert solves (184) and the cases only the
 truth-built sequences solve (63), with wrong corrections kept.
 
+## Result (chain of 2026-11-16, read 2026-11-18)
+
+The clone solves 119 of the 300 development cases, below every reference.
+
+**The pass.** 2,766 of 2,766 steps, all in the first link (job 23289367, 30 preemptions), ended 2026-11-17 14:40Z;
+the five later links exited at once. Training loss 0.023 over the last 64 steps. Validation loss on the 192 rows:
+0.079 at step 128, 0.038 at 512, 0.031 at 2,048, 0.026 at 2,304, 0.029 at 2,766, with token accuracy 0.984 to 0.989
+between steps 512 and 2,048. The open-rules clone ended at 0.019 on its rows (training 0.016). The reload canary was parseable
+but not the row's action: the row compares lines 5 and 2, the adapter corrects line 5.
+
+**The baseline** (job 23289373, two preemptions, 6.8 GPU-hours on RTX PRO 6000 cards, two workers, no prompt refused
+for length, 51.3 million input tokens):
+
+| On the 300 development cases | S0, rules in place | S0, rules lifted | Open-rules clone | This clone |
+| --- | --- | --- | --- | --- |
+| Solved | 182 | 186 | 163 | 119 |
+| Of the 184 the rule expert solves | 180 | 180 | 143 | 101 |
+| Of the 63 only the truth-built sequences solve | 2 | 6 | 20 | 18 |
+| Of the 153 in classes with a breaker error | 107 | 109 | 92 | 50 |
+| Of the 147 in classes without one | 75 | 77 | 71 | 69 |
+| Solved with no refused action, loop or false commit | 168 | 178 | 155 | 54 |
+| Wrong corrections kept | 46 | 62 | 110 | 453 |
+| Episodes with a healthy component corrupted | 47 | 52 | 90 | 145 |
+| Refused actions | 121 | 84 | 94 | 843 |
+| Episodes cut as a loop | 23 | 14 | 4 | 83 |
+| Episodes at the cap of 40 actions | | 2 | 7 | 70 |
+| Mean actions | 12.8 | 12.8 | 13.5 | 21.1 |
+
+Against the open-rules clone 72 cases are lost and 28 gained. The rule expert solves 106 of the 153 breaker cases
+and 78 of the 147 others.
+
+What the episodes show, this clone against the open-rules clone:
+
+- Refused actions, 843 in 189 episodes: a parameter correction that fails 294; `finalize_diagnosis` 234, every call
+  refused, a tool no row has as its target; a topology correction 165 (130 on a breaker the evidence does not
+  support, 34 that change nothing); a hand-off 118; output that is no tool call 30.
+- Candidates the verifier rejects: 448, kept 279. Kept on a true target 50 of 72, on a wrong one 229 of 376. The
+  open-rules clone kept 20 of 74 (8 of 19 true, 12 of 55 wrong).
+- Candidates the verifier accepts: kept 403 of 403 true and 224 of 245 wrong (519 of 527 and 98 of 127).
+- First correction of an episode: a line 189, a breaker 85, a meter 25 (140, 129, 31).
+- Line comparison: 11 calls (109). Corrections: line 901 (405), breaker 380 (178), meter 298 (220).
+- A correction after the estimator passes: 14 actions in 11 episodes (58 in 55). The six gains looked at are all
+  cases where the open-rules clone made that correction on a healthy meter.
+- In the 132 episodes that use no lifted rule the clone solves 87; the open-rules clone solves 77 of the same cases.
+  A correction outside the context's list is used in 137 episodes (23 solved), a kept rejected candidate in 126
+  (17), a breaker on a closed route in 76 (2).
+
+Not examined yet: the states at which the clone chose its components. That needs a local replay of the 300
+episodes, as was done for the open-rules clone.
+
+The 300 episode records, the read script and its output are in the worktree's `output/` (not in git):
+`output/compound_rl_20261106/complete_evidence_clone_baseline_20261117/`.
+
 ## Cards
 
 Both GPU stages name no partition, may be preempted and are requeued. The pass asks for
@@ -132,7 +185,8 @@ The B200 is in the pass's list since 2026-11-17 (the user's word). Checked on to
 list for this account (`sbatch --test-only`, which submits nothing), the jobs' torch build (2.10.0, CUDA 12.8) covers
 the card, and the pass runs at 95% of a card with the model loaded and 27 GB, above the B200's low-utilization lines
 (cancel below 70%, warning below 80%). The baseline is left off the B200: with two workers its smoke ran at 80% with
-the model loaded.
+the model loaded. The clone's full baseline then ran at 95% on an RTX PRO 6000 (410 samples), so the smoke's figure
+was the low one; the baseline's list was not changed.
 
 The chain submitted on 2026-11-16 keeps the four-type list: a queued job's request cannot be changed on torch. The
 wider list holds from the next deploy and submission. It adds cards to choose from. The seat is still a preemptible
