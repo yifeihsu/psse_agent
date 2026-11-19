@@ -13,10 +13,12 @@ ran once and every check of the update held. The run took the supervised model's
 was made under this run's settings (compared with its recorded settings under the cell's environment). Two
 things the smoke showed about the run itself are under "What the smoke showed that the run should know".
 
-**The focused run is deployed (2026-11-19, source 2d4919d) and nothing of it is submitted: "The focused run"
-below.** It draws from the training cases a truth-built sequence repairs and the supervised model does not, and
-teaches that sequence where no sample repairs. The deploy waited for the plain run's links to leave the queue,
-on the user's word of 2026-11-18 ("Yes, after it ends").
+**The focused run is deployed (2026-11-19, source 2d4919d), and its training pass was submitted on 2026-11-19 at
+19:17 UTC on the user's word (`mrl-train-pass` 23746858, 23746859, 23746861, 23746863; `mrl-train-pass-close`
+23746865). The focused smoke and the focused run are not submitted: "The focused run" below.** It draws from the
+training cases a truth-built sequence repairs and the supervised model does not, and teaches that sequence where
+no sample repairs. The deploy waited for the plain run's links to leave the queue, on the user's word of
+2026-11-18 ("Yes, after it ends").
 
 ## What it runs
 
@@ -339,6 +341,13 @@ place. It submitted nothing. Read on the cluster afterwards (08:13 UTC):
   training pass's folder and their own output folders, which their jobs write;
 - no job of this user queued.
 
+**The training pass, submitted 2026-11-19 at 19:17:48 UTC** on the user's word ("Yes, submit it"), with the
+command above and its default of four parts: `mrl-train-pass` 23746858, 23746859, 23746861 and 23746863, each
+two of the eight shards, and `mrl-train-pass-close` 23746865, which waits on all four (`afterany`) and writes
+`out/train_pass/evaluation.json`. Read on the cluster just before (19:17 UTC): the source at 2d4919d with no
+tracked change, no job of this user queued, the supervised pass's receipt and adapter in place, the file of
+sequences listing its 2,093 cases, and no `out/train_pass` yet. All five jobs were pending when submitted.
+
 **What the training pass is read for:** how many of the 2,093 cases the supervised model leaves unrepaired, and
 in which classes. 1,966 of them were in the supervised pass's training rows and 127 in its validation rows, so it
 may repair a larger share of them than the 80% of the development cases. If few are left, an iteration's 24 come
@@ -368,7 +377,8 @@ large card, one after the other on a smaller one), a failed shard fails its job,
 evaluation and a later one finds it, and the focused jobs refuse to start without the supervised pass's receipt
 or without the training pass.
 
-**Not checked.** It is deployed, but none of it has run on the cluster or met the model. The target renderer has not met the 12B's
+**Not checked.** It is deployed and its training pass is submitted, but none of it has finished on the cluster
+or met the model. The target renderer has not met the 12B's
 own processor: that is first exercised by the focused smoke. The replay of the 2,093 sequences on Linux is
 untested. Whether teaching the truth-built
 sequence on failed training cases repairs more of the 49 development cases is what the run is for.
