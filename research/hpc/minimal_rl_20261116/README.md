@@ -5,18 +5,18 @@ one on-policy update per iteration with a KL penalty to the supervised model, an
 development cases. What an iteration does and why its settings are what they are:
 `docs/minimal_env_20261115.md`, section 12.
 
-**State: the smoke passed (`mrl-smoke` 23435096, 2026-11-17, 22 minutes on an H200, source e82026b): every phase
-ran once and every check of the update held. The run is submitted to one iteration (`mrl-run` 23608433,
-23608439, 23608441; 2026-11-18 at 17:12 UTC), not read yet.** The run needed the user's word, and the
-supervised pass to finish (`research/hpc/minimal_sft_20261115/README.md`), which it did on 2026-11-18 at 07:54
-UTC. Its evaluation is read: 198 of 300 (rule expert 184, truth-built sequences 247). That evaluation was made
-under this run's settings (compared with its recorded settings under the cell's environment), so the run takes
-it as its baseline. Two things the smoke
-showed about the run itself are under "What the smoke showed that the run should know".
+**State: the run's first iteration finished on 2026-11-18 at 22:16 UTC (`mrl-run` 23608433, source e82026b)
+and is read: 202 of the 247 cases a truth-built sequence repairs, against the supervised model's 198 (rule
+expert 184), 5 cases gained and 1 lost, a split that one iteration cannot tell from chance ("The run, submitted
+2026-11-18").** The smoke passed before it (`mrl-smoke` 23435096, 2026-11-17, 22 minutes on an H200): every phase
+ran once and every check of the update held. The run took the supervised model's evaluation as its baseline: it
+was made under this run's settings (compared with its recorded settings under the cell's environment). Two
+things the smoke showed about the run itself are under "What the smoke showed that the run should know".
 
-**A focused run is built and not deployed (2026-11-18): "The focused run" below.** It draws from the training
-cases a truth-built sequence repairs and the supervised model does not, and teaches that sequence where no
-sample repairs. Its code is not on the cluster; the deployed source is still e82026b.
+**The focused run is deployed (2026-11-19, source 2d4919d) and nothing of it is submitted: "The focused run"
+below.** It draws from the training cases a truth-built sequence repairs and the supervised model does not, and
+teaches that sequence where no sample repairs. The deploy waited for the plain run's links to leave the queue,
+on the user's word of 2026-11-18 ("Yes, after it ends").
 
 ## What it runs
 
@@ -129,8 +129,8 @@ Read on the cluster afterwards (15:50 UTC):
 - the driver imports under the job's Python (3.12.13) with the cell's environment;
 - `status_cell.sh` ran there for the first time, on the empty cell: source, no receipt, no job.
 
-Commits on the branch after e82026b are records alone (the READMEs and the notes): the deployed source is not
-behind in code.
+Commits on the branch after e82026b up to 0960e22 were records alone (the READMEs and the notes). 2d4919d added
+the focused run in code; it was deployed on 2026-11-19 ("The focused run").
 
 ## The smoke of 2026-11-17
 
@@ -205,9 +205,58 @@ What it is read for:
 - the update at full size: rows, seconds a row, memory, the gap between the sampler and the first pass;
 - the evaluation after the first update: cases gained and lost against the 198.
 
-Outcome: not read yet.
+**Outcome, read 2026-11-19 at 08:06 UTC: the iteration solves 202 of the 247 cases a truth-built sequence
+repairs, against the supervised model's 198** (rule expert 184): 5 cases gained, 1 lost.
 
-## The focused run (built 2026-11-18, not deployed)
+| | the supervised model | after one update |
+| --- | --- | --- |
+| solved, of the 247 | 198 | 202 |
+| of the 184 the rule expert's episodes solve | 161 | 165 |
+| of the 63 only the truth-built sequence repairs | 37 | 37 |
+| declared resolved on an unsolved case | 72 | 73 |
+| declared unresolved | 27 | 24 |
+| out of actions (16) | 3 | 1 |
+| refused calls (unknown object, tool failure) | 88 (30, 58) | 67 (15, 52) |
+| damaged healthy objects (in episodes) | 51 (27) | 39 (26) |
+| mean actions | 4.45 | 4.36 |
+
+- **The jobs.** The first link started on gr103 (RTX PRO 6000) at 17:13 UTC, was preempted at 21:05 in the
+  evaluation, came back on gr104 (RTX PRO 6000) at 21:13 and went on from the manifest with the evaluation; it
+  ended at 22:16. The two later links found the target reached and ran nothing (22:39 and 22:43, about a minute
+  each). The baseline took 10 s (taken from the supervised cell's evaluation, the first time that path ran on the
+  cluster), the rollout 1 h 12 min, the update 2.28 h, the evaluation about 1 h 20 min of card time across the
+  preemption. Peak card memory 66,770 MiB, mean utilization 93%.
+- **The rollout.** 64 cases by 4 samples; 167 of the 256 episodes solved. 36 cases had every sample repaired;
+  9 had a repaired and an unrepaired sample, the only cases an update can learn a repair from; 19 had no repaired
+  sample, 11 of them cases a truth-built sequence repairs and 8 cases none repairs. 30 cases sampled more than
+  one distinct episode and 23 differed in reward. 55.6% of the 1,195 steps had every token above 0.99. Refused
+  calls: 69 unknown objects, 61 tool failures.
+- **The update.** One step on 629 rows (535 sampled rows of the 23 cases with a reward spread, 94 preservation
+  rows) in 2.28 h. Policy loss -0.0085, KL 0 (the reference is the start), gradient norm 1.14. The first pass
+  against the sampler: mean |log ratio| 0.0014, 0.019 on the 704 uncertain tokens, largest 1.29; no row without a
+  record; integrity ok.
+- **The cases that moved.** Gained: two two-breaker cases (`r0_37d75bce0a1b` cb2_split, `r0_566f34094a8a`
+  cb2_mixed) where the supervised model sent one topology correction fifteen times, refused each time as an
+  unknown object, until its actions ran out (these two cases held all 30 of its unknown-object refusals); the
+  updated model's two corrections are accepted, with an inspection between them, and it finishes in five
+  actions. And three cases where the supervised model's corrections damaged healthy objects: `r0_a04d7fb1791e`
+  (rx2_adjacent; a measurement correction, nine objects damaged, declared unresolved), `r0_c35a1e4bfa40`
+  (rx2_distant; a measurement correction after the two parameter corrections, two damaged, one error left) and
+  `r0_c2b40c5df2b0` (control_meter; both errors repaired, one healthy object damaged on the way, seven actions);
+  the updated model makes the two corrections each case needs and nothing else. Lost: `r0_ee184f6d4f8c`
+  (rx2_distant, one of the cases only the truth-built sequence repairs), where the updated model declares
+  resolved after the first of its two parameter corrections. Of the other 294 cases, 274 repeated their episodes
+  exactly and 20 changed their actions but not their outcome.
+- **The loop moved, it did not go.** All 15 unknown-object refusals after the update are one case,
+  `r0_ab11377c26a5` (unsolved before and after), where one refused topology correction is now sent fifteen times
+  until the actions run out; before the update that case had two refused parameter corrections.
+- **How far this goes.** Both evaluations were greedy, in bf16, on RTX PRO 6000 cards, so the card-type variation
+  of the earlier cells does not enter: the six cases moved because the adapter moved. But five gained against one
+  lost is a split two equally likely directions give about one time in five (two-sided sign test on the six
+  cases, p = 0.22), and two of the five are one loop in two cases. One iteration does not show that the update
+  helps.
+
+## The focused run (built 2026-11-18, deployed 2026-11-19)
 
 Asked for by the user on 2026-11-18, after the supervised model's evaluation: results are read against the 247
 development cases a truth-built sequence repairs, the model fails 49 of them, and the run should aim at such
@@ -277,6 +326,19 @@ wsl -- ssh torch bash -s -- focus 3 < research/hpc/minimal_rl_20261116/submit_ce
 
 The `3` is an example, as for the plain run.
 
+**The deploy of 2026-11-19.** At 08:08 UTC on the user's word, once the plain run's links had left the queue,
+the cell's source moved from e82026b to 2d4919d with a bundle of 95,891 bytes. The deploy found both suites with
+the planned checksums, and the reference, the job's Python, the supervised pass's receipt and its evaluation in
+place. It submitted nothing. Read on the cluster afterwards (08:13 UTC):
+
+- the source is at 2d4919d with no tracked change; the supervised cell's source is still at 9c80d9a;
+- the five scripts parse under the cluster's bash and hold no carriage return;
+- the file of sequences has the local file's checksum (`499d3a8b...`) and loads under the job's Python (3.12.13)
+  with its 2,093 cases; the driver and the evaluation import there with the cell's environment;
+- both focused configs load with the focus and its examples on, and everything they name is in place but the
+  training pass's folder and their own output folders, which their jobs write;
+- no job of this user queued.
+
 **What the training pass is read for:** how many of the 2,093 cases the supervised model leaves unrepaired, and
 in which classes. 1,966 of them were in the supervised pass's training rows and 127 in its validation rows, so it
 may repair a larger share of them than the 80% of the development cases. If few are left, an iteration's 24 come
@@ -306,7 +368,7 @@ large card, one after the other on a smaller one), a failed shard fails its job,
 evaluation and a later one finds it, and the focused jobs refuse to start without the supervised pass's receipt
 or without the training pass.
 
-**Not checked.** None of it has run on the cluster or met the model. The target renderer has not met the 12B's
+**Not checked.** It is deployed, but none of it has run on the cluster or met the model. The target renderer has not met the 12B's
 own processor: that is first exercised by the focused smoke. The replay of the 2,093 sequences on Linux is
 untested. Whether teaching the truth-built
 sequence on failed training cases repairs more of the 49 development cases is what the run is for.
@@ -388,12 +450,13 @@ checks them again.
 
 ## Not checked
 
-The smoke has run every phase once with the model, on one H200. Not exercised on the cluster:
+The smoke ran every phase once on an H200. The run's first iteration ran them at full size on RTX PRO 6000
+cards: the `run` branch of `submit_cell.sh`, the supervised cell's evaluation taken as the baseline, a 629-row
+update, two later links that found the target reached, and a preemption in the evaluation that the requeued job
+went on from. Not exercised on the cluster:
 
-- the `run` branch of `submit_cell.sh`, a chain's hand-over from link to link, and a preempted job's resume (the
-  resume has run locally only: the stage's shell against the stub, the update's checkpoint in the driver's tests);
-- taking the supervised cell's evaluation as the baseline (`baseline_from`): the smoke ran its own;
+- a preemption in the rollout or the update (the update's checkpoint resume has run in the driver's tests only);
 - a second iteration: the KL term away from zero, the optimizer carried from one update to the next, the draw of
   new cases;
-- an update of more than 27 rows, a prompt over 12,700 tokens, and any card but an H200 (two processes need
-  63.4 GB together; the stage starts two from 70 GB of card memory).
+- a prompt over 12,700 tokens (the run's longest prompt is not read);
+- anything of the focused run ("The focused run", its "Not checked").

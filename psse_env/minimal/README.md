@@ -200,9 +200,9 @@ environment variables (`psse_env/dagger/preliminary_e2b_eval.py`):
 
 - The supervised model exists since 2026-11-18: 198 of the 300 development cases, rule expert 184, truth-built
   sequences 247 (`research/hpc/minimal_sft_20261115/README.md`). What follows is still not built.
-- An RL run. The driver (`research/minimal_env/rl_train.py`) and its cluster cell
-  (`research/hpc/minimal_rl_20261116/`) have met the model in a smoke alone (2026-11-17: one small iteration,
-  every check of the update held).
+- An RL run past its first iteration. The driver (`research/minimal_env/rl_train.py`) and its cluster cell
+  (`research/hpc/minimal_rl_20261116/`) ran a smoke (2026-11-17) and one iteration of the run (2026-11-18): 202
+  of the 247 cases a truth-built sequence repairs, against the supervised model's 198.
 - A paging mode for large systems. On IEEE 118 one version's meter table alone is about 1,100 rows.
-- Recovery paths from a model's own failed episodes. (The focused RL run, built 2026-11-18, teaches a failed case's
+- Recovery paths from a model's own failed episodes. (The focused RL run, built 2026-11-18 and deployed 2026-11-19, teaches a failed case's
   truth-built sequence from its first state: `research/hpc/minimal_rl_20261116/README.md`.)

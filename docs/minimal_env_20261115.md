@@ -48,8 +48,8 @@ pipeline beside the old one, not as more switches on it.
 | Oracle sequences never mixed into RL groups | `rollout.rollout_group` holds only sampled episodes | built |
 | KL reference = the new supervised model | the update's reference is the run's starting adapter; an RL run started from the new adapter has it | by construction, no run yet |
 | The expert under the new interface, by mechanical translation | `expert.py`, replayed on the 300 development cases | built, run |
-| Train the new supervised model | `research/minimal_env/train_sft.py`, rows and selection | data built; the pass was submitted on 2026-11-16 and is **not finished** (the cell's README) |
-| RL from that checkpoint | `research/minimal_env/rl_train.py`: rollout, update, evaluation (section 12) | driver built and tested with stand-ins for the model; **no run** |
+| Train the new supervised model | `research/minimal_env/train_sft.py`, rows and selection | trained (the pass finished 2026-11-18) and evaluated once: 198 of 247 (the cell's README) |
+| RL from that checkpoint | `research/minimal_env/rl_train.py`: rollout, update, evaluation (section 12) | one iteration run (2026-11-18): 202 of 247; the focused variant deployed 2026-11-19, not run |
 
 ## 3. Checks
 
@@ -76,7 +76,8 @@ pipeline beside the old one, not as more switches on it.
 
 ## 4. Reference numbers on the 300 development cases
 
-These are the comparisons the review asks to keep. Two rows are still empty.
+These are the comparisons the review asks to keep. Every row has its number now; the rows recorded in the old
+environment have no object-level audit.
 
 | Policy | Environment | Solved (strict audit) | Solved (object level) | Actions per case |
 | --- | --- | --- | --- | --- |
@@ -85,7 +86,7 @@ These are the comparisons the review asks to keep. Two rows are still empty.
 | Truth-built sequences, recorded | old, five rules lifted | 247 | | 11.12 |
 | Truth-built sequences | minimal | 247 | 247 | 4.24 |
 | Supervised model on the new rows, one greedy pass (2026-11-18) | minimal | 198 | 198 | 4.45 |
-| RL from that model | minimal | not run | | |
+| RL from that model, one iteration (2026-11-18) | minimal | 202 | 202 | 4.36 |
 
 For orientation, in the old environment with the rules lifted: S0 186, the clone 163.
 
@@ -100,6 +101,13 @@ classes (15 of 35; the expert 21, the truth-built sequences 35). Of the 102 case
 the ones neither reference repairs and 49 are ones the truth-built sequence repairs. It declared 72 unsolved
 cases resolved, 52 of them on a passing estimate. The classes, the endings and the refused calls are in
 `research/hpc/minimal_sft_20261115/README.md`.
+
+**One RL iteration from it (2026-11-18): 202 of 247.** 5 cases gained and 1 lost against the supervised model,
+both passes greedy in bf16 on RTX PRO 6000 cards. Two of the gains are two-breaker cases where the supervised
+model sent one refused topology correction fifteen times; the updated model does that in another case instead.
+Five against one is a split two equally likely directions give about one time in five (two-sided sign test,
+p = 0.22): one iteration does not show that the update helps. `research/hpc/minimal_rl_20261116/README.md` has the
+rollout, the update and each case that moved.
 
 Reading the rows:
 
@@ -221,10 +229,10 @@ Checksums: training view `582349e2...`, validation view `e55689a6...` (`selectio
 - **The supervised model is trained and evaluated once** (2026-11-18, section 4). Not done with it: a second
   greedy pass on another card type, and rows that follow a refused call (two episodes repeated one refused call
   15 times).
-- **No RL run.** The driver exists (section 12) and has run with stand-ins for the model only; its cluster cell
-  is deployed (`research/hpc/minimal_rl_20261116/`, source e82026b) and its smoke passed on 2026-11-17 (every
-  phase once, every check of the update held); the run was submitted to one iteration on 2026-11-18 and is not
-  read.
+- **One RL iteration** (section 12): its cluster cell (`research/hpc/minimal_rl_20261116/`) ran the smoke on
+  2026-11-17 and one iteration of the run on 2026-11-18, 202 of 247 against the supervised model's 198 (section
+  4). Not done: a second iteration, and any of the focused run (deployed 2026-11-19 at 2d4919d, nothing
+  submitted).
 - **IEEE 118** is not handled: no breaker model there (the line-status form of `correct_topology` exists and is
   untested on that system), and a version's meter table is about 1,100 rows.
 - **The waveform families** (HIF, unbalance, harmonics) are outside this environment.
@@ -350,12 +358,12 @@ the same episode twice and none had a repaired and an unrepaired sample; and an 
 has both in full.
 
 **The cluster cell** is `research/hpc/minimal_rl_20261116/` (deployed 2026-11-16 at e82026b; the smoke passed 2026-11-17
-in 22 minutes; the run submitted to one iteration on 2026-11-18, not read): one stage that runs the phase the manifest is at, two processes per large card for the rollout and the evaluations, a smoke of
+in 22 minutes; the run's first iteration finished 2026-11-18, 202 of 247): one stage that runs the phase the manifest is at, two processes per large card for the rollout and the evaluations, a smoke of
 one small iteration from a checkpoint of the running supervised pass, and a chain for the run. The run starts from
 the supervised pass's adapter and takes that cell's evaluation of it as its baseline (`baseline_from`), so the
 supervised model has one number. Its README has the order of work and what the smoke has to show.
 
-**The focused run (built 2026-11-18, not deployed).** After the supervised model's evaluation the user set the
+**The focused run (built 2026-11-18, deployed 2026-11-19 at 2d4919d, nothing submitted).** After the supervised model's evaluation the user set the
 basis to the 247 cases a truth-built sequence repairs and asked for a run aimed at the solvable cases the model
 fails. `focus` in the driver's config does three things: it draws an iteration from the 2,093 training cases
 with a truth-built sequence, 24 the supervised model leaves unrepaired and 8 it repairs (its greedy pass over
