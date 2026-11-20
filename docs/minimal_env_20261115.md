@@ -382,3 +382,22 @@ it has met the model. The cell's README has the jobs, the order of work and what
 **Not built.** Recovery rows from the model's own failed episodes, which the rollouts will hold: truth-built
 continuations from the state a failed episode reached. The focused run's examples start from the case's first
 state.
+
+## 13. The stopping-state diagnostic (built and part 1 run 2026-11-20)
+
+Asked after the training pass whether the focused RL can close the gap or the method needs work first; the user
+said "Yes, build it".  `research/minimal_env/stopping_states.py` replays the supervised model's stored greedy
+episodes (all 2,393 reproduce), labels every state with what the truth says is still wrong, and from the state
+where each unrepaired episode stops, and from its first wrong turn, searches the truth-built way on;
+`research/minimal_env/evidence_probe.py` asks whether the evidence there says the case is unrepaired and which
+object is wrong; `research/minimal_env/score_actions.py` (cell `research/hpc/minimal_diag_20261120/`, not yet
+deployed) reads the model's own probability of the step on.  The cell's README has the tables.
+
+- Of the 49 unrepaired development cases, 45 stop with a true error never corrected (29 of the 60 errors left are
+  breakers), 3 with every error corrected and one fit outside tolerance, 1 with damage alone; every one has a
+  truth-built way on (24 straight from the stop, 25 after an undo).  Training: 465, 23 and 14 of 502; 2 without.
+- The evidence says the stop is unrepaired in 43 of 49 and places the object left first in 37 of 48, but for a
+  breaker only on the current version's breaker table, one `inspect` away: with only what was shown, 2 of 23.
+- After its first breaker correction in a two-breaker case the model inspects again in 140 of 289 training
+  episodes (132 repaired) and not in 149 (5 repaired).  The truth-built sequences inspect there in all 300
+  two-breaker cases and in none of the 891 others: that inspection is a decision the truth makes for the student.
