@@ -19,7 +19,8 @@ things the smoke showed about the run itself are under "What the smoke showed th
 truth-built sequence repairs unrepaired (24.0%, against 19.8% of the development cases). The focused smoke
 passed on 2026-11-20 (`mrl-focus-smoke` 23799236, submitted 03:35 UTC on the user's word, completed 05:01 UTC
 after one preemption, 39 minutes of card time on two H200s): every item on its list held, 6 of 6 replayed
-sequences repaired their cases and 25 of 25 example actions rendered. The focused run is not submitted: "The
+sequences repaired their cases and 25 of 25 example actions rendered. The focused run was submitted on
+2026-11-20 at 06:24 UTC on the user's word, to three iterations (`mrl-focus`, five links from 23814465): "The
 focused run" below.** It draws from the
 training cases a truth-built sequence repairs and the supervised model does not, and teaches that sequence where
 no sample repairs. The deploy waited for the plain run's links to leave the queue, on the user's word of
@@ -461,6 +462,24 @@ about 100 example rows, about 1,250 rows, 4.5 hours at 13.0 s a row (3.4 at the 
 about 7 to 7.5 hours an iteration on RTX PRO 6000 cards, against the 14 hours `submit_cell.sh` counts per
 iteration when it sets the links (`focus 3`: 5 links of 12 hours, each leaving at once when the target is
 reached).
+
+**The focused run, submitted 2026-11-20 at 06:24:05 UTC** on the user's word ("Yes, focus 3"), with
+`submit_cell.sh focus 3` from the source at 2d4919d: three iterations, five links, `mrl-focus` 23814465,
+23814468, 23814470, 23814471 and 23814472, each after the one before it (`afterany`). Read on the cluster just
+before (06:23 UTC): the source at 2d4919d with no tracked change; `rl_focus.json`, `stage_rl.sbatch`,
+`cell.env`, `submit_cell.sh` and the file of sequences with the local files' checksums (`rl_focus.json`
+`17037a4f...`); no job of this user queued; everything the config names in place (the supervised pass's adapter
+and receipt, both suites, the reference, the supervised cell's evaluation as the baseline, the training pass's
+evaluation); no `out/focus` yet. All five links were pending when submitted.
+
+What it is read for, per iteration (`status_cell.sh` prints each):
+
+- the evaluation on the 300 development cases: solved of the 247 (the supervised model 198, the plain run's
+  iteration 202), the cases gained and lost against the 198, and which;
+- the rollout: of the 24 unrepaired cases, how many have a repaired sample among their eight (they teach by
+  contrast) and how many get an example instead;
+- the update: its rows (about 1,250 by the arithmetic above), seconds a row, memory and integrity; from the second
+  iteration the KL term away from zero and the optimizer carried, neither run on the cluster before.
 
 **What the training pass is read for:** how many of the 2,093 cases the supervised model leaves unrepaired, and
 in which classes. 1,966 of them were in the supervised pass's training rows and 127 in its validation rows, so it
