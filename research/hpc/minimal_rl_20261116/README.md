@@ -13,9 +13,11 @@ ran once and every check of the update held. The run took the supervised model's
 was made under this run's settings (compared with its recorded settings under the cell's environment). Two
 things the smoke showed about the run itself are under "What the smoke showed that the run should know".
 
-**The focused run is deployed (2026-11-19, source 2d4919d), and its training pass was submitted on 2026-11-19 at
-19:17 UTC on the user's word (`mrl-train-pass` 23746858, 23746859, 23746861, 23746863; `mrl-train-pass-close`
-23746865). The focused smoke and the focused run are not submitted: "The focused run" below.** It draws from the
+**The focused run is deployed (2026-11-19, source 2d4919d), and its training pass ran on 2026-11-19 (submitted
+19:17 UTC on the user's word, evaluation written 22:10 UTC; `mrl-train-pass` 23746858, 23746859, 23746861,
+23746863; `mrl-train-pass-close` 23746865): the supervised model leaves 502 of the 2,093 training cases a
+truth-built sequence repairs unrepaired (24.0%, against 19.8% of the development cases). The focused smoke and
+the focused run are not submitted: "The focused run" below.** It draws from the
 training cases a truth-built sequence repairs and the supervised model does not, and teaches that sequence where
 no sample repairs. The deploy waited for the plain run's links to leave the queue, on the user's word of
 2026-11-18 ("Yes, after it ends").
@@ -348,6 +350,42 @@ two of the eight shards, and `mrl-train-pass-close` 23746865, which waits on all
 tracked change, no job of this user queued, the supervised pass's receipt and adapter in place, the file of
 sequences listing its 2,093 cases, and no `out/train_pass` yet. All five jobs were pending when submitted.
 
+**The training pass, finished 2026-11-19 at 22:10:53 UTC, read 2026-11-20.** Every part was preempted and
+requeued at least once (23746858 and 23746859 twice; their last instances ran on H200s, every other instance on
+RTX PRO 6000s), and every one ended COMPLETED with no error in any shard's log. The closing job found all 2,093
+episodes and wrote `out/train_pass/evaluation.json`: the supervised pass's adapter, greedy, bf16, 16 actions,
+two table versions, input limit 32,768 tokens, output limit 256. About 9.1 GPU-hours, 2 h 50 min from the first
+start to the evaluation.
+
+- The supervised model repairs 1,591 of the 2,093 cases (76.0%) and leaves 502 (24.0%); of the development
+  cases a truth-built sequence repairs it leaves 49 of 247 (19.8%). Of the 1,966 cases whose rows it trained on
+  it leaves 469 (23.9%), of the 127 whose rows were held out 33 (26.0%): having trained on a case's sequence
+  has not made the case repaired.
+- Left unrepaired by class (of the class's cases): cb2_dangling 67 of 120, cb2_mixed 50 of 90, cb2_split 46 of
+  90, control_cb 2 of 100, control_meter 11 of 100, control_rx 3 of 93, meter_on_rx 20 of 130, meter_rx2 70 of
+  201, rx2_adjacent 35 of 177, rx2_distant 43 of 201, rx_cb_distant 62 of 273, rx_cb_meter 60 of 254,
+  rx_cb_same_line 0 of 150, rx_cb_shared_bus 33 of 114. The two-breaker classes hold 163 of the 502.
+- How the 502 end:
+
+| Ending | Cases |
+| --- | --- |
+| declared unresolved, the final estimate fails | 217 |
+| declared resolved, the final estimate fails | 93 |
+| the budget ran out, the final estimate fails | 18 |
+| declared resolved, the final estimate passes, a healthy object damaged | 55 |
+| declared resolved, the final estimate passes, nothing damaged, an error left | 119 |
+
+- 435 of the 502 repaired part of the case first. 251 of them had a refused call, against 28 of the 1,591
+  repaired cases. The 643 refused calls: `correct_parameters` / `tool_failure` 413, `correct_topology` /
+  `unknown_object` 216, `correct_topology` / `no_change` 13, `correct_topology` / `tool_failure` 1; 20 episodes
+  with five or more hold 272 of them. (On the development cases: 58 and 30 of the first two, 88 in 300 cases.)
+- Declared against the outcome over all 2,093: resolved 1,857 (1,590 of them repaired, 267 not), unresolved 218
+  (217 not repaired), nothing declared 18; a healthy object damaged in 160 episodes.
+
+What this means for the focused run: its draw has 502 unrepaired and 1,591 repaired cases, so at 24 unrepaired
+cases an iteration each one comes round about once every 21 iterations. In 328 of the 502 the final estimate
+fails, so the numbers the model reads show the case is not done; in the other 174 they pass.
+
 **What the training pass is read for:** how many of the 2,093 cases the supervised model leaves unrepaired, and
 in which classes. 1,966 of them were in the supervised pass's training rows and 127 in its validation rows, so it
 may repair a larger share of them than the 80% of the development cases. If few are left, an iteration's 24 come
@@ -377,8 +415,8 @@ large card, one after the other on a smaller one), a failed shard fails its job,
 evaluation and a later one finds it, and the focused jobs refuse to start without the supervised pass's receipt
 or without the training pass.
 
-**Not checked.** It is deployed and its training pass is submitted, but none of it has finished on the cluster
-or met the model. The target renderer has not met the 12B's
+**Not checked.** Its training pass has run (above); the focused jobs have not run on the cluster or met the
+model. The target renderer has not met the 12B's
 own processor: that is first exercised by the focused smoke. The replay of the 2,093 sequences on Linux is
 untested. Whether teaching the truth-built
 sequence on failed training cases repairs more of the 49 development cases is what the run is for.
