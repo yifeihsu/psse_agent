@@ -391,8 +391,9 @@ said "Yes, build it".  `research/minimal_env/stopping_states.py` replays the sup
 episodes (all 2,393 reproduce), labels every state with what the truth says is still wrong, and from the state
 where each unrepaired episode stops, and from its first wrong turn, searches the truth-built way on;
 `research/minimal_env/evidence_probe.py` asks whether the evidence there says the case is unrepaired and which
-object is wrong; `research/minimal_env/score_actions.py` (cell `research/hpc/minimal_diag_20261120/`, not yet
-deployed) reads the model's own probability of the step on.  The cell's README has the tables.
+object is wrong; `research/minimal_env/score_actions.py` (cell `research/hpc/minimal_diag_20261120/`, deployed at
+96dbf99 and its job `mdg-score` 23861813 submitted 2026-11-20 18:24Z on the user's "Deploy and submit") reads the
+model's own probability of the step on.  The cell's README has the tables.
 
 - Of the 49 unrepaired development cases, 45 stop with a true error never corrected (29 of the 60 errors left are
   breakers), 3 with every error corrected and one fit outside tolerance, 1 with damage alone; every one has a
@@ -402,3 +403,12 @@ deployed) reads the model's own probability of the step on.  The cell's README h
 - After its first breaker correction in a two-breaker case the model inspects again in 140 of 289 training
   episodes (132 repaired) and not in 149 (5 repaired).  The truth-built sequences inspect there in all 300
   two-breaker cases and in none of the 891 others: that inspection is a decision the truth makes for the student.
+- The failure patterns (cell README, "The failure patterns"), development / training of 49 / 502: a two-breaker
+  case with the second breaker never corrected 17 / 144; a breaker never corrected and none corrected 7 / 90
+  (mostly the one-breaker mixed classes; 2 / 13 of them the model's misspelling `CB_2R4_R5` of `CB_2R4_2R5`); a
+  healthy breaker corrected instead 2 / 14; a healthy line fitted instead of the faulted one 9 / 56; a faulted line
+  never fitted 10 / 159 (66 of the training ones after fitting the other faulted line); a line fit outside
+  tolerance 2 / 17; a meter left 1 / 8; a healthy correction kept 1 / 14.  The focused run's rollouts reach a
+  repair in 9 of 18 groups of the first, 8 of 15 of the faulted-line-never-fitted ones, 3 of 6 of the wrong-line
+  ones and 2 of 7 of the breaker-never-corrected ones; the fit-outside-tolerance cases read as repaired on the
+  evidence (4 of 17 flagged) and are a limit of the fitting tool, not of the policy.

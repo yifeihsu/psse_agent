@@ -43,7 +43,9 @@ update uses.  Nothing is generated and nothing is trained.
 
 ## State
 
-Built 2026-11-20. Part 1 done on Windows the same day (below). Part 2 not yet deployed; nothing submitted.  The
+Built 2026-11-20. Part 1 done on Windows the same day (below).  Part 2 deployed at 96dbf99 on the user's "Deploy
+and submit" (2026-11-20; source cloned from the RL cell's, both input files uploaded with checksums verified: 785
+states, 2,564 actions); job `mdg-score` 23861813 submitted 18:24:50Z, running on gr105 a few minutes later.  The
 scoring inputs are in `output/minimal_env_20261115/stopping_states_20261120/`: 74 development states (49 stopping
 states, 25 first wrong turns) with 240 actions, and 711 training states (502 and 209) with 2,324 actions.
 
@@ -100,3 +102,60 @@ where the truth knows a breaker correction follows, so the demonstrations make t
 object is wrong, but for a breaker only on the current version's breaker table, one `inspect` away, which the model
 does not ask for.  Part 2 measures how much probability the model gives the step on, at the stop and at the first
 wrong turn.
+
+## The failure patterns, 2026-11-20
+
+Asked by the user: "Apart from cases involving multiple breaker errors, are there any other identifiable error
+patterns? Can RL learn to correct them?"  Each unrepaired solvable episode gets one pattern, from the truth's
+corrections and the episode's accepted calls, first match wins (breaker before line before meter).  "Evidence"
+is the state probe and the candidate probe at the stop, with the breaker table computed for the current version
+(the "inspect" reading).  "Rollouts" are the focused run's groups (8 samples at T = 1, iterations 0 and 1, 48
+failed training cases drawn); a group "reaches a repair" when one of its samples repairs the case.
+
+| Pattern | Development (49) | Training (502) | Ending, training: resolved / unresolved / out of actions | Evidence at the stop, training: flagged; the error left placed first (only the shown table) | Way on, training: direct / after an undo | Rollouts: groups reaching a repair; samples repaired |
+| --- | --- | --- | --- | --- | --- | --- |
+| A. Two-breaker case, one breaker corrected, the second never | 17 | 144 | 38 / 104 / 2 | 143 of 144; 135 of 144 (1) | 113 / 31 | 9 of 18; 25 of 144 |
+| B. A breaker never corrected, no breaker corrected | 7 | 90 | 40 / 36 / 14 | 90; 87 of 90 (17) | 64 / 26 | 2 of 7; 3 of 56 |
+| C. A healthy breaker corrected instead | 2 | 14 | 2 / 11 / 1 | 14; 10 of 14 (4) | 3 / 11 | 1 of 1; 2 of 8 |
+| D. A healthy line fitted instead of the faulted line | 9 | 56 | 42 / 14 / 0 | 41; 26 of 56 (26), top 3: 40 | 8 / 48 | 3 of 6; 8 of 48 |
+| E. A faulted line never fitted, no healthy line fitted | 10 | 159 | 110 / 48 / 1 | 118; 106 of 159 (103), top 3: 130 | 110 / 49 | 8 of 15; 21 of 120 |
+| F. Every error corrected, a line fit outside tolerance | 2 | 17 | 15 / 2 / 0 | 4; 1 of 17 (1) | 5 / 12 | none drawn |
+| G. A meter error left | 1 | 8 | 6 / 2 / 0 | 6; 6 of 8 | 6 / 2 | 0 of 1; 0 of 8 |
+| I. No error left, a healthy correction kept | 1 | 14 | 14 / 0 / 0 | 10; (nothing left to place) | 0 / 14 | none drawn |
+
+Classes: A is cb2_dangling, cb2_mixed and cb2_split; B is mostly the one-breaker mixed classes (training:
+rx_cb_distant 31, rx_cb_meter 30, rx_cb_shared_bus 16, cb2 11, control_cb 2); D and E are the two-line classes
+(meter_rx2, rx2_distant, rx2_adjacent) and the mixed classes.  The estimate passes at the stop in 23 of A, 28 of
+B, 21 of D, 82 of E and 10 of F (training).
+
+What the calls show (training; development in brackets):
+
+* **A.** After the first breaker correction the model turns to a line fit, which the tool refuses (a healthy line,
+  `parameter_correction_failure`), in 117 of 144 (10 of 17); after the first refusal it finishes in 72 (6) and
+  repeats the refused fit in 35 (3); it inspects the breakers in 1 (none).
+* **B.** 13 of the 90 (2 of 7), and 2 cases of A, are one name: the model writes `CB_2R4_R5` for `CB_2R4_2R5` and
+  repeats the refused call (`unknown_object`; 214 refused calls in the unrepaired training episodes, 30 in
+  development) until the actions run out or it turns elsewhere.  The supervised model repairs 10 of the 30 training
+  cases whose truth corrects that breaker (2 of 5 in development), against 998 of the 1,461 case-and-breaker pairs
+  of every other breaker (120 of 168).  Over all 90, the breaker left is first on the current version's computed
+  table in 87, and with only what was shown in 17.
+* **E.** 66 fit one faulted line and stop with the second never fitted (the line counterpart of A); 58 never fit a
+  faulted line; 35 tried the faulted line, the tool refused the fit, and did not get it in later (development: 2, 4
+  and 4).  From the stop one fit repairs 101 of the 159; for the 35 refused, the way on starts with an undo in 27 (4
+  of 4), so an earlier correction stands in the way, and a refit of that line comes first in only 3.
+* **D.** The probe places the faulted line first in 26 of 56 at the stop, so the lines are not told apart in about
+  half; the way on needs an undo in 48 of 56, and the model undid in 25 but did not find the line.
+* **F.** Every error corrected, the estimate passes in 10 of 17 and the probe flags 4 of 17: the evidence reads
+  repaired.  The way on is mostly an undo and the fits in another order (the order-dependence of
+  r0_220e9e133e72, above).
+
+**Reading (mine).**  A and B share a cause: the breaker left shows on the current version's breaker table, which
+the model does not fetch, and a refused line fit, a visible cue, is answered by stopping.  E is mostly an early
+stop (124 of 159 never try the line left, 66 of them after fitting the other faulted line) with the cue present at
+the stop in about three quarters.  These are learnable from what the model sees, and the rollouts reach a repair in
+about half of their groups (A 9 of 18, E 8 of 15), the contrast RL needs; the first update moved the greedy result
+by one case, so the rate is the question.  D and the refused part of E need an undo of the model's own wrong
+correction and a switch on evidence that is ambiguous in about half: learnable only in part.  F is not visible in
+the evidence at the stop, so no policy can learn it from there; it is a limit of the fitting tool's order
+dependence.  The misspelled breaker is a copy defect of one name.  Part 2 reads, per pattern, the probability the
+supervised model gives the truth-built step.
