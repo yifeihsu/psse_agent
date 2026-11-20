@@ -368,7 +368,8 @@ supervised model has one number. Its README has the order of work and what the s
 supervised model leaves 502 of the 2,093 solvable training cases unrepaired, 24.0% against 19.8% of the
 development cases; the focused smoke passed on 2026-11-20: 6 of 6 replayed sequences repaired their cases, 25 of
 25 example actions rendered, the update's integrity held; the focused run submitted on 2026-11-20 at 06:24 UTC,
-to three iterations).** After the supervised model's evaluation the user set the
+to three iterations; its first iteration 199 of the 247, gained 5 and lost 4, a repaired sample in 11 of its 24
+failed cases).** After the supervised model's evaluation the user set the
 basis to the 247 cases a truth-built sequence repairs and asked for a run aimed at the solvable cases the model
 fails. `focus` in the driver's config does three things: it draws an iteration from the 2,093 training cases
 with a truth-built sequence, 24 the supervised model leaves unrepaired and 8 it repairs (its greedy pass over
