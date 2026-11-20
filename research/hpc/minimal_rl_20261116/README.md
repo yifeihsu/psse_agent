@@ -16,8 +16,9 @@ things the smoke showed about the run itself are under "What the smoke showed th
 **The focused run is deployed (2026-11-19, source 2d4919d), and its training pass ran on 2026-11-19 (submitted
 19:17 UTC on the user's word, evaluation written 22:10 UTC; `mrl-train-pass` 23746858, 23746859, 23746861,
 23746863; `mrl-train-pass-close` 23746865): the supervised model leaves 502 of the 2,093 training cases a
-truth-built sequence repairs unrepaired (24.0%, against 19.8% of the development cases). The focused smoke and
-the focused run are not submitted: "The focused run" below.** It draws from the
+truth-built sequence repairs unrepaired (24.0%, against 19.8% of the development cases). The focused smoke was
+submitted on 2026-11-20 at 03:35 UTC on the user's word (`mrl-focus-smoke` 23799236); the focused run is not
+submitted: "The focused run" below.** It draws from the
 training cases a truth-built sequence repairs and the supervised model does not, and teaches that sequence where
 no sample repairs. The deploy waited for the plain run's links to leave the queue, on the user's word of
 2026-11-18 ("Yes, after it ends").
@@ -385,6 +386,12 @@ start to the evaluation.
 What this means for the focused run: its draw has 502 unrepaired and 1,591 repaired cases, so at 24 unrepaired
 cases an iteration each one comes round about once every 21 iterations. In 328 of the 502 the final estimate
 fails, so the numbers the model reads show the case is not done; in the other 174 they pass.
+
+**The focused smoke, submitted 2026-11-20 at 03:35:42 UTC** on the user's word ("Yes, smoke"):
+`mrl-focus-smoke` 23799236, 4-hour limit, one iteration of `rl_focus_smoke.json` (6 unrepaired and 2 repaired
+training cases by 2 samples, 8 development cases, the baseline included). Read on the cluster just before
+(03:35 UTC): the source at 2d4919d with no tracked change, no job queued, the training pass's evaluation and the
+supervised pass's receipt in place, and no `out/focus_smoke` yet.
 
 **What the training pass is read for:** how many of the 2,093 cases the supervised model leaves unrepaired, and
 in which classes. 1,966 of them were in the supervised pass's training rows and 127 in its validation rows, so it

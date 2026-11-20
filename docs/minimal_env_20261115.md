@@ -49,7 +49,7 @@ pipeline beside the old one, not as more switches on it.
 | KL reference = the new supervised model | the update's reference is the run's starting adapter; an RL run started from the new adapter has it | by construction, no run yet |
 | The expert under the new interface, by mechanical translation | `expert.py`, replayed on the 300 development cases | built, run |
 | Train the new supervised model | `research/minimal_env/train_sft.py`, rows and selection | trained (the pass finished 2026-11-18) and evaluated once: 198 of 247 (the cell's README) |
-| RL from that checkpoint | `research/minimal_env/rl_train.py`: rollout, update, evaluation (section 12) | one iteration run (2026-11-18): 202 of 247; the focused variant deployed 2026-11-19; its training pass: the supervised model leaves 502 of 2,093 solvable training cases |
+| RL from that checkpoint | `research/minimal_env/rl_train.py`: rollout, update, evaluation (section 12) | one iteration run (2026-11-18): 202 of 247; the focused variant deployed 2026-11-19; its training pass: the supervised model leaves 502 of 2,093 solvable training cases; its smoke submitted 2026-11-20 |
 
 ## 3. Checks
 
@@ -232,8 +232,8 @@ Checksums: training view `582349e2...`, validation view `e55689a6...` (`selectio
 - **One RL iteration** (section 12): its cluster cell (`research/hpc/minimal_rl_20261116/`) ran the smoke on
   2026-11-17 and one iteration of the run on 2026-11-18, 202 of 247 against the supervised model's 198 (section
   4). Not done: a second iteration, and the focused run itself (deployed 2026-11-19 at 2d4919d; its training
-  pass ran the same day and leaves 502 of the 2,093 solvable training cases unrepaired; the focused smoke and run
-  not submitted).
+  pass ran the same day and leaves 502 of the 2,093 solvable training cases unrepaired; the focused smoke
+  submitted 2026-11-20, the focused run not submitted).
 - **IEEE 118** is not handled: no breaker model there (the line-status form of `correct_topology` exists and is
   untested on that system), and a version's meter table is about 1,100 rows.
 - **The waveform families** (HIF, unbalance, harmonics) are outside this environment.
@@ -366,7 +366,7 @@ supervised model has one number. Its README has the order of work and what the s
 
 **The focused run (built 2026-11-18, deployed 2026-11-19 at 2d4919d; its training pass ran 2026-11-19: the
 supervised model leaves 502 of the 2,093 solvable training cases unrepaired, 24.0% against 19.8% of the
-development cases; the focused smoke and run not submitted).** After the supervised model's evaluation the user set the
+development cases; the focused smoke submitted 2026-11-20, the focused run not).** After the supervised model's evaluation the user set the
 basis to the 247 cases a truth-built sequence repairs and asked for a run aimed at the solvable cases the model
 fails. `focus` in the driver's config does three things: it draws an iteration from the 2,093 training cases
 with a truth-built sequence, 24 the supervised model leaves unrepaired and 8 it repairs (its greedy pass over
