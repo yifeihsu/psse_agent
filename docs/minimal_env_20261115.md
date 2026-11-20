@@ -384,7 +384,7 @@ it has met the model. The cell's README has the jobs, the order of work and what
 continuations from the state a failed episode reached. The focused run's examples start from the case's first
 state.
 
-## 13. The stopping-state diagnostic (built and part 1 run 2026-11-20)
+## 13. The stopping-state diagnostic (built, part 1 and part 2 run 2026-11-20)
 
 Asked after the training pass whether the focused RL can close the gap or the method needs work first; the user
 said "Yes, build it".  `research/minimal_env/stopping_states.py` replays the supervised model's stored greedy
@@ -392,8 +392,9 @@ episodes (all 2,393 reproduce), labels every state with what the truth says is s
 where each unrepaired episode stops, and from its first wrong turn, searches the truth-built way on;
 `research/minimal_env/evidence_probe.py` asks whether the evidence there says the case is unrepaired and which
 object is wrong; `research/minimal_env/score_actions.py` (cell `research/hpc/minimal_diag_20261120/`, deployed at
-96dbf99 and its job `mdg-score` 23861813 submitted 2026-11-20 18:24Z on the user's "Deploy and submit") reads the
-model's own probability of the step on.  The cell's README has the tables.
+96dbf99 and its job `mdg-score` 23861813 submitted 2026-11-20 18:24Z on the user's "Deploy and submit"; it
+completed in 2 h 15 min, all 785 states scored) reads the model's own probability of the step on.  The cell's
+README has the tables.
 
 - Of the 49 unrepaired development cases, 45 stop with a true error never corrected (29 of the 60 errors left are
   breakers), 3 with every error corrected and one fit outside tolerance, 1 with damage alone; every one has a
@@ -412,3 +413,15 @@ model's own probability of the step on.  The cell's README has the tables.
   repair in 9 of 18 groups of the first, 8 of 15 of the faulted-line-never-fitted ones, 3 of 6 of the wrong-line
   ones and 2 of 7 of the breaker-never-corrected ones; the fit-outside-tolerance cases read as repaired on the
   evidence (4 of 17 flagged) and are a limit of the fitting tool, not of the policy.
+- The scores (cell README, "Part 2"), at T = 1.  At the stop the model gives its own `finish` a median 0.89 in
+  training (development 0.90) and the step on a median 0.00089 (0.00031); one of 8 samples would step on at about
+  61 of the 502 training stops (7.2 of 49), and the median lead of the own action is 7.0 nats (8.2).  At the first
+  wrong turn, where it comes earlier (209 / 25 states), the step on is closer: median 0.031 (0.075), one of 8 at 75
+  of 209 (11 of 25), lead 3.2 nats (2.4).
+- By pattern (training): the second breaker left and the faulted line never fitted cost the tool choice, not the
+  object (5.3 and 4.2 nats against 0.0 and 0.4): one of 8 samples steps on at 29 of 144 and 24 of 159 stops, lead
+  5.4 and 5.3 nats.  The breaker never corrected (none corrected) is out of reach: the `inspect` of the breakers at a
+  median 0.0003, lead 8.2 nats, about 3 of 90 stops.  The wrong line is out of reach at the stop (an `undo` at 6e-9)
+  but near at its first wrong turn: the faulted line at a median 0.10, one of 8 at 30 of 56, lead 1.9 nats, the cost
+  the object.  The fit outside tolerance: lead 25.7 nats at the stop.  The misspelled `CB_2R4_2R5`: in all 17
+  scored calls the `2` after `R4_` costs 6.0 to 11.3 nats and the rest of the name at most 0.2 (one at 1.8).

@@ -45,9 +45,12 @@ update uses.  Nothing is generated and nothing is trained.
 
 Built 2026-11-20. Part 1 done on Windows the same day (below).  Part 2 deployed at 96dbf99 on the user's "Deploy
 and submit" (2026-11-20; source cloned from the RL cell's, both input files uploaded with checksums verified: 785
-states, 2,564 actions); job `mdg-score` 23861813 submitted 18:24:50Z, running on gr105 a few minutes later.  The
+states, 2,564 actions); job `mdg-score` 23861813 submitted 18:24:50Z, COMPLETED on gr105 in 2 h 15 min (summary
+written 20:45:59Z; 785 of 785 states, no prompt cut, no unrenderable action, no traceback); read below, "Part 2".  The
 scoring inputs are in `output/minimal_env_20261115/stopping_states_20261120/`: 74 development states (49 stopping
-states, 25 first wrong turns) with 240 actions, and 711 training states (502 and 209) with 2,324 actions.
+states, 25 first wrong turns) with 240 actions, and 711 training states (502 and 209) with 2,324 actions.  The
+scores (one file per state, copied from `out/scores/states`), the breakdown by pattern and the analysis scripts are
+in `part2/` there (local, not committed).
 
 ## Part 1, 2026-11-20
 
@@ -159,3 +162,80 @@ correction and a switch on evidence that is ambiguous in about half: learnable o
 the evidence at the stop, so no policy can learn it from there; it is a limit of the fitting tool's order
 dependence.  The misspelled breaker is a copy defect of one name.  Part 2 reads, per pattern, the probability the
 supervised model gives the truth-built step.
+
+## Part 2, the scores, 2026-11-20
+
+The job scored every state: the supervised model's probability, at the sampling temperature (T = 1, bf16), of its
+own action there, of each first step of the truth-built way on, and (at the stop) of the other `finish`.  Per state:
+
+* **P(own)**: the model's own action (at the stop its `finish`, or the refused call it ran out of actions on; at the
+  first wrong turn the wrong call).
+* **P(on)**: the steps toward the repair together: the first actions of the truth-built orders, both forms of an
+  `undo` where one comes first, and the `inspect` of the breakers where the current version does not show them (the
+  demonstrations take that step).
+* **1 of 8**: the expected number of states where at least one of 8 samples takes such a step, the sum of
+  1 - (1 - P(on))^8: how often a group of the focused run has a sample on the way there.
+* **Lead**: ln P(own) - ln P(best step on), in nats: how far an update must move before greedy decoding takes the
+  step.  **Tool / object**: the best step's cost split into the tool name's tokens and the arguments' tokens.
+
+| | Development, stop (49) | Development, first wrong turn (25) | Training, stop (502) | Training, first wrong turn (209) |
+| --- | --- | --- | --- | --- |
+| P(own), median | 0.90 | 0.78 | 0.89 | 0.78 |
+| P(on), median | 0.00031 | 0.075 | 0.00089 | 0.031 |
+| P(on) at least 0.1 / 0.01 / 0.001 | 5 / 12 / 18 | 12 / 17 / 23 | 45 / 134 / 245 | 66 / 130 / 174 |
+| 1 of 8; 1 of 32 (expected states) | 7.2; 10.9 | 11.1; 16.6 | 60.8; 112.3 | 75.2; 115.9 |
+| Lead, median; states within 3 nats | 8.2; 10 | 2.4; 16 | 7.0; 72 | 3.2; 97 |
+| A step on ahead of the own action | 0 | 2 | 2 | 8 |
+
+The first wrong turn is scored only where it comes before the stop (25 of the 49, 209 of the 502); elsewhere the
+stop is the first wrong turn.  Two training states have no step on (no repairing order there).
+
+By pattern, training (development in brackets):
+
+| Pattern | Stop: states; P(own); P(on) median | Stop: 1 of 8; lead (nats) | Stop: tool / object (nats), tool the larger cost in | First wrong turn: states; P(on) median; 1 of 8; lead | First wrong turn: tool / object |
+| --- | --- | --- | --- | --- | --- |
+| A. second breaker never corrected | 144 (17); 0.81 (0.80); 0.0041 (0.00033) | 29.3 (3.4); 5.4 (8.0) | 5.3 / 0.0, 139 of 144 | 37 (8); 0.0073 (0.067); 8.2 (3.1); 4.4 (2.2) | 5.3 / 0.0 |
+| B. breaker never corrected, none corrected | 90 (7); 0.90 (0.85); 0.00030 (0.00031) | 2.8 (0.0); 8.2 (8.2) | 7.9 / 0.0, 64 of 90 | 34 (1); 0.00043 (0.0097); 3.1 (0.1); 7.4 (4.9) | 8.0 / 0.0 |
+| C. healthy breaker instead | 14 (2); 0.81 (0.73); 0.00083 (0.0011) | 1.1 (0.0); 6.6 (16.3) | 6.7 / 0.0 | 14 (2); 0.12 (0.10); 8.3 (1.1); 2.4 (2.3) | 0.0 / 2.6 |
+| D. healthy line fitted instead | 56 (9); 0.94 (0.95); 6e-9 (8e-9) | 2.6 (0.2); 18.7 (18.5) | 7.3 / 9.2 | 56 (9); 0.10 (0.12); 30.0 (4.6); 1.9 (2.0) | 0.0 / 1.9 |
+| E. faulted line never fitted | 159 (10); 0.91 (0.88); 0.0045 (0.070) | 24.4 (3.5); 5.3 (2.6) | 4.2 / 0.4, 126 of 158 | 46 (3); 0.049 (0.0011); 17.2 (0.8); 2.8 (6.8) | 2.4 / 0.1 |
+| F. fit outside tolerance | 17 (2); 1.00 (1.00); 6e-12 (1e-11) | 0.0 (0.0); 25.7 (26.2) | 7.6 / 18.1 | 5 (1); 0.12 (0.29); 1.9 (0.9); 2.9 (0.9) | 2.3 / 0.8 |
+| G. meter left | 8 (1); 0.99 (0.92); 0.00057 (0.00031) | 0.5 (0.0); 8.2 (8.0) | 5.8 / 2.9 | 3 (0); 4e-5; 0.1; 10.2 | 3.3 / 4.4 |
+| I. healthy correction kept | 14 (1); 1.00 (1.00); 5e-12 (6e-13) | 0.1 (0.0); 25.9 (28.2) | 10.1 / 13.9 | 14 (1); 0.063 (0.074); 6.4 (0.5); 2.6 (2.5) | 1.8 / 0.1 |
+
+What it shows:
+
+* **The stop is a confident decision.**  The model gives its own `finish` a median 0.89 (development 0.90) and the
+  step on a median 0.00089 (0.00031); no step on leads the model's own action at any development stop, and 2 of the
+  502 training stops.  One of 8 samples would step on at about 61 of the 502 training stops (7.2 of 49).
+* **A and E: keep going or finish.**  The cost is the tool, not the object: once the model names `inspect` (A) or
+  `correct_parameters` (E) the breaker or line follows at no cost (0.0 and 0.4 nats).  One of 8 samples steps on at
+  about 29 of 144 A stops and 24 of 159 E stops; the median lead is 5.4 and 5.3 nats.  At A stops the `inspect` of
+  the breakers carries the step (P median 0.0075 over 112; correcting the breaker blind 0.0001).
+* **B: out of reach.**  The step is the `inspect` of the breakers at P median 0.0003 and a lead of 8.2 nats (7.4 at
+  its first wrong turn): about 3 of 90 stops and 3 of 34 first wrong turns would see a sample step on.  **The
+  misspelled breaker:** in all 17 scored calls that correct `CB_2R4_2R5` (13 B stops and 1 A stop in training, 2 B
+  stops in development, 1 A first wrong turn) the `2` after `R4_` costs 6.0 to 11.3 nats (a probability of 0.0025
+  down to 0.00001 per call), while every other token of the name costs at most 0.2 nats (one at 1.8): the model
+  knows the breaker and drops one character, and sampling will not write the name.
+* **D, C and I: reachable at the first wrong turn, not at the stop.**  At the stop the step is an `undo` of the
+  model's own correction, at P median 6e-9 for D (lead 18.7 nats).  At the turn where the model fitted the healthy
+  line the faulted line is a close second: P median 0.10, one of 8 samples picks it at 30 of 56 (4.6 of 9), lead 1.9
+  nats, and the cost there is the object (which line, 1.9 nats), not the tool.  C and I: 8.3 and 6.4 of 14.
+* **F: no.**  At the stop nothing calls for more (lead 25.7 nats); at its first wrong turn (the fit order, 5 cases)
+  the other order has P 0.12, but nothing in the evidence says which order is right.
+* **Against the focused rollouts** (48 training cases drawn in iterations 0 and 1): P(on) at the stop is higher
+  where a sample repaired the case (median 0.013 over 23, against 0.0012 over 25; area under the curve 0.62).  In A
+  0.046 against 0.0043 (9 and 9); in E 0.0085 against 0.0061 (8 and 7).  The rollouts sample from the start and leave
+  the stored path before the stop, so the stop's number is one part of what a group explores.
+
+**Reading (mine).**  The model stops because it learned to stop there, not because it hesitates.  A and E are
+learnable by RL from where they stop, at a slow rate: a group has a sample on the way at about one A stop in five
+and one E stop in six or seven, and the greedy choice changes only after the update has moved about 5 nats, which
+fits the focused run's one case per update.  D, C and I are learnable at the earlier turn, where the right object
+is about 2 nats behind and the episode's reward reaches that step (every step of a sample shares its advantage).  B
+and the misspelled name are out of reach by sampling: B needs the demonstrations to look at the breakers (the
+unconditional re-inspection of Part 1), and the name needs a direct fix.  F is not learnable from the evidence.  The
+demonstration fix (look at the breakers again after each correction and before finishing; answer a refused fit by
+looking again) acts on A and B at their source: A needs a 5-nat shift RL makes slowly, B an 8-nat one it does not
+make.
