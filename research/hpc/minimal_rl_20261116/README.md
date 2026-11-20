@@ -16,9 +16,11 @@ things the smoke showed about the run itself are under "What the smoke showed th
 **The focused run is deployed (2026-11-19, source 2d4919d), and its training pass ran on 2026-11-19 (submitted
 19:17 UTC on the user's word, evaluation written 22:10 UTC; `mrl-train-pass` 23746858, 23746859, 23746861,
 23746863; `mrl-train-pass-close` 23746865): the supervised model leaves 502 of the 2,093 training cases a
-truth-built sequence repairs unrepaired (24.0%, against 19.8% of the development cases). The focused smoke was
-submitted on 2026-11-20 at 03:35 UTC on the user's word (`mrl-focus-smoke` 23799236); the focused run is not
-submitted: "The focused run" below.** It draws from the
+truth-built sequence repairs unrepaired (24.0%, against 19.8% of the development cases). The focused smoke
+passed on 2026-11-20 (`mrl-focus-smoke` 23799236, submitted 03:35 UTC on the user's word, completed 05:01 UTC
+after one preemption, 39 minutes of card time on two H200s): every item on its list held, 6 of 6 replayed
+sequences repaired their cases and 25 of 25 example actions rendered. The focused run is not submitted: "The
+focused run" below.** It draws from the
 training cases a truth-built sequence repairs and the supervised model does not, and teaches that sequence where
 no sample repairs. The deploy waited for the plain run's links to leave the queue, on the user's word of
 2026-11-18 ("Yes, after it ends").
@@ -393,6 +395,73 @@ training cases by 2 samples, 8 development cases, the baseline included). Read o
 (03:35 UTC): the source at 2d4919d with no tracked change, no job queued, the training pass's evaluation and the
 supervised pass's receipt in place, and no `out/focus_smoke` yet.
 
+**The focused smoke, completed 2026-11-20 at 05:01:59 UTC, read at 05:14 UTC.** Two instances, both on H200s.
+The first (gh125) started at 04:05, 29 minutes after submission, ran the dry check, the baseline, the rollout and
+the update, and was preempted at 04:36:51, 47 seconds into the evaluation, before it had written an episode. The
+requeued job (gh103) started at 04:54:58, went on from the manifest with the evaluation, and ended COMPLETED at
+05:01:59 with the last line `mrl-focus_smoke-complete`. 38 min 43 s of card time; no traceback in the job's log
+or in any of its six shard logs. The manifest stands at iteration 1, phase rollout.
+
+Against the list below ("What the focused smoke has to show before a focused run"):
+
+| Item | Result |
+| --- | --- |
+| The dry check's `focus` block | ok, no problems, in both instances: 2,093 cases with a sequence, 502 left unrepaired and 1,591 repaired by the starting adapter (the training pass's split), 6 and 2 drawn, examples on at weight 1.0 |
+| Every replayed sequence repairs its case | 6 of 6 (`replays that did not repair 0`, none without a sequence; 14.3 s for the six) |
+| Every truth-built action renders | 25 of 25 rows (`supervised_rows_unrenderable 0`, `targets_refused 0`); integrity ok, no failure, no warning |
+| The supervised loss, and the per-row cap | 0.092, finite. The 104 rows' gradient norms: median 0.0008, 95th percentile 0.34, largest 8.57; the cap of 1.0 clipped 2; none dropped as non-finite |
+| The update's peak memory with the examples | 39,289 MiB, one process (the first smoke's update about 36,500 MiB); two processes 66,583 MiB (baseline), 63,587 MiB (rollout), 66,685 MiB (evaluation) |
+| One whole pass through the phases | baseline 5 min 5 s, rollout 5 min 43 s (the six replays included), update 18 min 48 s, evaluation 5 min 37 s after the requeue; loading included |
+
+- **The update.** 104 rows: 75 sampled rows of the 7 cases whose two samples differ in reward, 4 preservation
+  rows of the one that does not, 25 example rows of the six examples (390 tokens, weights 1.105 to 1.785, mean
+  1.47). 1,021 s, 9.8 s a row (the first smoke 9.2). Policy loss -0.0020, KL 0 (the reference is the start),
+  gradient norm 1.87; the global clip of 1.0 does not change this step, the first of a new AdamW being a sign
+  step. The first pass against the sampler: mean |log ratio| 0.0014 over 1,091 sampled tokens, 0.014 on the 115
+  uncertain ones, largest 0.176, none beyond the threshold. Each row once, one optimizer step; the optimizer is
+  saved for the next iteration.
+- **The rollout.** The six cases the supervised model leaves unrepaired (cb2_dangling, control_meter,
+  meter_rx2, rx_cb_distant, rx2_distant twice) were repaired in none of their 12 samples; the two it repairs
+  (control_cb, rx2_distant) in all 4. 7 of the 8 cases sampled two different episodes; 35% of the 83 sampled
+  steps had every token above 0.99 (the first smoke 53%, the plain run 56%). So no case had a repaired and an
+  unrepaired sample, and each of the six got its example. Refused calls: 9 tool failures, 1 no change.
+- **Where the samples went wrong**, against the example of the same case (the actions with their arguments):
+
+| Case (class) | The truth-built example | The two samples |
+| --- | --- | --- |
+| `r0_0a67a3746f13` (cb2_dangling) | opens CB_4_N6_B2, inspects, opens CB_9_B1_N1 | both open CB_9_B1_N1, then fit a line (3; 6, refused) instead of looking for the second breaker |
+| `r0_4576d58547ba` (rx2_distant) | fits lines 1 and 11 | both fit line 2 first; then line 11 and a meter repair, declared resolved, or line 18 (refused) and meter repairs |
+| `r0_5445d8be4a0b` (rx_cb_distant) | opens CB_Y1014_10N1_10N2, fits line 4 | both fit line 4 and never open that breaker (one tries CB_13R2_13R3, refused as no change); each sends line 18 three times, refused |
+| `r0_5508b87ff3db` (control_meter) | repairs meters 14 and 43 | both repair meter 43 without 14 and declare unresolved |
+| `r0_c6fa8de52cb0` (rx2_distant) | fits lines 5 and 16 | both open CB_2R2_2R3, a healthy breaker, then a line-7 fit or meter repairs; neither touches line 5 or 16 |
+| `r0_cb69ce62b9a2` (meter_rx2) | fits lines 7 and 6, repairs meter 67 | both fit line 3 instead of 7 and repair meter 67 (one also fits line 6); both declare resolved |
+
+  In five of the six a sample made at least one of the example's corrections, and what was missing is one
+  object: a second breaker or meter not looked for, a breaker not found, or the wrong one of two lines. In the
+  sixth the samples went to a breaker on a case of two line errors. The supervised loss of 0.092 is the example
+  rows' mean token log-loss weighted by their weights, about 0.06 a token unweighted. My reading, not measured
+  (the per-token losses are not recorded): the starting model already gives most tokens of the truth-built
+  actions a high probability, and what the examples teach is in the few tokens that name the object.
+- **The development cases** are the suite's first eight, all cb2_dangling (four the rule expert's episodes
+  solve, four only the truth-built sequence repairs): 4 of 8 solved before the update and 4 after, none gained,
+  none lost. Five episodes keep their tool sequence; three changed: `r0_77b3ec119344` dropped a fit-and-undo
+  detour (7 actions to 5, repaired both times), `r0_891df54d8682` declares unresolved instead of resolved (not
+  repaired either way), `r0_72c33dbda5f8` makes one parameter fit fewer (not repaired either way). Two greedy
+  passes of the starting model differ as well: this baseline against the supervised cell's evaluation of the same
+  eight cases (same adapter and settings, another job) has the same tool sequence in 6 of 8 and the same outcome
+  in 8 of 8, and the two that differ are `r0_891df54d8682` and `r0_72c33dbda5f8`. Eight cases of one class are
+  not a reading of the update.
+
+**A full focused iteration, my arithmetic from the measured rates.** The plain run's iteration on RTX PRO 6000
+cards: rollout 1 h 12 min for 256 episodes, update 2.28 h for 629 rows (13.0 s a row), evaluation about 1 h 20
+min. A focused iteration samples the same 256 episodes, but its update will be larger: in the smoke 7 of 8 cases
+differed in reward (the plain run's first iteration 23 of 64), since the samples of a case the model fails seldom
+share a reward. At that share, about 28 of 32 cases by 8 samples by 5.2 actions is about 1,160 sampled rows; with
+about 100 example rows, about 1,250 rows, 4.5 hours at 13.0 s a row (3.4 at the smoke's 9.8 s on an H200). So
+about 7 to 7.5 hours an iteration on RTX PRO 6000 cards, against the 14 hours `submit_cell.sh` counts per
+iteration when it sets the links (`focus 3`: 5 links of 12 hours, each leaving at once when the target is
+reached).
+
 **What the training pass is read for:** how many of the 2,093 cases the supervised model leaves unrepaired, and
 in which classes. 1,966 of them were in the supervised pass's training rows and 127 in its validation rows, so it
 may repair a larger share of them than the 80% of the development cases. If few are left, an iteration's 24 come
@@ -422,11 +491,13 @@ large card, one after the other on a smaller one), a failed shard fails its job,
 evaluation and a later one finds it, and the focused jobs refuse to start without the supervised pass's receipt
 or without the training pass.
 
-**Not checked.** Its training pass has run (above); the focused jobs have not run on the cluster or met the
-model. The target renderer has not met the 12B's
-own processor: that is first exercised by the focused smoke. The replay of the 2,093 sequences on Linux is
-untested. Whether teaching the truth-built
-sequence on failed training cases repairs more of the 49 development cases is what the run is for.
+**Not checked.** Its training pass and its smoke have run (above): the target renderer has met the 12B's own
+processor (25 of 25 rows rendered), and 6 of the 2,093 sequences were replayed on Linux, all repairing their
+cases; the other 2,087 have not been replayed there (a replay that does not repair is not kept, and the count
+says so). Not exercised on the cluster: a focused update at full size (about 1,250 rows by the arithmetic
+above), a second iteration (the KL term away from zero, the optimizer carried, a new draw), a preemption inside
+the rollout or the update. Whether teaching the truth-built sequence on failed training cases repairs more of the
+49 development cases is what the run is for.
 
 ## What the smoke showed that the run should know
 
