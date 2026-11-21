@@ -263,3 +263,32 @@ the two points; the first update's gains that did not hold (r0_7449ca0d5cd6, F, 
 **Reading (mine).**  The scores predict what the run moves: two updates flipped the cases within about a nat and
 none beyond 3.  With 24 of the 49 beyond 3 nats (16 beyond 6, among them 6 of the 7 B cases), the run's reach in a
 few more updates is the 25 within 3 nats, less what it loses elsewhere (5 so far).
+
+## Against the focused run's third evaluation, 2026-11-21
+
+The third evaluation (after three updates, the run's last) solves 202 of the 247: 10 of the 49 cases this
+diagnostic scored, and 6 fewer of the others.  By each case's smallest lead:
+
+| Smallest lead (nats) | Cases of the 49 | Solved after two updates | Solved after three | Patterns of the solved, after three |
+| --- | --- | --- | --- | --- |
+| under 1 | 7 | 5 | 5 | A 4, E 1 |
+| 1 to 2 | 6 | 1 | 1 | D 1 |
+| 2 to 3 | 12 | 1 | 3 | A 2, E 1 |
+| 3 to 6 | 8 | 0 | 0 | |
+| 6 or more | 16 | 0 | 1 | B 1 |
+
+By pattern, solved after three updates: A 6 of 17, B 1 of 7, D 1 of 9, E 2 of 10, the rest 0 of 6.  The smallest
+lead tells the 10 solved cases from the 39 others at an area under the curve of 0.82 (the stop alone 0.76; after
+two updates 0.92 and 0.81).
+
+The third update's new gains:
+- two A cases at 2.1 nats (r0_018a7be478a1, r0_243985153e00);
+- one B case at 8.2 nats (r0_566f34094a8a, cb2_mixed), which now inspects the breakers, corrects one, inspects
+  again and corrects the other.
+
+The first update's two gains that did not hold (r0_7449ca0d5cd6, F, 0.9 nats; r0_c35a1e4bfa40, D, 0.4) stayed
+unsolved.
+
+**Reading (mine).**  As after two updates, the run moved the near cases: 9 of its 10 gains were within 2.2 nats at
+one of the two points.  Over three updates it reached 10 of the 49 and lost 6 of the 198 the supervised model
+solved; the 24 cases beyond 3 nats moved once.

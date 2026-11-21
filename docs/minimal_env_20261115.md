@@ -49,7 +49,7 @@ pipeline beside the old one, not as more switches on it.
 | KL reference = the new supervised model | the update's reference is the run's starting adapter; an RL run started from the new adapter has it | by construction, no run yet |
 | The expert under the new interface, by mechanical translation | `expert.py`, replayed on the 300 development cases | built, run |
 | Train the new supervised model | `research/minimal_env/train_sft.py`, rows and selection | trained (the pass finished 2026-11-18) and evaluated once: 198 of 247 (the cell's README) |
-| RL from that checkpoint | `research/minimal_env/rl_train.py`: rollout, update, evaluation (section 12) | one iteration run (2026-11-18): 202 of 247; the focused variant deployed 2026-11-19; its training pass: the supervised model leaves 502 of 2,093 solvable training cases; its smoke passed 2026-11-20; the focused run submitted 2026-11-20, to three iterations: 199 and 200 of 247 after one and two updates |
+| RL from that checkpoint | `research/minimal_env/rl_train.py`: rollout, update, evaluation (section 12) | one iteration run (2026-11-18): 202 of 247; the focused variant deployed 2026-11-19; its training pass: the supervised model leaves 502 of 2,093 solvable training cases; its smoke passed 2026-11-20; the focused run, three iterations (2026-11-20 to 21): 199, 200 and 202 of 247 (201 by the strict audit) after one, two and three updates, complete |
 | Demonstrations that look before acting and answer a refusal (the stopping-state diagnostic, section 13) | `truth.py` look rules, refusal and breakers-last paths; `build_demonstrations`, `select_rows` (section 14) | built 2026-11-21: 30,960 training rows; the second pass's cell prepared, not deployed |
 
 ## 3. Checks
@@ -88,6 +88,7 @@ environment have no object-level audit.
 | Truth-built sequences | minimal | 247 | 247 | 4.24 |
 | Supervised model on the new rows, one greedy pass (2026-11-18) | minimal | 198 | 198 | 4.45 |
 | RL from that model, one iteration (2026-11-18) | minimal | 202 | 202 | 4.36 |
+| Focused RL from that model, three updates (2026-11-21) | minimal | 201 | 202 | 4.57 |
 
 For orientation, in the old environment with the rules lifted: S0 186, the clone 163.
 
@@ -109,6 +110,16 @@ model sent one refused topology correction fifteen times; the updated model does
 Five against one is a split two equally likely directions give about one time in five (two-sided sign test,
 p = 0.22): one iteration does not show that the update helps. `research/hpc/minimal_rl_20261116/README.md` has the
 rollout, the update and each case that moved.
+
+**The focused run from it (2026-11-20 to 21): 202 of 247 after three updates, 201 by the strict audit.**
+- After the first two updates it solved 199 and 200.
+- Against the supervised model: 10 cases gained and 6 lost (two-sided sign test p = 0.45). The three one-step updates
+  end where the plain run's one iteration did, with more churn.
+- Seven of the ten gains are two-breaker cases; six are the second breaker left (6 of 17).
+- The gains are the cases the stopping-state diagnostic found nearest: 5 of the 7 within 1 nat, 4 of the 18 within
+  1 to 3, and 1 of the 24 beyond 3 (section 13).
+
+`research/hpc/minimal_rl_20261116/README.md` has the rollouts, the updates and each case that moved.
 
 Reading the rows:
 
@@ -234,8 +245,8 @@ Checksums: training view `582349e2...`, validation view `e55689a6...` (`selectio
   2026-11-17 and one iteration of the run on 2026-11-18, 202 of 247 against the supervised model's 198 (section
   4). The focused run (deployed 2026-11-19 at 2d4919d; its training pass leaves 502 of the 2,093 solvable
   training cases unrepaired; its smoke passed and the run was submitted on 2026-11-20, to three iterations):
-  199 of 247 after one update, 200 after two (gained 7, lost 5 against the supervised model); the third
-  iteration is running.
+  199 of 247 after one update, 200 after two, 202 after three (201 by the strict audit; gained 10, lost 6 against
+  the supervised model, p = 0.45); the run is complete (2026-11-21).
 - **IEEE 118** is not handled: no breaker model there (the line-status form of `correct_topology` exists and is
   untested on that system), and a version's meter table is about 1,100 rows.
 - **The waveform families** (HIF, unbalance, harmonics) are outside this environment.
@@ -371,7 +382,9 @@ supervised model leaves 502 of the 2,093 solvable training cases unrepaired, 24.
 development cases; the focused smoke passed on 2026-11-20: 6 of 6 replayed sequences repaired their cases, 25 of
 25 example actions rendered, the update's integrity held; the focused run submitted on 2026-11-20 at 06:24 UTC,
 to three iterations; its first iteration 199 of the 247, gained 5 and lost 4, a repaired sample in 11 of its 24
-failed cases; its second 200, gained 7 and lost 5 against the supervised model, a repaired sample in 12 of 24).** After the supervised model's evaluation the user set the
+failed cases; its second 200, gained 7 and lost 5 against the supervised model, a repaired sample in 12 of 24; its
+third 202, 201 by the strict audit, gained 10 and lost 6, a repaired sample in 8 of 24; complete 2026-11-21 at
+11:03 UTC).** After the supervised model's evaluation the user set the
 basis to the 247 cases a truth-built sequence repairs and asked for a run aimed at the solvable cases the model
 fails. `focus` in the driver's config does three things: it draws an iteration from the 2,093 training cases
 with a truth-built sequence, 24 the supervised model leaves unrepaired and 8 it repairs (its greedy pass over
@@ -431,7 +444,9 @@ README has the tables.
   run's second evaluation"): by each development case's smallest lead (stop or first wrong turn), 5 of the 7
   within 1 nat are solved, 2 of the 18 within 1 to 3 nats, none of the 24 beyond 3 (16 beyond 6, among them 6 of
   the 7 breaker-never-corrected cases).  The larger probability of a step on tells the solved cases from the
-  others at an area under the curve of 0.92.
+  others at an area under the curve of 0.92.  After the third update (202): 5 of the 7, 4 of the 18 and 1 of the
+  24, at an area of 0.82.  The one beyond 3 nats is a breaker-never-corrected case at 8.2 nats that now looks at the
+  breakers again after its first breaker correction.
 
 ## 14. The second demonstration build (prepared 2026-11-21)
 
