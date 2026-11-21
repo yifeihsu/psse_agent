@@ -22,7 +22,8 @@ after one preemption, 39 minutes of card time on two H200s): every item on its l
 sequences repaired their cases and 25 of 25 example actions rendered. The focused run was submitted on
 2026-11-20 at 06:24 UTC on the user's word, to three iterations (`mrl-focus`, five links from 23814465): "The
 focused run" below. Its first iteration was read on 2026-11-20 at 17:05 UTC: 199 of the 247 (gained 5, lost 4);
-11 of its 24 failed cases had a repaired sample.** It draws from the
+11 of its 24 failed cases had a repaired sample. Its second was read on 2026-11-21 at 02:06 UTC: 200 of the 247
+(gained 7, lost 5 against the supervised model; sign test p = 0.77); the third iteration is running.** It draws from the
 training cases a truth-built sequence repairs and the supervised model does not, and teaches that sequence where
 no sample repairs. The deploy waited for the plain run's links to leave the queue, on the user's word of
 2026-11-18 ("Yes, after it ends").
@@ -504,6 +505,35 @@ r0_e802f3b2ab39 (meter_rx2), r0_e8b622e42551 (cb2_split). Lost: r0_7b9e211f46d8 
 Sampling found a repair in 11 of the 24 failed cases, far more than the smoke's 0 of 6, so the run has contrast to
 learn from; one step at 1e-5 moved the greedy result by one case. The run went on to its second iteration.
 
+**The second iteration, evaluation written 2026-11-21 by 02:02 UTC, read 02:06 UTC.** Its rollout ran on gr105
+(16:53 to 18:20 UTC); the update was preempted three times and resumed each time from its saved rows (on gr103,
+gh101 and gr105; the last stint resumed at 1,088 of 1,194 rows), and the evaluation once (resumed on gr102).
+
+| | |
+| --- | --- |
+| Development, solved of the 247 | 200 (the supervised model 198, the first iteration 199, the plain run's iteration 202): gained 7, lost 5 against the supervised model |
+| ... of the 184 the rule expert solves / of the 63 only the truth-built sequence repairs | 165 (161) / 35 (37) |
+| false resolved, declared unresolved, out of actions, episodes with damage (of 300) | 72, 25, 3, 31 (72, 27, 3, 27) |
+| Rollout: the 24 unrepaired cases | 12 with a repaired and an unrepaired sample, 12 with none; 31 of 192 episodes repaired |
+| Rollout: the 8 repaired cases | 60 of 64 episodes repaired (2 cases with an unrepaired sample) |
+| Groups with a reward spread / steps with every token above 0.99 | 25 of 32 / 42% of 1,312 |
+| Refused calls in the rollout | 246 (tool failure 178, unknown object 65, no change 3) |
+| Truth-built examples | 12, for the 12 cases without a repaired sample; 57 rows, weights 1.03 to 1.82, supervised loss 0.106 |
+| Update | one step on 1,194 rows (1,112 sampled, 25 preservation, 57 example); policy loss -0.0019, KL 0.0033, gradient norm 2.95; the optimizer carried from the first iteration (step 2) |
+| Against the sampler | mean abs log ratio 0.0016 (uncertain tokens 0.018), largest 1.34; integrity ok |
+
+Gained against the supervised model: r0_b37da0e8deca (cb2_dangling), r0_e802f3b2ab39 (meter_rx2), r0_e8b622e42551
+(cb2_split), all three also gained by the first iteration, and r0_17b04fcf34bb (meter_rx2), r0_a04d7fb1791e
+(rx2_adjacent), r0_b47550259680 (cb2_split), r0_bd2c9367bbe9 (cb2_dangling). Lost: r0_7b9e211f46d8 (rx2_adjacent),
+r0_891e3e9681b2 (meter_on_rx), r0_c83a69b4802b (cb2_mixed), all three also lost by the first iteration, and
+r0_5bae721d68ba (meter_rx2), r0_a7014fc5a4e1 (rx_cb_meter). The first iteration's r0_7449ca0d5cd6 and
+r0_c35a1e4bfa40 were lost again, its r0_c19207e4273d recovered. By the stopping-state diagnostic's failure patterns
+(`research/hpc/minimal_diag_20261120/README.md`), the 49 unrepaired cases now solved: second breaker left 4 of 17,
+faulted line never fitted 2 of 10, wrong line fitted 1 of 9, breaker never corrected 0 of 7, the rest 0 of 6. The
+gains are the cases where the supervised model was nearly right: of the 7 cases whose step on was within 1 nat of
+the model's own action (at the stop or at the first wrong turn), 5 are solved; of the 18 within 1 to 3 nats, 2; of
+the 24 further than 3 nats, none (that diagnostic's "Against the focused run's second evaluation").
+
 **What the training pass is read for:** how many of the 2,093 cases the supervised model leaves unrepaired, and
 in which classes. 1,966 of them were in the supervised pass's training rows and 127 in its validation rows, so it
 may repair a larger share of them than the 80% of the development cases. If few are left, an iteration's 24 come
@@ -536,10 +566,11 @@ or without the training pass.
 **Not checked.** Its training pass and its smoke have run (above): the target renderer has met the 12B's own
 processor (25 of 25 rows rendered), and 6 of the 2,093 sequences were replayed on Linux, all repairing their
 cases; the other 2,087 have not been replayed there (a replay that does not repair is not kept, and the count
-says so). A focused update at full size has run (1,186 rows, 4.5 h, integrity ok). Not exercised on the cluster
-yet: a second iteration (the KL term away from zero, the optimizer carried, a new draw), a preemption inside the
-rollout or the update. Whether teaching the truth-built sequence on failed training cases repairs more of the
-49 development cases is what the run is for.
+says so). A focused update at full size has run (1,186 rows, 4.5 h, integrity ok). The second iteration has
+exercised the KL term away from zero (0.0033), the optimizer carried (step 2), a new draw, and three preemptions
+inside the update, each resumed from its saved rows with integrity ok. Not exercised yet: a preemption inside the
+rollout. Whether teaching the truth-built sequence on failed training cases repairs more of the 49 development
+cases is what the run is for.
 
 ## What the smoke showed that the run should know
 

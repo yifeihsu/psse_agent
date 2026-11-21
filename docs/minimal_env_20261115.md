@@ -49,7 +49,7 @@ pipeline beside the old one, not as more switches on it.
 | KL reference = the new supervised model | the update's reference is the run's starting adapter; an RL run started from the new adapter has it | by construction, no run yet |
 | The expert under the new interface, by mechanical translation | `expert.py`, replayed on the 300 development cases | built, run |
 | Train the new supervised model | `research/minimal_env/train_sft.py`, rows and selection | trained (the pass finished 2026-11-18) and evaluated once: 198 of 247 (the cell's README) |
-| RL from that checkpoint | `research/minimal_env/rl_train.py`: rollout, update, evaluation (section 12) | one iteration run (2026-11-18): 202 of 247; the focused variant deployed 2026-11-19; its training pass: the supervised model leaves 502 of 2,093 solvable training cases; its smoke passed 2026-11-20; the focused run submitted 2026-11-20, to three iterations |
+| RL from that checkpoint | `research/minimal_env/rl_train.py`: rollout, update, evaluation (section 12) | one iteration run (2026-11-18): 202 of 247; the focused variant deployed 2026-11-19; its training pass: the supervised model leaves 502 of 2,093 solvable training cases; its smoke passed 2026-11-20; the focused run submitted 2026-11-20, to three iterations: 199 and 200 of 247 after one and two updates |
 
 ## 3. Checks
 
@@ -231,9 +231,10 @@ Checksums: training view `582349e2...`, validation view `e55689a6...` (`selectio
   15 times).
 - **One RL iteration** (section 12): its cluster cell (`research/hpc/minimal_rl_20261116/`) ran the smoke on
   2026-11-17 and one iteration of the run on 2026-11-18, 202 of 247 against the supervised model's 198 (section
-  4). Not done: a second iteration, and the focused run itself (deployed 2026-11-19 at 2d4919d; its training
-  pass ran the same day and leaves 502 of the 2,093 solvable training cases unrepaired; the focused smoke
-  passed on 2026-11-20 and the focused run was submitted the same day, to three iterations).
+  4). The focused run (deployed 2026-11-19 at 2d4919d; its training pass leaves 502 of the 2,093 solvable
+  training cases unrepaired; its smoke passed and the run was submitted on 2026-11-20, to three iterations):
+  199 of 247 after one update, 200 after two (gained 7, lost 5 against the supervised model); the third
+  iteration is running.
 - **IEEE 118** is not handled: no breaker model there (the line-status form of `correct_topology` exists and is
   untested on that system), and a version's meter table is about 1,100 rows.
 - **The waveform families** (HIF, unbalance, harmonics) are outside this environment.
@@ -369,7 +370,7 @@ supervised model leaves 502 of the 2,093 solvable training cases unrepaired, 24.
 development cases; the focused smoke passed on 2026-11-20: 6 of 6 replayed sequences repaired their cases, 25 of
 25 example actions rendered, the update's integrity held; the focused run submitted on 2026-11-20 at 06:24 UTC,
 to three iterations; its first iteration 199 of the 247, gained 5 and lost 4, a repaired sample in 11 of its 24
-failed cases).** After the supervised model's evaluation the user set the
+failed cases; its second 200, gained 7 and lost 5 against the supervised model, a repaired sample in 12 of 24).** After the supervised model's evaluation the user set the
 basis to the 247 cases a truth-built sequence repairs and asked for a run aimed at the solvable cases the model
 fails. `focus` in the driver's config does three things: it draws an iteration from the 2,093 training cases
 with a truth-built sequence, 24 the supervised model leaves unrepaired and 8 it repairs (its greedy pass over
@@ -425,3 +426,8 @@ README has the tables.
   but near at its first wrong turn: the faulted line at a median 0.10, one of 8 at 30 of 56, lead 1.9 nats, the cost
   the object.  The fit outside tolerance: lead 25.7 nats at the stop.  The misspelled `CB_2R4_2R5`: in all 17
   scored calls the `2` after `R4_` costs 6.0 to 11.3 nats and the rest of the name at most 0.2 (one at 1.8).
+- Against the focused run's second evaluation (200 of 247 after two updates; cell README, "Against the focused
+  run's second evaluation"): by each development case's smallest lead (stop or first wrong turn), 5 of the 7
+  within 1 nat are solved, 2 of the 18 within 1 to 3 nats, none of the 24 beyond 3 (16 beyond 6, among them 6 of
+  the 7 breaker-never-corrected cases).  The larger probability of a step on tells the solved cases from the
+  others at an area under the curve of 0.92.

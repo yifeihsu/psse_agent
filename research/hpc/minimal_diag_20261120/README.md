@@ -239,3 +239,27 @@ unconditional re-inspection of Part 1), and the name needs a direct fix.  F is n
 demonstration fix (look at the breakers again after each correction and before finishing; answer a refused fit by
 looking again) acts on A and B at their source: A needs a 5-nat shift RL makes slowly, B an 8-nat one it does not
 make.
+
+## Against the focused run's second evaluation, 2026-11-21
+
+The focused run's second evaluation (after two updates; `research/hpc/minimal_rl_20261116/README.md`) solves 200
+of the 247, 7 of the 49 cases this diagnostic scored and 5 fewer of the others (lost 5).  Taking each case's
+smallest lead, at the stop or at the first wrong turn:
+
+| Smallest lead (nats) | Cases of the 49 | Solved after two updates | Patterns |
+| --- | --- | --- | --- |
+| under 1 | 7 | 5 | A 4, D 1, E 1, F 1 |
+| 1 to 2 | 6 | 1 | D 3, A 1, C 1, E 1 |
+| 2 to 3 | 12 | 1 | A 4, E 4, D 2, C 1, I 1 |
+| 3 to 6 | 8 | 0 | A 3, D 3, B 1, E 1 |
+| 6 or more | 16 | 0 | B 6, A 5, E 3, F 1, G 1 |
+
+The larger probability of a step on (stop or first wrong turn) tells the 7 solved cases from the 42 others with an
+area under the curve of 0.92 (the stop alone 0.81).  Every gained case had a lead of at most 2.1 nats at one of
+the two points; the first update's gains that did not hold (r0_7449ca0d5cd6, F, and r0_c35a1e4bfa40, D) were within
+0.9 and 0.4 nats at their first wrong turn.  In training, 162 of the 500 scored cases are within 3 nats (A 47 of
+144, B 7 of 90, C 10 of 14, D 37 of 56, E 50 of 158, F 2 of 16, G 1 of 8, I 8 of 14).
+
+**Reading (mine).**  The scores predict what the run moves: two updates flipped the cases within about a nat and
+none beyond 3.  With 24 of the 49 beyond 3 nats (16 beyond 6, among them 6 of the 7 B cases), the run's reach in a
+few more updates is the 25 within 3 nats, less what it loses elsewhere (5 so far).
