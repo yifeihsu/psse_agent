@@ -517,3 +517,50 @@ for one pass from the base model.  The cell (`research/hpc/minimal_sft_20261121/
 75 s a step and would submit 16 links of 12 hours; the upload is 689 MB (the first pass's 270 MB took 13 minutes).
 Cheaper ways, each a choice: `after_breakers` (about 16% fewer tokens, a rebuild of about 80 minutes), or the
 first pass's adapter as the start (`sft1`) with fewer steps than one pass (not yet an option of the stage).
+
+**Is the look needed everywhere?  What the estimate shows after a correction (2026-11-21).**  Asked by the user:
+after a breaker correction the estimate is run again, so should the model not go straight to another topology
+correction when the new evidence points there, and is the weakness one of several errors of one type?  Measured on
+this build's 2,091 repaired success paths and its 635 breakers-last paths, and on the supervised model's 2,093
+training episodes (scripts in `output/minimal_env_20261121/analysis/`, not in git).
+
+What is shown without asking is the WLS estimate of the new version (its two tests and the tables of buses, lines
+and meters).  The breaker table, the only per-breaker evidence, comes from the substation estimate, which runs when
+the model inspects.  So the look is the round of topology diagnosis, and the question is when it is due.
+
+| State on a truth-built path | States | The WLS estimate still fails a test |
+| --- | --- | --- |
+| After a breaker correction, the second breaker left | 300 | 296 |
+| Lines and meters corrected first, the breaker left (breakers-last paths) | 529 | 516 |
+| After a line fit, the second line left | 377 | 330 (rx2_distant 157 of 200) |
+| Only a meter left | 574 | 574 |
+| Nothing left, before finishing | 2,091 | 122 |
+
+- After a breaker correction the estimate fails a test in 937 states: a breaker is left in 296, a line or meter in
+  603, nothing in 38.  It passes in 554: nothing left in 518, a line or meter in 32, a breaker in 4.  The failing
+  test says something is left, not that it is a breaker.
+- A look on every version whose estimate still fails a test covers 296 of 300 and 516 of 529 of the states with a
+  breaker left.  The look on a passing estimate, which `every_version` adds, covers the other 4 and 13, at 2,053
+  more looks over the 2,091 success paths (about one action a case: 6.1 against about 5.1).
+- The substation estimate's own chi-square test is no sharper: it fails in 304 of 306 states with only a breaker
+  left, and in 712 of 768 with only a line left.
+
+**Two errors of one type, the supervised model on the training cases.**
+
+| The case holds | Repaired | One corrected, the other never | ... the estimate passes at that stop | ... declared resolved |
+| --- | --- | --- | --- | --- |
+| Two breakers | 137 of 300 | 146 | 23 | 38 |
+| Two lines | 300 of 378 | 52 | 26 | 36 |
+| Two lines and a meter | 131 of 201 | 57 | 30 | 49 |
+
+One error alone: breaker 248 of 250, line 90 of 93, meter 89 of 100.  Two of different types: breaker and line 292
+of 387, line and meter 110 of 130, breaker, line and meter 180 of 239.  A true error left never corrected: a breaker
+86 of 891 where it is the only breaker and 178 of 600 where there are two; a line 91 of 849 and 153 of 1,158; a
+meter 17 of 685 (no class holds two meters).
+
+**Reading (mine).**  The look after a correction is due where the new estimate still fails a test: there the model
+cannot tell a breaker from a line without the breaker table (it tried a line fit in 117 of the 144 two-breaker
+stops).  The look on a passing estimate, before finishing, buys 1 to 2.5% of the breaker states for an action in
+every case.  The early stop is not special to breakers in shape (14% of the two-line cases), but its cause differs:
+with breakers the estimate still fails and the model declares the case unresolved (105 of 146); with lines the
+estimate passes at half of the stops and the model declares it resolved.
