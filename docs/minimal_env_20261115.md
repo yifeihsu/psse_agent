@@ -50,6 +50,7 @@ pipeline beside the old one, not as more switches on it.
 | The expert under the new interface, by mechanical translation | `expert.py`, replayed on the 300 development cases | built, run |
 | Train the new supervised model | `research/minimal_env/train_sft.py`, rows and selection | trained (the pass finished 2026-11-18) and evaluated once: 198 of 247 (the cell's README) |
 | RL from that checkpoint | `research/minimal_env/rl_train.py`: rollout, update, evaluation (section 12) | one iteration run (2026-11-18): 202 of 247; the focused variant deployed 2026-11-19; its training pass: the supervised model leaves 502 of 2,093 solvable training cases; its smoke passed 2026-11-20; the focused run submitted 2026-11-20, to three iterations: 199 and 200 of 247 after one and two updates |
+| Demonstrations that look before acting and answer a refusal (the stopping-state diagnostic, section 13) | `truth.py` look rules, refusal and breakers-last paths; `build_demonstrations`, `select_rows` (section 14) | built 2026-11-21: 30,960 training rows; the second pass's cell prepared, not deployed |
 
 ## 3. Checks
 
@@ -431,3 +432,73 @@ README has the tables.
   within 1 nat are solved, 2 of the 18 within 1 to 3 nats, none of the 24 beyond 3 (16 beyond 6, among them 6 of
   the 7 breaker-never-corrected cases).  The larger probability of a step on tells the solved cases from the
   others at an area under the curve of 0.92.
+
+## 14. The second demonstration build (prepared 2026-11-21)
+
+Asked after the stopping-state diagnostic and the focused run's second evaluation ("Yes, prepare it"): change the
+demonstrations where the supervised model's failures start, so that looking at the breakers is never a decision
+the truth makes, and a refused call is answered.  What the first demonstrations taught, and the change:
+
+| | First build (2026-11-15) | Second build |
+| --- | --- | --- |
+| Look at the breakers after a breaker correction | only when another breaker correction follows (300 of 300 first-of-two, 0 of 1,300 others) | always (`--looks every_version`: before every action on a version not looked at, `finish` included) |
+| A refused call in the history | only the truth's own refused corrections, retried | refusal paths: the most plausible healthy line fit, refused, on the version after the first breaker correction (or at the start), then the look and the rest |
+| A breaker still wrong after the lines and meters | never shown (breakers are corrected first) | breakers-last paths: lines and meters first, the look that shows the breaker, the breaker, the refit of what was corrected on the wrong topology |
+| `CB_2R4_2R5` | 36 training targets; the model wrote `CB_2R4_R5` in 245 of 263 calls | its rows written three times (`select_rows --repeat-breaker CB_2R4_2R5=3`) |
+
+Code: `psse_env/minimal/truth.py` (`looks`, `build_refusal`, `build_breakers_last`; the default `needed` reproduces
+the first build), `research/minimal_env/build_demonstrations.py` (`--looks`, `--refusals`, `--breakers-last`),
+`research/minimal_env/select_rows.py` (`--skip-demonstrations`, `--repeat-breaker`); committed e95db77.
+
+**The two look rules on a sample** (the first 20 cases of every class, 280 cases, against the first build's rows of
+the same cases; tokens at 1.46 characters each, the first build's ratio):
+
+| | First build | `after_breakers` | `every_version` |
+| --- | --- | --- | --- |
+| Look after an accepted breaker correction (success paths) | 60 of 220 (the first of two breakers only) | 220 of 220 | 220 of 220 |
+| Success path, mean actions | 4.14 | 5.33 | 5.71 |
+| Paths: success / recovery / refusal / breakers-last | 280 / 212 / - / - | 280 / 212 / 110 / 49 | 280 / 212 / 110 / 49 |
+| Rows | 1,746 | 3,103 (x1.78) | 3,392 (x1.94) |
+| Prompt tokens, median / max / all | 9,264 / 14,948 / 16.5M | 11,546 / 15,892 / 34.2M (x2.07) | 12,279 / 16,337 / 40.5M (x2.45) |
+| Looks skipped for the action budget | - | 0 | 0 |
+
+In the sample the refusal paths come from the two refusals the supervised model met (`parameter_correction_failure`
+76, the scan-size error after a bus split 34), 72 after the first breaker correction and 38 at the start, in 47 of
+the 60 two-breaker cases; the breakers-last paths come from the classes of pattern B (rx_cb_distant 16, rx_cb_meter
+17, rx_cb_shared_bus 16 of 20 each), 17 of the 49 with a refit.  Every path kept repairs its case by both audits.
+`every_version` was built: after a line fit the look comes before the student can fit another line on an estimate
+that still alarms because of a breaker (62 of pattern B's 90 training stops alarm), at 18% more tokens than
+`after_breakers`.
+
+**The development reference under `every_version`** (the 300 development cases, success paths only): 247 repaired
+by both audits, the same verdict as the first rule on 300 of 300; 6.09 actions a path against 4.24 (the rule
+expert's replay 6.53), no look skipped.
+
+**The full build** (the 2,550 training cases, at e95db77, 94 minutes on 26 workers; under
+`output/minimal_env_20261121/`, not in git):
+
+| | First build | Second build |
+| --- | --- | --- |
+| Paths: success / recovery / refusal / breakers-last | 2,550 / 1,855 / - / - | 2,550 / 1,855 / 912 / 635 |
+| Of them repaired by both audits | 2,091 / 1,853 | 2,091 / 1,853 / 911 / 635 |
+| Success path, mean actions | 4.26 | 6.11 |
+| Look after an accepted breaker correction (success paths) | 300 of 1,600 | 1,600 of 1,600 |
+| Rows | 16,077 | 33,181 (x2.06) |
+| Prompt tokens, median / max / all | 9,221 / 14,948 / 149.0M | 12,327 / 16,477 / 396.8M (x2.66) |
+| `CB_2R4_2R5` as a target | 41 of 2,109 breaker targets | 44 of 2,991 |
+
+No look was skipped for the action budget and no healthy object was damaged.
+
+**The selection** (`select_rows --repeat-breaker CB_2R4_2R5=3`, `output/minimal_env_20261121/selection_ieee14`):
+the same 2,550 cases and the same split (2,398 training, 152 validation), 30,960 training rows (first selection
+14,823) and 256 validation rows; the 305 `finish unresolved` rows on a passing estimate left out as before.  By
+tool: `inspect` 14,544, `finish` 5,300, `correct_parameters` 4,761, `correct_topology` 2,895, `undo` 1,738,
+`correct_measurements` 1,722.  The 39 rows that correct `CB_2R4_2R5` are written three times (78 more).  Prompt
+tokens about 369M (137M); train sha256 aa0e7985..., validation 67ffcb58....
+
+**What a pass on these rows costs** (my estimate): 7,740 optimizer steps at about 47,700 prompt tokens a step,
+against the first pass's 3,706 at about 37,000 and 51 s a step over 49.5 hours: about 66 s a step, about 140 hours
+for one pass from the base model.  The cell (`research/hpc/minimal_sft_20261121/`, prepared, not deployed) counts
+75 s a step and would submit 16 links of 12 hours; the upload is 689 MB (the first pass's 270 MB took 13 minutes).
+Cheaper ways, each a choice: `after_breakers` (about 16% fewer tokens, a rebuild of about 80 minutes), or the
+first pass's adapter as the start (`sft1`) with fewer steps than one pass (not yet an option of the stage).

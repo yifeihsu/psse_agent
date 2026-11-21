@@ -29,8 +29,19 @@ numbers are in `docs/minimal_env_20261115.md`, section 14):
   last, the look that shows the breaker, and a refit of what was corrected on the wrong topology; kept when it
   repairs by both audits.
 
-`research/minimal_env/select_rows.py` then takes every case as before; `--repeat-breaker CB_2R4_2R5=K` writes the
-training rows that correct that breaker K times (the default selection of this cell: see section 14).
+`research/minimal_env/select_rows.py` then takes every case as before; `--repeat-breaker CB_2R4_2R5=3` writes the
+39 training rows that correct that breaker three times.
+
+**Built 2026-11-21 at e95db77** (`output/minimal_env_20261121/`, not in git; numbers in section 14 of the doc):
+33,181 rows from the 2,550 training cases (first build 16,077): 2,550 success paths, 1,855 recovery paths, 912
+refusal paths and 635 breakers-last paths; the look follows 1,600 of the 1,600 accepted breaker corrections of the
+success paths (first build 300); 6.11 actions a success path (4.26).  The selection: 30,960 training rows (14,823)
+on the same 2,398 training cases, 256 validation rows on the same 152; about 369M prompt tokens (137M), median
+12,327 and longest 16,477 by the sibling-ratio estimate; train sha256 aa0e7985..., validation 67ffcb58....
+
+**Cost of a pass** (my estimate): 7,740 optimizer steps at about 47,700 tokens a step (the first pass: 3,706 at
+about 37,000, 51 s a step, 49.5 hours): about 66 s a step and 140 hours from the base model.  `submit_cell.sh`
+counts 75 s a step: 16 links of 12 hours.  The upload is 689 MB.
 
 ## Starts
 
