@@ -1,0 +1,5 @@
+# What goes to the cluster as it is, or is compared byte for byte, stays LF in every checkout.
+*.json text eol=lf
+*.sh text eol=lf
+*.sbatch text eol=lf
+*.env text eol=lf

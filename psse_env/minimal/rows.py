@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from psse_env.minimal import observation as view
-from psse_env.minimal.truth import KIND_ERROR, KIND_PREFIX, TARGET_KINDS
+from psse_env.minimal.truth import KIND_ERROR, KIND_PREFIX, KIND_REFUSED, LOOK_NEEDED, TARGET_KINDS
 
 ROW_CONTRACT = "minimal_sft_row_v1"
 #: ``metadata.protocol`` of these rows: the interface their prompts and tool calls belong to.
@@ -45,7 +45,7 @@ def demonstration_rows(root: Mapping[str, Any], built: Mapping[str, Any], *, tag
     scenario_id = str((root.get("execution") or {}).get("scenario_id") or "")
     rows: list[dict[str, Any]] = []
     for step in built["steps"]:
-        if step["kind"] in (KIND_PREFIX, KIND_ERROR) or step["kind"] not in TARGET_KINDS:
+        if step["kind"] in (KIND_PREFIX, KIND_ERROR, KIND_REFUSED) or step["kind"] not in TARGET_KINDS:
             continue
         if step["result"].get("status") != "ok":
             continue  # a call the tool could not carry out is recorded in the episode, not taught
@@ -59,9 +59,14 @@ def demonstration_rows(root: Mapping[str, Any], built: Mapping[str, Any], *, tag
             "declared": built["score"].get("declared"),
             "estimator_passes_at_end": bool(built["score"].get("estimator_passes")),
         }
+        if built.get("looks") not in (None, LOOK_NEEDED):  # the first build's rows carry no such label
+            labels["looks"] = built["looks"]
         if built["demonstration"] == "recovery":
             labels["after"] = built.get("after")
             labels["injected_error"] = built.get("injected_error")
+        if built["demonstration"] == "refusal":
+            labels["after"] = built.get("after")
+            labels["refused_call"] = built.get("refused_call")
         rows.append(step_row(root, step, example_id=f"{scenario_id}:{tag}:{int(step['step']):02d}", labels=labels))
     return rows
 

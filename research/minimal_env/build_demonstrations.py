@@ -9,6 +9,12 @@ and, with ``--recoveries N``, N recovery paths (a correction on a healthy compon
 ``undo`` and the rest of the true corrections).  Every sequence is executed here, through
 ``MinimalDiagnosisEnv``; nothing is taken from an older trace.
 
+``--looks`` sets where the demonstrations look at the breakers (``psse_env.minimal.truth``,
+"Look rules"; the default ``needed`` is the first build's).  For a case whose success path
+repairs it, ``--refusals`` adds a refusal path (a staged fit of a healthy line the tool
+refuses, then the rest) and ``--breakers-last`` a path with the breaker corrections last,
+each kept only where it could be staged and, for the second, where it repairs the case.
+
 Outputs under ``--output-dir``:
 
 ``episodes.jsonl``
@@ -75,16 +81,25 @@ def _prompt_chars(rows: Sequence[Mapping[str, Any]]) -> list[int]:
 def _run_root(root: Mapping[str, Any]) -> dict[str, Any]:
     assert _ENV is not None
     started = time.perf_counter()
-    success = truth.build_success(root, _ENV, max_orders=int(_SETTINGS["max_orders"]),
-                                  opening_inspection=bool(_SETTINGS["opening_inspection"]))
+    looks = str(_SETTINGS.get("looks") or truth.LOOK_NEEDED)
+    opening = bool(_SETTINGS["opening_inspection"])
+    success = truth.build_success(root, _ENV, max_orders=int(_SETTINGS["max_orders"]), opening_inspection=opening, looks=looks)
     sequences = [("success", success)]
     if success["solved"]:
         plan = truth.recovery_plan(root, success["order"], seed=int(_SETTINGS["seed"]), count=int(_SETTINGS["recoveries"]))
         for number, item in enumerate(plan):
             built = truth.build_recovery(root, _ENV, success["order"], after=item["after"], family=item["family"],
-                                         opening_inspection=bool(_SETTINGS["opening_inspection"]))
+                                         opening_inspection=opening, looks=looks)
             if built is not None:
                 sequences.append((f"recovery{number}", built))
+        if _SETTINGS.get("refusals"):
+            built = truth.build_refusal(root, _ENV, success["order"], opening_inspection=opening, looks=looks)
+            if built is not None:
+                sequences.append(("refusal0", built))
+        if _SETTINGS.get("breakers_last"):
+            built = truth.build_breakers_last(root, _ENV, success["order"], opening_inspection=opening, looks=looks)
+            if built is not None:
+                sequences.append(("breakerslast0", built))
     episodes, rows = [], []
     for tag, built in sequences:
         if _SETTINGS["export_rows"]:
@@ -111,6 +126,7 @@ def summarize(episodes: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         if record["solved"]:
             cell[f"{kind}_solved"] += 1
             totals[f"{kind}_solved"] += 1
+        totals["skipped_looks"] += int(record.get("skipped_looks") or 0)
         if kind == "success":
             actions.append(len(record["steps"]))
             totals["strict_solved"] += int(bool(score["strict"]["solved"]))
@@ -161,6 +177,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--per-class", type=int, default=None, help="run the first N cases of every class only")
     parser.add_argument("--no-opening-inspection", action="store_true",
                         help="inspect the breakers only before a breaker correction, not at the start of every case")
+    parser.add_argument("--looks", choices=truth.LOOK_RULES, default=truth.LOOK_NEEDED,
+                        help="where the demonstrations look at the breakers (psse_env.minimal.truth, 'Look rules')")
+    parser.add_argument("--refusals", action="store_true", help="a refusal path for every case whose success path repairs it")
+    parser.add_argument("--breakers-last", action="store_true",
+                        help="a breakers-last path for every repaired case with a breaker error and another one")
     parser.add_argument("--no-rows", action="store_true")
     parser.add_argument("--seed", type=int, default=20261115)
     parser.add_argument("--roots", nargs="*", help="scenario ids to run (default: all)")
@@ -188,6 +209,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "table_versions": (int(args.table_versions) or None), "max_orders": int(args.max_orders), "recoveries": int(args.recoveries),
         "opening_inspection": not args.no_opening_inspection, "export_rows": not args.no_rows, "seed": int(args.seed),
     }
+    if args.looks != truth.LOOK_NEEDED or args.refusals or args.breakers_last:
+        # Recorded only when used, so the first build's settings read as they did.
+        settings.update(looks=args.looks, refusals=bool(args.refusals), breakers_last=bool(args.breakers_last))
     args.output_dir.mkdir(parents=True, exist_ok=True)
     started = time.time()
     episodes: list[dict[str, Any]] = []
@@ -203,7 +227,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             for record in result["episodes"]:
                 episode_file.write(json.dumps(record, sort_keys=True, allow_nan=False) + "\n")
                 episodes.append({key: record[key] for key in ("demonstration", "solved", "score", "compound_class", "steps")
-                                 } | {"orders_tried": record.get("orders_tried", 1)})
+                                 } | {"orders_tried": record.get("orders_tried", 1), "skipped_looks": record.get("skipped_looks", 0)})
                 episodes[-1]["steps"] = [None] * len(record["steps"])
             for row in result["rows"]:
                 row_file.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")

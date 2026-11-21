@@ -22,6 +22,36 @@ correction on a version whose breakers have not been inspected, and, with
 model, so that looking at the breakers is not a decision the truth made for
 the student.
 
+**Look rules** (``looks``).  Under that first rule (``needed``) a
+demonstration looks again after a breaker correction only when another
+breaker correction follows, so in the first build the look after the first
+of two breakers was the truth's decision (300 of 300 two-breaker cases, none
+of the 1,000 others), and the supervised model, which cannot see that
+decision's reason, mostly did not look (the stopping-state diagnostic of
+2026-11-20).  ``every_version`` looks before every action on a version whose
+breakers have not been looked at, ``finish`` included: a demonstration then
+acts only on versions whose breaker table it has seen, and looking is never
+a decision the truth makes.  ``after_breakers`` is the cheaper middle way:
+``needed``, and a look after every breaker correction and before ``finish``.
+A look yields to the action budget (``skipped_looks`` counts it).
+
+**Refusal paths** (``build_refusal``).  The true corrections up to the first
+breaker correction (none when the case has no breaker error), then, on the
+version the student has not looked at, the call the supervised model most
+often had refused there: a fit of the healthy line with the largest
+multiplier (``plausible_errors``).  Kept only when the tool refuses it; the
+refused call is context, never a target, and the rows begin with the step
+after it, under the look rule.
+
+**Breakers-last paths** (``build_breakers_last``).  For a case with a
+breaker error and another one, the same true corrections with the breakers
+last: the state where the lines or meters are corrected and a breaker is
+still wrong, which the supervised model reaches by correcting what it sees
+first, is then in the demonstrations, with the look that shows the breaker.
+A line fitted on the wrong topology is fitted wrong, so once the breakers
+are right the true objects still unrepaired are corrected once more.  Kept
+only when the path repairs the case by both audits.
+
 **Recovery paths** (``build_recovery``).  A demonstration that never errs
 cannot teach undoing.  A recovery path replays the first ``after`` true
 corrections, applies one correction to a healthy component, and then shows
@@ -64,10 +94,15 @@ from psse_env.minimal.scoring import audit_scenario, physical_comparison, score_
 DEMONSTRATION_CONTRACT = "minimal_truth_demonstration_v1"
 FAMILY_ORDER = {CORRECT_TOPOLOGY: 0, CORRECT_PARAMETERS: 1, CORRECT_MEASUREMENTS: 2}
 KIND_INSPECT, KIND_CORRECTION, KIND_UNDO, KIND_FINISH = "inspect", "correction", "undo", "finish"
-KIND_PREFIX, KIND_ERROR = "prefix", "injected_error"
-#: Step kinds that are training targets.  The replayed prefix repeats the success path and the injected error is wrong.
+KIND_PREFIX, KIND_ERROR, KIND_REFUSED = "prefix", "injected_error", "refused_call"
+#: Step kinds that are training targets.  The replayed prefix repeats the success path, the injected error is wrong
+#: and the refused call is the student's mistake the path answers.
 TARGET_KINDS = (KIND_INSPECT, KIND_CORRECTION, KIND_UNDO, KIND_FINISH)
 REPRESENTABLE_FLIPS = frozenset({"dangling_line_terminal", "reconnect_line_terminal", "bus_split", "merge"})
+#: The look rules (module docstring, "Look rules").  ``needed`` is the first build's and the default.
+LOOK_NEEDED, LOOK_AFTER_BREAKERS, LOOK_EVERY_VERSION = "needed", "after_breakers", "every_version"
+LOOK_RULES = (LOOK_NEEDED, LOOK_AFTER_BREAKERS, LOOK_EVERY_VERSION)
+INSPECT_BREAKERS = {"tool": INSPECT, "arguments": {"view": VIEW_BREAKERS}}
 
 
 def truth_corrections(root: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -114,21 +149,37 @@ def _breakers_shown(observation: Mapping[str, Any]) -> bool:
     return any(int(entry["version"]) == current and "substation" in entry for entry in observation["versions"])
 
 
+def _is_breaker_correction(action: Mapping[str, Any] | None) -> bool:
+    return bool(action) and action.get("tool") == CORRECT_TOPOLOGY and "breaker" in (action.get("arguments") or {})
+
+
+def _check_looks(looks: str) -> str:
+    if looks not in LOOK_RULES:
+        raise ValueError(f"looks must be one of {LOOK_RULES}, got {looks!r}")
+    return looks
+
+
 class _Run:
     """One scripted run: steps with the observation each action was chosen on."""
 
-    def __init__(self, env: MinimalDiagnosisEnv, root: Mapping[str, Any]) -> None:
+    def __init__(self, env: MinimalDiagnosisEnv, root: Mapping[str, Any], *, looks: str = LOOK_NEEDED) -> None:
         self.env = env
         self.root = root
+        self.looks = _check_looks(looks)
         self.scenario = audit_scenario(root)
         self.observation = env.reset(root)
         self.steps: list[dict[str, Any]] = []
+        #: The last accepted correction or ``undo``: the change that made the current version.
+        self.last_change: dict[str, Any] | None = None
+        self.skipped_looks = 0
 
     def act(self, action: Mapping[str, Any], kind: str) -> dict[str, Any]:
         before = self.observation
         self.observation, result = self.env.step(copy.deepcopy(dict(action)))
         self.steps.append({"step": self.env.steps, "kind": kind, "action": self.env.history()[-1]["action"],
                            "result": result, "observation": before})
+        if result.get("status") == "ok" and action.get("tool") in (CORRECT_TOPOLOGY, CORRECT_PARAMETERS, CORRECT_MEASUREMENTS, UNDO):
+            self.last_change = copy.deepcopy(dict(action))
         return result
 
     def solved(self) -> bool:
@@ -139,9 +190,32 @@ class _Run:
         return not self.env.done and self.env.max_actions - self.env.steps > reserve
 
 
+def _look(run: _Run, before: Mapping[str, Any], kind: str) -> bool:
+    """Inspect the breakers before the action ``before`` where the run's look rule asks for it; whether it looked.
+
+    Under ``needed`` the caller's loop holds the budget check, as in the first build; under the other rules a look
+    needs room for itself, the action and, before a correction, the ``finish`` after it.
+    """
+    if not run.env.breakers or run.env.done or _breakers_shown(run.observation):
+        return False
+    if run.looks == LOOK_EVERY_VERSION:
+        due = True
+    else:
+        due = _is_breaker_correction(before)
+        if run.looks == LOOK_AFTER_BREAKERS:
+            due = due or before.get("tool") == FINISH or _is_breaker_correction(run.last_change)
+    if not due:
+        return False
+    if run.looks != LOOK_NEEDED and not run.room(reserve=1 if before.get("tool") == FINISH else 2):
+        run.skipped_looks += 1
+        return False
+    run.act(INSPECT_BREAKERS, kind)
+    return True
+
+
 def _apply_corrections(run: _Run, queue: Sequence[Mapping[str, Any]], *, kind: str, inspect_kind: str,
                        retry: bool = True) -> list[dict[str, Any]]:
-    """Run the corrections in order, inspecting the breakers first where a breaker correction needs them shown.
+    """Run the corrections in order, inspecting the breakers first where the look rule asks for it.
 
     Returns the corrections whose tool failed, with the error.  A failed
     correction is tried once more after the others.
@@ -153,8 +227,7 @@ def _apply_corrections(run: _Run, queue: Sequence[Mapping[str, Any]], *, kind: s
     while (pending or again) and run.room():
         source = pending if pending else again
         action = source[0]
-        if action["tool"] == CORRECT_TOPOLOGY and "breaker" in action["arguments"] and not _breakers_shown(run.observation):
-            run.act({"tool": INSPECT, "arguments": {"view": VIEW_BREAKERS}}, inspect_kind)
+        if _look(run, action, inspect_kind):
             continue
         source.pop(0)
         result = run.act(action, kind)
@@ -167,6 +240,9 @@ def _apply_corrections(run: _Run, queue: Sequence[Mapping[str, Any]], *, kind: s
 
 
 def _finish(run: _Run) -> None:
+    if run.env.done:
+        return
+    _look(run, {"tool": FINISH, "arguments": {}}, KIND_INSPECT)
     if not run.env.done:
         run.act({"tool": FINISH, "arguments": {"outcome": OUTCOME_RESOLVED if run.solved() else OUTCOME_UNRESOLVED}}, KIND_FINISH)
 
@@ -177,18 +253,18 @@ def _record(run: _Run, *, demonstration: str, order: Sequence[Mapping[str, Any]]
     return {"contract": DEMONSTRATION_CONTRACT, "demonstration": demonstration, "scenario_id": run.env.scenario_id,
             "class": score.get("class"), "order": [copy.deepcopy(dict(action)) for action in order],
             "failed_corrections": [copy.deepcopy(dict(item)) for item in failed], "steps": run.steps, "score": score,
-            "solved": bool(score["solved"]), **extra}
+            "solved": bool(score["solved"]), "looks": run.looks, "skipped_looks": run.skipped_looks, **extra}
 
 
 def run_order(env: MinimalDiagnosisEnv, root: Mapping[str, Any], order: Sequence[Mapping[str, Any]], *,
-              opening_inspection: bool = True) -> dict[str, Any]:
+              opening_inspection: bool = True, looks: str = LOOK_NEEDED, demonstration: str = "success") -> dict[str, Any]:
     """One success-path run in the given order."""
-    run = _Run(env, root)
+    run = _Run(env, root, looks=looks)
     if opening_inspection and env.breakers:
-        run.act({"tool": INSPECT, "arguments": {"view": VIEW_BREAKERS}}, KIND_INSPECT)
+        run.act(INSPECT_BREAKERS, KIND_INSPECT)
     failed = _apply_corrections(run, order, kind=KIND_CORRECTION, inspect_kind=KIND_INSPECT)
     _finish(run)
-    return _record(run, demonstration="success", order=order, failed=failed)
+    return _record(run, demonstration=demonstration, order=order, failed=failed)
 
 
 def _tidied(order: Sequence[Mapping[str, Any]], built: Mapping[str, Any]) -> list[dict[str, Any]] | None:
@@ -204,8 +280,9 @@ def _tidied(order: Sequence[Mapping[str, Any]], built: Mapping[str, Any]) -> lis
 
 
 def build_success(root: Mapping[str, Any], env: MinimalDiagnosisEnv, *, max_orders: int = 6,
-                  opening_inspection: bool = True) -> dict[str, Any]:
+                  opening_inspection: bool = True, looks: str = LOOK_NEEDED) -> dict[str, Any]:
     """The case's success path: the first order that ends repaired, else the first order's run."""
+    _check_looks(looks)
     corrections = truth_corrections(root)
     kept: dict[str, Any] | None = None
     runs: list[dict[str, Any]] = []
@@ -219,7 +296,7 @@ def build_success(root: Mapping[str, Any], env: MinimalDiagnosisEnv, *, max_orde
                      "actions": len(built["steps"]), "failed_corrections": len(built["failed_corrections"]), **extra})
 
     for order in orders(corrections, max_orders):
-        built = run_order(env, root, order, opening_inspection=opening_inspection)
+        built = run_order(env, root, order, opening_inspection=opening_inspection, looks=looks)
         note(built)
         if kept is None or rank(built) > rank(kept):
             kept = built
@@ -230,7 +307,7 @@ def build_success(root: Mapping[str, Any], env: MinimalDiagnosisEnv, *, max_orde
     if kept["solved"]:
         tidy = _tidied(kept["order"], kept)
         if tidy is not None:
-            again = run_order(env, root, tidy, opening_inspection=opening_inspection)
+            again = run_order(env, root, tidy, opening_inspection=opening_inspection, looks=looks)
             note(again, tidied=True)
             if rank(again) >= rank(kept) and len(again["failed_corrections"]) < len(kept["failed_corrections"]):
                 kept, tidied = again, True
@@ -275,38 +352,128 @@ def plausible_errors(root: Mapping[str, Any], observation: Mapping[str, Any]) ->
 
 def build_recovery(root: Mapping[str, Any], env: MinimalDiagnosisEnv, order: Sequence[Mapping[str, Any]], *,
                    after: int, family: str | None = None, error: Mapping[str, Any] | None = None,
-                   opening_inspection: bool = True) -> dict[str, Any] | None:
+                   opening_inspection: bool = True, looks: str = LOOK_NEEDED) -> dict[str, Any] | None:
     """A recovery path: ``after`` true corrections, one correction on a healthy component, then the way back.
 
     ``error`` names the erroneous correction; otherwise ``plausible_errors``
     proposes one, of ``family`` when given (a tool name).  Returns ``None``
     when no error could be staged: the prefix did not run cleanly, nothing
     healthy stood out, or the erroneous tool call failed and so left nothing
-    to undo.
+    to undo.  Under a look rule other than ``needed`` the error is made on a
+    version whose breakers were looked at, and the erroneous version is
+    looked at (a target) before the ``undo`` where the rule asks for it.
     """
-    run = _Run(env, root)
+    run = _Run(env, root, looks=looks)
     if opening_inspection and env.breakers:
-        run.act({"tool": INSPECT, "arguments": {"view": VIEW_BREAKERS}}, KIND_PREFIX)
+        run.act(INSPECT_BREAKERS, KIND_PREFIX)
     prefix, rest = list(order[: int(after)]), list(order[int(after):])
     if _apply_corrections(run, prefix, kind=KIND_PREFIX, inspect_kind=KIND_PREFIX, retry=False) or run.env.done:
         return None
     breaker_error = (error is None and family == CORRECT_TOPOLOGY) or (
         error is not None and error["tool"] == CORRECT_TOPOLOGY and "breaker" in error["arguments"])
-    if breaker_error and env.breakers and not _breakers_shown(run.observation):
+    looked_before = (looks == LOOK_EVERY_VERSION
+                     or (looks == LOOK_AFTER_BREAKERS and _is_breaker_correction(run.last_change)))
+    if (breaker_error or looked_before) and env.breakers and not _breakers_shown(run.observation):
         # The mistake is made by a reader of the breaker table, so the table is on the state it is made on.
-        run.act({"tool": INSPECT, "arguments": {"view": VIEW_BREAKERS}}, KIND_PREFIX)
+        run.act(INSPECT_BREAKERS, KIND_PREFIX)
     if error is None:
         candidates = [item for item in plausible_errors(root, run.observation) if family in (None, item["tool"])]
         if not candidates:
             return None
         error = candidates[0]
-    if not run.room(reserve=2 + len(rest)) or run.act(error, KIND_ERROR).get("status") != "ok":
+    reserve = 2 + len(rest) if looks == LOOK_NEEDED else 2 * len(rest) + 3
+    if not run.room(reserve=reserve) or run.act(error, KIND_ERROR).get("status") != "ok":
         return None
-    run.act({"tool": UNDO, "arguments": {}}, KIND_UNDO)
+    undo = {"tool": UNDO, "arguments": {}}
+    _look(run, undo, KIND_INSPECT)
+    run.act(undo, KIND_UNDO)
     failed = _apply_corrections(run, rest, kind=KIND_CORRECTION, inspect_kind=KIND_INSPECT)
     _finish(run)
     return _record(run, demonstration="recovery", order=order, failed=failed, after=int(after),
                    injected_error=copy.deepcopy(dict(error)))
+
+
+def build_refusal(root: Mapping[str, Any], env: MinimalDiagnosisEnv, order: Sequence[Mapping[str, Any]], *,
+                  error: Mapping[str, Any] | None = None, opening_inspection: bool = True,
+                  looks: str = LOOK_NEEDED) -> dict[str, Any] | None:
+    """A refusal path: the true corrections up to the first breaker correction, a call the tool refuses, the rest.
+
+    ``error`` names the refused call; otherwise it is the fit of the healthy
+    line ``plausible_errors`` proposes on the version reached (module
+    docstring, "Refusal paths").  Returns ``None`` when nothing could be
+    staged: the prefix did not run cleanly, no healthy line stood out, the
+    budget is too short, or the tool carried the call out (a correction made
+    on a healthy component is a recovery path's matter).
+    """
+    run = _Run(env, root, looks=looks)
+    if opening_inspection and env.breakers:
+        run.act(INSPECT_BREAKERS, KIND_PREFIX)
+    first = next((index for index, action in enumerate(order) if _is_breaker_correction(action)), None)
+    after = 0 if first is None else first + 1
+    prefix, rest = list(order[:after]), list(order[after:])
+    # The prefix looks only where its rule asks before each correction: after its last one the student has not looked.
+    if _apply_corrections(run, prefix, kind=KIND_PREFIX, inspect_kind=KIND_PREFIX, retry=False) or run.env.done:
+        return None
+    if error is None:
+        candidates = [item for item in plausible_errors(root, run.observation) if item["tool"] == CORRECT_PARAMETERS]
+        if not candidates:
+            return None
+        error = candidates[0]
+    if not run.room(reserve=2 * len(rest) + 2):
+        return None
+    result = run.act(error, KIND_REFUSED)
+    if result.get("status") == "ok":
+        return None
+    failed = _apply_corrections(run, rest, kind=KIND_CORRECTION, inspect_kind=KIND_INSPECT)
+    _finish(run)
+    return _record(run, demonstration="refusal", order=order, failed=failed, after=after,
+                   refused_call=copy.deepcopy(dict(error)),
+                   refusal={"error_code": result.get("error_code"), "error_detail": str(result.get("error_detail") or "")[:200]})
+
+
+def breakers_last(order: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The same corrections with the breaker corrections moved to the end, each family's order kept."""
+    return ([copy.deepcopy(dict(action)) for action in order if not _is_breaker_correction(action)]
+            + [copy.deepcopy(dict(action)) for action in order if _is_breaker_correction(action)])
+
+
+def _refits(run: _Run) -> list[dict[str, Any]]:
+    """The corrections of the true lines and meters the current state still leaves unrepaired, to run once more."""
+    left = [error for error in physical_comparison(run.scenario, run.env.final_state())["errors"] if not error["repaired"]]
+    out = [{"tool": CORRECT_PARAMETERS, "arguments": {"line": int(error["line"])}}
+           for error in sorted((error for error in left if error["kind"] == "line"), key=lambda error: int(error["line"]))]
+    meters = sorted(int(error["meter"]) for error in left if error["kind"] == "meter")
+    if meters:
+        out.append({"tool": CORRECT_MEASUREMENTS, "arguments": {"meters": meters}})
+    return out
+
+
+def build_breakers_last(root: Mapping[str, Any], env: MinimalDiagnosisEnv, order: Sequence[Mapping[str, Any]], *,
+                        opening_inspection: bool = True, looks: str = LOOK_NEEDED) -> dict[str, Any] | None:
+    """A breakers-last path (module docstring), or ``None`` when the case lacks a breaker error or another one, the
+    order already has its breakers last, or the path does not repair the case by both audits.
+
+    A line fitted, or a meter repaired, while a breaker is still wrong is corrected on the wrong topology; once the
+    breakers are right, the corrections of the true objects still unrepaired run once more (``refits``), as the way on
+    from the state the supervised model reaches.
+    """
+    if not any(_is_breaker_correction(action) for action in order) or all(_is_breaker_correction(action) for action in order):
+        return None
+    alternative = breakers_last(order)
+    if [_signature(action) for action in alternative] == [_signature(action) for action in order]:
+        return None
+    run = _Run(env, root, looks=looks)
+    if opening_inspection and env.breakers:
+        run.act(INSPECT_BREAKERS, KIND_INSPECT)
+    failed = _apply_corrections(run, alternative, kind=KIND_CORRECTION, inspect_kind=KIND_INSPECT)
+    refits = _refits(run) if not run.env.done else []
+    if refits:
+        failed += _apply_corrections(run, refits, kind=KIND_CORRECTION, inspect_kind=KIND_INSPECT, retry=False)
+    _finish(run)
+    built = _record(run, demonstration="breakers_last", order=alternative, failed=failed, refits=refits)
+    if not (built["solved"] and built["score"]["strict"]["solved"]):
+        return None
+    return built
 
 
 def recovery_plan(root: Mapping[str, Any], order: Sequence[Mapping[str, Any]], *, seed: int, count: int = 1) -> list[dict[str, Any]]:
@@ -321,7 +488,8 @@ def recovery_plan(root: Mapping[str, Any], order: Sequence[Mapping[str, Any]], *
 
 
 __all__ = [
-    "DEMONSTRATION_CONTRACT", "KIND_CORRECTION", "KIND_ERROR", "KIND_FINISH", "KIND_INSPECT", "KIND_PREFIX", "KIND_UNDO",
-    "TARGET_KINDS", "build_recovery", "build_success", "orders", "plausible_errors", "recovery_plan", "run_order",
-    "truth_corrections",
+    "DEMONSTRATION_CONTRACT", "KIND_CORRECTION", "KIND_ERROR", "KIND_FINISH", "KIND_INSPECT", "KIND_PREFIX", "KIND_REFUSED",
+    "KIND_UNDO", "LOOK_AFTER_BREAKERS", "LOOK_EVERY_VERSION", "LOOK_NEEDED", "LOOK_RULES", "TARGET_KINDS",
+    "breakers_last", "build_breakers_last", "build_recovery", "build_refusal", "build_success", "orders",
+    "plausible_errors", "recovery_plan", "run_order", "truth_corrections",
 ]

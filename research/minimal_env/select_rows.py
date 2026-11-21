@@ -25,6 +25,13 @@ cases kept apart for another use; they appear in neither view.  The validation v
 seeded sample of the held-out cases' rows (``--validation-rows``), balanced over the step
 kinds so that the rare ones (``undo``) are seen.
 
+**Options of the second build** (2026-11-21).  ``--skip-demonstrations`` leaves out the
+paths of the named kinds (``recovery``, ``refusal``, ``breakers_last``) without a rebuild.
+``--repeat-breaker NAME=K`` writes every training row whose target corrects breaker NAME K
+times in all (validation untouched): the supervised model of the first build wrote
+``CB_2R4_R5`` for ``CB_2R4_2R5`` in 245 of 263 calls, a copy defect of one name that its 36
+training targets did not prevent.
+
 Outputs: ``train.jsonl``, ``validation.jsonl``, ``selection_cases.json`` and
 ``selection_report.json``.
 """
@@ -62,12 +69,13 @@ def _sha256(path: Path) -> str:
 
 
 def choose_cases(episodes: Sequence[Mapping[str, Any]], *, keep_unsolved: bool = True,
-                 excluded: frozenset[str] | set[str] = frozenset()) -> dict[str, dict[str, Any]]:
+                 excluded: frozenset[str] | set[str] = frozenset(),
+                 skip: frozenset[str] | set[str] = frozenset()) -> dict[str, dict[str, Any]]:
     """Per taken case: its class, whether it is repaired and the tags of the sequences whose rows are taken."""
     cases: dict[str, dict[str, Any]] = {}
     for record in episodes:
         scenario = str(record["scenario_id"])
-        if scenario in excluded:
+        if scenario in excluded or str(record["demonstration"]) in skip:
             continue
         repaired = bool(record["solved"]) and bool(record["score"]["strict"]["solved"])
         entry = cases.setdefault(scenario, {"class": record.get("compound_class"), "solved": False, "tags": []})
@@ -78,6 +86,28 @@ def choose_cases(episodes: Sequence[Mapping[str, Any]], *, keep_unsolved: bool =
         elif repaired:
             entry["tags"].append(str(record["tag"]))
     return {scenario: entry for scenario, entry in cases.items() if entry["solved"] or (keep_unsolved and entry["tags"])}
+
+
+def target_breaker(row: Mapping[str, Any]) -> str | None:
+    """The breaker a row's target call corrects, if it is a breaker correction."""
+    for call in row["messages"][-1].get("tool_calls") or []:
+        function = call.get("function") or {}
+        arguments = function.get("arguments") or {}
+        if isinstance(arguments, str):
+            arguments = json.loads(arguments)
+        if function.get("name") == "correct_topology" and arguments.get("breaker"):
+            return str(arguments["breaker"])
+    return None
+
+
+def parse_repeats(values: Sequence[str] | None) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for value in values or []:
+        name, _, count = str(value).partition("=")
+        if not name or not count.isdigit() or int(count) < 1:
+            raise ValueError(f"--repeat-breaker wants NAME=K with K >= 1, got {value!r}")
+        out[name] = int(count)
+    return out
 
 
 def split_cases(cases: Mapping[str, Mapping[str, Any]], *, share: float, seed: int) -> set[str]:
@@ -105,18 +135,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--exclude-roots", type=Path, default=None, help='JSON list of scenario ids, or {"roots": [...]}')
     parser.add_argument("--solved-only", action="store_true", help="leave out the cases the correction tools cannot repair")
     parser.add_argument("--seed", type=int, default=20261115)
+    parser.add_argument("--skip-demonstrations", default="", help="comma-separated demonstration kinds to leave out")
+    parser.add_argument("--repeat-breaker", action="append", default=[], metavar="NAME=K",
+                        help="write the training rows whose target corrects breaker NAME K times in all")
     args = parser.parse_args(argv)
+    skip = {item.strip() for item in str(args.skip_demonstrations).split(",") if item.strip()}
+    if "success" in skip:
+        raise SystemExit("the success paths cannot be left out")
+    repeats = parse_repeats(args.repeat_breaker)
 
     excluded: set[str] = set()
     if args.exclude_roots is not None:
         payload = json.loads(args.exclude_roots.read_text(encoding="utf-8"))
         excluded = {str(item) for item in (payload.get("roots") if isinstance(payload, Mapping) else payload) or []}
     episodes = list(_jsonl(args.demonstrations / "episodes.jsonl"))
-    cases = choose_cases(episodes, keep_unsolved=not args.solved_only, excluded=excluded)
+    cases = choose_cases(episodes, keep_unsolved=not args.solved_only, excluded=excluded, skip=skip)
     held = split_cases(cases, share=args.validation_share, seed=args.seed)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    counts: dict[str, Counter] = {"train": Counter(), "validation_pool": Counter(), "dropped": Counter()}
+    counts: dict[str, Counter] = {"train": Counter(), "validation_pool": Counter(), "dropped": Counter(), "repeated": Counter()}
     chars: list[int] = []
     pool: dict[str, list[dict[str, Any]]] = defaultdict(list)
     train_path = args.output_dir / "train.jsonl"
@@ -140,10 +177,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 pool[key].append(row)
                 counts["validation_pool"][key] += 1
             else:
-                train.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
-                counts["train"][key] += 1
-                counts["train"][f"tool:{labels['tool']}"] += 1
-                chars.append(sum(len(str(message.get("content") or "")) for message in row["messages"][:2]))
+                copies = repeats.get(target_breaker(row) or "", 1)
+                for copy_index in range(copies):
+                    written = row if copy_index == 0 else {**row, "example_id": f"{row['example_id']}:repeat{copy_index}"}
+                    train.write(json.dumps(written, sort_keys=True, allow_nan=False) + "\n")
+                    counts["train"][key] += 1
+                    counts["train"][f"tool:{labels['tool']}"] += 1
+                    chars.append(sum(len(str(message.get("content") or "")) for message in row["messages"][:2]))
+                if copies > 1:
+                    counts["repeated"][str(target_breaker(row))] += copies - 1
     # The validation view: the kinds in turn, so a rare kind is not crowded out by the common ones.
     rng = random.Random(int(args.seed))
     for rows in pool.values():
@@ -166,13 +208,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = {
         "contract": SELECTION_CONTRACT, "demonstrations": str(args.demonstrations.resolve()),
         "settings": {"validation_share": args.validation_share, "validation_rows": args.validation_rows,
-                     "solved_only": bool(args.solved_only), "seed": args.seed, "excluded_roots": len(excluded)},
+                     "solved_only": bool(args.solved_only), "seed": args.seed, "excluded_roots": len(excluded),
+                     **({"skip_demonstrations": sorted(skip)} if skip else {}),
+                     **({"repeat_breaker": repeats} if repeats else {})},
         "rows_read": rows_seen,
         "rows_dropped": dict(sorted(counts["dropped"].items())),
         "cases": {"taken": len(cases), "train": len(cases) - len(held), "validation": len(held),
                   "repaired": sum(1 for entry in cases.values() if entry["solved"]),
                   "beyond_the_tools": sum(1 for entry in cases.values() if not entry["solved"]),
-                  "with_a_recovery_path": sum(1 for entry in cases.values() if len(entry["tags"]) > 1)},
+                  "with_a_recovery_path": sum(1 for entry in cases.values() if len(entry["tags"]) > 1),
+                  "paths_by_kind": dict(sorted(Counter(
+                      tag.rstrip("0123456789") for entry in cases.values() for tag in entry["tags"]).items()))},
+        **({"repeated_rows": dict(sorted(counts["repeated"].items()))} if counts["repeated"] else {}),
         "train_rows": sum(value for key, value in counts["train"].items() if not key.startswith("tool:")),
         "train_rows_by_kind": {key: value for key, value in sorted(counts["train"].items()) if not key.startswith("tool:")},
         "train_rows_by_tool": {key[5:]: value for key, value in sorted(counts["train"].items()) if key.startswith("tool:")},

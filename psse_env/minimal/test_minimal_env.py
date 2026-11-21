@@ -531,6 +531,97 @@ class DemonstrationTests(unittest.TestCase):
         self.assertEqual([step["action"]["tool"] for step in built["steps"]],
                          ["inspect", "correct_topology", "inspect", "correct_topology", "finish"])
 
+    def test_every_version_acts_only_on_versions_whose_breakers_were_looked_at(self) -> None:
+        for name in ("rx_cb_meter", "cb2_split", "control_meter"):
+            built = truth.build_success(ROOTS[name], _env(), looks=truth.LOOK_EVERY_VERSION)
+            self.assertTrue(built["solved"] and built["score"]["strict"]["solved"], name)
+            self.assertEqual(built["skipped_looks"], 0)
+            for step in built["steps"]:
+                if step["action"]["tool"] != "inspect":
+                    self.assertTrue(truth._breakers_shown(step["observation"]), (name, step["step"], step["action"]))
+        tools = [step["action"]["tool"] for step in truth.build_success(ROOTS["rx_cb_meter"], _env(), looks=truth.LOOK_EVERY_VERSION)["steps"]]
+        self.assertEqual(tools, ["inspect", "correct_topology", "inspect", "correct_parameters", "inspect", "correct_measurements",
+                                 "inspect", "finish"])
+        # Without the opening inspection the rule still looks at the first version before acting on it.
+        meters = truth.build_success(ROOTS["control_meter"], _env(), opening_inspection=False, looks=truth.LOOK_EVERY_VERSION)
+        self.assertEqual([step["action"]["tool"] for step in meters["steps"]], ["inspect", "correct_measurements", "inspect", "finish"])
+        with self.assertRaises(ValueError):
+            truth.build_success(ROOTS["control_meter"], _env(), looks="sometimes")
+
+    def test_after_breakers_looks_after_each_breaker_and_before_finishing(self) -> None:
+        tools = [step["action"]["tool"] for step in truth.build_success(ROOTS["rx_cb_meter"], _env(), looks=truth.LOOK_AFTER_BREAKERS)["steps"]]
+        self.assertEqual(tools, ["inspect", "correct_topology", "inspect", "correct_parameters", "correct_measurements", "inspect", "finish"])
+        tools = [step["action"]["tool"] for step in truth.build_success(ROOTS["cb2_split"], _env(), looks=truth.LOOK_AFTER_BREAKERS)["steps"]]
+        self.assertEqual(tools, ["inspect", "correct_topology", "inspect", "correct_topology", "inspect", "finish"])
+
+    def test_the_look_after_a_breaker_correction_is_no_longer_the_truths_decision(self) -> None:
+        def after_breaker(looks: str) -> set[bool]:
+            seen = set()
+            for name in ("rx_cb_meter", "cb2_split"):
+                steps = truth.build_success(ROOTS[name], _env(), looks=looks)["steps"]
+                for index, step in enumerate(steps[:-1]):
+                    if step["action"]["tool"] == "correct_topology":
+                        seen.add(steps[index + 1]["action"]["tool"] == "inspect")
+            return seen
+
+        # The first build looks after a breaker correction only where another breaker correction follows.
+        self.assertEqual(after_breaker(truth.LOOK_NEEDED), {True, False})
+        self.assertEqual(after_breaker(truth.LOOK_EVERY_VERSION), {True})
+        self.assertEqual(after_breaker(truth.LOOK_AFTER_BREAKERS), {True})
+
+    def test_a_refusal_path_answers_the_refused_call_by_looking(self) -> None:
+        root = ROOTS["cb2_split"]
+        order = truth.orders(truth.truth_corrections(root), 1)[0]
+        refused = {"tool": "correct_parameters", "arguments": {"line": 999}}  # no such line: the tool always refuses it
+        built = truth.build_refusal(root, _env(), order, error=refused, looks=truth.LOOK_EVERY_VERSION)
+        self.assertIsNotNone(built)
+        kinds = [step["kind"] for step in built["steps"]]
+        self.assertEqual(kinds, [truth.KIND_PREFIX, truth.KIND_PREFIX, truth.KIND_REFUSED, truth.KIND_INSPECT,
+                                 truth.KIND_CORRECTION, truth.KIND_INSPECT, truth.KIND_FINISH])
+        self.assertEqual(built["steps"][2]["result"]["error_code"], ERROR_UNKNOWN_OBJECT)
+        self.assertTrue(built["solved"] and built["score"]["strict"]["solved"])
+        rows = demonstration_rows(root, built, tag="refusal0")
+        self.assertEqual([row["minimal"]["kind"] for row in rows], [truth.KIND_INSPECT, truth.KIND_CORRECTION, truth.KIND_INSPECT,
+                                                                    truth.KIND_FINISH])
+        self.assertIn('correct_parameters {"line":999} -> error', rows[0]["messages"][1]["content"])
+        self.assertEqual((rows[0]["minimal"]["refused_call"], rows[0]["minimal"]["looks"]), (refused, truth.LOOK_EVERY_VERSION))
+        # A call the tool carries out is a recovery path's matter, not a refusal.
+        self.assertIsNone(truth.build_refusal(root, _env(), order, error=order[1], looks=truth.LOOK_EVERY_VERSION))
+
+    def test_a_recovery_path_looks_at_the_erroneous_version_before_undoing_it(self) -> None:
+        root = ROOTS["control_meter"]
+        order = truth.orders(truth.truth_corrections(root), 1)[0]
+        built = truth.build_recovery(root, _env(), order, after=0, family="correct_measurements", looks=truth.LOOK_EVERY_VERSION)
+        self.assertIsNotNone(built)
+        self.assertEqual([step["kind"] for step in built["steps"]],
+                         [truth.KIND_PREFIX, truth.KIND_ERROR, truth.KIND_INSPECT, truth.KIND_UNDO, truth.KIND_CORRECTION,
+                          truth.KIND_INSPECT, truth.KIND_FINISH])
+        self.assertTrue(built["solved"])
+
+    def test_a_breakers_last_path_corrects_the_breaker_after_the_others(self) -> None:
+        cb2 = ROOTS["cb2_split"]
+        self.assertIsNone(truth.build_breakers_last(cb2, _env(), truth.orders(truth.truth_corrections(cb2), 1)[0]))
+        root = ROOTS["rx_cb_meter"]
+        order = truth.orders(truth.truth_corrections(root), 1)[0]
+        self.assertEqual([action["tool"] for action in truth.breakers_last(order)],
+                         ["correct_parameters", "correct_measurements", "correct_topology"])
+        built = truth.build_breakers_last(root, _env(), order, looks=truth.LOOK_EVERY_VERSION)
+        self.assertIsNotNone(built)
+        tools = [step["action"]["tool"] for step in built["steps"]]
+        self.assertEqual(built["demonstration"], "breakers_last")
+        breaker = tools.index("correct_topology")
+        self.assertLess(tools.index("correct_parameters"), breaker)
+        self.assertEqual(tools[breaker - 1], "inspect")
+        # The line fitted while the breaker was wrong is fitted wrong; once the breaker is right it is fitted again.
+        self.assertEqual([action["tool"] for action in built["refits"]], ["correct_parameters"])
+        self.assertGreater(len(tools) - 1 - tools[::-1].index("correct_parameters"), breaker)
+        self.assertTrue(built["score"]["strict"]["solved"])
+
+    def test_the_first_builds_rule_writes_the_first_builds_rows(self) -> None:
+        built = truth.build_success(ROOTS["rx_cb_meter"], _env())
+        self.assertEqual((built["looks"], built["skipped_looks"]), (truth.LOOK_NEEDED, 0))
+        self.assertNotIn("looks", demonstration_rows(ROOTS["rx_cb_meter"], built, tag="success")[0]["minimal"])
+
     def test_a_recovery_path_undoes_the_error_and_finishes_the_case(self) -> None:
         root = ROOTS["control_meter"]
         order = truth.orders(truth.truth_corrections(root), 1)[0]

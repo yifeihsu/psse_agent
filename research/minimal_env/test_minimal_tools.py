@@ -92,6 +92,49 @@ class CaseSelectionTests(unittest.TestCase):
         self.assertEqual({row["selection"]["split"] for row in train}, {"train"})
         train_sft.validate_minimal_splits(train, validation)
 
+    def test_paths_of_a_kind_can_be_left_out_and_one_breakers_rows_repeated(self) -> None:
+        def breaker_row(scenario: str, tag: str, step: int, breaker: str) -> dict:
+            row = _row(scenario, tag, step, "correction", "correct_topology")
+            row["messages"][-1]["tool_calls"][0]["function"] = {"name": "correct_topology",
+                                                                "arguments": {"breaker": breaker, "status": "open"}}
+            return row
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "demo"
+            source.mkdir()
+            episodes, rows = [], []
+            for index in range(20):
+                scenario = f"case{index:02d}"
+                refusal = {**_episode(scenario, "x", tag="refusal0"), "demonstration": "refusal"}
+                episodes += [_episode(scenario, "x"), refusal]
+                rows += [breaker_row(scenario, "success", 2, "CB_2R4_2R5" if index % 2 else "CB_6_B1_B2"),
+                         _row(scenario, "success", 3, "finish", "finish"), _row(scenario, "refusal0", 4, "inspect", "inspect")]
+                rows[-1]["minimal"]["demonstration"] = "refusal"
+            (source / "episodes.jsonl").write_text("".join(json.dumps(item) + "\n" for item in episodes), encoding="utf-8")
+            (source / "rows.jsonl").write_text("".join(json.dumps(item) + "\n" for item in rows), encoding="utf-8")
+            reports = {}
+            for name, extra in (("plain", []), ("chosen", ["--skip-demonstrations", "refusal", "--repeat-breaker", "CB_2R4_2R5=3"])):
+                out = Path(folder) / name
+                self.assertEqual(select_rows.main(["--demonstrations", str(source), "--output-dir", str(out), "--validation-share",
+                                                   "0.2", "--validation-rows", "4", *extra]), 0)
+                train = [json.loads(line) for line in (out / "train.jsonl").read_text(encoding="utf-8").splitlines()]
+                validation = [json.loads(line) for line in (out / "validation.jsonl").read_text(encoding="utf-8").splitlines()]
+                reports[name] = (json.loads((out / "selection_report.json").read_text(encoding="utf-8")), train, validation)
+        plain, plain_train, _ = reports["plain"]
+        chosen, chosen_train, chosen_validation = reports["chosen"]
+        self.assertEqual(plain["cases"]["paths_by_kind"], {"refusal": 20, "success": 20})
+        self.assertEqual(chosen["cases"]["paths_by_kind"], {"success": 20})
+        self.assertNotIn("refusal", {row["minimal"]["demonstration"] for row in chosen_train + chosen_validation})
+        named = [row for row in plain_train if select_rows.target_breaker(row) == "CB_2R4_2R5"]
+        repeated = [row for row in chosen_train if select_rows.target_breaker(row) == "CB_2R4_2R5"]
+        self.assertEqual(len(repeated), 3 * len(named))
+        self.assertEqual(chosen["repeated_rows"], {"CB_2R4_2R5": 2 * len(named)})
+        self.assertEqual(len({row["example_id"] for row in repeated}), len(repeated))  # every copy has its own id
+        self.assertEqual(chosen["settings"]["repeat_breaker"], {"CB_2R4_2R5": 3})
+        self.assertFalse(any(":repeat" in row["example_id"] for row in chosen_validation))
+        with self.assertRaises(ValueError):
+            select_rows.parse_repeats(["CB_2R4_2R5"])
+
 
 class TrainerChecksTests(unittest.TestCase):
     def test_minimal_rows_keep_their_own_tools(self) -> None:
