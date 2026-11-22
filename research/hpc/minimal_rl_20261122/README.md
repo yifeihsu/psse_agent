@@ -167,7 +167,7 @@ when the target is reached.
   has not run.
 - The selection of section 10 and the given outcomes of `finish` have run with stand-ins and on the smoke's
   stored records only. The two probes submitted at 98e6518 are their first run with the model; they went out
-  without a second smoke.
+  without a second smoke. The first case they wrote reads as designed (section 9); the summaries are not in.
 - Whether eight steps on one batch at 3e-5 stay close to the sampled policy, and whether 65 steps are safe or
   enough. The smoke took four steps on one small batch: by the fourth, the uncertain tokens were a mean factor of
   1.35 from the policy that sampled the batch (section 9). No earlier RL run of this project took more than a
@@ -276,6 +276,15 @@ and 12 hours, with preemption allowed. All 15 were pending when read at 15:35 UT
 - Stage A: the lines the status script prints for every update (the log-ratio to the sampler by step, the KL to
   the supervised model), and the first evaluation, after iteration 2 (17 steps). If it loses more than it gains,
   the plan is to cancel the chain and halve the learning rate; the cancel needs the user's word.
+
+**The first case the development probe wrote, read at 15:48 UTC** (`r0_891df54d8682`, cb2_dangling; the greedy
+episode claims the case resolved after four actions, return -0.79). Contract `minimal_one_step_forks_v2`; 24
+branches, all ran; forced prefixes canonical 17 of 17; 446 s for 4 states. The 7 `finish` branches the harness
+gave (3 resolved, 4 unresolved; the greedy claim left out) were carried out and ended the episode there. Rows
+kept: a look at the breakers at the third state, which repairs the case (margin 1.24), and "declare the case
+unresolved" at the fourth, where the greedy episode made the false claim (0.50). The two margins add up to the
+best return less the greedy return (0.95 + 0.79). By then stage A was in iteration 0's rollout and three of the
+training probe's four parts were running; no traceback in any log.
 
 ## 10. What the probe's smoke changed (2026-11-22; deployed at 98e6518 before the probes)
 
