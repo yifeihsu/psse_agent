@@ -1,6 +1,10 @@
 # RL plan for the minimal environment, 2026-11-22
 
-**Status: a plan. Nothing here is built, deployed or run.** Every cluster action in it needs the user's word.
+**Status (2026-11-22, later the same day): both stages are built and tested locally; nothing is deployed or
+run.** The user approved the build ("Yes, build both", no cluster action). The cell is
+`research/hpc/minimal_rl_20261122`; its README has the order of work, what each smoke is read for and where the
+build differs from this plan (section 9 below lists those points). Every cluster action still needs the user's
+word. The text below is the plan as written before the build.
 
 It replaces the "demonstration fix" I proposed on 2026-11-21 (a look at the breakers written into the supervised
 rows). The user objected that a decision rule taught through demonstrations is a rule-based mechanism by another
@@ -198,10 +202,25 @@ toward the failing states without anything having told it to.
 - Mean actions an episode (4.57 after the focused run), since the goal includes fewer tool calls.
 - On the training side: of the unrepaired cases drawn, how many the model's greedy episode repairs afterwards.
 
-## 8. Not checked
+## 8. Not checked (as planned; the cell's README has the list after the build)
 
 - Every cost in sections 3 and 4 is arithmetic from measured rates, not a measurement of these settings.
 - Whether eight steps on one batch at 3e-5 stay close enough to the sampled policy.
 - Whether a forced tool name followed by the model's own arguments decodes cleanly under the chat template.
 - How many failed cases one forced step repairs: that is the fork probe's question.
 - Whether log-likelihood rows on fork states, with the KL term, keep the cases already solved.
+
+## 9. What the build changed (2026-11-22)
+
+- **The forks are made in the rollout phase**, by the processes that sample, not in a phase of their own. The
+  batch stage and the run's manifest are unchanged and the model is loaded once.
+- **Stage A is counted at 9 iterations, not 10**: with an evaluation every third iteration the tenth would not be
+  evaluated. Nine iterations are 65 optimizer steps (1, then 8 in each of eight updates), 41 to 55 GPU-hours by the
+  same arithmetic, with evaluations after 17, 41 and 65 steps.
+- **A forced call that does not render** as the supervised pass taught it gives no row and is counted; it does
+  not stop the run.
+- **Sampled arguments are an option** (`forks.argument_samples`, 0 in both configs): branches whose forced call
+  is sampled, which try other objects of one tool. Only the probe's smoke uses it.
+- **Local tests** (stand-ins for the model, the real environment and scoring): a stand-in that corrects one of
+  two breakers and claims the case is repaired by one forced step, and its better branch is taught; a stand-in
+  that claims a two-breaker case at once is not repaired by one forced step, and the probe reports that.

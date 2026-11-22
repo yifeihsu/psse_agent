@@ -23,7 +23,7 @@ Here there is no workflow to learn. Results from the first runs are in `docs/min
 | --- | --- | --- | --- |
 | Numerical execution | `kernel.py`, `versions.py` | state estimation, substation estimation, measurement repair, line fit, breaker flip, saving and restoring states, counting cost | rank a target, offer or withhold a correction, accept or reject one, say what to do next |
 | Model decision | `actions.py`, `env.py`, `observation.py`, `policy.py` | take one action from the model, check its form, run it, return what happened | see the truth, or a recommended next step |
-| Training and evaluation | `scoring.py`, `truth.py`, `rows.py`, `rollout.py`, `expert.py` | build demonstrations from the truth, score a finished episode, compute the reward | approve or refuse an action while the model acts |
+| Training and evaluation | `scoring.py`, `truth.py`, `rows.py`, `rollout.py`, `forks.py`, `expert.py` | build demonstrations from the truth, score a finished episode, compute the reward | approve or refuse an action while the model acts |
 
 The kernel reuses the numerical routines of `psse_env.providers.matpower.MatpowerDeploymentProviders` (the same
 solves, repairs and fits) and the complete tables of `psse_env.providers.complete_evidence`. It does not call that
@@ -182,8 +182,16 @@ trained adapter on a suite. All three need the model or its tokenizer; the clust
 
 `research/minimal_env/rl_train.py` is the RL driver: sampled episodes of this environment (`rollout.py`), the
 outcome reward of `scoring.py`, and the update of the RL series (`psse_env/rl`) on the sampled tokens, with the
-supervised model as the KL reference (docs/minimal_env_20261115.md, section 12). It has run with stand-ins for the
-model only.
+supervised model as the KL reference (docs/minimal_env_20261115.md, section 12).
+
+`forks.py` (2026-11-22) measures what the sampling does not reach. It runs a policy's own episode on a case and
+then, at every state of it, forces each other tool once: the harness gives the tool's name, the model writes the
+arguments (`policy.MinimalModelPolicy.act_forced`) and continues to the end, and the branch is scored like any
+episode. Where a branch returned more than the own episode, the RL driver trains that branch's call on that
+state's prompt (`forks` in a driver config; docs/minimal_rl_plan_20261122.md). The forks are at every state and
+over every tool, the truth enters through the reward alone, and nothing after a forced step is trained. An
+evaluated episode never branches. `research/minimal_env/fork_probe.py` runs the forks with no update. Neither has
+met the model yet: both have run with stand-ins only.
 
 ## Settings a model run needs
 
@@ -200,9 +208,11 @@ environment variables (`psse_env/dagger/preliminary_e2b_eval.py`):
 
 - The supervised model exists since 2026-11-18: 198 of the 300 development cases, rule expert 184, truth-built
   sequences 247 (`research/hpc/minimal_sft_20261115/README.md`). What follows is still not built.
-- An RL run past its first iteration. The driver (`research/minimal_env/rl_train.py`) and its cluster cell
-  (`research/hpc/minimal_rl_20261116/`) ran a smoke (2026-11-17) and one iteration of the run (2026-11-18): 202
-  of the 247 cases a truth-built sequence repairs, against the supervised model's 198.
+- An RL run that improves on the supervised model. The driver (`research/minimal_env/rl_train.py`) and its cluster
+  cell (`research/hpc/minimal_rl_20261116/`) ran one iteration of the plain run (2026-11-18) and three of the
+  focused run (2026-11-21): both ended at 202 of the 247 cases a truth-built sequence repairs, against the
+  supervised model's 198, which this suite cannot tell apart. The next runs are prepared, not deployed
+  (`research/hpc/minimal_rl_20261122/`).
 - A paging mode for large systems. On IEEE 118 one version's meter table alone is about 1,100 rows.
 - Recovery paths from a model's own failed episodes. (The focused RL run, built 2026-11-18 and deployed 2026-11-19, teaches a failed case's
   truth-built sequence from its first state: `research/hpc/minimal_rl_20261116/README.md`.)

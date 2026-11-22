@@ -410,6 +410,87 @@ class ResearchPolicyFactoryTests(unittest.TestCase):
         self.assertFalse(render.call_args.kwargs["enable_thinking"])
         self.assertFalse(render.call_args.kwargs["inject_empty_thought_channel"])
         self.assertIsNone(policy.last_action_metrics["forced_tool_prefix"])
+        self.assertNotIn("forced_prefix_tokens", policy.last_generation)
+
+    def test_a_forced_prefix_is_fed_after_the_prompt_and_starts_the_answer(self) -> None:
+        try:
+            import torch
+        except ImportError as exc:  # pragma: no cover - test environment guard.
+            self.skipTest(str(exc))
+
+        class Embeddings(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(()))
+
+        seen: dict = {}
+
+        class Model:
+            def __init__(self):
+                self.embeddings = Embeddings()
+
+            def get_input_embeddings(self):
+                return self.embeddings
+
+            def eval(self):
+                return self
+
+            def forward(self, input_ids, mm_token_type_ids=None):
+                return input_ids, mm_token_type_ids
+
+            def generate(self, **kwargs):
+                seen.update(kwargs)
+                suffix = torch.tensor([[99]], dtype=kwargs["input_ids"].dtype)
+                return torch.cat((kwargs["input_ids"], suffix), dim=-1)
+
+        bundle = factory._ModelBundle(
+            model=Model(), processor=object(), model_id="google/gemma-4-12B-it", model_revision="f" * 40,
+            adapter_snapshot_path="adapter",
+        )
+        policy = factory._CanonicalResearchNativePolicy(bundle, architecture="gemma4_unified")
+        suffix = policy._UNIFIED_GENERATION_SUFFIX
+        decoded: list[list[int]] = []
+
+        def decode(_processor, token_ids, *, pad_token_id):
+            decoded.append([int(value) for value in token_ids.tolist()])
+            return '<|tool_call|>call:wls_from_path{"case_path":"active"}', len(decoded[-1]), 0
+
+        prefix = "<|tool_call>call:wls_from_path{"
+        # Seven prompt tokens and two forced ones: nine tokens in the model's first pass, the length the pad guards.
+        with patch.object(factory, "render_eval_text", return_value="prompt" + suffix), patch.object(
+            factory,
+            "tokenize_rendered_text",
+            return_value={
+                "input_ids": torch.tensor([[1, 2, 3, 4, 5, 6, 7]], dtype=torch.long),
+                "attention_mask": torch.ones((1, 7), dtype=torch.long),
+            },
+        ), patch.object(factory, "encode_text", return_value={"input_ids": [41, 42]}) as encode, patch.object(
+            factory, "get_stop_token_ids", return_value=[1]
+        ), patch.object(factory, "resolve_pad_token_id", return_value=0), patch.object(
+            factory, "decode_generated_response", side_effect=decode
+        ):
+            text = policy.generate_text({"case_alias": "active"}, forced_prefix=prefix)
+            metrics, record = policy.last_action_metrics, policy.last_generation
+            from psse_env.dagger import preliminary_e2b_eval
+
+            limit = preliminary_e2b_eval.MAX_NEW_TOKENS
+            with patch.object(factory, "encode_text", return_value={"input_ids": list(range(limit))}):
+                with self.assertRaisesRegex(GateError, "forced prefix"):
+                    policy.generate_text({"case_alias": "active"}, forced_prefix=prefix)
+        self.assertEqual(encode.call_args.args[1], prefix)
+        # One pad, the prompt, then the forced tokens; every side input grows with them.
+        self.assertEqual(seen["input_ids"].tolist(), [[0, 1, 2, 3, 4, 5, 6, 7, 41, 42]])
+        self.assertEqual(seen["attention_mask"].tolist(), [[0, 1, 1, 1, 1, 1, 1, 1, 1, 1]])
+        self.assertEqual(seen["mm_token_type_ids"].shape[-1], 10)
+        self.assertEqual(seen["max_new_tokens"], limit - 2)
+        # The answer is the forced tokens and what the model wrote after them.
+        self.assertEqual(decoded, [[41, 42, 99]])
+        self.assertEqual(json.loads(text), {"name": "wls_from_path", "arguments": {"case_path": "active"}})
+        self.assertEqual((metrics["forced_tool_prefix"], metrics["prompt_tokens"], metrics["prefill_pad_tokens"],
+                          metrics["generated_tokens"]), (prefix, 7, 1, 3))
+        self.assertEqual((record["completion_token_ids"], record["forced_prefix_tokens"], record["prompt_tokens"]),
+                         ([41, 42, 99], 2, 7))
+        self.assertNotIn("completion_token_probabilities", record)
 
     def test_empty_peft_registration_fails_without_raw_base_fallback(self) -> None:
         class EmptyPeft:

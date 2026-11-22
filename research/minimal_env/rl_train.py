@@ -42,6 +42,16 @@ taught it, with weight ``demonstration_weight`` times how far the sequence's rew
 case's samples.  Those rows are imitation of the truth-built sequence, not on-policy data: they have no sampling
 record, no advantage and no part in the KL term or the on-policy check.
 
+``forks`` (2026-11-22, the RL plan's stage B) lets an update learn an action the sampling never takes.  In the
+rollout phase, beside the sampled episodes, the current adapter's greedy episode is run on every drawn case and
+forked at every state: each other tool is forced once (the model writes the arguments), the model continues
+greedily, and the branch is scored like any episode (``psse_env.minimal.forks``).  At a state where a branch
+returned more than the greedy episode, the update trains that branch's action on that state's prompt as a
+supervised row, with weight ``forks.weight`` times the difference of the returns.  Which states and tools matter
+is nowhere written: the forks are everywhere, and the truth enters through the reward alone.  A forced step is
+the harness's, so nothing after it is trained, and such a row has no sampling record, no advantage and no part
+in the KL term, like a truth-built example's.  ``evaluate_every`` evaluates every N-th iteration's adapter only.
+
 Settings that carry what the earlier RL arms measured (``rl_config_example.json`` beside this file sets them;
 docs/minimal_env_20261115.md, section 12, has the reasons):
 
@@ -71,6 +81,8 @@ if str(REPO_ROOT) not in sys.path:
 from psse_env.minimal.env import DEFAULT_MAX_ACTIONS, DEFAULT_TABLE_VERSIONS, MinimalDiagnosisEnv  # noqa: E402
 from psse_env.minimal import rollout as minimal_rollout  # noqa: E402
 from psse_env.minimal.episode import OUTCOME_PROMPT_LIMIT, run_episode  # noqa: E402
+from psse_env.minimal.forks import FORK_SAMPLE, ForkSettings, ForkStore, fork_roots  # noqa: E402
+from psse_env.minimal.forks import summarize as summarize_forks  # noqa: E402
 from psse_env.minimal.rollout import rollout_roots  # noqa: E402
 from psse_env.minimal.scoring import RewardWeights  # noqa: E402
 from psse_env.rl.advantages import GroupAdvantages, group_advantages, summarize_groups  # noqa: E402
@@ -230,6 +242,12 @@ class MinimalRLConfig:
     #: baseline is evaluated here.  An evaluation of another adapter or under other settings is refused.
     baseline_from: str | None = None
     evaluate_every_iteration: bool = True
+    #: Evaluate the adapter of every N-th iteration only (the N-th, the 2N-th, ...; 1: every one).  An evaluation
+    #: is about as long as a rollout, and a run of many small updates is read every few of them.
+    evaluate_every: int = 1
+    #: ``psse_env.minimal.forks.ForkSettings``: one-step forks of the current adapter's greedy episode on every
+    #: drawn case, made in the rollout phase, and the rows the update takes from them.  Empty: none.
+    forks: dict[str, Any] = field(default_factory=dict)
     #: Do not advance past an update that shows a stop condition of ``psse_env.rl.integrity`` (a prompt that is
     #: not the sampled one, a row without its sampling record, a nonfinite loss, duplicated or missing work).
     stop_on_integrity_failure: bool = True
@@ -287,6 +305,10 @@ class MinimalRLConfig:
         limit = self.development_limit
         if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
             raise ValueError("development_limit must be a positive integer (null: the whole development suite)")
+        every = self.evaluate_every
+        if isinstance(every, bool) or not isinstance(every, int) or every < 1:
+            raise ValueError("evaluate_every must be a positive integer (1: every iteration)")
+        ForkSettings.from_mapping(self.forks)
         group_advantages([0.0, 1.0], method=self.advantage_method, scale=self.advantage_scale)
         RewardWeights.from_mapping(self.reward)
         UpdateSettings(**self.update).validate()
@@ -309,6 +331,13 @@ class MinimalRLConfig:
 
     def focus_settings(self) -> FocusSettings:
         return FocusSettings.from_mapping(self.focus)
+
+    def fork_settings(self) -> ForkSettings:
+        return ForkSettings.from_mapping(self.forks)
+
+    def evaluated(self, iteration: int) -> bool:
+        """Whether the adapter of ``iteration`` (from 0) is evaluated: every ``evaluate_every``-th one."""
+        return bool(self.development_suite) and bool(self.evaluate_every_iteration) and (int(iteration) + 1) % int(self.evaluate_every) == 0
 
     def update_settings(self, iteration: int) -> UpdateSettings:
         return UpdateSettings(**{**self.update, "seed": self.seed + int(iteration), "temperature": float(self.temperature)})
@@ -506,6 +535,26 @@ def target_function(config: MinimalRLConfig, adapter: str, processor: Any) -> Ca
     return render_target
 
 
+def fork_prefix_check(config: MinimalRLConfig, adapter: str, policy: Any) -> Callable[..., bool] | None:
+    """``check(observation, action, forced_ids)``: whether the tokens a forced call was started with are the first
+    tokens of that call as the supervised pass rendered it.  ``None`` for a policy that holds no processor.
+
+    A forced call's name is given to the model as text (``psse_env.minimal.policy.forced_call_prefix``); were its
+    tokens not the ones the model was trained to write the call with, the arguments would be written after a
+    prefix the model never saw.  A rollout's fork summary counts how many forced calls pass.
+    """
+    processor = getattr(getattr(policy, "_bundle", None), "processor", None)
+    if processor is None:
+        return None
+    render_target = target_function(config, adapter, processor)
+
+    def check(observation: Mapping[str, Any], action: Mapping[str, Any], forced_ids: Sequence[int]) -> bool:
+        target = render_target(model_view(observation), action)
+        return [int(value) for value in target[: len(forced_ids)]] == [int(value) for value in forced_ids]
+
+    return check
+
+
 def model_view(observation: Mapping[str, Any]) -> dict[str, Any]:
     """An environment observation as the model policy records the one it decoded from (marked as a whole history)."""
     from psse_env.minimal.policy import MinimalModelPolicy
@@ -681,18 +730,35 @@ def phase_rollout(config: MinimalRLConfig, manifest: Manifest, *, progress: Call
     weights = RewardWeights.from_mapping(config.reward)
     store = TrajectoryStore(out / "trajectories")
     pending = [root for root in mine if not store.has_group(scenario_root(root), int(config.samples_per_root))]
-    if pending:
+    forks = config.fork_settings()
+    fork_store = ForkStore(out / "forks")
+    unforked = [root for root in mine if not fork_store.has(scenario_root(root))] if forks.enabled else []
+    forked = 0
+    if pending or unforked:
         env = environment(config)
         try:
-            rollout_roots(pending, store_dir=out / "trajectories", samples=int(config.samples_per_root),
-                          base_seed=config.seed + manifest.iteration, env_factory=lambda: env,
-                          policy_factory=sampling_policy_factory(config, manifest.current_adapter), weights=weights,
-                          progress=progress)
+            if pending:
+                rollout_roots(pending, store_dir=out / "trajectories", samples=int(config.samples_per_root),
+                              base_seed=config.seed + manifest.iteration, env_factory=lambda: env,
+                              policy_factory=sampling_policy_factory(config, manifest.current_adapter), weights=weights,
+                              progress=progress)
+            if unforked:
+                # The same model, decoding greedily: the episode an evaluation would run, and its one-step forks.
+                forked = fork_roots(
+                    unforked, store=fork_store, env_factory=lambda: env,
+                    policy_factory=greedy_policy_factory(config, manifest.current_adapter), weights=weights, settings=forks,
+                    argument_policy_factory=(sampling_policy_factory(config, manifest.current_adapter)
+                                             if forks.argument_samples else None),
+                    base_seed=config.seed + manifest.iteration,
+                    canonical_factory=lambda policy: fork_prefix_check(config, manifest.current_adapter, policy),
+                    progress=progress)
         finally:
             _release_models()
     result: dict[str, Any] = {"iteration": manifest.iteration, "adapter": manifest.current_adapter, "roots": len(mine),
                               "groups_sampled": len(pending), "samples_per_root": int(config.samples_per_root),
                               "seconds": round(time.perf_counter() - started, 1)}
+    if forks.enabled:
+        result["cases_forked"] = forked
     if shard is not None:
         return {**result, "shard": f"{shard[0]}/{shard[1]}"}
     result.update(
@@ -705,8 +771,16 @@ def phase_rollout(config: MinimalRLConfig, manifest: Manifest, *, progress: Call
         result["focus"] = focus_summary(store, focused["available"], focused["failed"], focused["solved"])
         if focus.examples:
             result["truth_built_examples"] = truth_built_examples(config, drawn, focused["sequences"], store, out, weights)
+    if forks.enabled:
+        result["forks"] = fork_summary(fork_store, drawn)
     _write_json(out / "rollout_summary.json", result)
     return result
+
+
+def fork_summary(store: ForkStore, drawn: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """What the one-step forks of an iteration's drawn cases found (``psse_env.minimal.forks.summarize``)."""
+    records = [store.read(scenario_root(root))["record"] for root in drawn if store.has(scenario_root(root))]
+    return {"cases_drawn": len(drawn), "cases_forked": len(records), **summarize_forks(records)}
 
 
 def focus_summary(store: TrajectoryStore, available: Mapping[str, Any], drawn_failed: Sequence[Mapping[str, Any]],
@@ -828,6 +902,86 @@ def example_rows(examples: Sequence[tuple[Trajectory, float]], *, weight: float,
     return rows, report
 
 
+def stored_forks(out: Path, settings: ForkSettings) -> list[dict[str, Any]]:
+    """The forked cases of an iteration with a state where a branch returned more than the greedy episode by more
+    than ``settings.min_gain``: each case's stored payload, its ``better`` cut to those states."""
+    found: list[dict[str, Any]] = []
+    for _case, payload in ForkStore(out / "forks").iter():
+        better = [item for item in payload["record"].get("better") or [] if float(item["gain"]) > float(settings.min_gain)]
+        if better:
+            found.append({**payload, "better": better})
+    return found
+
+
+def fork_rows(payloads: Sequence[Mapping[str, Any]], *, weight: float, render_prompt: Callable[..., str],
+              prompt_token_ids: Callable[..., Any], render_target: Callable[..., Sequence[int]], max_length: int,
+              required_side_inputs: Sequence[str], settings: RowSettings) -> tuple[list[TrainingRow], dict[str, Any]]:
+    """The supervised rows of an iteration's forks: one per state where a forced branch returned more.
+
+    A row is the branch's forced call on the prompt the model read at that state, rendered as the supervised pass
+    taught it, with weight ``weight`` times how far the branch's return lies above the greedy episode's.  A prompt
+    over the policy's input limit gives no row.  A call that does not render as the student emits it gives no row
+    and is counted (``unrenderable``): the model wrote the call itself, so the count should be zero, and it is
+    read, not a stop condition, because nothing wrong is trained by leaving the row out.
+    """
+    rows: list[TrainingRow] = []
+    report: dict[str, Any] = {"cases": len(payloads), "candidates": 0, "rows": 0, "tokens": 0, "unrenderable": 0,
+                              "prompt_over_the_input_limit": 0, "prompt_truncated_rows": 0, "prompt_truncated_rows_rejected": 0,
+                              "weight": float(weight), "row_weights": None, "rows_by_tool": {},
+                              "rows_whose_branch_repairs": 0, "rows_within_one_action_cost": 0}
+    weights: list[float] = []
+    for payload in payloads:
+        case = str(payload["case"])
+        for item in payload["better"]:
+            report["candidates"] += 1
+            term = float(weight) * float(item["gain"])
+            observation = model_view(payload["observations"][str(item["state"])])
+            prompt_ids, original = prompt_token_ids(render_prompt(observation))
+            if int(original) != len(prompt_ids):
+                report["prompt_over_the_input_limit"] += 1
+                continue
+            try:
+                target_ids = [int(value) for value in render_target(observation, item["action"])]
+            except ValueError:
+                target_ids = []
+            if not target_ids:
+                report["unrenderable"] += 1
+                continue
+            row = build_step_row(root=case, sample_index=FORK_SAMPLE, step=int(item["state"]) + 1, advantage=0.0,
+                                 prompt_ids=prompt_ids, completion_ids=target_ids, max_length=max_length,
+                                 required_side_inputs=required_side_inputs, lifecycle_term=term, supervised=True)
+            if row.prompt_truncated:
+                report["prompt_truncated_rows"] += 1
+                if settings.reject_truncated_prompts:
+                    report["prompt_truncated_rows_rejected"] += 1
+                    continue
+            row.trajectory_tokens = row.completion_tokens
+            rows.append(row)
+            weights.append(term)
+            tool = str(item["tool"])
+            report["rows_by_tool"][tool] = int(report["rows_by_tool"].get(tool, 0)) + 1
+            report["rows_whose_branch_repairs"] += int(bool(item["solved"]) and not payload["record"]["own"]["solved"])
+            report["rows_within_one_action_cost"] += int(float(item["gain"]) <= 0.05)
+    report["rows"] = len(rows)
+    report["tokens"] = sum(row.completion_tokens for row in rows)
+    report["rows_by_tool"] = dict(sorted(report["rows_by_tool"].items()))
+    if weights:
+        report["row_weights"] = {"min": min(weights), "mean": sum(weights) / len(weights), "max": max(weights)}
+    return rows, report
+
+
+def _count_fork_rows(rows_report: dict[str, Any], report: Mapping[str, Any]) -> None:
+    """The forks' rows in the counts the row builder keeps; a call that did not render is reported, not a stop."""
+    rows_report["rows"] = int(rows_report.get("rows") or 0) + int(report["rows"])
+    rows_report["completion_tokens"] = int(rows_report.get("completion_tokens") or 0) + int(report["tokens"])
+    rows_report["supervised_rows"] = int(rows_report.get("supervised_rows") or 0) + int(report["rows"])
+    rows_report["supervised_tokens"] = int(rows_report.get("supervised_tokens") or 0) + int(report["tokens"])
+    rows_report["prompt_truncated_rows"] = int(rows_report.get("prompt_truncated_rows") or 0) + int(report["prompt_truncated_rows"])
+    rows_report["prompt_truncated_rows_rejected"] = (int(rows_report.get("prompt_truncated_rows_rejected") or 0)
+                                                     + int(report["prompt_truncated_rows_rejected"]))
+    rows_report["one_step_forks"] = dict(report)
+
+
 def _count_example_rows(rows_report: dict[str, Any], report: Mapping[str, Any]) -> None:
     """The examples' rows in the counts the row builder keeps and the integrity check reads."""
     rows_report["rows"] = int(rows_report.get("rows") or 0) + int(report["rows"])
@@ -864,9 +1018,12 @@ def phase_update(config: MinimalRLConfig, manifest: Manifest, *, progress: Calla
         trajectory.pairing_ok for trajectories, adv in groups if adv.informative for trajectory in trajectories)
     focus = config.focus_settings()
     examples = stored_examples(out, groups) if focus.examples else []
-    if not informative_paired and not examples:
+    forks = config.fork_settings()
+    forked = stored_forks(out, forks) if forks.enabled else []
+    if not informative_paired and not examples and not forked:
         report["update"] = None
         report["note"] = ("no case whose paired samples scored differently" + (" and no truth-built example" if focus.examples else "")
+                          + (" and no forced branch above the greedy episode" if forks.enabled else "")
                           + ": the adapter is carried over unchanged")
         _carry_adapter_over(manifest.current_adapter, next_adapter)
         report["adapter_out"] = str(next_adapter)
@@ -888,13 +1045,21 @@ def phase_update(config: MinimalRLConfig, manifest: Manifest, *, progress: Calla
         rows, rows_report = build_rows(groups, render_prompt=render, prompt_token_ids=prompt_ids,
                                        max_length=int(config.max_length), required_side_inputs=side_inputs,
                                        settings=row_settings)
+        render_target = target_function(config, manifest.current_adapter, processor) if examples or forked else None
         if examples:
             taught, taught_report = example_rows(
                 examples, weight=float(focus.demonstration_weight), render_prompt=render, prompt_token_ids=prompt_ids,
-                render_target=target_function(config, manifest.current_adapter, processor), max_length=int(config.max_length),
+                render_target=render_target, max_length=int(config.max_length),
                 required_side_inputs=side_inputs, settings=row_settings)
             rows.extend(taught)
             _count_example_rows(rows_report, taught_report)
+        if forked:
+            taught, taught_report = fork_rows(
+                forked, weight=float(forks.weight), render_prompt=render, prompt_token_ids=prompt_ids,
+                render_target=render_target, max_length=int(config.max_length),
+                required_side_inputs=side_inputs, settings=row_settings)
+            rows.extend(taught)
+            _count_fork_rows(rows_report, taught_report)
         report["rows"] = rows_report
         report["resumed_from_checkpoint"] = str(resume_dir) if resume_dir is not None else None
         if not rows:
@@ -904,7 +1069,8 @@ def phase_update(config: MinimalRLConfig, manifest: Manifest, *, progress: Calla
         elif all(row.supervised for row in rows):
             # Every sampled row was refused: the examples alone would be an update with nothing sampled in it.
             report["update"] = None
-            report["note"] = "no sampled row after the pairing and rendering checks: the truth-built examples alone are not applied"
+            report["note"] = ("no sampled row after the pairing and rendering checks: the truth-built examples and the "
+                              "forks' rows alone are not applied")
             _carry_adapter_over(manifest.current_adapter, next_adapter)
         else:
             optimizer = None
@@ -1055,10 +1221,19 @@ def phase_baseline(config: MinimalRLConfig, manifest: Manifest, *, shard: tuple[
 
 def phase_evaluate(config: MinimalRLConfig, manifest: Manifest, *, shard: tuple[int, int] | None = None,
                    progress: Callable[[Mapping[str, Any]], None] | None = None) -> dict[str, Any] | None:
-    """The iteration's adapter on the development suite; skipped when the update left the adapter unchanged."""
+    """The iteration's adapter on the development suite; skipped when the update left the adapter unchanged, and in
+    the iterations between two evaluations of a run that sets ``evaluate_every``."""
     if not config.development_suite or not config.evaluate_every_iteration:
         return None
     out = iteration_dir(config, manifest.iteration)
+    if not config.evaluated(manifest.iteration):
+        every = int(config.evaluate_every)
+        summary = {"iteration": manifest.iteration, "adapter": str(out / "adapter"),
+                   "skipped": f"the run evaluates every {every} iterations; the next evaluation is of iteration "
+                              f"{(manifest.iteration // every + 1) * every - 1}"}
+        if shard is None:
+            _write_json(out / "evaluation.json", {"summary": summary})
+        return summary
     update_path = out / "update_report.json"
     update_report = json.loads(update_path.read_text(encoding="utf-8")) if update_path.is_file() else None
     if update_report is not None and update_report.get("update") is None:
@@ -1175,7 +1350,9 @@ def check(config: MinimalRLConfig) -> dict[str, Any]:
         "initial_adapter": str(adapter), "kl_reference": config.initial_adapter if config.update_settings(0).beta_kl > 0.0 else None,
         "environment": environment_record(config), "prompt_limits": apply_prompt_limits(config),
         "run_is_at": {"iteration": manifest.iteration, "phase": manifest.phase},
+        "evaluate_every": int(config.evaluate_every),
         **({"focus": focused} if focused is not None else {}),
+        **({"forks": asdict(config.fork_settings())} if config.fork_settings().enabled else {}),
     }
 
 

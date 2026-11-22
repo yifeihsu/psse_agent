@@ -10,6 +10,11 @@ with, and the generated call is checked against those tools alone.
 A prompt that does not fit the model's input is refused, never cut: an
 observation here is the whole episode, and a cut one would be a different
 observation.  The runner ends such an episode without a declaration.
+
+``act_forced`` is not the policy's choice: the harness names the tool and the
+model writes the arguments.  It exists for the one-step forks of
+``psse_env.minimal.forks``, which measure what a tool the policy did not take
+would have earned.
 """
 from __future__ import annotations
 
@@ -53,6 +58,31 @@ class MinimalModelPolicy(_CanonicalResearchNativePolicy):
         except GateError:
             return text
 
+    def act_forced(self, observation: Mapping[str, Any], tool: str) -> Any:
+        """One call of ``tool`` on ``observation``: the harness fixes the tool's name, the model writes the arguments.
+
+        For the forks of ``psse_env.minimal.forks`` only: a forced call is an intervention, never the policy's own
+        choice.  Returns the call, or the raw text where what the model wrote after the name is not a valid call.
+        """
+        from psse_env.dagger.release_factories import _validated_generated_action
+
+        whole = self._whole(observation)
+        parameters = self.render_messages(whole)[2]
+        if tool not in parameters:
+            raise ValueError(f"{tool!r} is not a tool of this observation ({sorted(parameters)})")
+        text = self.generate_text(whole, forced_prefix=forced_call_prefix(tool))
+        try:
+            return _validated_generated_action(text, parameters)
+        except GateError:
+            return text
+
+
+def forced_call_prefix(tool: str) -> str:
+    """How a call of ``tool`` starts in the model's own wire format, up to the opening of its arguments."""
+    from psse_env.dagger.preliminary_e2b_eval import FORCED_TOOL_PREFIX
+
+    return f"{FORCED_TOOL_PREFIX}{tool}{{"
+
 
 def minimal_policy_factory(adapter_path: str | Path, *, base_model: str | None = None, base_revision: str | None = None,
                            load_in_4bit: bool = True, local_files_only: bool = True, trust_remote_code: bool = False,
@@ -67,4 +97,4 @@ def minimal_policy_factory(adapter_path: str | Path, *, base_model: str | None =
     return MinimalModelPolicy(bundle, architecture=str(identity.get("architecture") or ""), generation=generation)
 
 
-__all__ = ["MinimalModelPolicy", "PromptLimitError", "minimal_policy_factory"]
+__all__ = ["MinimalModelPolicy", "PromptLimitError", "forced_call_prefix", "minimal_policy_factory"]

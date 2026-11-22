@@ -43,6 +43,7 @@ from psse_env.dagger.release_factories import (
 from psse_env.sft.gates import GateError
 from psse_env.sft.gemma_text import (
     decode_generated_response,
+    encode_text,
     get_stop_token_ids,
     render_eval_text,
     resolve_pad_token_id,
@@ -838,6 +839,7 @@ class _CanonicalResearchNativePolicy:
         text: str,
         token_probabilities: Sequence[float] | None = None,
         prompt_ids: Any = None,
+        forced_prefix_tokens: int = 0,
     ) -> None:
         from psse_env.rl.prompt_digest import prompt_token_digest
 
@@ -861,10 +863,21 @@ class _CanonicalResearchNativePolicy:
             probabilities = [float(value) for value in list(token_probabilities)[: len(completion_ids)]]
             record["completion_token_probabilities"] = probabilities
             record.update(sampling_summary(probabilities))
+        if forced_prefix_tokens:
+            # The first tokens of the completion were given, not generated: the record is not a sampled completion.
+            record["forced_prefix_tokens"] = int(forced_prefix_tokens)
         self._last_generation = record
         self._generation_calls += 1
 
-    def generate_text(self, observation: Mapping[str, Any]) -> str:
+    def generate_text(self, observation: Mapping[str, Any], *, forced_prefix: str | None = None) -> str:
+        """Generate the model's answer to ``observation``.
+
+        ``forced_prefix`` is text the answer is made to start with: its tokens are appended to the prompt and the
+        model writes what follows, so the answer is the prefix and the model's continuation of it.  Such a call
+        is an intervention of the harness (a fork of an episode, ``psse_env.minimal.forks``): its record carries
+        ``forced_prefix_tokens`` and no token probabilities, and it is never a sampled training row.
+        """
+
         from psse_env.dagger.preliminary_e2b_eval import (
             MAX_INPUT_TOKENS,
             MAX_NEW_TOKENS,
@@ -921,7 +934,25 @@ class _CanonicalResearchNativePolicy:
         # The prompt the record describes (and the update re-renders) is the
         # unpadded one; the pad only moves the prefill off the corrupted residue.
         prompt_ids_for_record = model_inputs["input_ids"].detach().cpu()
-        prefill_pad = prefill_pad_tokens(prompt_length)
+        forced_ids: list[int] = []
+        if forced_prefix is not None:
+            forced_ids = [int(value) for value in encode_text(self._bundle.processor, str(forced_prefix))["input_ids"]]
+            if not forced_ids or len(forced_ids) >= MAX_NEW_TOKENS:
+                raise GateError("the forced prefix does not tokenize to a usable number of tokens")
+            forced = torch.tensor([forced_ids], dtype=model_inputs["input_ids"].dtype, device=device)
+            for name, value in tuple(model_inputs.items()):
+                if not hasattr(value, "shape") or int(value.shape[-1]) != prompt_length:
+                    continue
+                if name == "input_ids":
+                    suffix = forced
+                elif name == "attention_mask":
+                    suffix = torch.ones_like(forced, dtype=value.dtype)
+                else:
+                    suffix = torch.zeros_like(forced, dtype=value.dtype)
+                model_inputs[name] = torch.cat((value, suffix), dim=-1)
+        # What the model's first pass reads: the prompt and, in a forced call, the prefix after it.
+        conditioned_length = prompt_length + len(forced_ids)
+        prefill_pad = prefill_pad_tokens(conditioned_length)
         if prefill_pad:
             model_inputs = left_pad_model_inputs(model_inputs, pad_tokens=prefill_pad, pad_token_id=pad_token_id)
         started = time.perf_counter()
@@ -944,7 +975,7 @@ class _CanonicalResearchNativePolicy:
                 with torch.inference_mode():
                     generated = self._bundle.model.generate(
                         **model_inputs,
-                        max_new_tokens=MAX_NEW_TOKENS,
+                        max_new_tokens=MAX_NEW_TOKENS - len(forced_ids),
                         use_cache=True,
                         eos_token_id=stop_ids,
                         pad_token_id=pad_token_id,
@@ -983,10 +1014,15 @@ class _CanonicalResearchNativePolicy:
         if self._memory_refused_tokens is not None and prompt_length >= self._memory_refused_tokens:
             self._memory_refused_tokens = None  # the device holds this length again
         sequences = generated.sequences if want_scores else generated
-        sampled_ids = sequences[0][prompt_length + prefill_pad :].detach().cpu()
+        sampled_ids = sequences[0][conditioned_length + prefill_pad :].detach().cpu()
         token_probabilities = (
             sampled_token_probabilities(generated.scores, sampled_ids) if want_scores else None
         )
+        if forced_ids:
+            # The answer is the prefix and what the model wrote after it; the probabilities cover the latter only,
+            # so the record keeps none.
+            sampled_ids = torch.cat((torch.tensor(forced_ids, dtype=sampled_ids.dtype), sampled_ids))
+            token_probabilities = None
         if complete_view and prompt_length >= MEMORY_RELEASE_PROMPT_TOKENS:
             # The sampled tokens are on the host by now; the output holds the prompt's cache.
             generated = sequences = None
@@ -1006,7 +1042,7 @@ class _CanonicalResearchNativePolicy:
             "generated_tokens": int(generated_tokens),
             "generation_seconds": float(generation_seconds),
             "hit_max_new_tokens": int(generated_tokens) >= MAX_NEW_TOKENS,
-            "forced_tool_prefix": None,
+            "forced_tool_prefix": forced_prefix,
             "trimmed_trailing_pad_tokens": int(trimmed_pad_tokens),
             "prefill_pad_tokens": int(prefill_pad),
             **repetition,
@@ -1022,6 +1058,7 @@ class _CanonicalResearchNativePolicy:
             text=text,
             token_probabilities=token_probabilities,
             prompt_ids=prompt_ids_for_record,
+            forced_prefix_tokens=len(forced_ids),
         )
         try:
             action = _validated_generated_action(text, visible_parameters)

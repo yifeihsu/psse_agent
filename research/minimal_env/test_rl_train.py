@@ -22,6 +22,7 @@ from psse_env.minimal import observation as view
 from psse_env.minimal import truth
 from psse_env.minimal.env import MinimalDiagnosisEnv
 from psse_env.minimal.episode import ScriptedPolicy, run_episode
+from psse_env.minimal.forks import FORK_SAMPLE, ForkStore
 from psse_env.minimal.kernel import NumericalKernel
 from psse_env.minimal.policy import MinimalModelPolicy
 from psse_env.providers.scenario_generator import DEFAULT_COMPOUND_CLASSES, Round0ScenarioGenerator
@@ -112,6 +113,15 @@ class _Scripted:
         }
         self.calls += 1
         return action
+
+    def act_forced(self, observation: dict, tool: str) -> dict:
+        """A forced call of ``tool``: the case's true correction by that tool where it has one, fixed arguments otherwise."""
+        true = next((action for action in REPAIRS[_key(observation)] if action["tool"] == tool), None)
+        if true is not None:
+            return copy.deepcopy(true)
+        return {"tool": tool, "arguments": {"inspect": {"view": "estimate"}, "correct_topology": {"breaker": "CB_NO_SUCH", "status": "open"},
+                                            "correct_parameters": {"line": 1}, "correct_measurements": {"meters": [0]}, "undo": {},
+                                            "finish": {"outcome": "resolved"}}[tool]}
 
 
 class _Stop(RuntimeError):
@@ -951,6 +961,171 @@ class FocusIterationTests(unittest.TestCase):
                               found["truth_built_examples"]),
                              (2, 1, 1, {"left_unrepaired": 1, "repaired": 1}, True))
             self.assertFalse(Path(config.output_dir).exists())
+
+
+@unittest.skipIf(torch is None, "torch is not installed")
+class ForkIterationTests(unittest.TestCase):
+    """The greedy episode of every drawn case is forked in the rollout phase; a branch above it is a row of the update."""
+
+    def test_a_forced_branch_above_the_greedy_episode_becomes_a_row_of_the_update(self) -> None:
+        holder = {"never_repair": True}  # every sample claims its case, and so does the starting adapter's greedy episode
+        ids = [root["execution"]["scenario_id"] for root in ROOTS]
+        with tempfile.TemporaryDirectory() as folder, _stand_ins(holder) as rl:
+            config = _config(folder, forks={"enabled": True}, rows=FOCUS_ROWS)
+            out = iteration_dir(config, 0)
+            part = _run(config, "rollout", shard=(0, 2))
+            self.assertEqual((part["groups_sampled"], part["cases_forked"]), (1, 1))
+            self.assertFalse((out / "rollout_summary.json").exists())  # a shard closes nothing
+            rollout = _run(config, "rollout")
+            self.assertEqual((rollout["groups_sampled"], rollout["cases_forked"]), (1, 1))  # the case the shard left
+            found = rollout["forks"]
+            self.assertEqual((found["cases_drawn"], found["cases_forked"]), (2, 2))
+            totals = found["totals"]
+            # Two one-state episodes, five other tools each.
+            self.assertEqual((totals["own_episode_unrepaired"], totals["states"], totals["branches"], totals["branches_ran"]), (2, 2, 10, 10))
+            self.assertGreaterEqual(totals["unrepaired_cases_one_forced_step_repairs"], 1)
+            self.assertEqual(rollout["store"]["totals"]["episodes"], 4)  # the groups hold the sampled episodes alone
+            stored = dict(ForkStore(out / "forks").iter())
+            self.assertEqual(sorted(stored), sorted(ids))
+            # The meter case: the forced repair of its meters, then the claim, against the false claim alone.
+            [better] = stored[ids[0]]["record"]["better"]
+            self.assertEqual((better["state"], better["action"], better["solved"]), (0, REPAIRS[_key(MinimalDiagnosisEnv(KERNEL).reset(ROOTS[0]))][0], True))
+            self.assertAlmostEqual(better["gain"], 1.49)
+            candidates = [(case, item) for case in sorted(stored) for item in stored[case]["record"]["better"]]
+
+            # The update: the sampled rows of both cases for the KL term, and one supervised row per better branch.
+            report = _run(config, "update")
+            rows = report["rows"]
+            self.assertEqual((rows["policy_rows"], rows["preservation_rows"], rows["supervised_rows"], rows["rows"]),
+                             (0, 2, len(candidates), 2 + len(candidates)))
+            taught = rows["one_step_forks"]
+            self.assertEqual((taught["candidates"], taught["rows"], taught["unrenderable"], taught["prompt_over_the_input_limit"]),
+                             (len(candidates), len(candidates), 0, 0))
+            self.assertGreaterEqual(taught["rows_whose_branch_repairs"], 1)
+            self.assertEqual(sum(taught["rows_by_tool"].values()), len(candidates))
+            self.assertAlmostEqual(taught["row_weights"]["max"], 1.49)
+            self.assertNotIn("truth_built_examples", rows)
+            # Each row is the branch's forced call on the prompt the model read at that state.
+            self.assertEqual([action for _prompt, action in holder["targets"]], [item["action"] for _case, item in candidates])
+            self.assertEqual(holder["targets"][0][0] if candidates[0][0] == ids[0] else holder["targets"][-1][0],
+                             view.user_text(MinimalDiagnosisEnv(KERNEL).reset(ROOTS[0])))
+            update = report["update"]
+            self.assertEqual((update["rows"], update["supervised_rows"], update["optimizer_steps"]), (2 + len(candidates), len(candidates), 1))
+            self.assertGreater(update["supervised_loss"][0], 0.0)
+            self.assertEqual((report["integrity"]["ok"], report["integrity"]["failures"]), (True, []))
+            before = torch.load(Path(config.initial_adapter) / "weights.pt")["table"]
+            self.assertFalse(torch.equal(before, torch.load(out / "adapter" / "weights.pt")["table"]))
+
+            # A closing call that runs again forks nothing.
+            manifest = rl.load_manifest(config)
+            manifest.iteration, manifest.phase = 0, "rollout"
+            with contextlib.redirect_stdout(io.StringIO()):
+                again = rl.phase_rollout(config, manifest)
+            self.assertEqual((again["cases_forked"], again["forks"]["cases_forked"]), (0, 2))
+
+    def test_the_weight_and_the_threshold_are_the_configs(self) -> None:
+        holder = {"never_repair": True}
+        with tempfile.TemporaryDirectory() as folder, _stand_ins(holder):
+            config = _config(folder, forks={"enabled": True, "weight": 0.5}, rows=FOCUS_ROWS)
+            _run(config, "rollout")
+            taught = _run(config, "update")["rows"]["one_step_forks"]
+            self.assertEqual(taught["weight"], 0.5)
+            self.assertAlmostEqual(taught["row_weights"]["max"], 0.745)
+        # No branch is five rewards above its greedy episode: nothing to teach, and no sample differs.
+        holder = {"never_repair": True}
+        with tempfile.TemporaryDirectory() as folder, _stand_ins(holder):
+            config = _config(folder, forks={"enabled": True, "min_gain": 5.0}, rows=FOCUS_ROWS)
+            rollout = _run(config, "rollout")
+            self.assertEqual(rollout["forks"]["totals"]["states_with_a_better_branch"], 0)
+            report = _run(config, "update")
+            self.assertIsNone(report["update"])
+            self.assertIn("no forced branch above the greedy episode", report["note"])
+            self.assertNotIn("loads", holder)
+
+    def test_a_forced_call_that_does_not_render_is_counted_and_left_out(self) -> None:
+        holder = {"never_repair": True, "unrenderable": True}
+        with tempfile.TemporaryDirectory() as folder, _stand_ins(holder) as rl:
+            config = _config(folder, forks={"enabled": True}, rows=FOCUS_ROWS)
+            _run(config, "rollout")
+            report = _run(config, "update")
+            taught = report["rows"]["one_step_forks"]
+            self.assertGreaterEqual(taught["candidates"], 1)
+            self.assertEqual((taught["rows"], taught["unrenderable"]), (0, taught["candidates"]))
+            # The sampled rows alone were trained; the run goes on, and the count is there to be read.
+            self.assertEqual((report["update"]["rows"], report["update"]["supervised_rows"], report["rows"]["supervised_rows"]), (2, 0, 0))
+            self.assertTrue(report["integrity"]["ok"])
+            self.assertEqual(rl.load_manifest(config).phase, "evaluate")
+
+    def test_without_forks_nothing_is_forked(self) -> None:
+        holder = {"never_repair": True}
+        with tempfile.TemporaryDirectory() as folder, _stand_ins(holder):
+            config = _config(folder, rows=FOCUS_ROWS)
+            rollout = _run(config, "rollout")
+            self.assertNotIn("forks", rollout)
+            self.assertNotIn("cases_forked", rollout)
+            self.assertFalse((iteration_dir(config, 0) / "forks").exists())
+            self.assertIsNone(_run(config, "update")["update"])
+
+    def test_the_fork_rows_carry_the_forks_sample_index(self) -> None:
+        seen: dict = {}
+        original = rl_train.fork_rows
+
+        def spy(payloads, **options):
+            rows, report = original(payloads, **options)
+            seen["rows"] = rows
+            return rows, report
+
+        holder = {"never_repair": True}
+        with tempfile.TemporaryDirectory() as folder, _stand_ins(holder), mock.patch.object(rl_train, "fork_rows", spy):
+            config = _config(folder, forks={"enabled": True}, rows=FOCUS_ROWS)
+            _run(config, "rollout")
+            _run(config, "update")
+        self.assertTrue(seen["rows"])
+        for row in seen["rows"]:
+            self.assertEqual((row.sample_index, row.supervised, row.advantage, row.step), (FORK_SAMPLE, True, 0.0, 1))
+            self.assertGreater(row.lifecycle_term, 0.0)
+
+    def test_the_config_checks_the_fork_settings_and_the_check_names_them(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            for bad in (dict(forks={"enabled": True, "weight": 0.0}), dict(forks={"states": "last"}), dict(forks={"argument_samples": -1})):
+                with self.assertRaises(ValueError, msg=str(bad)):
+                    _config(folder, **bad)
+            self.assertFalse(_config(folder).fork_settings().enabled)
+            found = rl_train.check(_config(folder, forks={"enabled": True, "argument_samples": 1}, evaluate_every=3))
+            self.assertEqual((found["forks"]["enabled"], found["forks"]["argument_samples"], found["evaluate_every"]), (True, 1, 3))
+            self.assertNotIn("forks", rl_train.check(_config(folder)))
+
+
+@unittest.skipIf(torch is None, "torch is not installed")
+class EvaluationIntervalTests(unittest.TestCase):
+    def test_only_every_nth_iteration_is_evaluated(self) -> None:
+        holder: dict = {}
+        with tempfile.TemporaryDirectory() as folder, _stand_ins(holder) as rl:
+            for bad in (0, -1, 1.5, True):
+                with self.assertRaises(ValueError, msg=str(bad)):
+                    _config(folder, evaluate_every=bad)
+            config = _config(folder, evaluate_every=2)
+            self.assertEqual([config.evaluated(iteration) for iteration in range(4)], [False, True, False, True])
+            self.assertEqual([_config(folder).evaluated(iteration) for iteration in range(3)], [True, True, True])
+            first = iteration_dir(config, 0)
+            for phase in ("rollout", "update"):
+                _run(config, phase)
+            # A worker's shard of a skipped evaluation writes nothing; the closing call records the skip.
+            self.assertIn("skipped", _run(config, "evaluate", shard=(0, 2)))
+            self.assertFalse((first / "evaluation.json").exists())
+            skipped = _run(config, "evaluate")
+            self.assertRegex(skipped["skipped"], "evaluates every 2 iterations; the next evaluation is of iteration 1")
+            self.assertEqual(_json(first / "evaluation.json")["summary"], skipped)
+            self.assertFalse((first / "evaluation").exists())  # no episode was run
+            manifest = rl.load_manifest(config)
+            self.assertEqual((manifest.iteration, manifest.phase, manifest.current_adapter), (1, "rollout", str(first / "adapter")))
+            self.assertEqual(manifest.history[0]["evaluation"]["skipped"], skipped["skipped"])
+            for phase in ("rollout", "update"):
+                _run(config, phase)
+            evaluated = _run(config, "evaluate")
+            self.assertEqual((evaluated["iteration"], evaluated["cases"]), (1, 2))
+            self.assertEqual(len(list((iteration_dir(config, 1) / "evaluation" / "episodes").glob("*.json"))), 2)
+            self.assertEqual(rl.load_manifest(config).iteration, 2)
 
 
 if __name__ == "__main__":

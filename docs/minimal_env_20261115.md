@@ -448,7 +448,12 @@ README has the tables.
   24, at an area of 0.82.  The one beyond 3 nats is a breaker-never-corrected case at 8.2 nats that now looks at the
   breakers again after its first breaker correction.
 
-## 14. The second demonstration build (prepared 2026-11-21)
+## 14. The second demonstration build (prepared 2026-11-21; set aside the same day)
+
+**Set aside (2026-11-21).** The user objected that a look rule taught through demonstrations is a rule-based
+decision mechanism by another route, and that the objective is to improve performance through RL. The cell below
+stays undeployed, and the rule this section measures ("look where the estimate still fails a test") is kept as a
+labelled reference to read a trained policy against, not as a teaching target. Section 15 has what replaced it.
 
 Asked after the stopping-state diagnostic and the focused run's second evaluation ("Yes, prepare it"): change the
 demonstrations where the supervised model's failures start, so that looking at the breakers is never a decision
@@ -564,3 +569,25 @@ stops).  The look on a passing estimate, before finishing, buys 1 to 2.5% of the
 every case.  The early stop is not special to breakers in shape (14% of the two-line cases), but its cause differs:
 with breakers the estimate still fails and the model declares the case unresolved (105 of 146); with lines the
 estimate passes at half of the stops and the model declares it resolved.
+
+## 15. The RL plan of 2026-11-22 (built, no run)
+
+The plan is `docs/minimal_rl_plan_20261122.md`; the cell is `research/hpc/minimal_rl_20261122` (prepared, not
+deployed). What the finished focused run showed about the procedure, and what was built for it:
+
+| What held RL back (measured in the focused run) | What was built |
+| --- | --- |
+| Three optimizer steps in 28.6 hours at 1e-5, against 3,706 at 1e-4 in the supervised pass; KL from the start 0.0033 and 0.0024 | Stage A: eight steps a batch by case (one while the optimizer is new), 3e-5, an evaluation every third iteration (`evaluate_every`) |
+| The repairing action is not sampled: the look in the breaker-never-corrected cases has probability about 0.0003, and a policy gradient weighs an action by p(1 - p) | Stage B: one-step forks of the greedy episode (`psse_env/minimal/forks.py`), and one supervised row per state where a forced branch returned more, weighted by the difference |
+
+- **The forced call.** The harness gives the tool's name and the model writes the arguments
+  (`MinimalModelPolicy.act_forced`; `generate_text(..., forced_prefix=...)` in the research policy). Its record
+  carries no sampling probabilities, and nothing after a forced step is a training row.
+- **No rule.** The forks are at every state and over every tool, and the truth enters through the reward alone. A
+  look that changes nothing loses to finishing by the 0.01 action cost, so the same rows teach where a look does
+  not pay.
+- **The fork probe** (`research/minimal_env/fork_probe.py`) runs the forks with no update and counts the unrepaired
+  cases one forced step repairs: a labelled upper bound on one round of stage B, read before a run is spent.
+- **Not checked:** nothing has met the model. Whether the forced name tokenizes as the model writes it, whether
+  eight steps a batch at 3e-5 stay close to the sampled policy, and every cost in the cell's README are open
+  until the smokes run.

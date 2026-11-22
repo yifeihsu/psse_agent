@@ -1,0 +1,514 @@
+"""One-step forks of a policy's own episode: what each other tool would have earned.
+
+For a case, the policy's own episode is run once.  Then, at every state of that episode and for every other
+tool, the episode is run again: the actions before the state are replayed through the environment, the tool is
+forced (the policy writes the arguments itself, ``act_forced``), and the policy continues to the end under the
+budget the episode has left.  A branch is scored like any episode (``scoring.episode_reward``), prefix included,
+so its return is the return an ordinary episode with that action would have had.
+
+What it is for (RL plan of 2026-11-22, stage B).  A policy-gradient update learns an action only from episodes
+that sampled it, in proportion to p(1 - p): an action the policy gives a probability of 0.0003 is never learned.
+A fork measures such an action's outcome directly.  A state where a forced branch returned more than the own
+episode names an action the policy could have taken there and done better with; the RL update trains that action
+on that state's prompt, weighted by the difference of the returns (``research.minimal_env.rl_train``).
+
+What it is not.  Nothing here says which states or tools matter: the forks are at every state and over every
+tool, and the truth enters only through the reward, as in every sampled episode.  A forced step is an
+intervention of the harness, not a choice of the policy: the steps after it are never training rows.  And the
+branching is a training-time measurement: an evaluated episode is one pass, one action at a time.
+
+Replays are checked.  At every replayed step the policy must be shown what it was shown in the own episode (a
+digest of the rendered observation); a branch whose state has drifted is marked and never used.
+
+``argument_samples`` adds branches whose forced call is written by a second, sampling policy (every tool, the
+policy's own included): they try other objects of one tool, which a forced tool with the policy's own decoding
+does not.  A sampled call that repeats one already tried at the state is not run again.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import os
+import re
+import time
+from collections import Counter, defaultdict
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Callable, Iterator, Mapping, Sequence
+
+from psse_env.minimal import observation as view
+from psse_env.minimal.actions import FINISH, OUTCOME_UNRESOLVED, tool_schemas
+from psse_env.minimal.env import MinimalDiagnosisEnv
+from psse_env.minimal.episode import run_episode
+from psse_env.minimal.scoring import RewardWeights
+from psse_env.rl.rollout import sample_seed, scenario_root
+
+FORK_CONTRACT = "minimal_one_step_forks_v1"
+#: Who wrote the forced call's arguments: the policy's own decoding, or the sampling policy.
+ARGUMENTS_GREEDY = "own_decoding"
+ARGUMENTS_SAMPLED = "sampled"
+#: A branch that ran to the end of its episode with a valid call of the forced tool.
+STATUS_RAN = "ran"
+#: The replay showed the policy something else than the own episode did: the branch is not that state's.
+STATUS_DRIFTED = "drifted"
+#: What the model wrote after the tool's name is not a valid call of that tool.
+STATUS_INVALID = "invalid_call"
+#: The forced call repeats one already tried at the state (the own action or an earlier branch).
+STATUS_DUPLICATE = "duplicate"
+#: The policy raised at the forced step (a prompt over its input limit).
+STATUS_NO_CALL = "no_call"
+STATUSES = (STATUS_RAN, STATUS_DRIFTED, STATUS_INVALID, STATUS_DUPLICATE, STATUS_NO_CALL)
+#: ``sample_index`` of the seed a case's argument-sampling policy is built with: beside the sampled episodes.
+FORK_SAMPLE = 2000
+_GAIN_TOLERANCE = 1e-9
+
+
+@dataclass(frozen=True)
+class ForkSettings:
+    """Whether a run forks, and how the update reads the branches."""
+
+    enabled: bool = False
+    #: Weight of a fork row, times how far the branch's return lies above the own episode's.
+    weight: float = 1.0
+    #: A branch teaches only when its return exceeds the own episode's by more than this.  0 keeps every gain,
+    #: the 0.01 of one action saved included.
+    min_gain: float = 0.0
+    #: Further branches per tool whose forced call a sampling policy writes (0: none).
+    argument_samples: int = 0
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any] | None) -> "ForkSettings":
+        payload = dict(payload or {})
+        unknown = sorted(set(payload) - set(cls.__dataclass_fields__))
+        if unknown:
+            raise ValueError(f"unknown forks fields: {unknown}")
+        settings = cls(**payload)
+        settings.validate()
+        return settings
+
+    def validate(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise ValueError("forks.enabled must be true or false")
+        for name in ("weight", "min_gain"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.0 <= float(value) < float("inf"):
+                raise ValueError(f"forks.{name} must be finite and nonnegative")
+        if self.enabled and not float(self.weight) > 0.0:
+            raise ValueError("forks.weight must be positive when forks are enabled")
+        if isinstance(self.argument_samples, bool) or not isinstance(self.argument_samples, int) or self.argument_samples < 0:
+            raise ValueError("forks.argument_samples must be a nonnegative integer")
+
+
+# ------------------------------------------------------------------ states
+
+
+def state_digest(observation: Mapping[str, Any]) -> str:
+    """A digest of what the model reads at a state: the rendered user turn, and whether its tools name breakers."""
+    text = ("1" if observation.get("breaker_model") else "0") + view.user_text(observation)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def offered_tools(observation: Mapping[str, Any]) -> list[str]:
+    """The names of the tools an observation offers, in the order the model is shown them."""
+    return [str(row["function"]["name"]) for row in tool_schemas(breakers=bool(observation.get("breaker_model")))]
+
+
+def signature(action: Any) -> str:
+    """One string per distinct call (or per distinct unreadable text)."""
+    if isinstance(action, Mapping):
+        return json.dumps({"tool": action.get("tool"), "arguments": action.get("arguments") or {}}, sort_keys=True, default=str)
+    return f"text:{action!r}"
+
+
+def class_of(root: Mapping[str, Any]) -> str:
+    return str(((root.get("audit") or {}).get("compound") or {}).get("class")
+               or (root.get("grouping") or {}).get("scenario_family") or "")
+
+
+class _Recorder:
+    """The policy, keeping every state it was asked at and what it answered."""
+
+    def __init__(self, policy: Any) -> None:
+        self.policy = policy
+        self.states: list[dict[str, Any]] = []
+
+    @property
+    def last_action_metrics(self) -> Any:
+        return getattr(self.policy, "last_action_metrics", None)
+
+    def act(self, observation: Mapping[str, Any]) -> Any:
+        state: dict[str, Any] = {"observation": copy.deepcopy(dict(observation)), "action": None, "raised": None}
+        self.states.append(state)
+        try:
+            action = self.policy.act(observation)
+        except Exception as exc:
+            state["raised"] = f"{type(exc).__name__}: {exc}"
+            raise
+        state["action"] = copy.deepcopy(action)
+        return action
+
+
+_NOT_CALLED = object()
+
+
+class ForkPolicy:
+    """Replays a prefix, forces one tool, then hands the episode over to the policy.
+
+    ``prefix`` holds the actions before the fork's state as the environment took them in the own episode (the
+    call, the model's words where they were not one, ``None`` where the policy raised) and ``digests`` the
+    digest of every state up to the fork's, that one included.  ``forced_policy`` writes the forced call
+    (``act_forced(observation, tool)``); the policy itself unless another is named.  ``seen`` holds the
+    signatures of the calls already tried at the state.
+
+    After the episode: ``drifted_at`` (the first replayed step whose state was not the own episode's, or
+    ``None``), ``forced`` (what the forced step returned), ``status`` and ``forced_generation`` (the tokens of
+    the forced call where the policy records them).  A branch that cannot be used ends its episode at once.
+    """
+
+    def __init__(self, policy: Any, *, prefix: Sequence[Any], digests: Sequence[str], tool: str,
+                 forced_policy: Any | None = None, seen: set[str] | None = None) -> None:
+        if len(digests) != len(prefix) + 1:
+            raise ValueError("a fork needs the digest of every state up to its own: one more than its prefix has actions")
+        self._policy = policy
+        self._forced_policy = forced_policy if forced_policy is not None else policy
+        self._prefix = [copy.deepcopy(action) for action in prefix]
+        self._digests = [str(value) for value in digests]
+        self.tool = str(tool)
+        self._seen = seen
+        self._position = 0
+        self._acting: Any = None
+        self.drifted_at: int | None = None
+        self.forced: Any = _NOT_CALLED
+        self.forced_generation: dict[str, Any] | None = None
+        self.status: str = STATUS_NO_CALL
+
+    @property
+    def last_action_metrics(self) -> Any:
+        return getattr(self._acting, "last_action_metrics", None) if self._acting is not None else None
+
+    @staticmethod
+    def _leave() -> dict[str, Any]:
+        return {"tool": FINISH, "arguments": {"outcome": OUTCOME_UNRESOLVED}}
+
+    def act(self, observation: Mapping[str, Any]) -> Any:
+        index = self._position
+        self._position += 1
+        self._acting = None
+        if self.status in (STATUS_DRIFTED, STATUS_INVALID, STATUS_DUPLICATE):
+            return self._leave()  # the environment's budget, not this policy, ends an episode that goes on
+        if index <= len(self._prefix) and state_digest(observation) != self._digests[index]:
+            self.drifted_at = index
+            self.status = STATUS_DRIFTED
+            return self._leave()
+        if index < len(self._prefix):
+            return copy.deepcopy(self._prefix[index])
+        if index > len(self._prefix):
+            self._acting = self._policy
+            return self._policy.act(observation)
+        self._acting = self._forced_policy
+        self.forced = self._forced_policy.act_forced(observation, self.tool)
+        generation = getattr(self._forced_policy, "last_generation", None)
+        if isinstance(generation, Mapping) and generation.get("forced_prefix_tokens"):
+            self.forced_generation = {"completion_token_ids": [int(value) for value in generation.get("completion_token_ids") or []],
+                                      "forced_prefix_tokens": int(generation["forced_prefix_tokens"])}
+        if not isinstance(self.forced, Mapping) or self.forced.get("tool") != self.tool:
+            self.status = STATUS_INVALID
+            return self._leave()
+        if self._seen is not None and signature(self.forced) in self._seen:
+            self.status = STATUS_DUPLICATE
+            return self._leave()
+        self.status = STATUS_RAN
+        return copy.deepcopy(self.forced)
+
+
+# ------------------------------------------------------------------ one branch, one case
+
+
+def _brief_action(action: Any) -> Any:
+    if isinstance(action, Mapping):
+        return {"tool": action.get("tool"), "arguments": copy.deepcopy(dict(action.get("arguments") or {}))}
+    return None if action is None else str(action)[:600]
+
+
+def run_branch(root: Mapping[str, Any], *, env: MinimalDiagnosisEnv, policy: Any, prefix: Sequence[Any],
+               digests: Sequence[str], tool: str, weights: RewardWeights | None = None, forced_policy: Any | None = None,
+               seen: set[str] | None = None) -> dict[str, Any]:
+    """One branch: the prefix replayed, ``tool`` forced at the state after it, the policy to the end.
+
+    ``return`` and the outcome are those of the whole episode, as scored for any episode; they mean something
+    only for a branch whose ``status`` is ``ran``.  ``executed`` says whether the environment carried the forced
+    call out (a call it refused changed nothing).
+    """
+    fork = ForkPolicy(policy, prefix=prefix, digests=digests, tool=tool, forced_policy=forced_policy, seen=seen)
+    episode = run_episode(env, root, fork, weights=weights, keep_observations=False)
+    at = len(prefix)
+    steps = episode["steps"]
+    record: dict[str, Any] = {"state": at, "tool": str(tool), "status": fork.status,
+                              "action": None if fork.forced is _NOT_CALLED else _brief_action(fork.forced)}
+    if fork.drifted_at is not None:
+        record["drifted_at"] = int(fork.drifted_at)
+    if fork.forced_generation is not None:
+        record["forced_generation"] = fork.forced_generation
+    if fork.status != STATUS_RAN:
+        return record
+    score = episode["score"]
+    forced_step = steps[at] if at < len(steps) else {}
+    result = forced_step.get("result") or {}
+    record.update({
+        "executed": result.get("status") == "ok",
+        "error_code": result.get("error_code"),
+        "return": float(episode["reward"]["total"]),
+        "solved": bool(score["solved"]),
+        "strict_solved": bool((score.get("strict") or {}).get("solved")),
+        "declared": score.get("declared"),
+        "actions": int(score.get("actions") or 0),
+        "outcome": episode["outcome"],
+        "continuation": [_brief_action(step.get("action")) for step in steps[at + 1:]],
+        "seconds": episode["seconds"],
+    })
+    return record
+
+
+def better_branches(record: Mapping[str, Any], min_gain: float = 0.0) -> list[dict[str, Any]]:
+    """Per state of the own episode, the branch that returned the most above it, where one returned more.
+
+    Only a branch that ran with a call the environment carried out counts: a refused call is not an action to
+    teach.  Between branches of one state with the same return the earlier one is kept (a call in the policy's own
+    decoding before a sampled one).
+    """
+    own = float(record["own"]["return"])
+    best: dict[int, dict[str, Any]] = {}
+    for position, branch in enumerate(record.get("branches") or []):
+        if branch.get("status") != STATUS_RAN or not branch.get("executed"):
+            continue
+        gain = float(branch["return"]) - own
+        if not gain > float(min_gain) + _GAIN_TOLERANCE:
+            continue
+        held = best.get(int(branch["state"]))
+        if held is None or gain > held["gain"] + _GAIN_TOLERANCE:
+            best[int(branch["state"])] = {
+                "state": int(branch["state"]), "branch": position, "tool": branch["tool"], "action": copy.deepcopy(branch["action"]),
+                "arguments": branch.get("arguments"), "gain": gain, "return": float(branch["return"]),
+                "solved": bool(branch["solved"]), "actions": int(branch["actions"])}
+    return [best[state] for state in sorted(best)]
+
+
+def fork_case(root: Mapping[str, Any], *, env_factory: Callable[[], MinimalDiagnosisEnv], policy: Any,
+              weights: RewardWeights | None = None, settings: ForkSettings | None = None, argument_policy: Any | None = None,
+              canonical: Callable[[Mapping[str, Any], Mapping[str, Any], Sequence[int]], bool] | None = None) -> dict[str, Any]:
+    """The policy's own episode on ``root`` and its one-step forks.
+
+    Returns ``{"record": ..., "observations": {state: observation}}``: the record of the own episode and of every
+    branch, with ``better`` (:func:`better_branches`), and the observation of every state that has a better
+    branch, which is what a training row of that state is rendered from.
+
+    ``canonical(observation, action, forced_ids)`` is asked, for a forced call whose tokens the policy recorded,
+    whether the tokens the harness gave are how that call's own rendering starts; the answer is kept on the
+    branch (``prefix_canonical``).
+    """
+    settings = settings or ForkSettings(enabled=True)
+    started = time.perf_counter()
+    recorder = _Recorder(policy)
+    own = run_episode(env_factory(), root, recorder, weights=weights, keep_observations=False)
+    states = recorder.states
+    digests = [state_digest(state["observation"]) for state in states]
+    replay = [None if state["raised"] else state["action"] for state in states]
+    branches: list[dict[str, Any]] = []
+    for index, state in enumerate(states):
+        if state["raised"]:
+            continue  # the policy could not answer here: neither can a forced call
+        own_action = state["action"]
+        own_tool = own_action.get("tool") if isinstance(own_action, Mapping) else None
+        tools = offered_tools(state["observation"])
+        plan: list[tuple[str, str, int | None]] = [(tool, ARGUMENTS_GREEDY, None) for tool in tools if tool != own_tool]
+        if settings.argument_samples and argument_policy is not None:
+            plan += [(tool, ARGUMENTS_SAMPLED, sample) for tool in tools for sample in range(int(settings.argument_samples))]
+        seen = {signature(own_action)}
+        for tool, arguments, sample in plan:
+            branch = run_branch(root, env=env_factory(), policy=policy, prefix=replay[:index], digests=digests[: index + 1],
+                                tool=tool, weights=weights, forced_policy=argument_policy if arguments == ARGUMENTS_SAMPLED else None,
+                                seen=seen)
+            branch["arguments"] = arguments
+            if sample is not None:
+                branch["sample"] = int(sample)
+            generation = branch.pop("forced_generation", None)
+            if branch["status"] == STATUS_RAN:
+                seen.add(signature(branch["action"]))
+            if generation is not None:
+                branch["forced_prefix_tokens"] = int(generation["forced_prefix_tokens"])
+                if canonical is not None and isinstance(branch.get("action"), Mapping) and branch["status"] in (STATUS_RAN, STATUS_DUPLICATE):
+                    forced_ids = generation["completion_token_ids"][: generation["forced_prefix_tokens"]]
+                    try:
+                        branch["prefix_canonical"] = bool(canonical(state["observation"], branch["action"], forced_ids))
+                    except ValueError:
+                        branch["prefix_canonical"] = False
+            branches.append(branch)
+    score = own["score"]
+    record: dict[str, Any] = {
+        "contract": FORK_CONTRACT,
+        "scenario_id": own["scenario_id"],
+        "class": class_of(root),
+        "settings": asdict(settings),
+        "own": {
+            "return": float(own["reward"]["total"]),
+            "solved": bool(score["solved"]),
+            "strict_solved": bool((score.get("strict") or {}).get("solved")),
+            "declared": score.get("declared"),
+            "actions": int(score.get("actions") or 0),
+            "outcome": own["outcome"],
+            "steps": [{"step": int(step["step"]), "action": _brief_action(step.get("action")),
+                       "status": (step.get("result") or {}).get("status"), "error_code": (step.get("result") or {}).get("error_code")}
+                      for step in own["steps"]],
+        },
+        "states": len(states),
+        "branches": branches,
+        "seconds": {"own": own["seconds"], "total": round(time.perf_counter() - started, 4)},
+    }
+    record["better"] = better_branches(record, settings.min_gain)
+    observations = {str(item["state"]): states[item["state"]]["observation"] for item in record["better"]}
+    return {"record": record, "observations": observations}
+
+
+# ------------------------------------------------------------------ the store
+
+
+def _safe_name(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", name) or "case"
+
+
+class ForkStore:
+    """One file per case under ``directory/cases``, written whole and in one move."""
+
+    def __init__(self, directory: str | Path) -> None:
+        self.directory = Path(directory)
+
+    def _path(self, case: str) -> Path:
+        return self.directory / "cases" / f"{_safe_name(case)}.json"
+
+    def has(self, case: str) -> bool:
+        return self._path(case).is_file()
+
+    def write(self, case: str, payload: Mapping[str, Any]) -> Path:
+        path = self._path(case)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+            json.dump({"case": str(case), **dict(payload)}, stream, sort_keys=True, allow_nan=False)
+            stream.write("\n")
+        os.replace(temporary, path)
+        return path
+
+    def read(self, case: str) -> dict[str, Any]:
+        return json.loads(self._path(case).read_text(encoding="utf-8"))
+
+    def iter(self) -> Iterator[tuple[str, dict[str, Any]]]:
+        folder = self.directory / "cases"
+        if not folder.is_dir():
+            return
+        for path in sorted(folder.glob("*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            yield str(payload["case"]), payload
+
+
+def fork_roots(scenarios: Sequence[Mapping[str, Any]], *, store: ForkStore, env_factory: Callable[[], MinimalDiagnosisEnv],
+               policy_factory: Callable[[], Any], weights: RewardWeights | None = None, settings: ForkSettings | None = None,
+               argument_policy_factory: Callable[[int], Any] | None = None, base_seed: int = 0,
+               canonical_factory: Callable[[Any], Any] | None = None,
+               progress: Callable[[Mapping[str, Any]], None] | None = None) -> int:
+    """Fork every case that has no file yet; returns how many were forked.
+
+    The policy is built only when a case is left, so a start that finds everything done loads no model.
+    ``argument_policy_factory(seed)`` builds the sampling policy of one case's sampled forced calls;
+    ``canonical_factory(policy)`` the check of :func:`fork_case` (``None`` where the policy cannot give one).
+    """
+    settings = settings or ForkSettings(enabled=True)
+    pending = [scenario for scenario in scenarios if not store.has(scenario_root(scenario))]
+    if not pending:
+        return 0
+    policy = policy_factory()
+    canonical = canonical_factory(policy) if canonical_factory is not None else None
+    for number, scenario in enumerate(pending, start=1):
+        case = scenario_root(scenario)
+        argument_policy = None
+        if settings.argument_samples and argument_policy_factory is not None:
+            argument_policy = argument_policy_factory(sample_seed(base_seed, case, FORK_SAMPLE))
+        payload = fork_case(scenario, env_factory=env_factory, policy=policy, weights=weights, settings=settings,
+                            argument_policy=argument_policy, canonical=canonical)
+        store.write(case, payload)
+        if progress is not None:
+            record = payload["record"]
+            progress({"fork": case, "done": number, "of": len(pending), "own_solved": record["own"]["solved"],
+                      "states": record["states"], "branches": len(record["branches"]),
+                      "better": [(item["state"], item["tool"], round(item["gain"], 4)) for item in record["better"]],
+                      "seconds": record["seconds"]["total"]})
+    return len(pending)
+
+
+# ------------------------------------------------------------------ reading
+
+
+def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Counts over forked cases: what the branches did, and how many cases a single forced step repairs."""
+    totals: Counter = Counter()
+    better_by_tool: Counter = Counter()
+    repairing_by_tool: Counter = Counter()
+    by_class: dict[str, Counter] = defaultdict(Counter)
+    gains: list[float] = []
+    seconds = 0.0
+    for record in records:
+        own = record["own"]
+        branches = record.get("branches") or []
+        cell = by_class[str(record.get("class"))]
+        totals["cases"] += 1
+        cell["cases"] += 1
+        totals["own_episode_repaired"] += int(bool(own["solved"]))
+        totals["states"] += int(record["states"])
+        totals["branches"] += len(branches)
+        for branch in branches:
+            totals[f"branches_{branch['status']}"] += 1
+            if branch["status"] == STATUS_RAN and not branch.get("executed"):
+                totals["forced_calls_the_environment_refused"] += 1
+            if "prefix_canonical" in branch:
+                totals["forced_prefixes_checked"] += 1
+                totals["forced_prefixes_canonical"] += int(bool(branch["prefix_canonical"]))
+        repairing = [branch for branch in branches
+                     if branch["status"] == STATUS_RAN and branch.get("executed") and branch.get("solved")]
+        if not own["solved"]:
+            totals["own_episode_unrepaired"] += 1
+            cell["own_episode_unrepaired"] += 1
+            if repairing:
+                totals["unrepaired_cases_one_forced_step_repairs"] += 1
+                cell["unrepaired_cases_one_forced_step_repairs"] += 1
+                first = min(repairing, key=lambda branch: (branch["state"], -float(branch["return"])))
+                repairing_by_tool[str(first["tool"])] += 1
+            if any(branch.get("arguments") == ARGUMENTS_GREEDY for branch in repairing):
+                totals["unrepaired_cases_one_forced_step_repairs_in_the_policys_own_decoding"] += 1
+        better = record.get("better") or []
+        totals["cases_with_a_better_branch"] += int(bool(better))
+        totals["states_with_a_better_branch"] += len(better)
+        for item in better:
+            better_by_tool[str(item["tool"])] += 1
+            gains.append(float(item["gain"]))
+            totals["better_branches_that_repair_an_unrepaired_case"] += int(bool(item["solved"]) and not own["solved"])
+            totals["better_branches_at_the_last_state"] += int(item["state"] == int(record["states"]) - 1)
+        seconds += float((record.get("seconds") or {}).get("total") or 0.0)
+    ordered = sorted(gains)
+    return {
+        "contract": FORK_CONTRACT,
+        "totals": dict(sorted(totals.items())),
+        "better_branches_by_tool": dict(sorted(better_by_tool.items())),
+        "first_repairing_branch_by_tool": dict(sorted(repairing_by_tool.items())),
+        "gain": {"count": len(ordered), "min": ordered[0] if ordered else None,
+                 "median": ordered[len(ordered) // 2] if ordered else None, "max": ordered[-1] if ordered else None,
+                 "at_most_one_action_cost": sum(1 for value in ordered if value <= 0.05)},
+        "by_class": {name: dict(sorted(cell.items())) for name, cell in sorted(by_class.items())},
+        "seconds": round(seconds, 1),
+    }
+
+
+__all__ = [
+    "ARGUMENTS_GREEDY", "ARGUMENTS_SAMPLED", "FORK_CONTRACT", "FORK_SAMPLE", "ForkPolicy", "ForkSettings", "ForkStore",
+    "STATUSES", "STATUS_DRIFTED", "STATUS_DUPLICATE", "STATUS_INVALID", "STATUS_NO_CALL", "STATUS_RAN", "better_branches",
+    "class_of", "fork_case", "fork_roots", "offered_tools", "run_branch", "signature", "state_digest", "summarize",
+]
