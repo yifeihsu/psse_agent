@@ -536,12 +536,15 @@ class StatusTests(unittest.TestCase):
         text = printed.stdout
         self.assertIn("at iteration 1, phase update;", text)
         self.assertIn("--- iteration_000", text)
-        self.assertRegex(text, r"forks: 2 of 2 cases; greedy episode unrepaired 2, one forced step repairs [12] of them; states 2, branches 10 "
-                               r'\{"ran": 10\}')
-        self.assertRegex(text, r"forks: states with a better branch \d, by tool \{.*\}, gain \{.*\}; forced prefixes canonical 0 of 0; ")
+        # Two one-state episodes: five other tools each, and the other outcome of the claim.
+        self.assertRegex(text, r"forks: 2 of 2 cases; greedy episode unrepaired 2, one forced step repairs [12] of them; states 2, branches 12 "
+                               r'\{"ran": 12\}')
+        self.assertRegex(text, r"forks: states with a branch to teach \d \(\d repair an unrepaired case\), by tool \{.*\}, margin \{.*\}; "
+                               r"forced prefixes canonical 0 of 0; ")
         self.assertRegex(text, r"rows: rows \d+, policy_rows 0, preservation_rows 2, .*supervised_rows \d, supervised_rows_unrenderable 0")
-        self.assertRegex(text, r"fork rows in the update: \d of \d better branches in \d cases, by tool \{.*\}; whose branch repairs \d, "
-                               r"within one action's cost \d; row weights \{.*\}; not rendered 0, over the input limit 0")
+        self.assertRegex(text, r"fork rows in the update: \d of \d kept branches in \d cases, by tool \{.*\}; whose branch repairs \d "
+                               r"\(weight [\d.]+ of [\d.]+\), within one action's cost \d; row weights \{.*\}; not rendered 0, "
+                               r"over the input limit 0")
         self.assertRegex(text, r"update: 1 step\(s\) on \d+ rows in .* h; rows per step \[\d+\]")  # one step while the optimizer is new
         self.assertIn("update: mean |log ratio| to the sampler by step [", text)
         self.assertIn("integrity: ok True; failures []", text)
@@ -552,9 +555,12 @@ class StatusTests(unittest.TestCase):
         self.assertEqual((before.returncode, after.returncode), (0, 0), before.stderr + after.stderr)
         self.assertIn(f"cases forked {len(records)}", before.stdout)
         self.assertIn("summary.json: not yet", before.stdout)
-        self.assertRegex(after.stdout, r"selected 2; greedy episode unrepaired 2 of 2; one forced step repairs [12] of them \([12] with the "
-                                       r"model's own decoding of the arguments\)")
-        self.assertIn("states 2, branches 10", after.stdout)
+        self.assertRegex(after.stdout, r"selected 2; greedy episode unrepaired 2 of 2; one forced step repairs [12] of them \([12] without "
+                                       r"a sampled call\); repaired after a call the environment refused, which changes nothing but the "
+                                       r"history: \d")
+        self.assertIn("states 2, branches 12", after.stdout)
+        self.assertRegex(after.stdout, r"states with a branch to teach \d in \d cases \(\d repair an unrepaired case\); by tool \{.*\}; "
+                                       r"margin \(the row weight\) \{.*\}")
         self.assertIn("forced prefixes that start the call's own rendering: 0 of 0 checked", after.stdout)
         self.assertRegex(after.stdout, r"control_meter: unrepaired 1 of 1, one forced step repairs 1")
         self.assertRegex(after.stdout, r"fork time [\d.]+ h in all, [\d.]+ s a case")

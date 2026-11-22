@@ -981,8 +981,8 @@ class ForkIterationTests(unittest.TestCase):
             found = rollout["forks"]
             self.assertEqual((found["cases_drawn"], found["cases_forked"]), (2, 2))
             totals = found["totals"]
-            # Two one-state episodes, five other tools each.
-            self.assertEqual((totals["own_episode_unrepaired"], totals["states"], totals["branches"], totals["branches_ran"]), (2, 2, 10, 10))
+            # Two one-state episodes: five other tools each, and the other outcome of the claim.
+            self.assertEqual((totals["own_episode_unrepaired"], totals["states"], totals["branches"], totals["branches_ran"]), (2, 2, 12, 12))
             self.assertGreaterEqual(totals["unrepaired_cases_one_forced_step_repairs"], 1)
             self.assertEqual(rollout["store"]["totals"]["episodes"], 4)  # the groups hold the sampled episodes alone
             stored = dict(ForkStore(out / "forks").iter())
@@ -991,6 +991,7 @@ class ForkIterationTests(unittest.TestCase):
             [better] = stored[ids[0]]["record"]["better"]
             self.assertEqual((better["state"], better["action"], better["solved"]), (0, REPAIRS[_key(MinimalDiagnosisEnv(KERNEL).reset(ROOTS[0]))][0], True))
             self.assertAlmostEqual(better["gain"], 1.49)
+            self.assertAlmostEqual(better["margin"], 1.49)
             candidates = [(case, item) for case in sorted(stored) for item in stored[case]["record"]["better"]]
 
             # The update: the sampled rows of both cases for the KL term, and one supervised row per better branch.
@@ -1002,6 +1003,10 @@ class ForkIterationTests(unittest.TestCase):
             self.assertEqual((taught["candidates"], taught["rows"], taught["unrenderable"], taught["prompt_over_the_input_limit"]),
                              (len(candidates), len(candidates), 0, 0))
             self.assertGreaterEqual(taught["rows_whose_branch_repairs"], 1)
+            # A row's weight is its branch's margin; the rows that repair hold their share of it.
+            self.assertAlmostEqual(taught["weight_of_rows"], sum(item["margin"] for _case, item in candidates))
+            self.assertAlmostEqual(taught["weight_of_rows_whose_branch_repairs"],
+                                   sum(item["margin"] for _case, item in candidates if item["solved"]))
             self.assertEqual(sum(taught["rows_by_tool"].values()), len(candidates))
             self.assertAlmostEqual(taught["row_weights"]["max"], 1.49)
             self.assertNotIn("truth_built_examples", rows)

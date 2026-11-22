@@ -36,14 +36,18 @@ else:
     unrepaired = int(totals.get("own_episode_unrepaired", 0))
     print(f"    selected {((payload.get('selection') or {}).get('selected'))}; greedy episode unrepaired {unrepaired} of {totals.get('cases', 0)}; "
           f"one forced step repairs {totals.get('unrepaired_cases_one_forced_step_repairs', 0)} of them "
-          f"({totals.get('unrepaired_cases_one_forced_step_repairs_in_the_policys_own_decoding', 0)} with the model's own decoding of the arguments)")
+          f"({totals.get('unrepaired_cases_one_forced_step_repairs_in_the_policys_own_decoding', 0)} without a sampled call); "
+          f"repaired after a call the environment refused, which changes nothing but the history: "
+          f"{totals.get('unrepaired_cases_repaired_after_a_refused_call', 0)}")
     statuses = {key[9:]: value for key, value in totals.items() if key.startswith("branches_")}
     print(f"    states {totals.get('states', 0)}, branches {totals.get('branches', 0)} {json.dumps(statuses, sort_keys=True)}; "
           f"forced calls the environment refused {totals.get('forced_calls_the_environment_refused', 0)}")
     print(f"    forced prefixes that start the call's own rendering: {totals.get('forced_prefixes_canonical', 0)} of "
           f"{totals.get('forced_prefixes_checked', 0)} checked")
-    print(f"    states with a better branch {totals.get('states_with_a_better_branch', 0)} in {totals.get('cases_with_a_better_branch', 0)} cases; "
-          f"by tool {json.dumps(summary.get('better_branches_by_tool'), sort_keys=True)}; gain {json.dumps(summary.get('gain'), sort_keys=True)}")
+    print(f"    states with a branch to teach {totals.get('states_with_a_better_branch', 0)} in {totals.get('cases_with_a_better_branch', 0)} cases "
+          f"({totals.get('better_branches_that_repair_an_unrepaired_case', 0)} repair an unrepaired case); "
+          f"by tool {json.dumps(summary.get('better_branches_by_tool'), sort_keys=True)}; "
+          f"margin (the row weight) {json.dumps(summary.get('margin'), sort_keys=True)}")
     print(f"    first repairing branch by tool {json.dumps(summary.get('first_repairing_branch_by_tool'), sort_keys=True)}; "
           f"better branches at the last state {totals.get('better_branches_at_the_last_state', 0)}")
     for name, cell in (summary.get("by_class") or {}).items():
@@ -135,8 +139,9 @@ for folder in sorted(glob.glob(f"{run}/iteration_*")):
             print(f"        forks: {forks.get('cases_forked')} of {forks.get('cases_drawn')} cases; greedy episode unrepaired "
                   f"{ftotals.get('own_episode_unrepaired', 0)}, one forced step repairs {ftotals.get('unrepaired_cases_one_forced_step_repairs', 0)} of them; "
                   f"states {ftotals.get('states', 0)}, branches {ftotals.get('branches', 0)} {json.dumps(statuses, sort_keys=True)}")
-            print(f"        forks: states with a better branch {ftotals.get('states_with_a_better_branch', 0)}, by tool "
-                  f"{json.dumps(forks.get('better_branches_by_tool'), sort_keys=True)}, gain {json.dumps(forks.get('gain'), sort_keys=True)}; "
+            print(f"        forks: states with a branch to teach {ftotals.get('states_with_a_better_branch', 0)} "
+                  f"({ftotals.get('better_branches_that_repair_an_unrepaired_case', 0)} repair an unrepaired case), by tool "
+                  f"{json.dumps(forks.get('better_branches_by_tool'), sort_keys=True)}, margin {json.dumps(forks.get('margin'), sort_keys=True)}; "
                   f"forced prefixes canonical {ftotals.get('forced_prefixes_canonical', 0)} of {ftotals.get('forced_prefixes_checked', 0)}; "
                   f"{round(float(forks.get('seconds') or 0) / 3600, 2)} h of forks")
     elif groups or forked:
@@ -155,8 +160,9 @@ for folder in sorted(glob.glob(f"{run}/iteration_*")):
                   f"row weights {json.dumps(taught.get('row_weights'))}")
         forks = rows.get("one_step_forks")
         if forks:
-            print(f"        fork rows in the update: {forks.get('rows')} of {forks.get('candidates')} better branches in {forks.get('cases')} cases, "
-                  f"by tool {json.dumps(forks.get('rows_by_tool'), sort_keys=True)}; whose branch repairs {forks.get('rows_whose_branch_repairs')}, "
+            print(f"        fork rows in the update: {forks.get('rows')} of {forks.get('candidates')} kept branches in {forks.get('cases')} cases, "
+                  f"by tool {json.dumps(forks.get('rows_by_tool'), sort_keys=True)}; whose branch repairs {forks.get('rows_whose_branch_repairs')} "
+                  f"(weight {forks.get('weight_of_rows_whose_branch_repairs')} of {forks.get('weight_of_rows')}), "
                   f"within one action's cost {forks.get('rows_within_one_action_cost')}; row weights {json.dumps(forks.get('row_weights'))}; "
                   f"not rendered {forks.get('unrenderable')}, over the input limit {forks.get('prompt_over_the_input_limit')}")
         if update is None:

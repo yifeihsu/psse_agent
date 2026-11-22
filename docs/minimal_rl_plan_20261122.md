@@ -1,10 +1,11 @@
 # RL plan for the minimal environment, 2026-11-22
 
-**Status (2026-11-22, later the same day): both stages are built and tested locally; nothing is deployed or
-run.** The user approved the build ("Yes, build both", no cluster action). The cell is
-`research/hpc/minimal_rl_20261122`; its README has the order of work, what each smoke is read for and where the
-build differs from this plan (section 9 below lists those points). Every cluster action still needs the user's
-word. The text below is the plan as written before the build.
+**Status (2026-11-22, evening): both stages are built; the cell is deployed at d6b7cfc and its two smokes
+passed; no run and no probe is submitted.** The user approved the build ("Yes, build both") and then the deploy
+and the smokes ("Yes, deploy and smoke"). The cell is `research/hpc/minimal_rl_20261122`; its README has the
+order of work, what each smoke showed (its section 9) and how a fork row is picked since the probe's smoke (its
+section 10; section 10 below). Every further cluster action needs the user's word. Sections 1 to 8 are the plan
+as written before the build.
 
 It replaces the "demonstration fix" I proposed on 2026-11-21 (a look at the breakers written into the supervised
 rows). The user objected that a decision rule taught through demonstrations is a rule-based mechanism by another
@@ -224,3 +225,24 @@ toward the failing states without anything having told it to.
 - **Local tests** (stand-ins for the model, the real environment and scoring): a stand-in that corrects one of
   two breakers and claims the case is repaired by one forced step, and its better branch is taught; a stand-in
   that claims a two-breaker case at once is not repaired by one forced step, and the probe reports that.
+
+## 10. What the smokes showed and changed (2026-11-22)
+
+Both smokes completed on the cluster; the cell's README (sections 9 and 10) has the tables.
+
+- **Stage A's smoke.** The first update took one step and the second four with the optimizer carried; the first
+  evaluation was skipped and the second made; integrity ok. Within one batch the steps drift from the policy that
+  sampled it: the mean absolute log-ratio on uncertain tokens was 0.011, 0.14, 0.18 and 0.30 over the four steps,
+  and the KL to the supervised model reached 0.021 after five steps (the focused run: 0.0033 and 0.0024 in all).
+  An update row took 12.2 to 12.8 s, so more steps a batch cost nothing.
+- **The probe's smoke.** The forced tool name tokenizes as the model writes it in 176 of 176 branches; no forced
+  call was invalid and no replay drifted. One forced step repairs 3 of the 4 unrepaired development cases it ran
+  on. Four cases are not a rate, and in one of them a call the environment refused, which changes nothing but the
+  history, is followed by a repair as well.
+- **Step 4 of section 4 is changed.** A state's best branch is now compared with what going on as the greedy
+  episode did can still reach (the greedy return, or a branch kept at a later state), and the excess is the row's
+  weight. Against the greedy return alone, the smoke's records gave 15 rows of which 8 were `finish`: stopping at
+  the first state was taught beside the look that repairs the case two states later, and where the greedy episode
+  ends in a false claim, stopping before looking at anything got weight 0.52. Both outcomes of `finish` are now
+  forked as whole calls at every state, so the honest declaration is taught where the false claim was made. With
+  the new comparison the same records give 10 rows, 86% of their weight on branches that repair. Not deployed.

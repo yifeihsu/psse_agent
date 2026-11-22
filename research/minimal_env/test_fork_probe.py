@@ -127,8 +127,10 @@ class ProbeTests(unittest.TestCase):
             self.assertEqual(len(holder["seeds"]), 1)
             summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
             self.assertEqual((summary["settings"]["argument_samples"], summary["settings"]["seed"]), (1, 7))
-            self.assertEqual(closing["branches"], 5 + 6)  # the five other tools, then every tool once with sampled arguments
-            self.assertEqual(summary["summary"]["totals"]["branches_duplicate"], 6)  # the sampler here writes what was tried
+            # The five other tools, the other outcome of the claim, then every tool but ``finish`` once with sampled
+            # arguments.
+            self.assertEqual(closing["branches"], 5 + 1 + 5)
+            self.assertEqual(summary["summary"]["totals"]["branches_duplicate"], 5)  # the sampler here writes what was tried
 
     def test_a_reference_without_an_evaluation_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

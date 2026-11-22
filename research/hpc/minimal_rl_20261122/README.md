@@ -1,8 +1,10 @@
 # The RL plan of 2026-11-22: stage A, stage B and the fork probe
 
-**Status: DEPLOYED 2026-11-22 at d6b7cfc; the two smokes are submitted; no run and no probe is submitted.**
-The user's word for both: "Yes, deploy and smoke". Section 9 has the cluster record. Stage A's run, the probe and
-stage B each still need the user's word.
+**Status: DEPLOYED 2026-11-22 at d6b7cfc; both smokes completed and passed their checks (section 9); no run and
+no probe is submitted.** The probe's smoke showed that stage B would have picked contradictory rows; how a fork
+row is picked was changed the same day (section 10). That change is tested locally and is NOT deployed. The
+user's word so far: "Yes, deploy and smoke". A redeploy, stage A's run, the probe and stage B each still need
+the user's word.
 
 The plan and its reasons are in `docs/minimal_rl_plan_20261122.md`. The user approved building both stages on
 2026-11-22 ("Yes, build both"), with no cluster action.
@@ -39,14 +41,16 @@ iteration is evaluated, the others record that they were skipped and load no mod
   `forced_prefix_tokens` and no token probabilities, so it cannot be taken for a sampled completion.
 - `psse_env/minimal/policy.py`: `act_forced(observation, tool)`. The harness gives the tool's name
   (`<|tool_call>call:NAME{`); the model writes the arguments.
-- `psse_env/minimal/forks.py`: the model's own greedy episode, then at every state every other tool forced once,
-  the model continuing greedily, each branch scored with the episode reward. A replay is checked against a digest
-  of what the model read; a branch that drifted, a forced call that is not a valid call of its tool, and a call
-  the environment refused are marked and never taught.
+- `psse_env/minimal/forks.py`: the model's own greedy episode, then at every state every other tool forced once
+  and both outcomes of `finish` given as whole calls (section 10), the model continuing greedily, each branch
+  scored with the episode reward. A replay is checked against a digest of what the model read; a branch that
+  drifted, a forced call that is not a valid call of its tool, and a call the environment refused are marked and
+  never taught.
 - `research/minimal_env/rl_train.py`, `forks`: the forks are made in the rollout phase, by the same processes that
-  sample (one model load, one file per case, sharded and restartable like the samples). At a state where a branch
-  returned more than the greedy episode, the update gets one supervised row: the branch's call on that state's
-  prompt, weighted by the difference of the returns.
+  sample (one model load, one file per case, sharded and restartable like the samples). At a state whose best
+  branch returned more than going on as the greedy episode did can still reach (the greedy return, or a branch
+  kept at a later state), the update gets one supervised row: the branch's call on that state's prompt, weighted
+  by that excess (section 10; before the probe's smoke the comparison was with the greedy return alone).
 - `research/minimal_env/fork_probe.py`: the forks with no update, and a summary.
 
 **What a fork is not.** The forks are at every state and over every tool; nothing names the states or the tools
@@ -123,6 +127,16 @@ All of this is my arithmetic from the focused run's measured rates; none of thes
 | Probe, 100 training cases | about 11 |
 | Each smoke | about 1 |
 
+**Measured in the two smokes (2026-11-22, section 9), on few cases.** An update row takes 12.2 to 12.8 s (0.21 h
+for 62 rows in one step, 0.37 h for 104 rows in four), inside the focused run's 8.6 to 13.7 s: a row is used once,
+so more steps a batch cost nothing. The forks take about 95 to 100 s a state without sampled calls (16 states of
+4 cases), which is about 450 s for a case of 4.6 states against the 382 to 404 s the table assumes. With that
+rate the probe is about 6 GPU-hours on the 49 development cases and about 12.5 on 100 training cases, the forks
+of one iteration about 4, and stage B's nine iterations 77 to 91. Branches whose forced call the environment
+refused took 26% of the fork time (22 of the 80 calls in the model's own decoding). They are never taught; ending
+such a branch at the refusal would save that time. It is not built, because the probe reads what follows a
+refusal (section 9).
+
 One case can cost far more than the average: a greedy episode that runs out of its 16 actions is forked at 16
 states, and each branch can run to the budget, about 50 minutes for that case (3 of the supervised model's 300
 development episodes ended that way). There is no cap on the states forked.
@@ -147,12 +161,16 @@ when the target is reached.
 
 ## 7. Not checked
 
-- Nothing ran on the cluster. The forced call, the forks and the probe have met the model nowhere yet.
-- Whether `<|tool_call>call:NAME{` tokenizes to the first tokens of a call's own rendering. The probe's smoke
-  counts it.
+- The forced call has met the model on 4 cases (section 9): its tokens start the call's own rendering in 176 of
+  176 branches, no forced call was invalid and no replay drifted. Stage B's update on fork rows (`forks-smoke`)
+  has not run.
+- The selection of section 10 and the given outcomes of `finish` have run with stand-ins and on the smoke's
+  stored records only. The cluster's source is still d6b7cfc.
 - Whether eight steps on one batch at 3e-5 stay close to the sampled policy, and whether 65 steps are safe or
-  enough. No earlier RL run of this project took more than a few steps.
-- Every cost above.
+  enough. The smoke took four steps on one small batch: by the fourth, the uncertain tokens were a mean factor of
+  1.35 from the policy that sampled the batch (section 9). No earlier RL run of this project took more than a
+  few steps.
+- Every cost above; the measured rates are from 4 cases and two small updates.
 - Whether supervised rows on fork states, with the KL term, keep the cases already solved.
 - The forks read the greedy episode. A case whose repair needs two unlikely steps in a row is not reached by one
   forced step (the probe's tests show such a case); how many of the 49 are like that is the probe's question.
@@ -181,4 +199,101 @@ both suites have the planned checksums; no job of this user was queued.
 | `mrp-steps-smoke` | 24068489 | 08:39:40 | two iterations of `rl_steps_smoke.json`, 4-hour limit |
 | `mrp-probe-smoke` | 24068494 | 08:39:55 | the probe on 4 unrepaired development cases with one sampled call a tool, 4-hour limit |
 
-Both were pending when submitted. Results are added here when the jobs end.
+**Both jobs completed** with no preemption and no traceback: `mrp-probe-smoke` in 40 min 16 s on gr102 (peak
+memory 33 GB, mean utilization 77%), `mrp-steps-smoke` in 1 h 06 min 13 s on gr105 (peak memory 66 GB, 78%).
+
+**Stage A's smoke, read against section 4.**
+
+| What | Read |
+| --- | --- |
+| First update | 1 step on 62 rows, the optimizer new, 0.21 h. 29 rows of 6 truth-built examples and 33 rows for the KL term; no policy row, because no case had samples of different reward |
+| Second update | 4 steps on 104 rows (18, 27, 32, 27), the optimizer carried from iteration 0 (1 step before, 5 after), 0.37 h |
+| Mean absolute log-ratio to the sampler, by step | all tokens 0.0014, 0.0076, 0.029, 0.026; uncertain tokens 0.011, 0.14, 0.18, 0.30 |
+| KL to the supervised model, by step | 0.0004, 0.012, 0.009, 0.021 |
+| Evaluation | iteration 0 recorded as skipped ("the next evaluation is of iteration 1"); iteration 1 evaluated: 4 of 8 before and after, gained 0, lost 0, mean actions 6.12 to 5.25 |
+| Integrity | ok in both iterations; rows that did not render 0 |
+
+The mechanics work. The drift within a batch is real: the first step's 0.011 is the numerical gap between the
+decoding and the training pass, and by the fourth step the uncertain tokens are a mean factor of e^0.30 = 1.35
+from the policy that sampled the batch, with nothing correcting for it (the clip is off). The run takes eight
+steps a batch, so its last steps will be further off. The KL to the supervised model after five steps (0.021) is
+6 to 9 times what the focused run reached in all (0.0033 and 0.0024); the KL term's coefficient is 0.04. The
+first evaluation of the run (after 17 steps) is the check, and the status script prints these lines for every
+update. Eight development cases say nothing about the score.
+
+**The probe's smoke, read against section 4.**
+
+| What | Read |
+| --- | --- |
+| Forced prefixes that start the call's own rendering | 176 of 176 |
+| Branches | 176 at 16 states of 4 cases: 108 ran, 68 repeated a call already tried (all among the 96 sampled calls); invalid 0, drifted 0, no call 0 |
+| Forced calls the environment refused | 29 of the 108 (22 of the 80 in the model's own decoding): a breaker named before the breakers were looked at, an undo with nothing to undo, a line fit that fails |
+| Unrepaired cases one forced step repairs | 3 of 4, all three with the model's own decoding of the arguments. The sampled calls added one repairing branch and no case |
+| Time | 577 s a case with the sampled calls, 0.64 h in all; about 95 to 100 s a state without them |
+
+The four cases (the supervised model's greedy episode, then what one forced step did):
+
+| Case | Greedy episode | One forced step |
+| --- | --- | --- |
+| `r0_243985153e00`, cb2_split | looks at the breakers, opens one, a line fit fails, declares the case unresolved (-0.06) | a second look at the breakers at the third or fourth state: the model opens the second breaker and the case is repaired (0.95, 0.92) |
+| `r0_9c85ff49a8e0`, rx_cb_distant | opens one breaker and declares the case resolved, which is false (-0.53) | `correct_parameters` at the last state: the model writes line 16 and the case is repaired (0.96) |
+| `r0_a04d7fb1791e`, rx2_adjacent | a fit of line 1 fails, corrects nine meters (a healthy object damaged), unresolved (-0.56) | a look at the estimate at the second state, or `correct_parameters` at the third (the model writes line 3): the model fits line 3, then line 1 (0.95, 0.93) |
+| `r0_d17f8671b359`, rx2_distant | fits line 1, a fit of line 17 fails twice, unresolved (-0.09) | nothing repairs; the fit of line 17 fails in every branch |
+
+**Two cautions on "3 of 4".** Four cases are not a rate. And part of what a forced step does is disturb the
+episode. In the cb2_split case a forced correction of a wrong breaker or of a meter also ends repaired (the model
+undoes it, looks at the breakers again and finds the right one), and so do four branches whose forced call the
+environment refused, which changed nothing but the history the model reads. In that case the model's choice
+between a second look and giving up is close. The summary now counts the unrepaired cases repaired after a
+refused call (1 of 4 here): the floor to read the one-forced-step count against.
+
+## 10. What the probe's smoke changed (2026-11-22; tested locally, not deployed)
+
+The smoke's records show the rows stage B would have trained on those 4 cases as deployed: 15 rows, 8 of them
+`finish`. Two kinds were wrong.
+
+- **A lesson contradicted by a later one.** In the cb2_split case the first two states taught "declare the case
+  unresolved" (0.05 and 0.04 above the greedy episode: the actions it saves against an episode that fails anyway),
+  beside the look that repairs the case at the third state.
+- **A lesson at the wrong state.** In the rx_cb_distant case the greedy episode ends in a false claim. Compared
+  with it, the first state taught "declare the case unresolved before looking at anything" with weight 0.52, and
+  the second taught the false claim one action earlier (0.01).
+
+Two changes, both in `psse_env/minimal/forks.py`:
+
+1. **A state is compared with what going on can still reach**: the greedy return, or the return of a branch kept
+   at a later state. Before a later, better branch the greedy action is the right one, since it leads there.
+   The excess is the row's weight (`margin`); with `min_gain` 0 the margins of a case add up to its best return
+   less the greedy return, so a repair is paid once, at the state where it is gained.
+2. **Both outcomes of `finish` are forked as whole calls** at every state (the greedy action left out), with no
+   model call, because the episode ends there. That puts "declare the case unresolved" at the state where the
+   greedy episode claimed it resolved. A `finish` whose outcome the model writes is no longer forked.
+
+Neither is a decision rule: the first is arithmetic on returns, the second tries both calls of the one tool that
+has only two.
+
+The smoke's stored records read with the new comparison (they predate the given outcomes of `finish`):
+
+| | Against the greedy return (as deployed) | Against what going on reaches (now) |
+| --- | --- | --- |
+| Rows | 15 | 10 |
+| Rows whose branch repairs the case | 6, weight 7.98 | 5, weight 3.52 |
+| `finish` rows | 8, weight 0.86 | 4, weight 0.08 |
+| Other: an undo that takes back a damaging meter correction before the case is handed off | 1, weight 0.49 | 1, weight 0.49 |
+| Total weight | 9.33 | 4.09 |
+
+The four `finish` rows that remain are all in the case nothing repairs. Each says "stop one state earlier" and is
+worth the actions it saves (0.01 to 0.03), 2% of the weight. `forks.min_gain` above 0.03 would drop them; it is 0
+in `rl_forks.json`. Whether stage B should teach stopping earlier on a case it cannot repair is the user's call.
+
+Also changed: the update reads a stored record with its own `min_gain` (`stored_forks` asks `better_branches`
+again), so a case's file keeps the observation of every state with a carried-out branch above the greedy return;
+the summary has `margin` (with the share of the branches that repair) beside `gain`, and
+`unrepaired_cases_repaired_after_a_refused_call`; the contract is `minimal_one_step_forks_v2`.
+
+**What it means for the order of work.** Stage A does not run this code. The probe's count of cases one forced
+step repairs does not depend on the comparison, but a probe on d6b7cfc would fork a `finish` the model writes
+and report rows under the old comparison. Redeploy before the probe.
+
+Local tests after the change: `test_forks.py` 13 (one new: the three patterns above as records), the driver 32,
+the probe 4, this cell 18, the research policy 15, the earlier RL cell 24.

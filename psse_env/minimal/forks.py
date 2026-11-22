@@ -6,11 +6,23 @@ forced (the policy writes the arguments itself, ``act_forced``), and the policy 
 budget the episode has left.  A branch is scored like any episode (``scoring.episode_reward``), prefix included,
 so its return is the return an ordinary episode with that action would have had.
 
+``finish`` is the one tool whose calls are few enough to try them all: at every state both of its outcomes are
+forked as whole calls given by the harness (the own action left out).  No model call is needed, because the
+episode ends there.  That is what puts "declare the case unresolved" at the state where the own episode claimed
+it resolved; a ``finish`` whose outcome the model writes is not forked.
+
 What it is for (RL plan of 2026-11-22, stage B).  A policy-gradient update learns an action only from episodes
 that sampled it, in proportion to p(1 - p): an action the policy gives a probability of 0.0003 is never learned.
-A fork measures such an action's outcome directly.  A state where a forced branch returned more than the own
-episode names an action the policy could have taken there and done better with; the RL update trains that action
-on that state's prompt, weighted by the difference of the returns (``research.minimal_env.rl_train``).
+A fork measures such an action's outcome directly.  A state whose best branch returned more than going on as the
+own episode did can still reach names an action the policy could have taken there and done better with; the RL
+update trains that action on that state's prompt, weighted by that excess (``better_branches``,
+``research.minimal_env.rl_train``).
+
+Why "can still reach" and not the own return (the probe's smoke of 2026-11-22).  Against the own return alone, a
+case that one forced look repairs at its third state also taught "declare it unresolved" at its first two, because
+stopping at once costs fewer actions than the own failed episode.  The two lessons contradict each other.  So a
+state is compared with the best of the own return and the branches kept at later states: before a later, better
+branch the own action is the right one, since it leads there.
 
 What it is not.  Nothing here says which states or tools matter: the forks are at every state and over every
 tool, and the truth enters only through the reward, as in every sampled episode.  A forced step is an
@@ -20,9 +32,9 @@ branching is a training-time measurement: an evaluated episode is one pass, one 
 Replays are checked.  At every replayed step the policy must be shown what it was shown in the own episode (a
 digest of the rendered observation); a branch whose state has drifted is marked and never used.
 
-``argument_samples`` adds branches whose forced call is written by a second, sampling policy (every tool, the
-policy's own included): they try other objects of one tool, which a forced tool with the policy's own decoding
-does not.  A sampled call that repeats one already tried at the state is not run again.
+``argument_samples`` adds branches whose forced call is written by a second, sampling policy (every tool but
+``finish``, the policy's own included): they try other objects of one tool, which a forced tool with the policy's
+own decoding does not.  A sampled call that repeats one already tried at the state is not run again.
 """
 from __future__ import annotations
 
@@ -38,16 +50,20 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from psse_env.minimal import observation as view
-from psse_env.minimal.actions import FINISH, OUTCOME_UNRESOLVED, tool_schemas
+from psse_env.minimal.actions import FINISH, OUTCOMES, OUTCOME_UNRESOLVED, tool_schemas
 from psse_env.minimal.env import MinimalDiagnosisEnv
 from psse_env.minimal.episode import run_episode
 from psse_env.minimal.scoring import RewardWeights
 from psse_env.rl.rollout import sample_seed, scenario_root
 
-FORK_CONTRACT = "minimal_one_step_forks_v1"
-#: Who wrote the forced call's arguments: the policy's own decoding, or the sampling policy.
+#: v2 (2026-11-22): both outcomes of ``finish`` given by the harness; ``better`` compares a state with what going
+#: on can still reach and carries ``margin``.
+FORK_CONTRACT = "minimal_one_step_forks_v2"
+#: Who wrote the forced call's arguments: the policy's own decoding, the sampling policy, or the harness (the two
+#: outcomes of ``finish``, a whole call each).
 ARGUMENTS_GREEDY = "own_decoding"
 ARGUMENTS_SAMPLED = "sampled"
+ARGUMENTS_GIVEN = "given"
 #: A branch that ran to the end of its episode with a valid call of the forced tool.
 STATUS_RAN = "ran"
 #: The replay showed the policy something else than the own episode did: the branch is not that state's.
@@ -69,10 +85,11 @@ class ForkSettings:
     """Whether a run forks, and how the update reads the branches."""
 
     enabled: bool = False
-    #: Weight of a fork row, times how far the branch's return lies above the own episode's.
+    #: Weight of a fork row, times the branch's margin: how far its return lies above what going on as the own
+    #: episode did can still reach (the own return, or a branch kept at a later state).
     weight: float = 1.0
-    #: A branch teaches only when its return exceeds the own episode's by more than this.  0 keeps every gain,
-    #: the 0.01 of one action saved included.
+    #: A branch teaches only when its margin is more than this.  0 keeps every margin, the 0.01 of one action
+    #: saved included.
     min_gain: float = 0.0
     #: Further branches per tool whose forced call a sampling policy writes (0: none).
     argument_samples: int = 0
@@ -158,8 +175,9 @@ class ForkPolicy:
     ``prefix`` holds the actions before the fork's state as the environment took them in the own episode (the
     call, the model's words where they were not one, ``None`` where the policy raised) and ``digests`` the
     digest of every state up to the fork's, that one included.  ``forced_policy`` writes the forced call
-    (``act_forced(observation, tool)``); the policy itself unless another is named.  ``seen`` holds the
-    signatures of the calls already tried at the state.
+    (``act_forced(observation, tool)``); the policy itself unless another is named.  ``given`` is a whole call
+    of ``tool`` that the harness gives instead, with no model call.  ``seen`` holds the signatures of the calls
+    already tried at the state.
 
     After the episode: ``drifted_at`` (the first replayed step whose state was not the own episode's, or
     ``None``), ``forced`` (what the forced step returned), ``status`` and ``forced_generation`` (the tokens of
@@ -167,11 +185,14 @@ class ForkPolicy:
     """
 
     def __init__(self, policy: Any, *, prefix: Sequence[Any], digests: Sequence[str], tool: str,
-                 forced_policy: Any | None = None, seen: set[str] | None = None) -> None:
+                 forced_policy: Any | None = None, seen: set[str] | None = None, given: Mapping[str, Any] | None = None) -> None:
         if len(digests) != len(prefix) + 1:
             raise ValueError("a fork needs the digest of every state up to its own: one more than its prefix has actions")
+        if given is not None and given.get("tool") != str(tool):
+            raise ValueError("a given call must be a call of the forced tool")
         self._policy = policy
         self._forced_policy = forced_policy if forced_policy is not None else policy
+        self._given = None if given is None else copy.deepcopy(dict(given))
         self._prefix = [copy.deepcopy(action) for action in prefix]
         self._digests = [str(value) for value in digests]
         self.tool = str(tool)
@@ -206,12 +227,15 @@ class ForkPolicy:
         if index > len(self._prefix):
             self._acting = self._policy
             return self._policy.act(observation)
-        self._acting = self._forced_policy
-        self.forced = self._forced_policy.act_forced(observation, self.tool)
-        generation = getattr(self._forced_policy, "last_generation", None)
-        if isinstance(generation, Mapping) and generation.get("forced_prefix_tokens"):
-            self.forced_generation = {"completion_token_ids": [int(value) for value in generation.get("completion_token_ids") or []],
-                                      "forced_prefix_tokens": int(generation["forced_prefix_tokens"])}
+        if self._given is not None:
+            self.forced = copy.deepcopy(self._given)  # the harness's call: no model is asked
+        else:
+            self._acting = self._forced_policy
+            self.forced = self._forced_policy.act_forced(observation, self.tool)
+            generation = getattr(self._forced_policy, "last_generation", None)
+            if isinstance(generation, Mapping) and generation.get("forced_prefix_tokens"):
+                self.forced_generation = {"completion_token_ids": [int(value) for value in generation.get("completion_token_ids") or []],
+                                          "forced_prefix_tokens": int(generation["forced_prefix_tokens"])}
         if not isinstance(self.forced, Mapping) or self.forced.get("tool") != self.tool:
             self.status = STATUS_INVALID
             return self._leave()
@@ -233,14 +257,14 @@ def _brief_action(action: Any) -> Any:
 
 def run_branch(root: Mapping[str, Any], *, env: MinimalDiagnosisEnv, policy: Any, prefix: Sequence[Any],
                digests: Sequence[str], tool: str, weights: RewardWeights | None = None, forced_policy: Any | None = None,
-               seen: set[str] | None = None) -> dict[str, Any]:
+               seen: set[str] | None = None, given: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """One branch: the prefix replayed, ``tool`` forced at the state after it, the policy to the end.
 
     ``return`` and the outcome are those of the whole episode, as scored for any episode; they mean something
     only for a branch whose ``status`` is ``ran``.  ``executed`` says whether the environment carried the forced
-    call out (a call it refused changed nothing).
+    call out (a call it refused changed nothing).  ``given`` is a whole call the harness gives as the forced one.
     """
-    fork = ForkPolicy(policy, prefix=prefix, digests=digests, tool=tool, forced_policy=forced_policy, seen=seen)
+    fork = ForkPolicy(policy, prefix=prefix, digests=digests, tool=tool, forced_policy=forced_policy, seen=seen, given=given)
     episode = run_episode(env, root, fork, weights=weights, keep_observations=False)
     at = len(prefix)
     steps = episode["steps"]
@@ -271,27 +295,50 @@ def run_branch(root: Mapping[str, Any], *, env: MinimalDiagnosisEnv, policy: Any
 
 
 def better_branches(record: Mapping[str, Any], min_gain: float = 0.0) -> list[dict[str, Any]]:
-    """Per state of the own episode, the branch that returned the most above it, where one returned more.
+    """Per state of the own episode, the branch to teach there, where there is one.
 
-    Only a branch that ran with a call the environment carried out counts: a refused call is not an action to
-    teach.  Between branches of one state with the same return the earlier one is kept (a call in the policy's own
-    decoding before a sampled one).
+    A state's candidate is its branch with the highest return among those that ran with a call the environment
+    carried out: a refused call is not an action to teach, and between equal returns the earlier branch is taken
+    (a call in the policy's own decoding before a sampled one).
+
+    The candidate is kept when its return exceeds, by more than ``min_gain``, what going on as the own episode did
+    can still reach: the own return, or the return of a branch kept at a later state.  So a state before a later,
+    better branch teaches nothing, because the own action there leads to that branch.  ``margin`` is that excess
+    and the weight of the state's training row; ``ahead`` is what it was measured against; ``gain`` is the
+    excess over the own return.  With ``min_gain`` 0 the margins of a case add up to its best return less the own.
     """
     own = float(record["own"]["return"])
     best: dict[int, dict[str, Any]] = {}
     for position, branch in enumerate(record.get("branches") or []):
         if branch.get("status") != STATUS_RAN or not branch.get("executed"):
             continue
-        gain = float(branch["return"]) - own
-        if not gain > float(min_gain) + _GAIN_TOLERANCE:
-            continue
-        held = best.get(int(branch["state"]))
-        if held is None or gain > held["gain"] + _GAIN_TOLERANCE:
-            best[int(branch["state"])] = {
-                "state": int(branch["state"]), "branch": position, "tool": branch["tool"], "action": copy.deepcopy(branch["action"]),
-                "arguments": branch.get("arguments"), "gain": gain, "return": float(branch["return"]),
+        state = int(branch["state"])
+        held = best.get(state)
+        if held is None or float(branch["return"]) > held["return"] + _GAIN_TOLERANCE:
+            best[state] = {
+                "state": state, "branch": position, "tool": branch["tool"], "action": copy.deepcopy(branch["action"]),
+                "arguments": branch.get("arguments"), "return": float(branch["return"]),
                 "solved": bool(branch["solved"]), "actions": int(branch["actions"])}
-    return [best[state] for state in sorted(best)]
+    kept: list[dict[str, Any]] = []
+    ahead = own
+    for state in sorted(best, reverse=True):
+        item = best[state]
+        margin = item["return"] - ahead
+        if not margin > float(min_gain) + _GAIN_TOLERANCE:
+            continue
+        item.update({"gain": item["return"] - own, "margin": margin, "ahead": ahead})
+        kept.append(item)
+        ahead = item["return"]
+    return sorted(kept, key=lambda item: item["state"])
+
+
+def states_above_the_own_return(record: Mapping[str, Any]) -> list[int]:
+    """The states with a carried-out branch above the own return: every state :func:`better_branches` can keep,
+    whatever ``min_gain`` it is asked with."""
+    own = float(record["own"]["return"])
+    return sorted({int(branch["state"]) for branch in record.get("branches") or []
+                   if branch.get("status") == STATUS_RAN and branch.get("executed")
+                   and float(branch["return"]) > own + _GAIN_TOLERANCE})
 
 
 def fork_case(root: Mapping[str, Any], *, env_factory: Callable[[], MinimalDiagnosisEnv], policy: Any,
@@ -300,8 +347,9 @@ def fork_case(root: Mapping[str, Any], *, env_factory: Callable[[], MinimalDiagn
     """The policy's own episode on ``root`` and its one-step forks.
 
     Returns ``{"record": ..., "observations": {state: observation}}``: the record of the own episode and of every
-    branch, with ``better`` (:func:`better_branches`), and the observation of every state that has a better
-    branch, which is what a training row of that state is rendered from.
+    branch, with ``better`` (:func:`better_branches`), and the observation of every state with a carried-out
+    branch above the own return, which is what a training row of that state is rendered from (every state
+    ``better_branches`` can keep, so the update may read the record with another ``min_gain``).
 
     ``canonical(observation, action, forced_ids)`` is asked, for a forced call whose tokens the policy recorded,
     whether the tokens the harness gave are how that call's own rendering starts; the answer is kept on the
@@ -321,14 +369,22 @@ def fork_case(root: Mapping[str, Any], *, env_factory: Callable[[], MinimalDiagn
         own_action = state["action"]
         own_tool = own_action.get("tool") if isinstance(own_action, Mapping) else None
         tools = offered_tools(state["observation"])
-        plan: list[tuple[str, str, int | None]] = [(tool, ARGUMENTS_GREEDY, None) for tool in tools if tool != own_tool]
-        if settings.argument_samples and argument_policy is not None:
-            plan += [(tool, ARGUMENTS_SAMPLED, sample) for tool in tools for sample in range(int(settings.argument_samples))]
         seen = {signature(own_action)}
-        for tool, arguments, sample in plan:
+        # Every other tool with a call the policy writes; ``finish`` with each of its outcomes as a whole call.
+        plan: list[tuple[str, str, int | None, dict[str, Any] | None]] = []
+        for tool in tools:
+            if tool == FINISH:
+                calls = [{"tool": FINISH, "arguments": {"outcome": outcome}} for outcome in OUTCOMES]
+                plan += [(FINISH, ARGUMENTS_GIVEN, None, call) for call in calls if signature(call) not in seen]
+            elif tool != own_tool:
+                plan.append((tool, ARGUMENTS_GREEDY, None, None))
+        if settings.argument_samples and argument_policy is not None:
+            plan += [(tool, ARGUMENTS_SAMPLED, sample, None) for tool in tools if tool != FINISH
+                     for sample in range(int(settings.argument_samples))]
+        for tool, arguments, sample, given in plan:
             branch = run_branch(root, env=env_factory(), policy=policy, prefix=replay[:index], digests=digests[: index + 1],
                                 tool=tool, weights=weights, forced_policy=argument_policy if arguments == ARGUMENTS_SAMPLED else None,
-                                seen=seen)
+                                seen=seen, given=given)
             branch["arguments"] = arguments
             if sample is not None:
                 branch["sample"] = int(sample)
@@ -366,7 +422,7 @@ def fork_case(root: Mapping[str, Any], *, env_factory: Callable[[], MinimalDiagn
         "seconds": {"own": own["seconds"], "total": round(time.perf_counter() - started, 4)},
     }
     record["better"] = better_branches(record, settings.min_gain)
-    observations = {str(item["state"]): states[item["state"]]["observation"] for item in record["better"]}
+    observations = {str(index): states[index]["observation"] for index in states_above_the_own_return(record)}
     return {"record": record, "observations": observations}
 
 
@@ -440,7 +496,7 @@ def fork_roots(scenarios: Sequence[Mapping[str, Any]], *, store: ForkStore, env_
             record = payload["record"]
             progress({"fork": case, "done": number, "of": len(pending), "own_solved": record["own"]["solved"],
                       "states": record["states"], "branches": len(record["branches"]),
-                      "better": [(item["state"], item["tool"], round(item["gain"], 4)) for item in record["better"]],
+                      "better": [(item["state"], item["tool"], round(item["margin"], 4)) for item in record["better"]],
                       "seconds": record["seconds"]["total"]})
     return len(pending)
 
@@ -455,6 +511,8 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     repairing_by_tool: Counter = Counter()
     by_class: dict[str, Counter] = defaultdict(Counter)
     gains: list[float] = []
+    margins: list[float] = []
+    margin_of_repairs = 0.0
     seconds = 0.0
     for record in records:
         own = record["own"]
@@ -474,6 +532,11 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 totals["forced_prefixes_canonical"] += int(bool(branch["prefix_canonical"]))
         repairing = [branch for branch in branches
                      if branch["status"] == STATUS_RAN and branch.get("executed") and branch.get("solved")]
+        # A refused call changed nothing but the history the model reads.  A repair after one is not that call's
+        # doing: it says how easily the own episode's last decisions tip, and is the floor to read the count
+        # above against.
+        after_a_refusal = [branch for branch in branches
+                           if branch["status"] == STATUS_RAN and not branch.get("executed") and branch.get("solved")]
         if not own["solved"]:
             totals["own_episode_unrepaired"] += 1
             cell["own_episode_unrepaired"] += 1
@@ -482,33 +545,47 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 cell["unrepaired_cases_one_forced_step_repairs"] += 1
                 first = min(repairing, key=lambda branch: (branch["state"], -float(branch["return"])))
                 repairing_by_tool[str(first["tool"])] += 1
-            if any(branch.get("arguments") == ARGUMENTS_GREEDY for branch in repairing):
+            if any(branch.get("arguments") != ARGUMENTS_SAMPLED for branch in repairing):
                 totals["unrepaired_cases_one_forced_step_repairs_in_the_policys_own_decoding"] += 1
+            if after_a_refusal:
+                totals["unrepaired_cases_repaired_after_a_refused_call"] += 1
+                cell["unrepaired_cases_repaired_after_a_refused_call"] += 1
         better = record.get("better") or []
         totals["cases_with_a_better_branch"] += int(bool(better))
         totals["states_with_a_better_branch"] += len(better)
         for item in better:
+            repairs = bool(item["solved"]) and not own["solved"]
             better_by_tool[str(item["tool"])] += 1
             gains.append(float(item["gain"]))
-            totals["better_branches_that_repair_an_unrepaired_case"] += int(bool(item["solved"]) and not own["solved"])
+            margins.append(float(item["margin"]))
+            margin_of_repairs += float(item["margin"]) if repairs else 0.0
+            totals["better_branches_that_repair_an_unrepaired_case"] += int(repairs)
             totals["better_branches_at_the_last_state"] += int(item["state"] == int(record["states"]) - 1)
         seconds += float((record.get("seconds") or {}).get("total") or 0.0)
-    ordered = sorted(gains)
+
+    def spread(values: list[float]) -> dict[str, Any]:
+        ordered = sorted(values)
+        return {"count": len(ordered), "min": ordered[0] if ordered else None,
+                "median": ordered[len(ordered) // 2] if ordered else None, "max": ordered[-1] if ordered else None,
+                "at_most_one_action_cost": sum(1 for value in ordered if value <= 0.05)}
+
     return {
         "contract": FORK_CONTRACT,
         "totals": dict(sorted(totals.items())),
         "better_branches_by_tool": dict(sorted(better_by_tool.items())),
         "first_repairing_branch_by_tool": dict(sorted(repairing_by_tool.items())),
-        "gain": {"count": len(ordered), "min": ordered[0] if ordered else None,
-                 "median": ordered[len(ordered) // 2] if ordered else None, "max": ordered[-1] if ordered else None,
-                 "at_most_one_action_cost": sum(1 for value in ordered if value <= 0.05)},
+        # ``margin`` is what a row is weighted by; ``gain`` is the same branches against the own return.
+        "margin": {**spread(margins), "total": round(sum(margins), 6),
+                   "total_of_branches_that_repair_an_unrepaired_case": round(margin_of_repairs, 6)},
+        "gain": spread(gains),
         "by_class": {name: dict(sorted(cell.items())) for name, cell in sorted(by_class.items())},
         "seconds": round(seconds, 1),
     }
 
 
 __all__ = [
-    "ARGUMENTS_GREEDY", "ARGUMENTS_SAMPLED", "FORK_CONTRACT", "FORK_SAMPLE", "ForkPolicy", "ForkSettings", "ForkStore",
-    "STATUSES", "STATUS_DRIFTED", "STATUS_DUPLICATE", "STATUS_INVALID", "STATUS_NO_CALL", "STATUS_RAN", "better_branches",
-    "class_of", "fork_case", "fork_roots", "offered_tools", "run_branch", "signature", "state_digest", "summarize",
+    "ARGUMENTS_GIVEN", "ARGUMENTS_GREEDY", "ARGUMENTS_SAMPLED", "FORK_CONTRACT", "FORK_SAMPLE", "ForkPolicy", "ForkSettings",
+    "ForkStore", "STATUSES", "STATUS_DRIFTED", "STATUS_DUPLICATE", "STATUS_INVALID", "STATUS_NO_CALL", "STATUS_RAN",
+    "better_branches", "class_of", "fork_case", "fork_roots", "offered_tools", "run_branch", "signature", "state_digest",
+    "states_above_the_own_return", "summarize",
 ]

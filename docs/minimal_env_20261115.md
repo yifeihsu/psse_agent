@@ -570,15 +570,16 @@ every case.  The early stop is not special to breakers in shape (14% of the two-
 with breakers the estimate still fails and the model declares the case unresolved (105 of 146); with lines the
 estimate passes at half of the stops and the model declares it resolved.
 
-## 15. The RL plan of 2026-11-22 (built, no run)
+## 15. The RL plan of 2026-11-22 (built, smoked, no run)
 
-The plan is `docs/minimal_rl_plan_20261122.md`; the cell is `research/hpc/minimal_rl_20261122` (prepared, not
-deployed). What the finished focused run showed about the procedure, and what was built for it:
+The plan is `docs/minimal_rl_plan_20261122.md`; the cell is `research/hpc/minimal_rl_20261122` (deployed at
+d6b7cfc; its two smokes passed on 2026-11-22; no run and no probe submitted). What the finished focused run showed
+about the procedure, and what was built for it:
 
 | What held RL back (measured in the focused run) | What was built |
 | --- | --- |
 | Three optimizer steps in 28.6 hours at 1e-5, against 3,706 at 1e-4 in the supervised pass; KL from the start 0.0033 and 0.0024 | Stage A: eight steps a batch by case (one while the optimizer is new), 3e-5, an evaluation every third iteration (`evaluate_every`) |
-| The repairing action is not sampled: the look in the breaker-never-corrected cases has probability about 0.0003, and a policy gradient weighs an action by p(1 - p) | Stage B: one-step forks of the greedy episode (`psse_env/minimal/forks.py`), and one supervised row per state where a forced branch returned more, weighted by the difference |
+| The repairing action is not sampled: the look in the breaker-never-corrected cases has probability about 0.0003, and a policy gradient weighs an action by p(1 - p) | Stage B: one-step forks of the greedy episode (`psse_env/minimal/forks.py`), and one supervised row per state whose best branch returned more than going on as the greedy episode did can still reach, weighted by that excess |
 
 - **The forced call.** The harness gives the tool's name and the model writes the arguments
   (`MinimalModelPolicy.act_forced`; `generate_text(..., forced_prefix=...)` in the research policy). Its record
@@ -588,6 +589,13 @@ deployed). What the finished focused run showed about the procedure, and what wa
   not pay.
 - **The fork probe** (`research/minimal_env/fork_probe.py`) runs the forks with no update and counts the unrepaired
   cases one forced step repairs: a labelled upper bound on one round of stage B, read before a run is spent.
-- **Not checked:** nothing has met the model. Whether the forced name tokenizes as the model writes it, whether
-  eight steps a batch at 3e-5 stay close to the sampled policy, and every cost in the cell's README are open
-  until the smokes run.
+- **The smokes (2026-11-22).** Stage A's: one step in the first update, four with the carried optimizer in the
+  second, the first evaluation skipped; over the four steps of one batch the mean absolute log-ratio to the
+  sampler on uncertain tokens went 0.011, 0.14, 0.18, 0.30. The probe's: the forced name tokenizes as the model
+  writes it (176 of 176), no invalid call, no drift, and one forced step repairs 3 of the 4 unrepaired development
+  cases it ran on (not a rate). The cell's README has both in full.
+- **Changed after the probe's smoke.** A state is compared with the best of the greedy return and the branches
+  kept at later states, and both outcomes of `finish` are forked as whole calls. Before, stopping at the first
+  state was taught beside the look that repairs the case two states later. Tested locally; not deployed.
+- **Not checked:** stage B's update on fork rows, eight steps a batch and 65 steps in all, and every cost beyond
+  the 4 cases and two small updates of the smokes.

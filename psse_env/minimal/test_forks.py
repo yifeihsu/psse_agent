@@ -17,6 +17,7 @@ from psse_env.minimal import forks, truth
 from psse_env.minimal.env import MinimalDiagnosisEnv
 from psse_env.minimal.episode import ScriptedPolicy, run_episode
 from psse_env.minimal.forks import (
+    ARGUMENTS_GIVEN,
     ARGUMENTS_GREEDY,
     ARGUMENTS_SAMPLED,
     STATUS_DRIFTED,
@@ -154,12 +155,20 @@ class ForkCaseTests(unittest.TestCase):
         payload = fork_case(root, env_factory=_env, policy=model)
         record = payload["record"]
         self.assertEqual((record["own"]["solved"], record["own"]["declared"], record["states"]), (False, "resolved", 1))
-        # Every other tool is forced once at the one state: five branches, each a whole episode.
+        # Every other tool is forced once at the one state, and the other outcome of the own ``finish`` is given
+        # by the harness: six branches, each a whole episode.
         self.assertEqual([branch["tool"] for branch in record["branches"]],
-                         ["inspect", "correct_topology", "correct_parameters", "correct_measurements", "undo"])
+                         ["inspect", "correct_topology", "correct_parameters", "correct_measurements", "undo", "finish"])
         self.assertEqual({branch["status"] for branch in record["branches"]}, {STATUS_RAN})
-        self.assertEqual({branch["arguments"] for branch in record["branches"]}, {ARGUMENTS_GREEDY})
+        self.assertEqual([branch["arguments"] for branch in record["branches"]], [ARGUMENTS_GREEDY] * 5 + [ARGUMENTS_GIVEN])
         by_tool = {branch["tool"]: branch for branch in record["branches"]}
+        # The honest declaration, with no model call: half a reward above the false claim, far below the repair.
+        honest = by_tool["finish"]
+        self.assertEqual((honest["action"], honest["declared"], honest["continuation"]),
+                         ({"tool": "finish", "arguments": {"outcome": "unresolved"}}, "unresolved", []))
+        self.assertAlmostEqual(honest["return"], -0.01)
+        self.assertNotIn("finish", model.forced_calls)
+        self.assertNotIn("prefix_canonical", honest)
         repaired = by_tool["correct_measurements"]
         self.assertTrue(repaired["solved"] and repaired["executed"])
         self.assertTrue(_same(repaired["action"], order[0]))
@@ -181,6 +190,7 @@ class ForkCaseTests(unittest.TestCase):
         better = record["better"][0]
         self.assertEqual((better["state"], better["tool"], better["solved"]), (0, "correct_measurements", True))
         self.assertAlmostEqual(better["gain"], 1.49)
+        self.assertAlmostEqual(better["margin"], 1.49)  # nothing later to compare with: the margin is the gain
         # The observation of that state is kept: it is what the training row is rendered from.
         self.assertEqual(list(payload["observations"]), ["0"])
         self.assertEqual(state_digest(payload["observations"]["0"]), state_digest(_env().reset(root)))
@@ -204,6 +214,15 @@ class ForkCaseTests(unittest.TestCase):
         chosen = {item["state"]: item for item in record["better"]}
         self.assertEqual(chosen[1]["tool"], "correct_topology")
         self.assertAlmostEqual(chosen[1]["gain"], (1.0 - 0.03) - record["own"]["return"])
+        self.assertAlmostEqual(chosen[1]["margin"], chosen[1]["gain"])  # the last state: against the own return
+        # The first state has both outcomes of ``finish`` as branches, and neither is taught there: stopping
+        # before the first correction returns less than the repair one state later.
+        at_the_start = [branch for branch in record["branches"] if branch["state"] == 0 and branch["tool"] == "finish"]
+        self.assertEqual(sorted(branch["action"]["arguments"]["outcome"] for branch in at_the_start), ["resolved", "unresolved"])
+        self.assertTrue(all(item["tool"] != "finish" for item in record["better"]))
+        # The margins of a case add up to its best return less the own.
+        self.assertAlmostEqual(sum(item["margin"] for item in record["better"]),
+                               max(item["return"] for item in record["better"]) - record["own"]["return"])
         summary = summarize([record])
         self.assertEqual((summary["totals"]["own_episode_unrepaired"], summary["totals"]["unrepaired_cases_one_forced_step_repairs"]), (1, 1))
         self.assertEqual(summary["totals"]["unrepaired_cases_one_forced_step_repairs_in_the_policys_own_decoding"], 1)
@@ -218,11 +237,17 @@ class ForkCaseTests(unittest.TestCase):
         better = record["better"]
         self.assertEqual([(item["state"], item["tool"]) for item in better], [(0, "correct_measurements")])
         self.assertAlmostEqual(better[0]["gain"], 0.01)
-        # A threshold above one action's cost leaves nothing to teach on a case already repaired.
+        self.assertAlmostEqual(better[0]["margin"], 0.01)
+        # A threshold above one action's cost leaves nothing to teach on a case already repaired.  The state's
+        # observation is kept all the same, for an update that reads the record with a lower threshold.
         self.assertEqual(better_branches(record, min_gain=0.05), [])
         kept = fork_case(root, env_factory=_env, policy=model, settings=ForkSettings(enabled=True, min_gain=0.05))
-        self.assertEqual((kept["record"]["better"], kept["observations"]), ([], {}))
-        self.assertEqual(summarize([record])["gain"]["at_most_one_action_cost"], 1)
+        self.assertEqual((kept["record"]["better"], list(kept["observations"])), ([], ["0"]))
+        self.assertEqual(forks.states_above_the_own_return(kept["record"]), [0])
+        summary = summarize([record])
+        self.assertEqual((summary["gain"]["at_most_one_action_cost"], summary["margin"]["at_most_one_action_cost"]), (1, 1))
+        self.assertAlmostEqual(summary["margin"]["total"], 0.01)
+        self.assertEqual(summary["margin"]["total_of_branches_that_repair_an_unrepaired_case"], 0.0)
 
     def test_a_refused_call_is_never_the_better_branch(self) -> None:
         record = {"own": {"return": -0.5}, "branches": [
@@ -233,26 +258,69 @@ class ForkCaseTests(unittest.TestCase):
         ]}
         better = better_branches(record)
         self.assertEqual([(item["tool"], item["branch"]) for item in better], [("finish", 2)])  # the earlier of two equal branches
+        # A repair after a refused call is counted apart: the call changed nothing but the history.
+        whole = {**record, "own": {"return": -0.5, "solved": False}, "states": 1, "better": better,
+                 "branches": [branch for branch in record["branches"] if branch["status"] == STATUS_RAN]}
+        totals = summarize([whole])["totals"]
+        self.assertEqual((totals["unrepaired_cases_repaired_after_a_refused_call"], totals.get("unrepaired_cases_one_forced_step_repairs", 0)), (1, 0))
+
+    def test_a_state_is_compared_with_what_going_on_can_still_reach(self) -> None:
+        def branch(state: int, tool: str, value: float, solved: bool = False) -> dict:
+            return {"state": state, "tool": tool, "status": STATUS_RAN, "executed": True, "return": value, "solved": solved,
+                    "actions": 1, "action": {"tool": tool}}
+
+        # The probe's smoke (r0_243985153e00): stopping at once beats the own failed episode by the actions it
+        # saves, and one forced look at the third state repairs the case.  Against the own return alone the first
+        # two states taught "declare it unresolved" beside the look that repairs.
+        record = {"own": {"return": -0.06}, "branches": [
+            branch(0, "finish", -0.01), branch(1, "finish", -0.02), branch(2, "finish", -0.03), branch(2, "inspect", 0.95, True),
+            branch(3, "inspect", 0.92, True)]}
+        better = better_branches(record)
+        self.assertEqual([(item["state"], item["tool"]) for item in better], [(2, "inspect"), (3, "inspect")])
+        for item, (margin, ahead, gain) in zip(better, ((0.03, 0.92, 1.01), (0.98, -0.06, 0.98))):
+            self.assertAlmostEqual(item["margin"], margin)
+            self.assertAlmostEqual(item["ahead"], ahead)
+            self.assertAlmostEqual(item["gain"], gain)
+        self.assertAlmostEqual(sum(item["margin"] for item in better), 0.95 + 0.06)
+        # A false claim at the last state: the lesson is the honest declaration there, worth the penalty; stopping
+        # at the start is worth the two actions it saves on top, not the penalty again.
+        record = {"own": {"return": -0.53}, "branches": [branch(0, "finish", -0.01), branch(1, "finish", -0.52), branch(2, "finish", -0.03)]}
+        better = better_branches(record)
+        self.assertEqual([item["state"] for item in better], [0, 2])
+        self.assertAlmostEqual(better[0]["margin"], 0.02)
+        self.assertAlmostEqual(better[0]["gain"], 0.52)
+        self.assertAlmostEqual(better[1]["margin"], 0.50)
+        # No branch repairs: stopping earlier saves actions, and a threshold above their cost drops those states.
+        record = {"own": {"return": -0.09}, "branches": [branch(0, "finish", -0.01), branch(1, "finish", -0.02),
+                                                         branch(2, "finish", -0.03), branch(3, "finish", -0.06)]}
+        better = better_branches(record)
+        self.assertEqual([item["state"] for item in better], [0, 1, 2, 3])
+        self.assertAlmostEqual(sum(item["margin"] for item in better), 0.08)
+        self.assertEqual([item["state"] for item in better_branches(record, min_gain=0.025)], [2, 3])
+        self.assertEqual(forks.states_above_the_own_return(record), [0, 1, 2, 3])
 
     def test_sampled_calls_try_other_arguments_and_a_repeat_is_not_run_again(self) -> None:
         root, order = ROOTS["control_meter"], ORDERS["control_meter"]
         model = _Model(order, stop_after=0)
         sampler = _Model(order, stop_after=0)
-        sampler.forced_answers = {"finish": {"tool": "finish", "arguments": {"outcome": "unresolved"}}}
+        sampler.forced_answers = {"correct_parameters": {"tool": "correct_parameters", "arguments": {"line": 2}}}
         record = fork_case(root, env_factory=_env, policy=model, argument_policy=sampler,
                            settings=ForkSettings(enabled=True, argument_samples=1))["record"]
         sampled = {branch["tool"]: branch for branch in record["branches"] if branch["arguments"] == ARGUMENTS_SAMPLED}
-        self.assertEqual(sorted(sampled), sorted(offered_tools(_env().reset(root))))  # every tool, the model's own included
+        # Every tool but ``finish``, whose two outcomes the harness gives.
+        self.assertEqual(sorted(sampled), sorted(tool for tool in offered_tools(_env().reset(root)) if tool != "finish"))
+        self.assertNotIn("finish", sampler.forced_calls)
         # The sampler wrote the calls the model's own decoding had already written: nothing new to run.
-        for tool in ("inspect", "correct_topology", "correct_parameters", "correct_measurements", "undo"):
+        for tool in ("inspect", "correct_topology", "correct_measurements", "undo"):
             self.assertEqual(sampled[tool]["status"], STATUS_DUPLICATE, tool)
             self.assertNotIn("return", sampled[tool])
-        # The model's own tool with another argument is a new call: an honest declaration beats the false claim.
-        self.assertEqual((sampled["finish"]["status"], sampled["finish"]["declared"], sampled["finish"]["sample"]), (STATUS_RAN, "unresolved", 0))
-        self.assertAlmostEqual(sampled["finish"]["return"] - record["own"]["return"], 0.5)
+        # Another line of the same tool is a new call, and it runs.
+        self.assertEqual((sampled["correct_parameters"]["status"], sampled["correct_parameters"]["sample"],
+                          sampled["correct_parameters"]["action"]["arguments"]), (STATUS_RAN, 0, {"line": 2}))
         self.assertEqual(sampler.calls, 0)  # the sampler writes forced calls only; the model continues every branch
         totals = summarize([record])["totals"]
-        self.assertEqual((totals["branches"], totals["branches_duplicate"], totals["branches_ran"]), (11, 5, 6))
+        # Five tools in the model's own decoding, the other outcome of ``finish``, five sampled calls.
+        self.assertEqual((totals["branches"], totals["branches_duplicate"], totals["branches_ran"]), (11, 4, 7))
 
     def test_what_is_not_a_call_of_the_forced_tool_is_marked_and_not_used(self) -> None:
         root, order = ROOTS["control_meter"], ORDERS["control_meter"]
@@ -268,7 +336,10 @@ class ForkCaseTests(unittest.TestCase):
         self.assertEqual((by_tool["inspect"]["status"], by_tool["inspect"]["action"]), (STATUS_INVALID, "I would look at the breakers."))
         self.assertEqual(by_tool["undo"]["status"], STATUS_INVALID)  # a valid call, of another tool
         self.assertEqual((by_tool["correct_measurements"]["status"], by_tool["correct_measurements"]["action"]), (STATUS_NO_CALL, None))
-        self.assertEqual(record["better"], [])
+        # None of those is taught.  What is left above the false claim is the harness's honest declaration.
+        self.assertEqual([(item["tool"], item["action"]["arguments"], item["arguments"]) for item in record["better"]],
+                         [("finish", {"outcome": "unresolved"}, ARGUMENTS_GIVEN)])
+        self.assertAlmostEqual(record["better"][0]["margin"], 0.5)
         totals = summarize([record])["totals"]
         self.assertEqual((totals["branches_invalid_call"], totals["branches_no_call"]), (2, 1))
 

@@ -81,7 +81,7 @@ if str(REPO_ROOT) not in sys.path:
 from psse_env.minimal.env import DEFAULT_MAX_ACTIONS, DEFAULT_TABLE_VERSIONS, MinimalDiagnosisEnv  # noqa: E402
 from psse_env.minimal import rollout as minimal_rollout  # noqa: E402
 from psse_env.minimal.episode import OUTCOME_PROMPT_LIMIT, run_episode  # noqa: E402
-from psse_env.minimal.forks import FORK_SAMPLE, ForkSettings, ForkStore, fork_roots  # noqa: E402
+from psse_env.minimal.forks import FORK_SAMPLE, ForkSettings, ForkStore, better_branches, fork_roots  # noqa: E402
 from psse_env.minimal.forks import summarize as summarize_forks  # noqa: E402
 from psse_env.minimal.rollout import rollout_roots  # noqa: E402
 from psse_env.minimal.scoring import RewardWeights  # noqa: E402
@@ -903,11 +903,11 @@ def example_rows(examples: Sequence[tuple[Trajectory, float]], *, weight: float,
 
 
 def stored_forks(out: Path, settings: ForkSettings) -> list[dict[str, Any]]:
-    """The forked cases of an iteration with a state where a branch returned more than the greedy episode by more
-    than ``settings.min_gain``: each case's stored payload, its ``better`` cut to those states."""
+    """The forked cases of an iteration with a state to teach: each case's stored payload with ``better``, the
+    branches ``psse_env.minimal.forks.better_branches`` keeps of its stored record under ``settings.min_gain``."""
     found: list[dict[str, Any]] = []
     for _case, payload in ForkStore(out / "forks").iter():
-        better = [item for item in payload["record"].get("better") or [] if float(item["gain"]) > float(settings.min_gain)]
+        better = better_branches(payload["record"], settings.min_gain)
         if better:
             found.append({**payload, "better": better})
     return found
@@ -916,25 +916,27 @@ def stored_forks(out: Path, settings: ForkSettings) -> list[dict[str, Any]]:
 def fork_rows(payloads: Sequence[Mapping[str, Any]], *, weight: float, render_prompt: Callable[..., str],
               prompt_token_ids: Callable[..., Any], render_target: Callable[..., Sequence[int]], max_length: int,
               required_side_inputs: Sequence[str], settings: RowSettings) -> tuple[list[TrainingRow], dict[str, Any]]:
-    """The supervised rows of an iteration's forks: one per state where a forced branch returned more.
+    """The supervised rows of an iteration's forks: one per state whose best branch is kept.
 
     A row is the branch's forced call on the prompt the model read at that state, rendered as the supervised pass
-    taught it, with weight ``weight`` times how far the branch's return lies above the greedy episode's.  A prompt
-    over the policy's input limit gives no row.  A call that does not render as the student emits it gives no row
-    and is counted (``unrenderable``): the model wrote the call itself, so the count should be zero, and it is
-    read, not a stop condition, because nothing wrong is trained by leaving the row out.
+    taught it, with weight ``weight`` times the branch's margin: how far its return lies above what going on as
+    the greedy episode did can still reach (``psse_env.minimal.forks.better_branches``).  A prompt over the
+    policy's input limit gives no row.  A call that does not render as the student emits it gives no row and is
+    counted (``unrenderable``): the model wrote the call itself, so the count should be zero, and it is read, not
+    a stop condition, because nothing wrong is trained by leaving the row out.
     """
     rows: list[TrainingRow] = []
     report: dict[str, Any] = {"cases": len(payloads), "candidates": 0, "rows": 0, "tokens": 0, "unrenderable": 0,
                               "prompt_over_the_input_limit": 0, "prompt_truncated_rows": 0, "prompt_truncated_rows_rejected": 0,
                               "weight": float(weight), "row_weights": None, "rows_by_tool": {},
-                              "rows_whose_branch_repairs": 0, "rows_within_one_action_cost": 0}
+                              "rows_whose_branch_repairs": 0, "rows_within_one_action_cost": 0,
+                              "weight_of_rows": 0.0, "weight_of_rows_whose_branch_repairs": 0.0}
     weights: list[float] = []
     for payload in payloads:
         case = str(payload["case"])
         for item in payload["better"]:
             report["candidates"] += 1
-            term = float(weight) * float(item["gain"])
+            term = float(weight) * float(item["margin"])
             observation = model_view(payload["observations"][str(item["state"])])
             prompt_ids, original = prompt_token_ids(render_prompt(observation))
             if int(original) != len(prompt_ids):
@@ -960,8 +962,11 @@ def fork_rows(payloads: Sequence[Mapping[str, Any]], *, weight: float, render_pr
             weights.append(term)
             tool = str(item["tool"])
             report["rows_by_tool"][tool] = int(report["rows_by_tool"].get(tool, 0)) + 1
-            report["rows_whose_branch_repairs"] += int(bool(item["solved"]) and not payload["record"]["own"]["solved"])
-            report["rows_within_one_action_cost"] += int(float(item["gain"]) <= 0.05)
+            repairs = bool(item["solved"]) and not payload["record"]["own"]["solved"]
+            report["rows_whose_branch_repairs"] += int(repairs)
+            report["rows_within_one_action_cost"] += int(float(item["margin"]) <= 0.05)
+            report["weight_of_rows"] += term
+            report["weight_of_rows_whose_branch_repairs"] += term if repairs else 0.0
     report["rows"] = len(rows)
     report["tokens"] = sum(row.completion_tokens for row in rows)
     report["rows_by_tool"] = dict(sorted(report["rows_by_tool"].items()))

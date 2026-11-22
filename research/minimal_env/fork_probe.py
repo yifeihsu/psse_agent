@@ -126,8 +126,9 @@ def case_line(payload: Mapping[str, Any]) -> dict[str, Any]:
                                                              else "unreadable" for step in own["steps"]],
         "states": record["states"], "branches": len(record["branches"]),
         "repaired_by_one_forced_step": bool(repairing),
-        "better": [{"state": item["state"], "tool": item["tool"], "action": item["action"], "gain": item["gain"],
-                    "solved": item["solved"], "arguments": item.get("arguments")} for item in record.get("better") or []],
+        "better": [{"state": item["state"], "tool": item["tool"], "action": item["action"], "margin": item["margin"],
+                    "gain": item["gain"], "solved": item["solved"], "arguments": item.get("arguments")}
+                   for item in record.get("better") or []],
     }
     if repairing:
         first = repairing[0]

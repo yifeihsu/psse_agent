@@ -187,11 +187,13 @@ supervised model as the KL reference (docs/minimal_env_20261115.md, section 12).
 `forks.py` (2026-11-22) measures what the sampling does not reach. It runs a policy's own episode on a case and
 then, at every state of it, forces each other tool once: the harness gives the tool's name, the model writes the
 arguments (`policy.MinimalModelPolicy.act_forced`) and continues to the end, and the branch is scored like any
-episode. Where a branch returned more than the own episode, the RL driver trains that branch's call on that
-state's prompt (`forks` in a driver config; docs/minimal_rl_plan_20261122.md). The forks are at every state and
-over every tool, the truth enters through the reward alone, and nothing after a forced step is trained. An
-evaluated episode never branches. `research/minimal_env/fork_probe.py` runs the forks with no update. Neither has
-met the model yet: both have run with stand-ins only.
+episode. `finish` is forked with each of its two outcomes as a whole call, with no model call. Where a state's
+best branch returned more than going on as the own episode did can still reach (the own return, or a branch kept
+at a later state), the RL driver trains that branch's call on that state's prompt, weighted by that excess
+(`forks` in a driver config; docs/minimal_rl_plan_20261122.md). The forks are at every state and over every tool,
+the truth enters through the reward alone, and nothing after a forced step is trained. An evaluated episode never
+branches. `research/minimal_env/fork_probe.py` runs the forks with no update. The forced call met the model in
+the probe's smoke of 2026-11-22 (4 cases; `research/hpc/minimal_rl_20261122/README.md`, section 9).
 
 ## Settings a model run needs
 
