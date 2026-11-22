@@ -1,11 +1,13 @@
 # RL plan for the minimal environment, 2026-11-22
 
-**Status (2026-11-22, evening): both stages are built; the cell is deployed at d6b7cfc and its two smokes
-passed; no run and no probe is submitted.** The user approved the build ("Yes, build both") and then the deploy
-and the smokes ("Yes, deploy and smoke"). The cell is `research/hpc/minimal_rl_20261122`; its README has the
-order of work, what each smoke showed (its section 9) and how a fork row is picked since the probe's smoke (its
-section 10; section 10 below). Every further cluster action needs the user's word. Sections 1 to 8 are the plan
-as written before the build.
+**Status (2026-11-22, 15:35 UTC): both stages are built; the two smokes passed on d6b7cfc; the cell is
+redeployed at 98e6518, and stage A's run and both probes are submitted** (`mrp-steps` 24090332 to 24090338,
+`mrp-probe-dev` 24090400 to 24090402, `mrp-probe-train` 24090446 to 24090450). The user approved the build
+("Yes, build both"), the deploy and the smokes ("Yes, deploy and smoke"), then the redeploy, stage A's run and
+both probes ("Yes, all three"). The cell is `research/hpc/minimal_rl_20261122`; its README has the order of
+work, what each smoke showed and what was submitted (its section 9) and how a fork row is picked since the
+probe's smoke (its section 10; section 10 below). Stage B and every further cluster action need the user's
+word. Sections 1 to 8 are the plan as written before the build.
 
 It replaces the "demonstration fix" I proposed on 2026-11-21 (a look at the breakers written into the supervised
 rows). The user objected that a decision rule taught through demonstrations is a rule-based mechanism by another
@@ -245,4 +247,5 @@ Both smokes completed on the cluster; the cell's README (sections 9 and 10) has 
   the first state was taught beside the look that repairs the case two states later, and where the greedy episode
   ends in a false claim, stopping before looking at anything got weight 0.52. Both outcomes of `finish` are now
   forked as whole calls at every state, so the honest declaration is taught where the false claim was made. With
-  the new comparison the same records give 10 rows, 86% of their weight on branches that repair. Not deployed.
+  the new comparison the same records give 10 rows, 86% of their weight on branches that repair. Deployed at
+  98e6518 before the probes were submitted.

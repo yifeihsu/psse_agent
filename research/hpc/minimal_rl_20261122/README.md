@@ -1,10 +1,11 @@
 # The RL plan of 2026-11-22: stage A, stage B and the fork probe
 
-**Status: DEPLOYED 2026-11-22 at d6b7cfc; both smokes completed and passed their checks (section 9); no run and
-no probe is submitted.** The probe's smoke showed that stage B would have picked contradictory rows; how a fork
-row is picked was changed the same day (section 10). That change is tested locally and is NOT deployed. The
-user's word so far: "Yes, deploy and smoke". A redeploy, stage A's run, the probe and stage B each still need
-the user's word.
+**Status: REDEPLOYED 2026-11-22 at 98e6518; stage A's run and both probes are SUBMITTED** (section 9:
+`mrp-steps` 24090332 to 24090338, `mrp-probe-dev` 24090400 to 24090402, `mrp-probe-train` 24090446 to 24090450).
+Both smokes completed and passed their checks on d6b7cfc. The probe's smoke showed that stage B would have
+picked contradictory rows; how a fork row is picked was changed the same day (section 10) and is in the deployed
+source. The user's word so far: "Yes, deploy and smoke", then "Yes, all three" (the redeploy, stage A's run and
+both probes). Stage B (`forks-smoke`, `forks`), any cancel and any resubmission each still need the user's word.
 
 The plan and its reasons are in `docs/minimal_rl_plan_20261122.md`. The user approved building both stages on
 2026-11-22 ("Yes, build both"), with no cluster action.
@@ -165,7 +166,8 @@ when the target is reached.
   176 branches, no forced call was invalid and no replay drifted. Stage B's update on fork rows (`forks-smoke`)
   has not run.
 - The selection of section 10 and the given outcomes of `finish` have run with stand-ins and on the smoke's
-  stored records only. The cluster's source is still d6b7cfc.
+  stored records only. The two probes submitted at 98e6518 are their first run with the model; they went out
+  without a second smoke.
 - Whether eight steps on one batch at 3e-5 stay close to the sampled policy, and whether 65 steps are safe or
   enough. The smoke took four steps on one small batch: by the fourth, the uncertain tokens were a mean factor of
   1.35 from the policy that sampled the batch (section 9). No earlier RL run of this project took more than a
@@ -247,7 +249,35 @@ environment refused, which changed nothing but the history the model reads. In t
 between a second look and giving up is close. The summary now counts the unrepaired cases repaired after a
 refused call (1 of 4 here): the floor to read the one-forced-step count against.
 
-## 10. What the probe's smoke changed (2026-11-22; tested locally, not deployed)
+**Redeployed 2026-11-22, about 15:31 UTC, on the user's word ("Yes, all three")**, with
+`deploy_from_windows.sh 98e651886657c5a1286f475137bcc6aa3684b26d`: a bundle of 20,709 bytes moved the source
+from d6b7cfc to 98e6518. Read on the cluster afterwards: the source at 98e6518 with no local change; `forks.py`,
+`rl_train.py` and `fork_probe.py` parse under the job environment's Python; the status script and both stages
+pass `bash -n` and hold no carriage return; the inputs are present and both suites have the planned checksums;
+no job of this cell was queued before.
+
+**Submitted 2026-11-22 on the same word, source 98e6518:**
+
+| Job | Ids | Submitted (UTC) | What it runs |
+| --- | --- | --- | --- |
+| `mrp-steps` | 24090332 to 24090338, a chain of 7 links, each after the one before | 15:33:49 | stage A (`rl_steps.json`) from iteration 0 to 9; a link leaves at once when the target is reached |
+| `mrp-probe-dev` | parts 24090400 and 24090401, close 24090402 | 15:34:11 | the probe on the 49 unrepaired development cases a truth-built sequence repairs, in 2 parts, then the summary |
+| `mrp-probe-train` | parts 24090446 to 24090449, close 24090450 | 15:34:34 | the probe on 100 of the 502 unrepaired training cases, in 4 parts, then the summary |
+
+Every job asks for one card of the cell's pool (a100, h100, h200 or rtx6000, no partition named), 16 CPUs, 96 GB
+and 12 hours, with preemption allowed. All 15 were pending when read at 15:35 UTC. Outputs: `out/steps`,
+`out/probe_dev`, `out/probe_train`.
+
+**What to read first.**
+
+- The probes: the forced prefixes canonical and no invalid or drifted call, as in the smoke; then the `finish`
+  branches the harness gives (`arguments` "given"), which meet the model here for the first time; then how many
+  of the 49 and of the 100 one forced step repairs, beside the count repaired after a refused call.
+- Stage A: the lines the status script prints for every update (the log-ratio to the sampler by step, the KL to
+  the supervised model), and the first evaluation, after iteration 2 (17 steps). If it loses more than it gains,
+  the plan is to cancel the chain and halve the learning rate; the cancel needs the user's word.
+
+## 10. What the probe's smoke changed (2026-11-22; deployed at 98e6518 before the probes)
 
 The smoke's records show the rows stage B would have trained on those 4 cases as deployed: 15 rows, 8 of them
 `finish`. Two kinds were wrong.
@@ -293,7 +323,7 @@ the summary has `margin` (with the share of the branches that repair) beside `ga
 
 **What it means for the order of work.** Stage A does not run this code. The probe's count of cases one forced
 step repairs does not depend on the comparison, but a probe on d6b7cfc would fork a `finish` the model writes
-and report rows under the old comparison. Redeploy before the probe.
+and report rows under the old comparison. So the cell was redeployed at 98e6518 before the probes (section 9).
 
 Local tests after the change: `test_forks.py` 13 (one new: the three patterns above as records), the driver 32,
 the probe 4, this cell 18, the research policy 15, the earlier RL cell 24.

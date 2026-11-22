@@ -570,10 +570,11 @@ every case.  The early stop is not special to breakers in shape (14% of the two-
 with breakers the estimate still fails and the model declares the case unresolved (105 of 146); with lines the
 estimate passes at half of the stops and the model declares it resolved.
 
-## 15. The RL plan of 2026-11-22 (built, smoked, no run)
+## 15. The RL plan of 2026-11-22 (built, smoked; stage A's run and the probes submitted)
 
 The plan is `docs/minimal_rl_plan_20261122.md`; the cell is `research/hpc/minimal_rl_20261122` (deployed at
-d6b7cfc; its two smokes passed on 2026-11-22; no run and no probe submitted). What the finished focused run showed
+d6b7cfc; its two smokes passed on 2026-11-22; redeployed at 98e6518 the same day, with stage A's run and both
+probes submitted: the job ids are in the cell's README, section 9). What the finished focused run showed
 about the procedure, and what was built for it:
 
 | What held RL back (measured in the focused run) | What was built |
@@ -596,6 +597,7 @@ about the procedure, and what was built for it:
   cases it ran on (not a rate). The cell's README has both in full.
 - **Changed after the probe's smoke.** A state is compared with the best of the greedy return and the branches
   kept at later states, and both outcomes of `finish` are forked as whole calls. Before, stopping at the first
-  state was taught beside the look that repairs the case two states later. Tested locally; not deployed.
+  state was taught beside the look that repairs the case two states later. Tested locally; deployed at 98e6518,
+  where the two probes are its first run with the model.
 - **Not checked:** stage B's update on fork rows, eight steps a batch and 65 steps in all, and every cost beyond
   the 4 cases and two small updates of the smokes.

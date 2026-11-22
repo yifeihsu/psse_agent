@@ -213,8 +213,9 @@ environment variables (`psse_env/dagger/preliminary_e2b_eval.py`):
 - An RL run that improves on the supervised model. The driver (`research/minimal_env/rl_train.py`) and its cluster
   cell (`research/hpc/minimal_rl_20261116/`) ran one iteration of the plain run (2026-11-18) and three of the
   focused run (2026-11-21): both ended at 202 of the 247 cases a truth-built sequence repairs, against the
-  supervised model's 198, which this suite cannot tell apart. The next runs are prepared, not deployed
-  (`research/hpc/minimal_rl_20261122/`).
+  supervised model's 198, which this suite cannot tell apart. The next run (65 optimizer steps instead of 3)
+  and a probe of one-step forks were submitted on 2026-11-22 (`research/hpc/minimal_rl_20261122/`); no result
+  yet.
 - A paging mode for large systems. On IEEE 118 one version's meter table alone is about 1,100 rows.
 - Recovery paths from a model's own failed episodes. (The focused RL run, built 2026-11-18 and deployed 2026-11-19, teaches a failed case's
   truth-built sequence from its first state: `research/hpc/minimal_rl_20261116/README.md`.)
