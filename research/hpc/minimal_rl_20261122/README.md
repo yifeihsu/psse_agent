@@ -2,8 +2,8 @@
 
 **Status: REDEPLOYED 2026-11-22 at 98e6518; stage A's run and both probes are SUBMITTED** (section 9:
 `mrp-steps` 24090332 to 24090338, `mrp-probe-dev` 24090400 to 24090402, `mrp-probe-train` 24090446 to 24090450).
-**The development probe is done: one forced step repairs 39 of the 49 unrepaired cases (section 9).** The
-training probe and stage A were still running at 19:05 UTC.
+**Both probes are done: one forced step repairs 39 of the 49 unrepaired development cases and 74 of 97
+unrepaired training cases (section 9).** Stage A was in its first update at 19:35 UTC.
 Both smokes completed and passed their checks on d6b7cfc. The probe's smoke showed that stage B would have
 picked contradictory rows; how a fork row is picked was changed the same day (section 10) and is in the deployed
 source. The user's word so far: "Yes, deploy and smoke", then "Yes, all three" (the redeploy, stage A's run and
@@ -359,6 +359,74 @@ With 0.1, the rows are 43% of the count at 98% of the weight, every repaired cas
 no row says to stop before looking. Whether to set it is the user's call before stage B. `rl_forks.json` is
 read from the cell's source, and the deploy script does not move the source while a job of this cell is queued:
 a changed `min_gain` waits for stage A's chain or needs a second source folder.
+
+**The training probe, completed 2026-11-22 at 19:30 UTC** (parts 24090446 to 24090449, close 24090450; one
+preemption, no traceback; 11.6 card-hours against an estimate of 12.5). A seeded sample of 100 of the 502
+training cases the supervised model's training pass left unrepaired. These are cases stage B can draw.
+
+| What | Read |
+| --- | --- |
+| Cases | 100; the greedy episode left 97 unrepaired here (3 came out repaired on this card, against the training pass): 49 end in a false claim, 47 declare the case unresolved, 1 runs out of actions |
+| States and branches | 530 states, 3,180 branches, all ran; invalid 0, drifted 0 |
+| Forced prefixes that start the call's own rendering | 2,219 of 2,219 |
+| Forced calls the environment refused | 724 of the 2,219 |
+| **Cases one forced step repairs** | **74 of the 97**, every one by a call the environment carried out |
+| Cases repaired after a refused call too | 16, all among the 74 |
+| Branches that end repaired (the 97 cases) | after a carried-out forced call 298 of 1,444 (20.6%); after a refused one 42 of 700 (6.0%) |
+| Time | 770 s a case with two workers a card, 21.39 h of worker time |
+
+By class, cases one forced step repairs: cb2_dangling 11 of 12, cb2_mixed 7 of 7, cb2_split 8 of 9,
+control_meter 1 of 1, control_rx 2 of 2, meter_on_rx 3 of 3, meter_rx2 13 of 17, rx2_adjacent 2 of 4,
+rx2_distant 3 of 5, rx_cb_distant 9 of 14, rx_cb_meter 11 of 18, rx_cb_shared_bus 4 of 5. The 23 out of one
+step's reach: rx_cb_meter 7, rx_cb_distant 5, meter_rx2 4, rx2_adjacent 2, rx2_distant 2, and one each of
+cb2_dangling, cb2_split and rx_cb_shared_bus.
+
+What the repairing step is, grouped the same way for both probes (each case's kept repairing row with the
+highest return):
+
+| Where | Training, of 74 | Development, of 39 | The greedy action there | The forced step (training) |
+| --- | --- | --- | --- | --- |
+| A line fit where a breaker step repairs, at the second or third state | 42 | 18 | `correct_parameters` | the breaker named at once (30), a look at the breakers (12) |
+| The first state | 11 | 7 | a look at the breakers | `correct_parameters` (10), `correct_measurements` (1); the model names the object itself |
+| The state where the greedy episode stops | 10 | 5 | `finish` | `correct_parameters` (7), a look at the breakers, a breaker, an undo (1 each) |
+| Elsewhere | 11 | 9 | a line fit (7), a meter correction (3), a breaker (1) | undo (7), `correct_parameters` (2), a breaker (1), and one `finish` with the claim that is true there |
+
+The last entry is a control_rx case that is repaired after two actions; the greedy episode goes on and fits a
+line that damages it. The claim at that state is one of the `finish` calls the harness gives.
+
+The two probes agree: one forced step repairs 76% of the unrepaired training cases and 80% of the unrepaired
+development cases, and more than half of those steps are the same decision, a breaker step where the model
+fits a line. At that rate about 380 of the 502 unrepaired training cases hold such a step; stage B draws 24
+unrepaired cases an iteration. The cautions of the development probe hold here too: after a refused call 6.0%
+of the branches end repaired, and of the 74 cases 9 have one (state, tool) pair that repairs and 65 have two or
+more (up to 13).
+
+The rows stage B would keep on the 97 cases with `min_gain` 0:
+
+| Kind of row | Rows | Weight |
+| --- | --- | --- |
+| The branch repairs the case | 165 | 90.61 (80%) |
+| Declare the case unresolved, margin about 0.5 | 29 | 14.51 (13%) |
+| Declare the case unresolved, margin about 0.25 | 17 | 4.42 (4%) |
+| Declare the case unresolved, margin at most 0.03 | 117 | 1.81 (2%) |
+| Declare the case unresolved, other | 2 | 0.15 |
+| Another tool, no repair | 5 | 1.63 (1%) |
+| All | 335 | 113.13 |
+
+The 3 cases the greedy episode repaired add 4 rows of weight 0.10 in all (a shorter path). Of the 117 rows
+that only save actions, 85 are in the 23 cases no forced step repairs and 23 are at the first state.
+
+| `min_gain` (all 100 cases) | Rows | Repairing rows | `finish` rows above 0.2 | `finish` rows at most 0.2 | `finish` rows at the first state | Weight |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 (as in `rl_forks.json`) | 339 | 169 | 46 | 119 | 23 | 113.23 |
+| 0.035 | 168 | 98 | 46 | 20 | 1 | 111.66 |
+| 0.1 | 130 | 76 | 46 | 4 | 1 | 110.09 |
+| 0.2 | 126 | 74 | 48 | 0 | 0 | 109.78 |
+
+With 0.1 the rows are 38% of the count at 97% of the weight. What it buys is mostly what is taught, not time:
+at 24 unrepaired cases an iteration the difference is about 80 rows against about 30, some 10 minutes of an
+update. The one row that remains at the first state is a thinned one: a margin of 0.10 at the second state is
+not above the threshold and passes to the first state, which is kept at 0.11 (a case no forced step repairs).
 
 ## 10. What the probe's smoke changed (2026-11-22; deployed at 98e6518 before the probes)
 

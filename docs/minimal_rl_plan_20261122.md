@@ -4,7 +4,9 @@
 redeployed at 98e6518, and stage A's run and both probes are submitted** (`mrp-steps` 24090332 to 24090338,
 `mrp-probe-dev` 24090400 to 24090402, `mrp-probe-train` 24090446 to 24090450). The development probe is
 done: one forced step repairs 39 of the 49 unrepaired development cases a truth-built sequence repairs (a
-labelled upper bound; 14 of them are repaired after a refused call too). The user approved the build
+labelled upper bound; 14 of them are repaired after a refused call too). The training probe is done too:
+74 of 97 unrepaired training cases, 42 of them by a breaker step where the model fits a line. The user
+approved the build
 ("Yes, build both"), the deploy and the smokes ("Yes, deploy and smoke"), then the redeploy, stage A's run and
 both probes ("Yes, all three"). The cell is `research/hpc/minimal_rl_20261122`; its README has the order of
 work, what each smoke showed and what was submitted (its section 9) and how a fork row is picked since the
