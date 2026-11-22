@@ -2,6 +2,8 @@
 
 **Status: REDEPLOYED 2026-11-22 at 98e6518; stage A's run and both probes are SUBMITTED** (section 9:
 `mrp-steps` 24090332 to 24090338, `mrp-probe-dev` 24090400 to 24090402, `mrp-probe-train` 24090446 to 24090450).
+**The development probe is done: one forced step repairs 39 of the 49 unrepaired cases (section 9).** The
+training probe and stage A were still running at 19:05 UTC.
 Both smokes completed and passed their checks on d6b7cfc. The probe's smoke showed that stage B would have
 picked contradictory rows; how a fork row is picked was changed the same day (section 10) and is in the deployed
 source. The user's word so far: "Yes, deploy and smoke", then "Yes, all three" (the redeploy, stage A's run and
@@ -175,7 +177,8 @@ when the target is reached.
 - Every cost above; the measured rates are from 4 cases and two small updates.
 - Whether supervised rows on fork states, with the KL term, keep the cases already solved.
 - The forks read the greedy episode. A case whose repair needs two unlikely steps in a row is not reached by one
-  forced step (the probe's tests show such a case); how many of the 49 are like that is the probe's question.
+  forced step (the probe's tests show such a case): 10 of the 49 unrepaired development cases are out of one
+  step's reach (section 9).
 
 ## 8. Local checks
 
@@ -285,6 +288,77 @@ kept: a look at the breakers at the third state, which repairs the case (margin 
 unresolved" at the fourth, where the greedy episode made the false claim (0.50). The two margins add up to the
 best return less the greedy return (0.95 + 0.79). By then stage A was in iteration 0's rollout and three of the
 training probe's four parts were running; no traceback in any log.
+
+**The development probe, completed 2026-11-22 at 19:02 UTC** (parts 24090400, 3 h 22 min on gr101, and
+24090401, 2 h 22 min on gr103 after one preemption; close 24090402, 28 s; no traceback; about 6.7 card-hours in
+all against an estimate of 6). A labelled upper bound: a development fork is never a training row.
+
+| What | Read |
+| --- | --- |
+| Cases | 49, the greedy episode unrepaired in all 49: 28 end in a false claim, 19 declare the case unresolved, 2 run out of actions |
+| States and branches | 263 states, 1,578 branches, all ran: 1,099 with a call the model wrote and 479 `finish` calls the harness gave; invalid 0, drifted 0 |
+| Forced prefixes that start the call's own rendering | 1,099 of 1,099 |
+| Forced calls the environment refused | 368 of the 1,099 |
+| **Cases one forced step repairs** | **39 of 49**, every one by a call the environment carried out |
+| Cases repaired after a refused call too | 14 of the 49, all among the 39 |
+| Branches that end repaired | after a carried-out forced call 127 of 731 (17.4%); after a refused one 35 of 368 (9.5%) |
+| Time | 778 s a case with two workers a card, 10.59 h of worker time |
+
+By class, cases one forced step repairs: cb2_dangling 6 of 8, cb2_mixed 6 of 7, cb2_split 4 of 5, control_meter
+1 of 1, meter_on_rx 3 of 3, meter_rx2 4 of 5, rx2_adjacent 5 of 6, rx2_distant 1 of 3, rx_cb_distant 4 of 4,
+rx_cb_meter 4 of 4, rx_cb_shared_bus 1 of 3.
+
+What the repairing step is (each case's kept repairing row with the highest return):
+
+| Where | Cases | The greedy action there | The forced step |
+| --- | --- | --- | --- |
+| Two breaker errors (cb2_*), after the first breaker is corrected: the third state in 15, the second in 1 | 16 of 20 | fits a line (15), names a breaker (1) | a second look at the breakers (13), or the second breaker named at once (3) |
+| The first state | 7 (meter_on_rx 3, meter_rx2 2, rx2_distant 1, rx_cb_meter 1) | looks at the breakers | `correct_parameters`; the model names the line itself |
+| The last state, where the greedy episode claims the case resolved | 5 (rx_cb_distant 4, meter_rx2 1) | `finish`, resolved | `correct_parameters` (4), a look at the breakers (1) |
+| Elsewhere | 11 (rx2_adjacent 5, rx_cb_meter 3, control_meter 1, meter_rx2 1, rx_cb_shared_bus 1) | a line fit (8), a meter correction (2), an undo (1) | undo (4), a look (2), a correction of another kind (5) |
+
+By tool: a look 16, `correct_parameters` 12, `correct_topology` 5, undo 4, `correct_measurements` 2. In 34 of
+the 39 the step is before the last state.
+
+**Three cautions.** (1) The forced step is found by trying every tool and scoring the outcome with the truth;
+that is what stage B's forks do on training cases, and on development cases it is a measurement only. 198 + 39
+= 237 of 247 is what one round would reach if every such step were learned and nothing were lost; it is not a
+forecast. (2) Part of the effect is disturbance: a refused call changes only the history the model reads, and
+9.5% of such branches end repaired against 17.4% after a carried-out call. Of the 39 cases, 12 have one
+(state, tool) pair that repairs and 27 have two or more (up to 9): in many of these states the model's choice
+is close. (3) 10 cases are out of one step's reach (cb2_dangling 2, cb2_mixed 1, cb2_split 1, meter_rx2 1,
+rx2_adjacent 1, rx2_distant 2, rx_cb_shared_bus 2).
+
+The rows stage B would keep on these records with `min_gain` 0 (for reading only):
+
+| Kind of row | Rows | Weight |
+| --- | --- | --- |
+| The branch repairs the case | 69 | 46.86 (76%) |
+| Declare the case unresolved, margin about 0.5: the false-claim penalty that going on runs into | 20 | 10.02 (16%) |
+| Declare the case unresolved, margin about 0.25: one healthy object that going on damages | 7 | 1.82 (3%) |
+| Declare the case unresolved, margin at most 0.03: actions saved, nothing else | 77 | 1.59 (3%) |
+| Declare the case unresolved, other | 1 | 0.06 |
+| Another tool, no repair | 5 | 1.44 (2%) |
+| All | 179 | 61.79 |
+
+Of the 77 rows that only save actions, 54 are in the 10 cases no forced step repairs and 10 are at the first
+state ("declare the case unresolved before looking at anything"). They are 43% of the rows and 3% of the weight;
+an update row costs 12 to 13 s whatever its weight.
+
+What `forks.min_gain` keeps on the same records (a state it skips leaves its small margin to the state before,
+so the small rows thin out rather than vanish, and the total weight hardly moves):
+
+| `min_gain` | Rows | Repairing rows | `finish` rows above 0.2 | `finish` rows at most 0.2 | `finish` rows at the first state | Weight |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 (as in `rl_forks.json`) | 179 | 69 | 27 | 78 | 10 | 61.79 |
+| 0.035 | 101 | 45 | 27 | 26 | 1 | 61.30 |
+| 0.1 | 77 | 39, one a repaired case | 27 | 8 | 0 | 60.68 |
+| 0.2 | 72 | 39 | 31 | 0 | 0 | 60.77 |
+
+With 0.1, the rows are 43% of the count at 98% of the weight, every repaired case keeps one repairing row and
+no row says to stop before looking. Whether to set it is the user's call before stage B. `rl_forks.json` is
+read from the cell's source, and the deploy script does not move the source while a job of this cell is queued:
+a changed `min_gain` waits for stage A's chain or needs a second source folder.
 
 ## 10. What the probe's smoke changed (2026-11-22; deployed at 98e6518 before the probes)
 
