@@ -1,7 +1,8 @@
 # The RL plan of 2026-11-22: stage A, stage B and the fork probe
 
-**Status: PREPARED, NOT DEPLOYED (2026-11-22).** The code is written and tested locally with stand-ins for the
-model. Nothing here has been deployed, smoked or run on the cluster; each of those needs the user's word.
+**Status: DEPLOYED 2026-11-22 at d6b7cfc; the two smokes are submitted; no run and no probe is submitted.**
+The user's word for both: "Yes, deploy and smoke". Section 9 has the cluster record. Stage A's run, the probe and
+stage B each still need the user's word.
 
 The plan and its reasons are in `docs/minimal_rl_plan_20261122.md`. The user approved building both stages on
 2026-11-22 ("Yes, build both"), with no cluster action.
@@ -163,3 +164,21 @@ when the target is reached.
   (15, one new), `research/hpc/minimal_rl_20261122/test_cell.py` (18): all pass.
 - The environment and the scoring in those tests are the real ones, on freshly generated cases. The model is a
   stand-in that decides from the observation alone.
+
+## 9. Cluster record
+
+**Deployed 2026-11-22, about 08:35 UTC**, with `deploy_from_windows.sh d6b7cfc5fe4cbe586c5b41d272bcfd61f3aabff5`.
+The cell's source was cloned from the earlier RL cell's (at 2d4919d) and moved to d6b7cfc by a bundle of 210,035
+bytes. Read on the cluster afterwards: the source at d6b7cfc; the five changed Python files parse under the job
+environment's Python 3.12.13; the five scripts pass `bash -n` and hold no carriage return; the supervised adapter,
+its development evaluation, its training pass, the reference and the file of truth-built sequences are present;
+both suites have the planned checksums; no job of this user was queued.
+
+**Submitted 2026-11-22 on the user's word ("Yes, deploy and smoke"):**
+
+| Job | Id | Submitted (UTC) | What it runs |
+| --- | --- | --- | --- |
+| `mrp-steps-smoke` | 24068489 | 08:39:40 | two iterations of `rl_steps_smoke.json`, 4-hour limit |
+| `mrp-probe-smoke` | 24068494 | 08:39:55 | the probe on 4 unrepaired development cases with one sampled call a tool, 4-hour limit |
+
+Both were pending when submitted. Results are added here when the jobs end.
