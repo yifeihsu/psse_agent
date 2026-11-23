@@ -176,7 +176,7 @@ class ConfigTests(unittest.TestCase):
     def test_stage_b_is_stage_a_with_the_forks_and_without_the_examples(self) -> None:
         self.assertEqual(_differences(_config("rl_steps.json"), _config("rl_forks.json")), {
             "focus.demonstration_weight": (1.0, 0.0),
-            "forks.argument_samples": (None, 0), "forks.enabled": (None, True), "forks.min_gain": (None, 0.0), "forks.weight": (None, 1.0),
+            "forks.argument_samples": (None, 0), "forks.enabled": (None, True), "forks.min_gain": (None, 0.1), "forks.weight": (None, 1.0),
             "output_dir": (f"{WORK}/out/steps", f"{WORK}/out/forks"),
         })
         config = MinimalRLConfig.load(CELL / "rl_forks.json")

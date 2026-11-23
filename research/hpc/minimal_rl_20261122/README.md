@@ -10,7 +10,9 @@ against 0.06 at the seventh, carried by one token. Its first evaluation (after 1
 Both smokes completed and passed their checks on d6b7cfc. The probe's smoke showed that stage B would have
 picked contradictory rows; how a fork row is picked was changed the same day (section 10) and is in the deployed
 source. The user's word so far: "Yes, deploy and smoke", then "Yes, all three" (the redeploy, stage A's run and
-both probes). Stage B (`forks-smoke`, `forks`), any cancel and any resubmission each still need the user's word.
+both probes), then "Yes, set 0.1" on 2026-11-23: `forks.min_gain` is 0.1 in stage B's two configs, in the
+repository only; the cluster's source still holds 0. Stage B (`forks-smoke`, `forks`), any deploy, any cancel
+and any resubmission each still need the user's word.
 
 The plan and its reasons are in `docs/minimal_rl_plan_20261122.md`. The user approved building both stages on
 2026-11-22 ("Yes, build both"), with no cluster action.
@@ -24,6 +26,7 @@ The plan and its reasons are in `docs/minimal_rl_plan_20261122.md`. The user app
 | Evaluation on the 300 development cases | every third iteration | every third iteration | every iteration |
 | Truth-built examples for cases without a repaired sample | on (weight 1) | off | on (weight 1) |
 | One-step forks of the greedy episode | off | on | off |
+| Smallest margin of a fork row (`forks.min_gain`) | | 0.1 since 2026-11-23; 0 when the probes ran | |
 | Seed of the draw | 20261122 | 20261122 | 20261118 |
 
 Everything else is the focused run's (`research/hpc/minimal_rl_20261116/rl_focus.json`): the supervised model as
@@ -171,12 +174,13 @@ when the target is reached.
   176 branches, no forced call was invalid and no replay drifted. Stage B's update on fork rows (`forks-smoke`)
   has not run.
 - The selection of section 10 and the given outcomes of `finish` have run with stand-ins and on the smoke's
-  stored records only. The two probes submitted at 98e6518 are their first run with the model; they went out
-  without a second smoke. The first case they wrote reads as designed (section 9); the summaries are not in.
+  stored records only until the two probes, which went out at 98e6518 without a second smoke. Both probes read
+  as designed (section 9): every branch ran and every forced prefix was canonical. The selection with
+  `min_gain` 0.1 was read on the probes' stored records; it has not run inside an update.
 - Whether eight steps on one batch at 3e-5 stay close to the sampled policy, and whether 65 steps are safe or
   enough. The smoke took four steps on one small batch: by the fourth, the uncertain tokens were a mean factor of
   1.35 from the policy that sampled the batch (section 9). No earlier RL run of this project took more than a
-  few steps.
+  few steps. The run's first eight-step update is read in section 9; its first evaluation is not in.
 - Every cost above; the measured rates are from 4 cases and two small updates.
 - Whether supervised rows on fork states, with the KL term, keep the cases already solved.
 - The forks read the greedy episode. A case whose repair needs two unlikely steps in a row is not reached by one
@@ -353,15 +357,17 @@ so the small rows thin out rather than vanish, and the total weight hardly moves
 
 | `min_gain` | Rows | Repairing rows | `finish` rows above 0.2 | `finish` rows at most 0.2 | `finish` rows at the first state | Weight |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 (as in `rl_forks.json`) | 179 | 69 | 27 | 78 | 10 | 61.79 |
+| 0 (as in `rl_forks.json` when the probes ran) | 179 | 69 | 27 | 78 | 10 | 61.79 |
 | 0.035 | 101 | 45 | 27 | 26 | 1 | 61.30 |
-| 0.1 | 77 | 39, one a repaired case | 27 | 8 | 0 | 60.68 |
+| 0.1 (set on 2026-11-23) | 77 | 39, one a repaired case | 27 | 8 | 0 | 60.68 |
 | 0.2 | 72 | 39 | 31 | 0 | 0 | 60.77 |
 
 With 0.1, the rows are 43% of the count at 98% of the weight, every repaired case keeps one repairing row and
-no row says to stop before looking. Whether to set it is the user's call before stage B. `rl_forks.json` is
-read from the cell's source, and the deploy script does not move the source while a job of this cell is queued:
-a changed `min_gain` waits for stage A's chain or needs a second source folder.
+no row says to stop before looking. **The user set it on 2026-11-23 ("Yes, set 0.1"): `rl_forks.json` and
+`rl_forks_smoke.json` hold 0.1, in the repository only.** `rl_forks.json` is read from the cell's source, and
+the deploy script does not move the source while a job of this cell is queued: the change reaches the cluster
+with the next deploy, after stage A's chain or through a second source folder, and a deploy needs the user's
+word.
 
 **The training probe, completed 2026-11-22 at 19:30 UTC** (parts 24090446 to 24090449, close 24090450; one
 preemption, no traceback; 11.6 card-hours against an estimate of 12.5). A seeded sample of 100 of the 502
@@ -421,9 +427,9 @@ that only save actions, 85 are in the 23 cases no forced step repairs and 23 are
 
 | `min_gain` (all 100 cases) | Rows | Repairing rows | `finish` rows above 0.2 | `finish` rows at most 0.2 | `finish` rows at the first state | Weight |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 (as in `rl_forks.json`) | 339 | 169 | 46 | 119 | 23 | 113.23 |
+| 0 (as in `rl_forks.json` when the probes ran) | 339 | 169 | 46 | 119 | 23 | 113.23 |
 | 0.035 | 168 | 98 | 46 | 20 | 1 | 111.66 |
-| 0.1 | 130 | 76 | 46 | 4 | 1 | 110.09 |
+| 0.1 (set on 2026-11-23) | 130 | 76 | 46 | 4 | 1 | 110.09 |
 | 0.2 | 126 | 74 | 48 | 0 | 0 | 109.78 |
 
 With 0.1 the rows are 38% of the count at 97% of the weight. What it buys is mostly what is taught, not time:
@@ -522,8 +528,9 @@ The smoke's stored records read with the new comparison (they predate the given 
 | Total weight | 9.33 | 4.09 |
 
 The four `finish` rows that remain are all in the case nothing repairs. Each says "stop one state earlier" and is
-worth the actions it saves (0.01 to 0.03), 2% of the weight. `forks.min_gain` above 0.03 would drop them; it is 0
-in `rl_forks.json`. Whether stage B should teach stopping earlier on a case it cannot repair is the user's call.
+worth the actions it saves (0.01 to 0.03), 2% of the weight. `forks.min_gain` above 0.03 would drop them; it was
+0 in `rl_forks.json` then. After the probes the user set it to 0.1 (2026-11-23, section 9), so stage B does not
+teach stopping earlier for the actions saved alone.
 
 Also changed: the update reads a stored record with its own `min_gain` (`stored_forks` asks `better_branches`
 again), so a case's file keeps the observation of every state with a carried-out branch above the greedy return;
