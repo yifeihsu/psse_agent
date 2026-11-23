@@ -3,7 +3,10 @@
 **Status: REDEPLOYED 2026-11-22 at 98e6518; stage A's run and both probes are SUBMITTED** (section 9:
 `mrp-steps` 24090332 to 24090338, `mrp-probe-dev` 24090400 to 24090402, `mrp-probe-train` 24090446 to 24090450).
 **Both probes are done: one forced step repairs 39 of the 49 unrepaired development cases and 74 of 97
-unrepaired training cases (section 9).** Stage A was in its first update at 19:35 UTC.
+unrepaired training cases (section 9).** Stage A finished its first eight-step update at 02:17 UTC on
+2026-11-23 (section 9): the mean drift is as in the smoke; the eighth step's KL to the supervised model is 2.76
+against 0.06 at the seventh, carried by one token. Its first evaluation (after 17 steps) is expected between
+08:15 and 09:15 UTC.
 Both smokes completed and passed their checks on d6b7cfc. The probe's smoke showed that stage B would have
 picked contradictory rows; how a fork row is picked was changed the same day (section 10) and is in the deployed
 source. The user's word so far: "Yes, deploy and smoke", then "Yes, all three" (the redeploy, stage A's run and
@@ -427,6 +430,61 @@ With 0.1 the rows are 38% of the count at 97% of the weight. What it buys is mos
 at 24 unrepaired cases an iteration the difference is about 80 rows against about 30, some 10 minutes of an
 update. The one row that remains at the first state is a thinned one: a margin of 0.10 at the second state is
 not above the threshold and passes to the first state, which is kept at 0.11 (a case no forced step repairs).
+
+**Stage A's first two updates, read 2026-11-23 at 02:24 UTC** (the first link, 24090332; one preemption at
+about 22:41 UTC, as the second update began, moved it from gr103 to gh101; no traceback; integrity ok in both
+iterations; peak memory 66.9 GB, mean utilization 96%). Iteration 2's rollout began at 02:17 UTC.
+
+| What | Iteration 0 (the supervised model samples) | Iteration 1 (one step later) |
+| --- | --- | --- |
+| Rollout, 256 episodes | repaired 72, false claims 95, declared unresolved 74, out of actions 15 | repaired 95, false claims 108, declared unresolved 52, out of actions 1 |
+| The 24 unrepaired cases drawn of 502 | 5 with a repaired sample, 19 with none; 10 of 192 episodes repaired | 13 with a repaired sample (one with all eight), 11 with none; 42 of 192 episodes repaired |
+| The 8 repaired cases drawn of 1,591 | 62 of 64 episodes repaired; 2 cases with an unrepaired sample | 53 of 64; 4 cases with an unrepaired sample |
+| Truth-built examples kept | 19, 87 rows | 11, 51 rows |
+| Rows | 1,077: 932 policy, 58 for the KL term alone, 87 supervised | 1,223: 1,159 policy, 13 for the KL term alone, 51 supervised |
+| Update | 1 step, the optimizer new; 4.03 h | 8 steps on 202, 146, 156, 140, 164, 119, 147 and 149 rows, the optimizer carried (1 step before, 9 after); 3.50 h |
+| Gradient norm before the clip at 1.0 | 4.05 | 1.52, 2.28, 1.87, 4.19, 2.44, 4.21, 1.87, 3.80 |
+
+The two rollouts are not a comparison: each iteration draws other cases. For reference, the focused run's three
+rollouts, from nearly the same model, repaired 28, 31 and 25 of 192 episodes on the unrepaired cases drawn and
+64, 60 and 61 of 64 on the repaired ones. Iteration 1's 42 of 192 is above all of these and its 53 of 64 below
+all of them; with 24 and 8 cases a draw, neither is a result.
+
+The eight steps of iteration 1's update:
+
+| Step | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Mean absolute log-ratio to the sampler, all tokens | 0.0037 | 0.0092 | 0.0091 | 0.0076 | 0.019 | 0.028 | 0.031 | 0.023 |
+| The same on uncertain tokens | 0.039 | 0.124 | 0.141 | 0.139 | 0.208 | 0.273 | 0.298 | 0.271 |
+| The largest on one token | 0.42 | 1.61 | 1.91 | 1.15 | 3.29 | 2.49 | 3.00 | 7.67 |
+| Mean log-ratio to the sampler (signed) | -0.0007 | -0.0020 | -0.0019 | -0.0015 | -0.0091 | -0.0130 | -0.0170 | -0.0145 |
+| KL to the supervised model | 0.0044 | 0.0150 | 0.0030 | 0.0075 | 0.0269 | 0.0380 | 0.0632 | 2.764 |
+| Largest row gradient norm before the row bound of 1.0 | 1.26 | 0.80 | 22.6 | 0.77 | 1.64 | 5.32 | 2.02 | 508 |
+| Rows the row bound cut | 2 | 0 | 3 | 0 | 1 | 1 | 1 | 7 |
+| Median row gradient norm | 1.7e-4 | 8.1e-4 | 7.1e-5 | 2.3e-4 | 9.4e-4 | 1.5e-3 | 5.3e-3 | 6.0e-3 |
+
+- **The mean drift is what the smoke showed.** On uncertain tokens it rises to 0.27 to 0.30 by the sixth step
+  and stays there (the smoke reached 0.30 at its fourth step). The signed mean is negative and grows: the model
+  moves away from what it sampled, as a batch with a mean advantage of -0.034 asks.
+- **The model moves much further than in the focused run.** The KL to the supervised model is 0.063 at the
+  seventh step: three times the smoke's 0.021 after five steps and about twenty times the focused run's whole
+  movement (0.0033). The median row gradient norm grows 35 times over the eight steps.
+- **The eighth step's KL of 2.76 is not a general drift.** That step's mean gap is lower than the seventh's
+  (0.023 against 0.031). The estimate is exponential in the gap (e^d - d - 1 on each sampled token, d the
+  supervised model's log-probability less the model's), and the step holds one token 7.67 nats from the sampler
+  and one row whose gradient norm is 508 before the row bound, against 0.8 to 23 for the largest row of the
+  other steps. One token about 9 nats below the supervised model, in a row of the mean length of 18 tokens,
+  gives 2.76 as the mean of 149 rows. **This is read from the step's totals: the run keeps
+  no record by row (`step_diagnostics` is off), so the row and the token are not known.**
+- **What it means.** After seven steps the model gives one sampled token of a case this update had not trained
+  on yet a probability some thousands of times lower than the model that sampled it: a decision has swung hard
+  somewhere. That is the movement the focused run could not make, and it is the risk the halving rule is for.
+  The KL term pulled back on that row with the row bound's strength and no more (508 cut to 1.0).
+
+Time: 10.7 h for the two iterations (rollouts about 1.5 and 1.2 h, updates 4.03 and 3.50 h, at most 25
+minutes lost to the preemption). At this pace nine iterations and three evaluations take about 52 h, inside the
+planned 41 to 55. The first evaluation (iteration 2, after 17 steps) is expected between 08:15 and 09:15 UTC on
+2026-11-23; it is the planned check, and nothing was changed or cancelled on this reading.
 
 ## 10. What the probe's smoke changed (2026-11-22; deployed at 98e6518 before the probes)
 

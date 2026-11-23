@@ -5,7 +5,9 @@ redeployed at 98e6518, and stage A's run and both probes are submitted** (`mrp-s
 `mrp-probe-dev` 24090400 to 24090402, `mrp-probe-train` 24090446 to 24090450). The development probe is
 done: one forced step repairs 39 of the 49 unrepaired development cases a truth-built sequence repairs (a
 labelled upper bound; 14 of them are repaired after a refused call too). The training probe is done too:
-74 of 97 unrepaired training cases, 42 of them by a breaker step where the model fits a line. The user
+74 of 97 unrepaired training cases, 42 of them by a breaker step where the model fits a line. Stage A
+finished its first eight-step update on 2026-11-23 at 02:17 UTC (KL to the supervised model 0.063 at the
+seventh step, 2.76 at the eighth through one token); its first evaluation is the next reading. The user
 approved the build
 ("Yes, build both"), the deploy and the smokes ("Yes, deploy and smoke"), then the redeploy, stage A's run and
 both probes ("Yes, all three"). The cell is `research/hpc/minimal_rl_20261122`; its README has the order of
