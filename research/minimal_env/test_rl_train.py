@@ -58,6 +58,10 @@ def _key(observation: dict) -> tuple[int, float]:
 
 def setUpModule() -> None:
     global KERNEL
+    if ROOTS:
+        # Built already: another test module borrowed these fixtures (the status test of
+        # research/hpc/minimal_rl_20261122), and a second build would list every case twice.
+        return
     from research.compound_errors.build_suite import envelope_of
 
     generator = Round0ScenarioGenerator(seed=11, **GENERATOR_OPTIONS)
