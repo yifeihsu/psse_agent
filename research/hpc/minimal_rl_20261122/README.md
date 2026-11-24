@@ -13,8 +13,9 @@ Both smokes completed and passed their checks on d6b7cfc. The probe's smoke show
 picked contradictory rows; how a fork row is picked was changed the same day (section 10) and is in the deployed
 source. The user's word so far: "Yes, deploy and smoke", then "Yes, all three" (the redeploy, stage A's run and
 both probes), then "Yes, set 0.1" on 2026-11-23: `forks.min_gain` is 0.1 in stage B's two configs, in the
-repository only; the cluster's source still holds 0. Stage B (`forks-smoke`, `forks`), any deploy, any cancel
-and any resubmission each still need the user's word.
+repository only; the cluster's source still holds 0. On 2026-11-24, with the second evaluation read, the user
+said "Let it run": stage A goes on to its third evaluation unchanged. Stage B (`forks-smoke`, `forks`), any
+deploy, any cancel and any resubmission each still need the user's word.
 
 The plan and its reasons are in `docs/minimal_rl_plan_20261122.md`. The user approved building both stages on
 2026-11-22 ("Yes, build both"), with no cluster action.
