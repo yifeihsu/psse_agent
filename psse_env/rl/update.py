@@ -94,6 +94,7 @@ FIRST_STEP_BASELINES = ("persisted", "own")
 #: ``trajectory`` (root, sample) units, or whole ``group`` units (every sample
 #: of a root).  A group's advantages sum to zero only inside one step.
 CHUNKINGS = ("trajectory", "group")
+SUPERVISED_NORMALIZATIONS = ("rows", "groups")
 REFERENCE_ADAPTER = "reference"
 TRAINED_ADAPTER = "default"
 
@@ -209,6 +210,17 @@ class UpdateSettings:
     #: Without it the diagnostics keep the row norms, the rows that carry the
     #: step, the lifecycle probabilities and the step's size, at no extra pass.
     diagnostic_components: bool = True
+    #: How supervised rows are normalized within an optimizer step: ``rows``
+    #: divides by the number of supervised rows in the step (the historical
+    #: default); ``groups`` divides by the number of groups (cases) in the step,
+    #: so a row's weight does not depend on how many other cases in the step
+    #: produced supervised rows.
+    supervised_normalization: str = "rows"
+    #: Multiply ``max_row_grad_norm`` on a supervised row by its weight
+    #: (``lifecycle_term``), which clips the unweighted score gradient and
+    #: preserves the relative weights between high-margin repairs and smaller
+    #: margins.
+    scale_supervised_row_bound: bool = False
 
     @property
     def bounds_rows(self) -> bool:
@@ -258,6 +270,12 @@ class UpdateSettings:
             raise ValueError("diagnostic_top_rows must be a nonnegative integer")
         if not isinstance(self.diagnostic_components, bool):
             raise ValueError("diagnostic_components must be true or false")
+        if self.supervised_normalization not in SUPERVISED_NORMALIZATIONS:
+            raise ValueError(
+                f"supervised_normalization must be one of {SUPERVISED_NORMALIZATIONS}, got {self.supervised_normalization!r}"
+            )
+        if not isinstance(self.scale_supervised_row_bound, bool):
+            raise ValueError("scale_supervised_row_bound must be true or false")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -284,6 +302,13 @@ class RowGradientBound:
                 median = nonzero[middle] if len(nonzero) % 2 else 0.5 * (nonzero[middle - 1] + nonzero[middle])
                 bounds.append(float(self.settings.row_grad_norm_factor) * median)
         return min(bounds) if bounds else None
+
+    def bound_for(self, row: TrainingRow | None = None) -> float | None:
+        """The bound applied to ``row`` (scaled by ``lifecycle_term`` on supervised rows when configured)."""
+        limit = self.bound()
+        if limit is not None and row is not None and row.supervised and self.settings.scale_supervised_row_bound:
+            return limit * float(row.lifecycle_term)
+        return limit
 
     def record(self, norm: float, *, clipped: bool, dropped: bool) -> None:
         if dropped:
@@ -345,25 +370,26 @@ class OnPolicyCheck:
         self.uncertain_sum_abs = float(state.get("uncertain_sum_abs") or 0.0)
         self.uncertain_max_abs = float(state.get("uncertain_max_abs") or 0.0)
 
-    def record(self, logprobs: Any, sampling_logprobs: Any | None) -> None:
+    def record(self, logprobs: Any, sampling_logprobs: Any | None, *, weight: int = 1) -> None:
         """Compare one row's recomputed log-probabilities (shape ``[n]``) with its recorded ones."""
+        copies = max(1, int(weight))
         if sampling_logprobs is None:
-            self.rows_without_record += 1
+            self.rows_without_record += copies
             return
         recorded = sampling_logprobs.detach().float().reshape(-1)
         delta = logprobs.detach().float().reshape(-1) - recorded
-        self.rows += 1
+        self.rows += copies
         count = int(delta.numel())
-        self.tokens += count
+        self.tokens += copies * count
         if count:
-            self.sum_abs += float(delta.abs().sum())
-            self.sum += float(delta.sum())
+            self.sum_abs += copies * float(delta.abs().sum())
+            self.sum += copies * float(delta.sum())
             self.max_abs = max(self.max_abs, float(delta.abs().max()))
-            self.beyond += int((delta.abs() > self.threshold).sum())
+            self.beyond += copies * int((delta.abs() > self.threshold).sum())
             uncertain = delta[recorded < self.UNCERTAIN_LOGPROB]
             if int(uncertain.numel()):
-                self.uncertain_tokens += int(uncertain.numel())
-                self.uncertain_sum_abs += float(uncertain.abs().sum())
+                self.uncertain_tokens += copies * int(uncertain.numel())
+                self.uncertain_sum_abs += copies * float(uncertain.abs().sum())
                 self.uncertain_max_abs = max(self.uncertain_max_abs, float(uncertain.abs().max()))
 
     def state(self) -> dict[str, Any]:
@@ -479,6 +505,8 @@ def batch_digest(rows: Sequence[TrainingRow]) -> str:
     for row in rows:
         head = [str(row.root), int(row.sample_index), int(row.step), repr(float(row.advantage)), repr(float(row.lifecycle_term)),
                 row_kind(row), len(row.input_ids), int(row.completion_tokens)]
+        if int(row.multiplicity) != 1 or row.policy_multiplicity is not None:
+            head.extend([int(row.multiplicity), int(row.effective_policy_multiplicity)])
         digest.update(json.dumps(head, separators=(",", ":")).encode("utf-8"))
         digest.update(prompt_token_digest(row.input_ids).encode("ascii"))
     return digest.hexdigest()
@@ -1064,10 +1092,11 @@ def _chunk_weights(rows: Sequence[TrainingRow], chunk: Sequence[int]) -> dict[st
     # Supervised rows are outside the KL normalization too: their completion was not sampled.
     sampled = [index for index in chunk if not rows[index].supervised]
     return {
-        "tokens": sum(rows[index].completion_tokens for index in sampled),
-        "policy_tokens": sum(rows[index].completion_tokens for index in policy),
-        "rows": len(sampled),
-        "policy_rows": len(policy),
+        "tokens": sum(int(rows[index].multiplicity) * rows[index].completion_tokens for index in sampled),
+        "policy_tokens": sum(int(rows[index].effective_policy_multiplicity) * rows[index].completion_tokens for index in policy),
+        "rows": sum(int(rows[index].multiplicity) for index in sampled),
+        "policy_rows": sum(int(rows[index].effective_policy_multiplicity) for index in policy),
+        "groups": len({rows[index].root for index in chunk}),
         "lifecycle_rows": sum(1 for index in sampled if rows[index].lifecycle_term),
         "supervised_rows": len(chunk) - len(sampled),
         "trajectories": len({rows[index].trajectory_key for index in sampled}),
@@ -1364,10 +1393,13 @@ def policy_gradient_update(
             model.eval()
             with torch.no_grad():
                 for index in range(len(training_old), len(rows)):
-                    training_old.append(
-                        completion_logprobs(model, rows[index], use_logits_to_keep=settings.use_logits_to_keep,
-                                            temperature=settings.temperature).detach().float().cpu()
-                    )
+                    if rows[index].supervised:
+                        training_old.append(None)
+                    else:
+                        training_old.append(
+                            completion_logprobs(model, rows[index], use_logits_to_keep=settings.use_logits_to_keep,
+                                                temperature=settings.temperature).detach().float().cpu()
+                        )
                     if checkpoint is not None and (index + 1) % checkpoint.every_rows == 0 and index + 1 < len(rows):
                         _save_tensors(checkpoint.directory / PARTIAL_BASELINE_FILE,
                                       {"rows": len(rows), "logprobs": training_old, "batch_digest": digest}, torch)
@@ -1412,8 +1444,10 @@ def policy_gradient_update(
             chunk_lifecycle = partial_lifecycle
             chunk_supervised = partial_supervised
         weight = weights[chunk_index]
+        chunk_row_multiplicity = sum(int(rows[index].multiplicity) for index in chunk)
         for position in range(first_row, len(chunk)):
             row = rows[chunk[position]]
+            multiplicity = int(row.multiplicity)
             kl_term = None
             # The row's loss by term, for the diagnostics alone; the step's gradient comes from ``loss``.
             components: dict[str, Any] = {}
@@ -1424,7 +1458,8 @@ def policy_gradient_update(
                 logprobs = completion_logprobs(
                     model, row, use_logits_to_keep=settings.use_logits_to_keep, temperature=settings.temperature
                 )
-                supervised_scale = 1.0 / max(1, weight["supervised_rows"])
+                supervised_denom = weight["groups"] if settings.supervised_normalization == "groups" else weight["supervised_rows"]
+                supervised_scale = 1.0 / max(1, supervised_denom)
                 supervised_term = -(logprobs.mean()) * float(row.lifecycle_term)
                 loss = supervised_term * supervised_scale
                 components["supervised"] = loss
@@ -1440,8 +1475,8 @@ def policy_gradient_update(
                 sampler_old = None
                 if row.sampling_logprobs is not None and len(row.sampling_logprobs) == int(logprobs.shape[0]):
                     sampler_old = torch.tensor(list(row.sampling_logprobs), dtype=logprobs.dtype, device=logprobs.device)
-                check.record(logprobs, sampler_old)
-                if training_old is not None:
+                check.record(logprobs, sampler_old, weight=multiplicity)
+                if training_old is not None and training_old[chunk[position]] is not None:
                     clip_old = training_old[chunk[position]].to(device=logprobs.device, dtype=logprobs.dtype)
                 else:
                     clip_old = sampler_old
@@ -1450,7 +1485,7 @@ def policy_gradient_update(
                 # update that ran no baseline pass has nothing to compare with.
                 if settings.clip_ratio is not None and not (own_first_step and training_old is None
                                                             and settings.clip_reference == "training"):
-                    clip_check.record(logprobs, clip_old)
+                    clip_check.record(logprobs, clip_old, weight=multiplicity)
                 if own_first_step and chunk_index == 0:
                     clip_old = logprobs.detach()
                 # A lifecycle-only row has no policy term; a preservation row keeps
@@ -1494,19 +1529,21 @@ def policy_gradient_update(
                     if diagnostics is not None:
                         components["lifecycle"] = lifecycle_term.mean() * lifecycle_scale
                 if kl_term is not None:
-                    loss = loss + settings.beta_kl * reduce(kl_term) * kl_scale
+                    kl_loss = settings.beta_kl * float(multiplicity) * reduce(kl_term) * kl_scale
+                    loss = loss + kl_loss
                     if diagnostics is not None:
-                        components["kl"] = settings.beta_kl * reduce(kl_term) * kl_scale
+                        components["kl"] = kl_loss
             if diagnostics is not None:
                 norm, clipped, finite = _diagnosed_row_backward(loss, components if settings.diagnostic_components else {},
-                                                                parameters, bound, diagnostics, torch, bounded=settings.bounds_rows)
+                                                                parameters, bound, diagnostics, torch, bounded=settings.bounds_rows,
+                                                                row=row)
                 diagnostics.record_row(chunk[position], row, norm=norm, clipped=clipped, dropped=not finite, logprobs=logprobs)
             elif settings.bounds_rows:
-                _bounded_row_backward(loss, parameters, bound, torch)
+                _bounded_row_backward(loss, parameters, bound, torch, row=row)
             else:
                 loss.backward()
             if kl_term is not None:
-                chunk_kl += float(kl_term.mean().detach()) / max(1, len(chunk))
+                chunk_kl += float(multiplicity) * float(kl_term.mean().detach()) / max(1, chunk_row_multiplicity)
             done = position + 1
             if checkpoint is not None and done < len(chunk) and done % checkpoint.every_rows == 0:
                 _save_partial(checkpoint, model, optimizer,
@@ -1628,7 +1665,9 @@ def _policy_term(logprobs: Any, old_logprobs: Any | None, advantage: float, clip
     return -torch_module.minimum(ratio * advantage, clipped * advantage)
 
 
-def _bounded_row_backward(loss: Any, parameters: Sequence[Any], bound: RowGradientBound, torch_module: Any) -> None:
+def _bounded_row_backward(
+    loss: Any, parameters: Sequence[Any], bound: RowGradientBound, torch_module: Any, *, row: TrainingRow | None = None
+) -> None:
     """Backpropagate one row alone, clip its gradient to the row bound and add it to the step's sum.
 
     The step's accumulated gradient is held aside while the row's own
@@ -1640,7 +1679,7 @@ def _bounded_row_backward(loss: Any, parameters: Sequence[Any], bound: RowGradie
     for parameter in parameters:
         parameter.grad = None
     loss.backward()
-    limit = bound.bound()
+    limit = bound.bound_for(row)
     norm = float(torch_module.nn.utils.clip_grad_norm_(parameters, max_norm=limit if limit is not None else float("inf")))
     finite = math.isfinite(norm)
     bound.record(norm, clipped=bool(finite and limit is not None and norm > limit), dropped=not finite)
@@ -1656,7 +1695,7 @@ def _bounded_row_backward(loss: Any, parameters: Sequence[Any], bound: RowGradie
 
 def _diagnosed_row_backward(
     loss: Any, components: Mapping[str, Any], parameters: Sequence[Any], bound: RowGradientBound, diagnostics: StepDiagnostics,
-    torch_module: Any, *, bounded: bool,
+    torch_module: Any, *, bounded: bool, row: TrainingRow | None = None,
 ) -> tuple[float, bool, bool]:
     """One row's backward pass in a step with diagnostics; returns the row's norm, whether it was clipped, whether it was finite.
 
@@ -1674,7 +1713,7 @@ def _diagnosed_row_backward(
         parameter.grad = None
     names = [name for name, term in components.items() if term is not None and getattr(term, "requires_grad", False)]
     loss.backward(retain_graph=len(names) > 1)
-    limit = bound.bound() if bounded else None
+    limit = bound.bound_for(row) if bounded else None
     norm = float(torch_module.nn.utils.clip_grad_norm_(parameters, max_norm=limit if limit is not None else float("inf")))
     finite = math.isfinite(norm)
     clipped = bool(finite and limit is not None and norm > limit)
@@ -1753,7 +1792,10 @@ def _partial_baseline(checkpoint: UpdateCheckpoint | None, rows: Sequence[Traini
         not isinstance(payload, Mapping)
         or int(payload.get("rows", -1)) != len(rows)
         or len(saved) > len(rows)
-        or any(len(entry) != rows[index].completion_tokens for index, entry in enumerate(saved))
+        or any(
+            (entry is not None) if rows[index].supervised else (entry is None or len(entry) != rows[index].completion_tokens)
+            for index, entry in enumerate(saved)
+        )
         or (digest is not None and payload.get("batch_digest") and str(payload["batch_digest"]) != digest)
     ):
         raise RuntimeError("the partial clip baseline was written for a different batch of rows")

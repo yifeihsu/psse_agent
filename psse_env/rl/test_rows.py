@@ -207,7 +207,32 @@ class RowSettingsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             RowSettings(preservation="some").validate()
         with self.assertRaises(ValueError):
+            RowSettings(merge_shared_steps="yes").validate()  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
             RowSettings.from_mapping({"preservation": "one", "bogus": 1})
+
+    def test_merge_shared_steps_collapses_identical_group_prefixes_and_zeros_all_sample_steps(self) -> None:
+        # Four trajectories of one group share step 0 (one repairs at +1.0, three fail at -0.5) and diverge at step 1.
+        trajectories = []
+        for sample, second_completion in enumerate(([9, 1], [9, 2], [9, 2], [9, 3])):
+            t = _trajectory("g", sample, steps=2, with_probabilities=True, digest="match")
+            t.steps[1].completion_token_ids = list(second_completion)
+            t.steps[1].token_probabilities = [0.5, 0.5]
+            trajectories.append(t)
+        advantages = group_advantages([1.0, -0.5, -0.5, -0.5], root="g", scale="none")
+        plain, plain_report = _build([(trajectories, advantages)], require_prompt_digest=True)
+        merged, merged_report = _build([(trajectories, advantages)], require_prompt_digest=True, merge_shared_steps=True)
+        self.assertEqual((len(plain), plain_report["rows"]), (8, 8))
+        # Step 0 merges all 4 -> 1 row (zero net advantage); step 1 merges samples 1 & 2 -> 3 rows; total 4 rows.
+        self.assertEqual((len(merged), merged_report["rows"], merged_report["policy_rows"], merged_report["shared_steps_merged"]),
+                         (4, 4, 4, 4))
+        shared = merged[0]
+        self.assertEqual((shared.step, shared.advantage, shared.multiplicity, shared.effective_policy_multiplicity), (0, 0.0, 4, 4))
+        by_completion = {tuple(row.input_ids[-2:]): row for row in merged[1:]}
+        self.assertAlmostEqual(by_completion[(9, 1)].advantage, advantages.advantages[0])
+        self.assertEqual(by_completion[(9, 1)].multiplicity, 1)
+        self.assertAlmostEqual(by_completion[(9, 2)].advantage, advantages.advantages[1] + advantages.advantages[2])
+        self.assertEqual((by_completion[(9, 2)].multiplicity, by_completion[(9, 2)].effective_policy_multiplicity), (2, 2))
 
 
 def _with_decisions(trajectory: Trajectory, decisions) -> Trajectory:

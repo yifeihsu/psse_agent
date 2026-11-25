@@ -50,7 +50,16 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from psse_env.minimal import observation as view
-from psse_env.minimal.actions import FINISH, OUTCOMES, OUTCOME_UNRESOLVED, tool_schemas
+from psse_env.minimal.actions import (
+    CORRECTION_TOOLS,
+    FINISH,
+    INSPECT,
+    OUTCOMES,
+    OUTCOME_UNRESOLVED,
+    VIEW_BREAKERS,
+    VIEW_ESTIMATE,
+    tool_schemas,
+)
 from psse_env.minimal.env import MinimalDiagnosisEnv
 from psse_env.minimal.episode import run_episode
 from psse_env.minimal.scoring import RewardWeights
@@ -93,6 +102,19 @@ class ForkSettings:
     min_gain: float = 0.0
     #: Further branches per tool whose forced call a sampling policy writes (0: none).
     argument_samples: int = 0
+    #: Further sampled branches of the own episode's tool alone when that tool is a correction tool
+    #: (``correct_topology``, ``correct_parameters``, ``correct_measurements``), so wrong-object turns are
+    #: explored without sampling every other tool (0: none).
+    own_tool_samples: int = 0
+    #: End a branch immediately after a forced call the environment refused (``better_branches`` never teaches
+    #: a refused call; ``False`` keeps the continuation for diagnostics such as ``fork_probe``).
+    stop_on_refused_call: bool = False
+    #: Treat a forced ``inspect`` whose requested tables and breaker flips are already shown at that state as a
+    #: no-op: end the branch without running its continuation and never select it in ``better_branches``.
+    ignore_noop_inspect: bool = False
+    #: Skip forking states preceded by more than this many consecutive refused calls in the own episode, avoiding
+    #: 16-state runaway refusal loops (``None``: fork every state).
+    max_consecutive_refused_states: int | None = None
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any] | None) -> "ForkSettings":
@@ -113,8 +135,16 @@ class ForkSettings:
                 raise ValueError(f"forks.{name} must be finite and nonnegative")
         if self.enabled and not float(self.weight) > 0.0:
             raise ValueError("forks.weight must be positive when forks are enabled")
-        if isinstance(self.argument_samples, bool) or not isinstance(self.argument_samples, int) or self.argument_samples < 0:
-            raise ValueError("forks.argument_samples must be a nonnegative integer")
+        for name in ("argument_samples", "own_tool_samples"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"forks.{name} must be a nonnegative integer")
+        for name in ("stop_on_refused_call", "ignore_noop_inspect"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"forks.{name} must be true or false")
+        cap = self.max_consecutive_refused_states
+        if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int) or cap < 0):
+            raise ValueError("forks.max_consecutive_refused_states must be a nonnegative integer when set")
 
 
 # ------------------------------------------------------------------ states
@@ -136,6 +166,39 @@ def signature(action: Any) -> str:
     if isinstance(action, Mapping):
         return json.dumps({"tool": action.get("tool"), "arguments": action.get("arguments") or {}}, sort_keys=True, default=str)
     return f"text:{action!r}"
+
+
+def is_noop_inspect(observation: Mapping[str, Any], action: Any) -> bool:
+    """Whether ``action`` is an ``inspect`` call whose requested tables and breaker flips are already shown."""
+    if not isinstance(action, Mapping) or action.get("tool") != INSPECT:
+        return False
+    arguments = action.get("arguments")
+    if not isinstance(arguments, Mapping):
+        return False
+    target_version = arguments.get("version", observation.get("current_version"))
+    if isinstance(target_version, bool) or not isinstance(target_version, int):
+        return False
+    versions = {int(entry["version"]): entry for entry in observation.get("versions") or [] if "version" in entry}
+    entry = versions.get(int(target_version))
+    if not isinstance(entry, Mapping):
+        return False
+    kind = arguments.get("view")
+    if kind == VIEW_ESTIMATE:
+        return "meters" in (entry.get("estimate") or {})
+    if kind == VIEW_BREAKERS:
+        substation = entry.get("substation")
+        if not isinstance(substation, Mapping) or "breakers" not in substation:
+            return False
+        flips = arguments.get("flip") or []
+        if not flips:
+            return True
+        tested = {
+            str(row.get("cb"))
+            for row in substation.get("breakers") or []
+            if isinstance(row, Mapping) and row.get("flip_chi_square") is not None
+        }
+        return all(str(name) in tested for name in flips)
+    return False
 
 
 def class_of(root: Mapping[str, Any]) -> str:
@@ -185,7 +248,8 @@ class ForkPolicy:
     """
 
     def __init__(self, policy: Any, *, prefix: Sequence[Any], digests: Sequence[str], tool: str,
-                 forced_policy: Any | None = None, seen: set[str] | None = None, given: Mapping[str, Any] | None = None) -> None:
+                 forced_policy: Any | None = None, seen: set[str] | None = None, given: Mapping[str, Any] | None = None,
+                 stop_on_refused_call: bool = False, ignore_noop_inspect: bool = False) -> None:
         if len(digests) != len(prefix) + 1:
             raise ValueError("a fork needs the digest of every state up to its own: one more than its prefix has actions")
         if given is not None and given.get("tool") != str(tool):
@@ -197,12 +261,16 @@ class ForkPolicy:
         self._digests = [str(value) for value in digests]
         self.tool = str(tool)
         self._seen = seen
+        self._stop_on_refused_call = bool(stop_on_refused_call)
+        self._ignore_noop_inspect = bool(ignore_noop_inspect)
         self._position = 0
         self._acting: Any = None
         self.drifted_at: int | None = None
         self.forced: Any = _NOT_CALLED
         self.forced_generation: dict[str, Any] | None = None
         self.status: str = STATUS_NO_CALL
+        self.noop: bool = False
+        self.stopped_early: bool = False
 
     @property
     def last_action_metrics(self) -> Any:
@@ -216,7 +284,7 @@ class ForkPolicy:
         index = self._position
         self._position += 1
         self._acting = None
-        if self.status in (STATUS_DRIFTED, STATUS_INVALID, STATUS_DUPLICATE):
+        if self.status in (STATUS_DRIFTED, STATUS_INVALID, STATUS_DUPLICATE) or self.noop or self.stopped_early:
             return self._leave()  # the environment's budget, not this policy, ends an episode that goes on
         if index <= len(self._prefix) and state_digest(observation) != self._digests[index]:
             self.drifted_at = index
@@ -225,6 +293,11 @@ class ForkPolicy:
         if index < len(self._prefix):
             return copy.deepcopy(self._prefix[index])
         if index > len(self._prefix):
+            if self._stop_on_refused_call and index == len(self._prefix) + 1:
+                history = observation.get("history") or []
+                if history and ((history[-1].get("result") or {}).get("status") != "ok"):
+                    self.stopped_early = True
+                    return self._leave()
             self._acting = self._policy
             return self._policy.act(observation)
         if self._given is not None:
@@ -242,6 +315,9 @@ class ForkPolicy:
         if self._seen is not None and signature(self.forced) in self._seen:
             self.status = STATUS_DUPLICATE
             return self._leave()
+        if self._ignore_noop_inspect and is_noop_inspect(observation, self.forced):
+            self.noop = True
+            self.stopped_early = True
         self.status = STATUS_RAN
         return copy.deepcopy(self.forced)
 
@@ -257,14 +333,16 @@ def _brief_action(action: Any) -> Any:
 
 def run_branch(root: Mapping[str, Any], *, env: MinimalDiagnosisEnv, policy: Any, prefix: Sequence[Any],
                digests: Sequence[str], tool: str, weights: RewardWeights | None = None, forced_policy: Any | None = None,
-               seen: set[str] | None = None, given: Mapping[str, Any] | None = None) -> dict[str, Any]:
+               seen: set[str] | None = None, given: Mapping[str, Any] | None = None,
+               stop_on_refused_call: bool = False, ignore_noop_inspect: bool = False) -> dict[str, Any]:
     """One branch: the prefix replayed, ``tool`` forced at the state after it, the policy to the end.
 
     ``return`` and the outcome are those of the whole episode, as scored for any episode; they mean something
     only for a branch whose ``status`` is ``ran``.  ``executed`` says whether the environment carried the forced
     call out (a call it refused changed nothing).  ``given`` is a whole call the harness gives as the forced one.
     """
-    fork = ForkPolicy(policy, prefix=prefix, digests=digests, tool=tool, forced_policy=forced_policy, seen=seen, given=given)
+    fork = ForkPolicy(policy, prefix=prefix, digests=digests, tool=tool, forced_policy=forced_policy, seen=seen, given=given,
+                      stop_on_refused_call=stop_on_refused_call, ignore_noop_inspect=ignore_noop_inspect)
     episode = run_episode(env, root, fork, weights=weights, keep_observations=False)
     at = len(prefix)
     steps = episode["steps"]
@@ -291,6 +369,10 @@ def run_branch(root: Mapping[str, Any], *, env: MinimalDiagnosisEnv, policy: Any
         "continuation": [_brief_action(step.get("action")) for step in steps[at + 1:]],
         "seconds": episode["seconds"],
     })
+    if fork.noop:
+        record["noop"] = True
+    if fork.stopped_early:
+        record["stopped_early"] = True
     return record
 
 
@@ -310,7 +392,7 @@ def better_branches(record: Mapping[str, Any], min_gain: float = 0.0) -> list[di
     own = float(record["own"]["return"])
     best: dict[int, dict[str, Any]] = {}
     for position, branch in enumerate(record.get("branches") or []):
-        if branch.get("status") != STATUS_RAN or not branch.get("executed"):
+        if branch.get("status") != STATUS_RAN or not branch.get("executed") or branch.get("noop"):
             continue
         state = int(branch["state"])
         held = best.get(state)
@@ -337,7 +419,7 @@ def states_above_the_own_return(record: Mapping[str, Any]) -> list[int]:
     whatever ``min_gain`` it is asked with."""
     own = float(record["own"]["return"])
     return sorted({int(branch["state"]) for branch in record.get("branches") or []
-                   if branch.get("status") == STATUS_RAN and branch.get("executed")
+                   if branch.get("status") == STATUS_RAN and branch.get("executed") and not branch.get("noop")
                    and float(branch["return"]) > own + _GAIN_TOLERANCE})
 
 
@@ -362,10 +444,22 @@ def fork_case(root: Mapping[str, Any], *, env_factory: Callable[[], MinimalDiagn
     states = recorder.states
     digests = [state_digest(state["observation"]) for state in states]
     replay = [None if state["raised"] else state["action"] for state in states]
+    own_steps = own["steps"]
     branches: list[dict[str, Any]] = []
+    skipped_refusal_states = 0
     for index, state in enumerate(states):
         if state["raised"]:
             continue  # the policy could not answer here: neither can a forced call
+        if settings.max_consecutive_refused_states is not None:
+            consecutive = 0
+            for earlier in reversed(own_steps[:index]):
+                if (earlier.get("result") or {}).get("status") != "ok":
+                    consecutive += 1
+                else:
+                    break
+            if consecutive > int(settings.max_consecutive_refused_states):
+                skipped_refusal_states += 1
+                continue
         own_action = state["action"]
         own_tool = own_action.get("tool") if isinstance(own_action, Mapping) else None
         tools = offered_tools(state["observation"])
@@ -381,10 +475,15 @@ def fork_case(root: Mapping[str, Any], *, env_factory: Callable[[], MinimalDiagn
         if settings.argument_samples and argument_policy is not None:
             plan += [(tool, ARGUMENTS_SAMPLED, sample, None) for tool in tools if tool != FINISH
                      for sample in range(int(settings.argument_samples))]
+        if settings.own_tool_samples and argument_policy is not None and own_tool in CORRECTION_TOOLS:
+            offset = int(settings.argument_samples)
+            plan += [(str(own_tool), ARGUMENTS_SAMPLED, offset + sample, None)
+                     for sample in range(int(settings.own_tool_samples))]
         for tool, arguments, sample, given in plan:
             branch = run_branch(root, env=env_factory(), policy=policy, prefix=replay[:index], digests=digests[: index + 1],
                                 tool=tool, weights=weights, forced_policy=argument_policy if arguments == ARGUMENTS_SAMPLED else None,
-                                seen=seen, given=given)
+                                seen=seen, given=given, stop_on_refused_call=settings.stop_on_refused_call,
+                                ignore_noop_inspect=settings.ignore_noop_inspect)
             branch["arguments"] = arguments
             if sample is not None:
                 branch["sample"] = int(sample)
@@ -421,6 +520,8 @@ def fork_case(root: Mapping[str, Any], *, env_factory: Callable[[], MinimalDiagn
         "branches": branches,
         "seconds": {"own": own["seconds"], "total": round(time.perf_counter() - started, 4)},
     }
+    if skipped_refusal_states:
+        record["states_skipped_after_repeated_refusals"] = skipped_refusal_states
     record["better"] = better_branches(record, settings.min_gain)
     observations = {str(index): states[index]["observation"] for index in states_above_the_own_return(record)}
     return {"record": record, "observations": observations}
@@ -487,7 +588,7 @@ def fork_roots(scenarios: Sequence[Mapping[str, Any]], *, store: ForkStore, env_
     for number, scenario in enumerate(pending, start=1):
         case = scenario_root(scenario)
         argument_policy = None
-        if settings.argument_samples and argument_policy_factory is not None:
+        if (settings.argument_samples or settings.own_tool_samples) and argument_policy_factory is not None:
             argument_policy = argument_policy_factory(sample_seed(base_seed, case, FORK_SAMPLE))
         payload = fork_case(scenario, env_factory=env_factory, policy=policy, weights=weights, settings=settings,
                             argument_policy=argument_policy, canonical=canonical)
@@ -527,11 +628,16 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             totals[f"branches_{branch['status']}"] += 1
             if branch["status"] == STATUS_RAN and not branch.get("executed"):
                 totals["forced_calls_the_environment_refused"] += 1
+            if branch.get("noop"):
+                totals["forced_calls_noop_inspect"] += 1
+            if branch.get("stopped_early"):
+                totals["forced_calls_stopped_early"] += 1
             if "prefix_canonical" in branch:
                 totals["forced_prefixes_checked"] += 1
                 totals["forced_prefixes_canonical"] += int(bool(branch["prefix_canonical"]))
         repairing = [branch for branch in branches
-                     if branch["status"] == STATUS_RAN and branch.get("executed") and branch.get("solved")]
+                     if branch["status"] == STATUS_RAN and branch.get("executed") and not branch.get("noop")
+                     and branch.get("solved")]
         # A refused call changed nothing but the history the model reads.  A repair after one is not that call's
         # doing: it says how easily the own episode's last decisions tip, and is the floor to read the count
         # above against.
@@ -586,6 +692,6 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 __all__ = [
     "ARGUMENTS_GIVEN", "ARGUMENTS_GREEDY", "ARGUMENTS_SAMPLED", "FORK_CONTRACT", "FORK_SAMPLE", "ForkPolicy", "ForkSettings",
     "ForkStore", "STATUSES", "STATUS_DRIFTED", "STATUS_DUPLICATE", "STATUS_INVALID", "STATUS_NO_CALL", "STATUS_RAN",
-    "better_branches", "class_of", "fork_case", "fork_roots", "offered_tools", "run_branch", "signature", "state_digest",
-    "states_above_the_own_return", "summarize",
+    "better_branches", "class_of", "fork_case", "fork_roots", "is_noop_inspect", "offered_tools", "run_branch", "signature",
+    "state_digest", "states_above_the_own_return", "summarize",
 ]

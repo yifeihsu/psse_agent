@@ -952,13 +952,91 @@ class UpdateTests(unittest.TestCase):
                     dict(max_row_grad_norm=0.0), dict(row_grad_norm_factor=-1.0), dict(row_grad_norm_warmup=0),
                     dict(clip_ratio=0.0), dict(clip_ratio=1.0), dict(clip_ratio=float("nan")),
                     dict(max_on_policy_log_ratio=0.0), dict(max_on_policy_log_ratio=float("inf")),
-                    dict(chunk_by="root"), dict(carry_optimizer="yes")):
+                    dict(chunk_by="root"), dict(carry_optimizer="yes"),
+                    dict(supervised_normalization="tokens"), dict(scale_supervised_row_bound="yes")):
             with self.assertRaises(ValueError):
                 UpdateSettings(**bad).validate()
         with self.assertRaises(ValueError):
             policy_gradient_update(_TinyLM(), [], UpdateSettings())
         with self.assertRaises(ValueError):
             UpdateCheckpoint(directory=Path("."), save_model=lambda m, d: None, every_rows=0)
+
+    def test_merged_shared_steps_cancel_under_row_bounds_and_preserve_exact_kl(self) -> None:
+        # 1 repaired sample (+1.4) and 7 failed samples (-0.2 each) share step 0 ([1, 2] -> [3, 4]).
+        # With max_row_grad_norm=0.05, unmerged rows clip the +1.4 sample more than the seven -0.2 samples,
+        # creating a spurious negative gradient on the shared step; merged rows have exact zero advantage
+        # and run one forward/reference pass while matching the unmerged KL gradient to machine precision.
+        unmerged = [_group_row("a", 0, [1, 2], [3, 4], 1.4)] + [
+            _group_row("a", index, [1, 2], [3, 4], -0.2) for index in range(1, 8)
+        ]
+        merged_row = _group_row("a", 0, [1, 2], [3, 4], 0.0)
+        merged_row.multiplicity = 8
+        merged_row.policy_multiplicity = 8
+
+        base = _TinyLM(seed=4)
+        _with_record(base, unmerged)
+        _with_record(base, [merged_row])
+        ref_model = _TinyLM(seed=9)
+        ref_calls: list[int] = []
+
+        def ref_fn(row):
+            ref_calls.append(1)
+            return completion_logprobs(ref_model, row).detach()
+
+        # Pure policy under tight row bound: unmerged drifts nonzero, merged is identically zero.
+        m_unmerged = _TinyLM(seed=4)
+        rec_unmerged = _GradRecorder(m_unmerged)
+        policy_gradient_update(m_unmerged, unmerged, UpdateSettings(max_row_grad_norm=0.05, max_grad_norm=1e6),
+                               optimizer=rec_unmerged)
+        self.assertGreater(float(rec_unmerged.grad.abs().max()), 1e-3)
+
+        m_merged = _TinyLM(seed=4)
+        rec_merged = _GradRecorder(m_merged)
+        policy_gradient_update(m_merged, [merged_row], UpdateSettings(max_row_grad_norm=0.05, max_grad_norm=1e6),
+                               optimizer=rec_merged)
+        self.assertEqual(float(rec_merged.grad.abs().max()), 0.0)
+
+        # With beta_kl > 0 (no row clip): merged matches 8 unmerged KL passes in 1 reference call instead of 8.
+        m_kl_unmerged = _TinyLM(seed=4)
+        rec_kl_unmerged = _GradRecorder(m_kl_unmerged)
+        rep_unmerged = policy_gradient_update(
+            m_kl_unmerged, unmerged, UpdateSettings(beta_kl=0.04, max_grad_norm=1e6),
+            optimizer=rec_kl_unmerged, reference_logprobs=ref_fn,
+        )
+        self.assertEqual(len(ref_calls), 8)
+        ref_calls.clear()
+        m_kl_merged = _TinyLM(seed=4)
+        rec_kl_merged = _GradRecorder(m_kl_merged)
+        rep_merged = policy_gradient_update(
+            m_kl_merged, [merged_row], UpdateSettings(beta_kl=0.04, max_grad_norm=1e6),
+            optimizer=rec_kl_merged, reference_logprobs=ref_fn,
+        )
+        self.assertEqual(len(ref_calls), 1)
+        self.assertAlmostEqual(rep_merged.kl[0], rep_unmerged.kl[0], places=6)
+        self.assertTrue(torch.allclose(rec_kl_merged.grad, rec_kl_unmerged.grad, atol=1e-6))
+
+    def test_group_supervised_normalization_and_scaled_row_bound_preserve_margins(self) -> None:
+        # Two supervised rows on disjoint tokens: a repairing branch (margin 1.5) and a defensive finish (margin 0.25).
+        repair = build_step_row(root="a", sample_index=2000, step=1, advantage=0.0, prompt_ids=[1, 2], completion_ids=[3],
+                                max_length=64, lifecycle_term=1.5, supervised=True)
+        give_up = build_step_row(root="b", sample_index=2000, step=1, advantage=0.0, prompt_ids=[5, 6], completion_ids=[7],
+                                 max_length=64, lifecycle_term=0.25, supervised=True)
+        policy_anchor = _group_row("c", 0, [8, 9], [10], 0.0, preservation=True)
+
+        # Under tight max_row_grad_norm=0.01 without scaling, both supervised rows clip to the same norm (ratio ~ 1:1);
+        # with scale_supervised_row_bound=True, the 6:1 margin ratio (1.5 vs 0.25) is preserved exactly.
+        for scaled, expected_ratio in ((False, 1.0), (True, 6.0)):
+            model = _TinyLM(seed=2)
+            recorder = _GradRecorder(model)
+            settings = UpdateSettings(
+                optimizer_steps=1, chunk_by="group", max_row_grad_norm=0.01, max_grad_norm=1e6,
+                supervised_normalization="groups", scale_supervised_row_bound=scaled,
+            )
+            policy_gradient_update(model, [policy_anchor, repair, give_up], settings, optimizer=recorder)
+            repair_norm = float(recorder.grad[2].norm())
+            give_up_norm = float(recorder.grad[6].norm())
+            self.assertGreater(give_up_norm, 0.0)
+            self.assertAlmostEqual(repair_norm / give_up_norm, expected_ratio, places=3)
 
 
 if __name__ == "__main__":

@@ -87,6 +87,13 @@ class RowSettings:
     #: At most this many uninformative groups contribute preservation rows
     #: (a seeded draw); ``None`` is all of them.
     preservation_max_groups: int | None = None
+    #: Collapse identical ``(input_ids, completion_tokens)`` policy steps shared
+    #: across the trajectories of one group into a single row carrying the sum
+    #: of their advantages and their sample multiplicity for the KL term.  What
+    #: every trajectory of a group shares then has an exact zero advantage
+    #: before per-row gradient bounds or PPO ratio clipping are applied, and
+    #: runs one forward/backward pass instead of K.
+    merge_shared_steps: bool = False
     seed: int = 0
 
     @classmethod
@@ -104,6 +111,8 @@ class RowSettings:
             raise ValueError(f"rows.preservation must be one of {PRESERVATION_MODES}, got {self.preservation!r}")
         if self.preservation_max_groups is not None and int(self.preservation_max_groups) < 0:
             raise ValueError("rows.preservation_max_groups must be nonnegative when set")
+        if not isinstance(self.merge_shared_steps, bool):
+            raise ValueError("rows.merge_shared_steps must be true or false")
 
 
 @dataclass
@@ -152,11 +161,22 @@ class TrainingRow:
     #: continuations (:mod:`psse_env.rl.decision_credit`), not the audit's
     #: membership label.  The term rides in ``lifecycle_term``.
     decision_credit: bool = False
+    #: How many identical sampled steps of one group were merged into this row
+    #: (``RowSettings.merge_shared_steps``); ``1`` without merging.
+    multiplicity: int = 1
+    policy_multiplicity: int | None = None
 
     @property
     def policy_row(self) -> bool:
         """Whether the row carries a group advantage and counts toward the policy normalization."""
         return not self.preservation and not self.lifecycle_only and not self.supervised
+
+    @property
+    def effective_policy_multiplicity(self) -> int:
+        """How many policy rows' token/row weight this row represents in the policy denominator."""
+        if self.policy_multiplicity is not None:
+            return int(self.policy_multiplicity)
+        return int(self.multiplicity) if self.policy_row else 0
 
     @property
     def completion_tokens(self) -> int:
@@ -175,6 +195,54 @@ class TrainingRow:
         }
         record.update({key: list(value) for key, value in self.side_inputs.items()})
         return record
+
+
+def _merge_group_policy_rows(rows: Sequence[TrainingRow]) -> tuple[list[TrainingRow], int, int]:
+    """Merge identical ``(completion_tokens, input_ids)`` plain policy steps within one group.
+
+    Returns ``(merged_rows, saved_row_count, saved_completion_tokens)``.  Rows carrying a
+    lifecycle or decision-credit term are kept untouched in their position; plain policy
+    rows that share exact prompt and completion token ids sum their advantages (zeroed
+    within floating-point roundoff when every sample of the group took the step) and
+    record how many samples contributed via ``multiplicity`` / ``policy_multiplicity``.
+    """
+    clusters: dict[tuple[int, tuple[int, ...]], list[TrainingRow]] = {}
+    ordered: list[TrainingRow | tuple[int, tuple[int, ...]]] = []
+    for row in rows:
+        if not row.policy_row or row.lifecycle_term != 0.0 or row.decision_credit or row.decision is not None:
+            ordered.append(row)
+            continue
+        key = (int(row.completion_tokens), tuple(row.input_ids))
+        if key not in clusters:
+            clusters[key] = [row]
+            ordered.append(key)
+        else:
+            clusters[key].append(row)
+    merged: list[TrainingRow] = []
+    saved_rows = 0
+    saved_tokens = 0
+    for item in ordered:
+        if isinstance(item, TrainingRow):
+            merged.append(item)
+            continue
+        cluster = clusters[item]
+        first = cluster[0]
+        if len(cluster) == 1:
+            merged.append(first)
+            continue
+        net_advantage = sum(float(member.advantage) for member in cluster)
+        if abs(net_advantage) <= 1e-12:
+            net_advantage = 0.0
+        total_multiplicity = sum(int(member.multiplicity) for member in cluster)
+        total_policy = sum(int(member.effective_policy_multiplicity) for member in cluster)
+        first.advantage = net_advantage
+        first.multiplicity = total_multiplicity
+        first.policy_multiplicity = total_policy
+        merged.append(first)
+        extra = len(cluster) - 1
+        saved_rows += extra
+        saved_tokens += extra * int(first.completion_tokens)
+    return merged, saved_rows, saved_tokens
 
 
 def sampling_logprobs_for(
@@ -635,14 +703,26 @@ def build_rows(
                         rows.extend(decision_rows(trajectory))
             continue
         report["informative_groups"] += 1
+        group_built: list[TrainingRow] = []
         for trajectory, advantage in zip(trajectories, advantages.advantages):
             report["trajectories"] += 1
             if not trajectory.pairing_ok:
                 report["trajectories_unpaired"] += 1
                 continue
             built = trajectory_rows(trajectory, advantage, preservation=False)
-            rows.extend(built)
+            group_built.extend(built)
             report["policy_rows"] += len(built)
+        if settings.merge_shared_steps and len(group_built) > 1:
+            merged, saved_rows, saved_tokens = _merge_group_policy_rows(group_built)
+            report["rows"] -= saved_rows
+            report["policy_rows"] -= saved_rows
+            report["completion_tokens"] -= saved_tokens
+            report["rows_with_sampling_probabilities"] -= sum(
+                1 for row in group_built if row.sampling_logprobs is not None
+            ) - sum(1 for row in merged if row.sampling_logprobs is not None)
+            report["shared_steps_merged"] = int(report.get("shared_steps_merged") or 0) + saved_rows
+            group_built = merged
+        rows.extend(group_built)
 
     if uninformative:
         # The preservation draw: the same seeded order over the same list of

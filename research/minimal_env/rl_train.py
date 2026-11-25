@@ -748,7 +748,7 @@ def phase_rollout(config: MinimalRLConfig, manifest: Manifest, *, progress: Call
                     unforked, store=fork_store, env_factory=lambda: env,
                     policy_factory=greedy_policy_factory(config, manifest.current_adapter), weights=weights, settings=forks,
                     argument_policy_factory=(sampling_policy_factory(config, manifest.current_adapter)
-                                             if forks.argument_samples else None),
+                                             if (forks.argument_samples or forks.own_tool_samples) else None),
                     base_seed=config.seed + manifest.iteration,
                     canonical_factory=lambda policy: fork_prefix_check(config, manifest.current_adapter, policy),
                     progress=progress)

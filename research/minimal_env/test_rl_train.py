@@ -1096,13 +1096,65 @@ class ForkIterationTests(unittest.TestCase):
 
     def test_the_config_checks_the_fork_settings_and_the_check_names_them(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
-            for bad in (dict(forks={"enabled": True, "weight": 0.0}), dict(forks={"states": "last"}), dict(forks={"argument_samples": -1})):
+            for bad in (dict(forks={"enabled": True, "weight": 0.0}), dict(forks={"states": "last"}),
+                        dict(forks={"argument_samples": -1}), dict(forks={"own_tool_samples": -1}),
+                        dict(forks={"max_consecutive_refused_states": -1}), dict(forks={"max_consecutive_refused_states": True})):
                 with self.assertRaises(ValueError, msg=str(bad)):
                     _config(folder, **bad)
             self.assertFalse(_config(folder).fork_settings().enabled)
-            found = rl_train.check(_config(folder, forks={"enabled": True, "argument_samples": 1}, evaluate_every=3))
-            self.assertEqual((found["forks"]["enabled"], found["forks"]["argument_samples"], found["evaluate_every"]), (True, 1, 3))
+            found = rl_train.check(_config(folder, forks={"enabled": True, "argument_samples": 1, "own_tool_samples": 2,
+                                                          "stop_on_refused_call": True, "ignore_noop_inspect": True,
+                                                          "max_consecutive_refused_states": 1}, evaluate_every=3))
+            self.assertEqual((found["forks"]["enabled"], found["forks"]["argument_samples"], found["forks"]["own_tool_samples"],
+                              found["forks"]["stop_on_refused_call"], found["forks"]["ignore_noop_inspect"],
+                              found["forks"]["max_consecutive_refused_states"], found["evaluate_every"]),
+                             (True, 1, 2, True, True, 1, 3))
             self.assertNotIn("forks", rl_train.check(_config(folder)))
+
+    def test_stage_b_stabilized_fork_and_merged_row_update_end_to_end(self) -> None:
+        holder: dict = {}
+        with tempfile.TemporaryDirectory() as folder, _stand_ins(holder):
+            config = _config(
+                folder,
+                samples_per_root=4,
+                forks={
+                    "enabled": True,
+                    "min_gain": 0.1,
+                    "own_tool_samples": 2,
+                    "stop_on_refused_call": True,
+                    "ignore_noop_inspect": True,
+                    "max_consecutive_refused_states": 1,
+                },
+                rows={**FOCUS_ROWS, "merge_shared_steps": True},
+                update={
+                    "learning_rate": 0.01,
+                    "carry_optimizer": True,
+                    "chunk_by": "group",
+                    "optimizer_steps": 2,
+                    "max_row_grad_norm": 1.0,
+                    "clip_ratio": 0.2,
+                    "clip_reference": "sampler",
+                    "first_step_baseline": "own",
+                    "supervised_normalization": "groups",
+                    "scale_supervised_row_bound": True,
+                },
+            )
+            rollout = _run(config, "rollout")
+            totals = rollout["forks"]["totals"]
+            self.assertGreaterEqual(totals["forced_calls_noop_inspect"], 1)
+            self.assertGreaterEqual(totals["forced_calls_stopped_early"], 1)
+            self.assertGreaterEqual(totals["unrepaired_cases_one_forced_step_repairs"], 1)
+
+            report = _run(config, "update")
+            rows = report["rows"]
+            self.assertGreater(rows["shared_steps_merged"], 0)
+            self.assertGreaterEqual(rows["supervised_rows"], 1)
+            update = report["update"]
+            self.assertEqual(update["optimizer_steps"], 2)
+            self.assertEqual((update["settings"]["supervised_normalization"], update["settings"]["scale_supervised_row_bound"]),
+                             ("groups", True))
+            self.assertGreater(sum(update["supervised_loss"]), 0.0)
+            self.assertEqual((report["integrity"]["ok"], report["integrity"]["failures"]), (True, []))
 
 
 @unittest.skipIf(torch is None, "torch is not installed")

@@ -149,7 +149,7 @@ for folder in sorted(glob.glob(f"{run}/iteration_*")):
     report = load(f"{folder}/update_report.json")
     if report:
         rows = report.get("rows") or {}
-        keys = ("rows", "policy_rows", "preservation_rows", "informative_groups", "groups_incomplete", "trajectories_unpaired",
+        keys = ("rows", "policy_rows", "preservation_rows", "shared_steps_merged", "informative_groups", "groups_incomplete", "trajectories_unpaired",
                 "prompt_length_mismatches", "prompt_digest_mismatches", "prompt_digest_missing", "prompt_truncated_rows",
                 "rows_without_sampling_record_rejected", "supervised_rows", "supervised_rows_unrenderable")
         print("        rows: " + ", ".join(f"{key} {rows.get(key, 0)}" for key in keys))

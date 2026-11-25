@@ -17,8 +17,10 @@ picked contradictory rows; how a fork row is picked was changed the same day (se
 source. The user's word so far: "Yes, deploy and smoke", then "Yes, all three" (the redeploy, stage A's run and
 both probes), then "Yes, set 0.1" on 2026-11-23: `forks.min_gain` is 0.1 in stage B's two configs, in the
 repository only; the cluster's source still holds 0. On 2026-11-24, with the second evaluation read, the user
-said "Let it run": stage A goes on to its third evaluation unchanged. Stage B (`forks-smoke`, `forks`), any
-deploy, any cancel and any resubmission each still need the user's word.
+said "Let it run": stage A goes on to its third evaluation unchanged. On 2026-11-25 ("Please continue for the
+recommended actions"), stage B's update stabilization, shared-prefix deduplication and fork pruning/sampling
+upgrades (section 11) were implemented locally in the repository only, leaving stage A untouched. Stage B
+(`forks-smoke`, `forks`), any deploy, any cancel and any resubmission each still need the user's word.
 
 The plan and its reasons are in `docs/minimal_rl_plan_20261122.md`. The user approved building both stages on
 2026-11-22 ("Yes, build both"), with no cluster action.
@@ -28,17 +30,19 @@ The plan and its reasons are in `docs/minimal_rl_plan_20261122.md`. The user app
 | | Stage A: `rl_steps.json` | Stage B: `rl_forks.json` | The finished focused run, for comparison |
 | --- | --- | --- | --- |
 | Optimizer steps a batch | 8, dealt by case (4 cases a step); 1 in the first update | the same | 1 |
-| Learning rate | 3e-5 | 3e-5 | 1e-5 |
+| Learning rate | 3e-5 | 2e-5 (since 2026-11-25; section 11) | 1e-5 |
+| Focused draw an iteration (unrepaired / repaired) | 24 / 8 | 20 / 12 (since 2026-11-25; section 11) | 24 / 8 |
+| Off-policy clip across the 8-step batch | off | `clip_ratio` 0.2 against `sampler`, `first_step_baseline` `"own"` | off |
+| Shared-prefix row merging (`rows.merge_shared_steps`) | off | on (sums advantages on identical group prefixes) | off |
+| Supervised row normalization and row bound | per chunk's supervised rows, unscaled 1.0 bound | `"groups"` normalization, `scale_supervised_row_bound` on | per chunk's supervised rows |
 | Evaluation on the 300 development cases | every third iteration | every third iteration | every iteration |
 | Truth-built examples for cases without a repaired sample | on (weight 1) | off | on (weight 1) |
-| One-step forks of the greedy episode | off | on | off |
-| Smallest margin of a fork row (`forks.min_gain`) | | 0.1 since 2026-11-23; 0 when the probes ran | |
+| One-step forks of the greedy episode | off | on (`min_gain` 0.1, `own_tool_samples` 2, refusal/no-op pruning on; section 11) | off |
 | Seed of the draw | 20261122 | 20261122 | 20261118 |
 
 Everything else is the focused run's (`research/hpc/minimal_rl_20261116/rl_focus.json`): the supervised model as
-the start and the KL reference (0.04), 24 unrepaired and 8 repaired training cases an iteration, 8 samples a case
-at temperature 1, the reward, whole cases per step, the carried optimizer, no clip. `test_cell.py` asserts that
-these are the only differences.
+the start and the KL reference (0.04), 8 samples a case at temperature 1, the reward, whole cases per step, and
+the carried optimizer. `test_cell.py` asserts the exact config differences for both stages.
 
 The third thing is the **fork probe** (`stage_fork_probe.sbatch`, `research/minimal_env/fork_probe.py`): the forks
 alone, with no update, on cases the supervised model leaves unrepaired. It counts the cases one forced step
@@ -582,31 +586,31 @@ Solved by class, of the cases a truth-built sequence repairs:
 The training rollouts of iterations 2 to 6 (256 sampled episodes each; other cases every iteration, so a weak
 reading; the four outcome counts are not exclusive and sum to 258 in iteration 2):
 
-| Iteration | 2 | 3 | 4 | 5 | 6 |
-| --- | --- | --- | --- | --- | --- |
-| Repaired / false claims / declared unresolved / out of actions | 125 / 63 / 70 / 0 | 132 / 75 / 48 / 1 | 134 / 70 / 50 / 2 | 125 / 72 / 58 / 1 | 129 / 55 / 71 / 1 |
-| The 24 unrepaired cases drawn: with a repaired sample | 19 | 20 | 21 | 15 | 19 |
-| Their episodes repaired, of 192 | 81 | 76 | 83 | 67 | 75 |
-| The 8 repaired cases drawn: episodes repaired, of 64 | 44 | 56 | 51 | 58 | 54 |
-| Truth-built examples kept (rows) | 6 (25) | 4 (17) | 4 (18) | 9 (41) | 5 |
-| Rows: policy / for the KL term alone / supervised | 1,299 / 8 / 25 | 1,257 / 7 / 17 | 1,334 / 0 / 18 | 1,365 / 11 / 41 | update running |
+| Iteration | 2 | 3 | 4 | 5 | 6 | 7 (read 2026-11-25 00:20 UTC) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Repaired / false claims / declared unresolved / out of actions | 125 / 63 / 70 / 0 | 132 / 75 / 48 / 1 | 134 / 70 / 50 / 2 | 125 / 72 / 58 / 1 | 129 / 55 / 71 / 1 | 130 / 53 / 70 / 3 |
+| The 24 unrepaired cases drawn: with a repaired sample | 19 | 20 | 21 | 15 | 19 | 19 |
+| Their episodes repaired, of 192 | 81 | 76 | 83 | 67 | 75 | 78 |
+| The 8 repaired cases drawn: episodes repaired, of 64 | 44 | 56 | 51 | 58 | 54 | 52 |
+| Truth-built examples kept (rows) | 6 (25) | 4 (17) | 4 (18) | 9 (41) | 5 (23) | 5 (update running) |
+| Rows: policy / for the KL term alone / supervised | 1,299 / 8 / 25 | 1,257 / 7 / 17 | 1,334 / 0 / 18 | 1,365 / 11 / 41 | 1,364 / 9 / 23 | update at step 2 of 8 |
 
-Over iterations 0 to 6 the sampled episodes of the unrepaired cases drawn are repaired 10, 42, 81, 76, 83, 67
-and 75 times of 192, and those of the repaired cases drawn 62, 53, 44, 56, 51, 58 and 54 times of 64: the same
-two movements as on the development suite. The rows that hold a repaired case in place by the KL term alone
+Over iterations 0 to 7 the sampled episodes of the unrepaired cases drawn are repaired 10, 42, 81, 76, 83, 67,
+75 and 78 times of 192, and those of the repaired cases drawn 62, 53, 44, 56, 51, 58, 54 and 52 times of 64: the
+same two movements as on the development suite. The rows that hold a repaired case in place by the KL term alone
 fell from 58 in iteration 0 to between 0 and 13.
 
-The updates of iterations 2 to 5 (eight steps each, the optimizer carried: 17, 25, 33 and 41 steps after):
+The updates of iterations 2 to 6 (eight steps each, the optimizer carried: 17, 25, 33, 41 and 49 steps after):
 
-| Iteration | 2 | 3 | 4 | 5 |
-| --- | --- | --- | --- | --- |
-| KL to the supervised model by step | 0.028, 0.017, 0.032, 0.043, 0.037, 0.025, 0.035, 0.040 | 0.057, 0.036, 0.021, 0.043, 0.025, 0.063, 0.175, 0.048 | 0.041, 0.035, 0.023, 0.043, 0.008, 0.089, 0.113, 0.052 | 0.068, 0.046, 0.038, 0.066, 0.043, 0.051, 0.041, 0.033 |
-| Mean absolute log-ratio to the sampler on uncertain tokens, first and eighth step | 0.057, 0.190 | 0.008, 0.161 | 0.013, 0.136 | 0.008, 0.088 |
-| The largest on one token over the eight steps | 3.35 | 2.79 | 5.75 | 1.88 |
-| Largest row gradient norm before the row bound of 1.0 | 14.8 | 65.8 | 1,354 | 28.3 |
-| Most rows the row bound cut in one step | 7 | 13 | 6 | 4 |
-| Gradient norm before the clip at 1.0, range | 1.38 to 4.66 | 1.09 to 6.46 | 1.16 to 3.89 | 1.59 to 3.51 |
-| Mean advantage of the batch | -0.023 | -0.065 | -0.018 | -0.036 |
+| Iteration | 2 | 3 | 4 | 5 | 6 |
+| --- | --- | --- | --- | --- | --- |
+| KL to the supervised model by step | 0.028, 0.017, 0.032, 0.043, 0.037, 0.025, 0.035, 0.040 | 0.057, 0.036, 0.021, 0.043, 0.025, 0.063, 0.175, 0.048 | 0.041, 0.035, 0.023, 0.043, 0.008, 0.089, 0.113, 0.052 | 0.068, 0.046, 0.038, 0.066, 0.043, 0.051, 0.041, 0.033 | 0.024, 0.049, 0.042, 0.068, 0.055, 0.073, 0.041, 0.031 |
+| Mean absolute log-ratio to the sampler on uncertain tokens, first and eighth step | 0.057, 0.190 | 0.008, 0.161 | 0.013, 0.136 | 0.008, 0.088 | 0.016, 0.097 |
+| The largest on one token over the eight steps | 3.35 | 2.79 | 5.75 | 1.88 | — |
+| Largest row gradient norm before the row bound of 1.0 | 14.8 | 65.8 | 1,354 | 28.3 | — |
+| Most rows the row bound cut in one step | 7 | 13 | 6 | 4 | — |
+| Gradient norm before the clip at 1.0, range | 1.38 to 4.66 | 1.09 to 6.46 | 1.16 to 3.89 | 1.59 to 3.51 | 1.34 to 4.14 |
+| Mean advantage of the batch | -0.023 | -0.065 | -0.018 | -0.036 | — |
 
 The KL to the supervised model is mostly 0.02 to 0.07 a step, 6 to 20 times the focused run's whole movement
 (0.0033), with a low of 0.008 and a high of 0.175; iteration 1's 2.76 did not come back. The drift inside one batch is smaller than in
@@ -816,3 +820,35 @@ and report rows under the old comparison. So the cell was redeployed at 98e6518 
 
 Local tests after the change: `test_forks.py` 13 (one new: the three patterns above as records), the driver 32,
 the probe 4, this cell 18, the research policy 15, the earlier RL cell 24.
+
+## 11. Stage B stabilization and fork upgrades (2026-11-25, in repository only)
+
+Reading Stage A (`iteration_000..007`) and both probes identified four bottlenecks before Stage B (`rl_forks.json`
+and `rl_forks_smoke.json`) is launched:
+
+1. **Off-policy drift across the 8-step batch and solved-case erosion.** Taking 8 unclipped steps at `3e-5` drove
+   late-step single-token log-ratios up to `5.75..7.67` nats and eroded solved easy cases from 13 lost at step 17
+   (`205/247`) to 19 lost at step 41 (`198/247`). Because both loaders run in `bf16` with `1 mod 8` SDPA prefill
+   padding, the step-1 numerical gap to the sampler is `0.008..0.057` on uncertain tokens. `rl_forks.json` sets
+   `update.clip_ratio: 0.2`, `update.clip_reference: "sampler"`, `update.first_step_baseline: "own"` (exact ratio
+   1 on chunk 1, PPO ratio clipping on chunks 2 to 8 with zero extra forward passes), `update.learning_rate: 2e-5`,
+   and `focus: 20 unrepaired / 12 repaired` (+50% solved-case anchor coverage, still 4 cases per optimizer step).
+2. **Shared-prefix row deduplication (`rows.merge_shared_steps: true`).** When one of eight samples repairs
+   (`A = +1.31`) and seven fail (`A = -0.19`) after the same opening action, `max_row_grad_norm: 1.0` clips the
+   single `+1.31` row while leaving the seven `-0.19` rows unclipped, penalizing valid opening actions and running
+   eight identical 10k-token passes. `psse_env/rl/rows.py` and `psse_env/rl/update.py` collapse identical
+   `(completion_tokens, input_ids)` policy steps within each informative group, sum their advantages before row
+   clipping (zeroing shared prefixes where every sample took the step), and weight exact KL and DAPO normalizers
+   by `multiplicity`.
+3. **Group-normalized supervised fork loss and margin-scaled row bounds.** `psse_env/rl/update.py` adds
+   `update.supervised_normalization: "groups"` (avoiding per-chunk dilution when chunks differ in forked state
+   counts) and `update.scale_supervised_row_bound: true` (scaling `max_row_grad_norm` on supervised rows by
+   `row.lifecycle_term` so `0.25`-margin `finish(unresolved)` rows are not amplified to match `1.5`-margin
+   repairing rows).
+4. **Fork pruning and own-tool object sampling.** `psse_env/minimal/forks.py` and `research/minimal_env/rl_train.py`
+   add `stop_on_refused_call: true` (halting branches immediately when the forced call is refused, saving the ~26
+   to 33% of branches that are never taught), `ignore_noop_inspect: true` (skipping `inspect` calls whose view or
+   requested flips are already displayed), `max_consecutive_refused_states: 1` (preventing 16-state refusal-loop
+   stragglers), and `own_tool_samples: 2` (sampling alternative arguments of the greedy state's own tool to cover
+   wrong-object failures such as fitting a healthy line, at ~5% branch cost). All new flags default off so Stage A
+   and existing probe contracts are unchanged.

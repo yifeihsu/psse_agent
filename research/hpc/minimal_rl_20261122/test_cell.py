@@ -10,7 +10,9 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -55,8 +57,24 @@ def _expanded(path: Path, name: str) -> str:
     return value
 
 
+def _bash_executable() -> str:
+    """Prefer Git Bash on Windows so POSIX shells receive C:/... paths without WSL's System32 launcher."""
+    if os.name == "nt":
+        for candidate in (
+            Path("C:/Program Files/Git/bin/bash.exe"),
+            Path("C:/Program Files/Git/usr/bin/bash.exe"),
+            Path("C:/Program Files (x86)/Git/bin/bash.exe"),
+        ):
+            if candidate.is_file():
+                return str(candidate)
+    return shutil.which("bash") or "bash"
+
+
+BASH = _bash_executable()
+
+
 def _bash(script: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["bash", "-c", script], cwd=CELL, capture_output=True, text=True, check=False)
+    return subprocess.run([BASH, "-c", script], cwd=CELL, capture_output=True, text=True, check=False)
 
 
 def _config(name: str, cell: Path = CELL) -> dict:
@@ -79,7 +97,7 @@ class CellFilesTests(unittest.TestCase):
     def test_every_script_parses_and_holds_no_carriage_return(self) -> None:
         for name in SCRIPTS:
             self.assertNotIn(b"\r", (CELL / name).read_bytes(), name)
-            checked = subprocess.run(["bash", "-n", name], cwd=CELL, capture_output=True, text=True, check=False)
+            checked = subprocess.run([BASH, "-n", name], cwd=CELL, capture_output=True, text=True, check=False)
             self.assertEqual(checked.returncode, 0, f"{name}: {checked.stderr}")
         for name in CONFIGS:
             self.assertNotIn(b"\r", (CELL / name).read_bytes(), name)
@@ -176,12 +194,30 @@ class ConfigTests(unittest.TestCase):
     def test_stage_b_is_stage_a_with_the_forks_and_without_the_examples(self) -> None:
         self.assertEqual(_differences(_config("rl_steps.json"), _config("rl_forks.json")), {
             "focus.demonstration_weight": (1.0, 0.0),
-            "forks.argument_samples": (None, 0), "forks.enabled": (None, True), "forks.min_gain": (None, 0.1), "forks.weight": (None, 1.0),
+            "focus.failed_per_iteration": (24, 20),
+            "focus.solved_per_iteration": (8, 12),
+            "forks.argument_samples": (None, 0),
+            "forks.enabled": (None, True),
+            "forks.ignore_noop_inspect": (None, True),
+            "forks.max_consecutive_refused_states": (None, 1),
+            "forks.min_gain": (None, 0.1),
+            "forks.own_tool_samples": (None, 2),
+            "forks.stop_on_refused_call": (None, True),
+            "forks.weight": (None, 1.0),
             "output_dir": (f"{WORK}/out/steps", f"{WORK}/out/forks"),
+            "rows.merge_shared_steps": (None, True),
+            "update.clip_ratio": (None, 0.2),
+            "update.clip_reference": (None, "sampler"),
+            "update.first_step_baseline": (None, "own"),
+            "update.learning_rate": (3e-05, 2e-05),
+            "update.scale_supervised_row_bound": (None, True),
+            "update.supervised_normalization": (None, "groups"),
         })
         config = MinimalRLConfig.load(CELL / "rl_forks.json")
         self.assertTrue(config.fork_settings().enabled)
         self.assertFalse(config.focus_settings().examples)  # every supervised row of the run comes from a fork
+        focus = config.focus_settings()
+        self.assertEqual((focus.failed_per_iteration + focus.solved_per_iteration) // config.update_settings(0).optimizer_steps, 4)
 
     def test_the_smokes_differ_from_their_runs_in_size_alone(self) -> None:
         sizes = {"baseline_from", "development_limit", "evaluate_every", "focus.failed_per_iteration", "focus.solved_per_iteration",
@@ -197,7 +233,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual([steps.evaluated(iteration) for iteration in range(2)], [False, True])
         forks = MinimalRLConfig.load(CELL / "rl_forks_smoke.json")
         self.assertEqual(([forks.evaluated(0)], forks.focus_settings().failed_per_iteration, forks.focus_settings().solved_per_iteration),
-                         ([True], 3, 1))
+                         ([True], 2, 2))
 
     def test_the_configs_name_the_cells_own_folders_and_the_inputs_read_in_place(self) -> None:
         environment = CELL / "cell.env"
@@ -270,7 +306,9 @@ class SubmitAndDeployTests(unittest.TestCase):
         # What the deploy asks of the code is there.
         for needle, path in (("evaluate_every", "research/minimal_env/rl_train.py"), ("fork_settings", "research/minimal_env/rl_train.py"),
                              ("fresh_optimizer_steps", "psse_env/rl/update.py"), ("forced_prefix", "psse_env/dagger/research_policy_factory.py"),
-                             ("def act_forced", "psse_env/minimal/policy.py"), ('"--unrepaired-in"', "research/minimal_env/fork_probe.py")):
+                             ("def act_forced", "psse_env/minimal/policy.py"), ('"--unrepaired-in"', "research/minimal_env/fork_probe.py"),
+                             ("stop_on_refused_call", "psse_env/minimal/forks.py"), ("merge_shared_steps", "psse_env/rl/rows.py"),
+                             ("supervised_normalization", "psse_env/rl/update.py")):
             self.assertIn(needle, (REPO / path).read_text(encoding="utf-8"), needle)
             self.assertIn(needle, deploy, needle)
         self.assertIn("the source is not moved under them", deploy)  # not under a queued or running job of the cell
@@ -381,8 +419,8 @@ class StageFlowTests(unittest.TestCase):
     def _stage(self, name: str, **environment: str) -> subprocess.CompletedProcess:
         assignments = " ".join(f'{key}="{value}"' for key, value in environment.items())
         script = (f'chmod +x "{self.bin.as_posix()}/nvidia-smi"; PATH="$(cd "{self.bin.as_posix()}" && pwd):$PATH" {assignments} '
-                  f'bash "{(self.cell / name).as_posix()}"')
-        return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+                  f'"{BASH}" "{(self.cell / name).as_posix()}"')
+        return subprocess.run([BASH, "-c", script], capture_output=True, text=True, check=False)
 
     def _inputs(self, *, adapter: bool = True, train_pass: bool = True, dev_pass: bool = True) -> None:
         (self.passed / "training" / "lora").mkdir(parents=True, exist_ok=True)

@@ -14,9 +14,10 @@ steps) solves 187, 15 gained and 26 lost.** None differs from the start by more 
 0.30, 1.0, 0.12). The gain is the two-breaker classes (15, 26, 22, 19 of 35), by a second `inspect` and a second
 `correct_topology`, the step the fork probe named; the loss is cases solved in few actions, by added
 `correct_parameters` and `correct_measurements` calls, and it grows with the steps (13, 19, 26 cases). The
-halving rule did not fire and nothing was cancelled (the cell's README, section 9). After the
-probes the user set `forks.min_gain` to 0.1 for stage B (2026-11-23, "Yes, set 0.1"; in the repository only,
-not deployed). The user approved the build
+halving rule did not fire and nothing was cancelled (the cell's README, section 9). After the probes the user set `forks.min_gain` to 0.1 for stage B (2026-11-23, "Yes, set 0.1"), and
+on 2026-11-25 ("Please continue for the recommended actions") stage B's update stabilization, shared-prefix
+deduplication and fork pruning/sampling upgrades were built locally in the repository (section 11 below; not yet
+deployed). The user approved the build
 ("Yes, build both"), the deploy and the smokes ("Yes, deploy and smoke"), then the redeploy, stage A's run and
 both probes ("Yes, all three"). The cell is `research/hpc/minimal_rl_20261122`; its README has the order of
 work, what each smoke showed and what was submitted (its section 9) and how a fork row is picked since the
@@ -263,3 +264,46 @@ Both smokes completed on the cluster; the cell's README (sections 9 and 10) has 
   forked as whole calls at every state, so the honest declaration is taught where the false claim was made. With
   the new comparison the same records give 10 rows, 86% of their weight on branches that repair. Deployed at
   98e6518 before the probes were submitted.
+
+## 11. Stage B stabilization and fork upgrades after reading Stage A and the probes (2026-11-25, in repository only)
+
+Reading Stage A (`iteration_000..007`, including the two evaluations at `205/247` after 17 steps and `198/247`
+after 41 steps) alongside the finished development and training probes exposed four concrete optimization and
+search bottlenecks that would carry over into Stage B if `rl_forks.json` inherited Stage A's update mechanics
+verbatim:
+
+1. **Unclipped 8-step off-policy drift and solved-case regression.** Taking 8 unclipped policy-gradient steps per
+   batch at `3e-5` drove single-token log-ratios up to `5.75..7.67` nats and pre-clip row gradient norms up to
+   `508..1,354` on later chunks, eroding easy classes (`control_cb`, `control_meter`, `control_rx`,
+   `rx_cb_same_line`) from 13 lost cases at step 17 to 19 lost at step 41. Because both decoding and training use
+   `bf16` with `1 mod 8` SDPA prefill padding, the step-1 numerical gap to the sampler is only `0.008..0.057` on
+   uncertain tokens. Stage B therefore enables `update.clip_ratio: 0.2`, `update.clip_reference: "sampler"`, and
+   `update.first_step_baseline: "own"` (exact ratio 1 on chunk 1, PPO ratio clipping on chunks 2 to 8 with zero
+   extra baseline forward passes), lowers `update.learning_rate` to `2e-5`, and shifts the 32-case draw from
+   `24 / 8` to `20 / 12` (+50% solved-case anchor coverage, still 4 cases per optimizer step).
+2. **Asymmetric row-gradient clipping and `8x` duplicate forward/backward passes on shared group prefixes.** When
+   one sample in an 8-sample group repairs (`A = +1.31`) and seven fail (`A = -0.19`) after an identical opening
+   action (such as `inspect(breakers)`), their unmerged advantages sum to zero in expectation, yet
+   `max_row_grad_norm: 1.0` clips the single `+1.31` row while leaving the seven `-0.19` rows unclipped—producing
+   a net negative gradient against valid opening actions and running eight identical 10k-token passes.
+   `psse_env/rl/rows.py` and `psse_env/rl/update.py` now support `rows.merge_shared_steps: true`, collapsing
+   identical `(completion_tokens, input_ids)` policy steps within each informative group, summing their advantages
+   before row-norm clipping, and weighting exact KL and DAPO normalizers by `multiplicity`.
+3. **Supervised fork-row normalization and margin distortion.** Normalizing `chunk_supervised` by
+   `weight["supervised_rows"]` per 4-case chunk distorted row weights across chunks with different numbers of
+   forked states, and an unscaled `max_row_grad_norm: 1.0` clipped `1.5`-margin repairing branches and
+   `0.25`-margin `finish(unresolved)` branches (`35%` of kept training-probe rows at `min_gain: 0.1`) to the same
+   norm `1.0`. `psse_env/rl/update.py` adds `update.supervised_normalization: "groups"` and
+   `update.scale_supervised_row_bound: true` (scaling `max_row_grad_norm` on supervised rows by `margin`).
+4. **Fork compute waste and wrong-object blind spot.** In the two probes, `33%` of model-decoded forced calls were
+   refused by the environment (and never taught), no-op `inspect(estimate)` / `inspect(breakers)` calls wasted
+   branches on data already shown, 16-state refusal loops risked 50-minute stragglers, and deterministic
+   other-tool forcing could not explore alternative targets of the greedy tool itself (Pattern D, wrong line
+   fitted, `9/49` development failures). `psse_env/minimal/forks.py` and `research/minimal_env/rl_train.py` add
+   `stop_on_refused_call: true`, `ignore_noop_inspect: true`, `max_consecutive_refused_states: 1`, and
+   `own_tool_samples: 2` (all off by default so Stage A and probe contracts are unchanged, and enabled in
+   `rl_forks.json` and `rl_forks_smoke.json`). Nothing uses rule-based heuristics or hidden truth outside the
+   episode reward.
+
+All changes remain in the local worktree only until `mrp-steps` finishes its third evaluation (`iteration_008`)
+and the user approves deploying and running `forks-smoke`.

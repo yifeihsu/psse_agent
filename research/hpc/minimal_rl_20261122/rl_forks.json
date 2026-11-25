@@ -18,8 +18,8 @@
   "focus": {
     "truth_sequences": "/scratch/yx3882/minimal_rl_20261122/source/research/hpc/minimal_rl_20261116/train_truth_sequences.json",
     "evaluation": "/scratch/yx3882/minimal_rl_20261116/out/train_pass",
-    "failed_per_iteration": 24,
-    "solved_per_iteration": 8,
+    "failed_per_iteration": 20,
+    "solved_per_iteration": 12,
     "demonstration_weight": 0.0
   },
   "max_length": 32768,
@@ -28,17 +28,21 @@
   "advantage_scale": "none",
   "reward": {},
   "update": {
-    "learning_rate": 3e-05,
+    "learning_rate": 2e-05,
     "beta_kl": 0.04,
     "optimizer_steps": 8,
     "carry_optimizer": true,
     "chunk_by": "group",
-    "clip_ratio": null,
+    "clip_ratio": 0.2,
+    "clip_reference": "sampler",
+    "first_step_baseline": "own",
     "loss_normalization": "dapo",
     "max_grad_norm": 1.0,
     "max_row_grad_norm": 1.0,
     "max_on_policy_log_ratio": 0.2,
-    "fresh_optimizer_steps": 1
+    "fresh_optimizer_steps": 1,
+    "supervised_normalization": "groups",
+    "scale_supervised_row_bound": true
   },
   "rows": {
     "require_complete_groups": true,
@@ -46,7 +50,8 @@
     "require_prompt_digest": true,
     "require_sampling_records": true,
     "preservation": "one",
-    "preservation_max_groups": 24
+    "preservation_max_groups": 24,
+    "merge_shared_steps": true
   },
   "update_checkpoint_rows": 32,
   "baseline_evaluation": true,
@@ -58,6 +63,10 @@
     "enabled": true,
     "weight": 1.0,
     "min_gain": 0.1,
-    "argument_samples": 0
+    "argument_samples": 0,
+    "own_tool_samples": 2,
+    "stop_on_refused_call": true,
+    "ignore_noop_inspect": true,
+    "max_consecutive_refused_states": 1
   }
 }

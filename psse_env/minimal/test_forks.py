@@ -136,7 +136,9 @@ class SettingsTests(unittest.TestCase):
         settings = ForkSettings.from_mapping({"enabled": True, "weight": 2.0, "min_gain": 0.05, "argument_samples": 2})
         self.assertEqual((settings.weight, settings.min_gain, settings.argument_samples), (2.0, 0.05, 2))
         for bad in ({"enabled": 1}, {"enabled": True, "weight": 0.0}, {"weight": -1.0}, {"min_gain": float("inf")},
-                    {"argument_samples": -1}, {"argument_samples": 1.5}, {"states": "last"}):
+                    {"argument_samples": -1}, {"argument_samples": 1.5}, {"own_tool_samples": -1},
+                    {"stop_on_refused_call": 1}, {"ignore_noop_inspect": "yes"},
+                    {"max_consecutive_refused_states": -1}, {"max_consecutive_refused_states": True}, {"states": "last"}):
             with self.assertRaises(ValueError, msg=str(bad)):
                 ForkSettings.from_mapping(bad)
 
@@ -321,6 +323,68 @@ class ForkCaseTests(unittest.TestCase):
         totals = summarize([record])["totals"]
         # Five tools in the model's own decoding, the other outcome of ``finish``, five sampled calls.
         self.assertEqual((totals["branches"], totals["branches_duplicate"], totals["branches_ran"]), (11, 4, 7))
+
+    def test_own_tool_samples_explore_other_correction_targets_without_sampling_other_tools(self) -> None:
+        root, order = ROOTS["control_meter"], ORDERS["control_meter"]
+        # The own episode tries a wrong meter correction ([0]) and then finishes; own_tool_samples=2 draws the true meters.
+        class _WrongMeter(_Model):
+            def act(self, observation: dict) -> dict:
+                self.calls += 1
+                if not observation["history"]:
+                    return {"tool": "correct_measurements", "arguments": {"meters": [0]}}
+                return copy.deepcopy(FINISH)
+
+        model = _WrongMeter(order)
+        sampler = _Model(order)  # act_forced("correct_measurements") returns order[0] (the true meters)
+        record = fork_case(root, env_factory=_env, policy=model, argument_policy=sampler,
+                           settings=ForkSettings(enabled=True, own_tool_samples=2))["record"]
+        sampled_state0 = [b for b in record["branches"] if b["state"] == 0 and b["arguments"] == ARGUMENTS_SAMPLED]
+        # Only ``correct_measurements`` (the own correction tool at state 0) is sampled; state 1's own tool is ``finish``.
+        self.assertEqual([b["tool"] for b in sampled_state0], ["correct_measurements", "correct_measurements"])
+        self.assertEqual([b["tool"] for b in record["branches"] if b["state"] == 1 and b["arguments"] == ARGUMENTS_SAMPLED], [])
+        # First sample repairs with the true meters; second repeats it and is skipped as duplicate.
+        self.assertEqual((sampled_state0[0]["status"], sampled_state0[0]["solved"], sampled_state0[1]["status"]),
+                         (STATUS_RAN, True, STATUS_DUPLICATE))
+        self.assertTrue(any(item["state"] == 0 and item["tool"] == "correct_measurements" and item["solved"]
+                            for item in record["better"]))
+
+    def test_refused_calls_noop_inspects_and_repeated_refusal_loops_can_be_pruned(self) -> None:
+        root, order = ROOTS["control_meter"], ORDERS["control_meter"]
+        model = _Model(order, stop_after=0)
+        # Force inspect to ask for view="estimate" on version 0, whose tables are already shown at state 0.
+        model.forced_answers = {"inspect": {"tool": "inspect", "arguments": {"view": "estimate"}}}
+        self.assertTrue(forks.is_noop_inspect(_env().reset(root), {"tool": "inspect", "arguments": {"view": "estimate"}}))
+        self.assertFalse(forks.is_noop_inspect(_env().reset(root), {"tool": "inspect", "arguments": {"view": "breakers"}}))
+
+        pruned = fork_case(
+            root, env_factory=_env, policy=model,
+            settings=ForkSettings(enabled=True, stop_on_refused_call=True, ignore_noop_inspect=True),
+        )["record"]
+        by_tool = {b["tool"]: b for b in pruned["branches"]}
+        # ``undo`` and ``correct_topology`` (CB_NO_SUCH) are refused at state 0 and end immediately without asking the model.
+        for refused_tool in ("undo", "correct_topology"):
+            self.assertFalse(by_tool[refused_tool]["executed"])
+            self.assertTrue(by_tool[refused_tool]["stopped_early"])
+            self.assertEqual(by_tool[refused_tool]["continuation"], [{"tool": "finish", "arguments": {"outcome": "unresolved"}}])
+        # ``inspect(estimate)`` is marked noop, ends immediately, and is excluded from better_branches.
+        self.assertTrue(by_tool["inspect"]["noop"] and by_tool["inspect"]["stopped_early"])
+        self.assertNotIn("inspect", [item["tool"] for item in pruned["better"]])
+        self.assertEqual(summarize([pruned])["totals"]["forced_calls_noop_inspect"], 1)
+
+        # A runaway loop of 5 refused calls in the own episode: max_consecutive_refused_states=1 forks state 0 and state 1 only.
+        class _RefusalLoop(_Model):
+            def act(self, observation: dict) -> dict:
+                if len(observation["history"]) < 5:
+                    return {"tool": "correct_topology", "arguments": {"breaker": "CB_NO_SUCH", "status": "open"}}
+                return {"tool": "finish", "arguments": {"outcome": "unresolved"}}
+
+        loop_record = fork_case(
+            root, env_factory=_env, policy=_RefusalLoop(order),
+            settings=ForkSettings(enabled=True, stop_on_refused_call=True, max_consecutive_refused_states=1),
+        )["record"]
+        self.assertEqual(loop_record["states"], 6)
+        self.assertEqual(loop_record["states_skipped_after_repeated_refusals"], 4)
+        self.assertEqual(sorted({b["state"] for b in loop_record["branches"]}), [0, 1])
 
     def test_what_is_not_a_call_of_the_forced_tool_is_marked_and_not_used(self) -> None:
         root, order = ROOTS["control_meter"], ORDERS["control_meter"]

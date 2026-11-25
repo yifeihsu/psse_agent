@@ -48,6 +48,9 @@ git grep -q "fresh_optimizer_steps" "$COMMIT" -- psse_env/rl/update.py || { echo
 git grep -q "forced_prefix" "$COMMIT" -- psse_env/dagger/research_policy_factory.py || { echo "$COMMIT's policy cannot start an answer with a forced prefix" >&2; exit 2; }
 git grep -q "def act_forced" "$COMMIT" -- psse_env/minimal/policy.py || { echo "$COMMIT's minimal policy has no forced call" >&2; exit 2; }
 git grep -q -e '"--unrepaired-in"' "$COMMIT" -- research/minimal_env/fork_probe.py || { echo "$COMMIT's probe has no --unrepaired-in" >&2; exit 2; }
+git grep -q "stop_on_refused_call" "$COMMIT" -- psse_env/minimal/forks.py || { echo "$COMMIT's forks have no stop_on_refused_call" >&2; exit 2; }
+git grep -q "merge_shared_steps" "$COMMIT" -- psse_env/rl/rows.py || { echo "$COMMIT's row builder has no merge_shared_steps" >&2; exit 2; }
+git grep -q "supervised_normalization" "$COMMIT" -- psse_env/rl/update.py || { echo "$COMMIT's update has no supervised_normalization" >&2; exit 2; }
 # Every config loads under this checkout's driver.  Their paths are torch's; loading opens none of them.
 "$PYTHON" -c 'import sys; from research.minimal_env.rl_train import MinimalRLConfig; [MinimalRLConfig.load(path) for path in sys.argv[1:]]; print("configs load")' \
   "${CONFIGS[@]}"
