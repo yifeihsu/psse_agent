@@ -42,9 +42,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from psse_env.minimal.env import DEFAULT_MAX_ACTIONS, DEFAULT_TABLE_VERSIONS, MinimalDiagnosisEnv  # noqa: E402
 from psse_env.minimal.episode import OUTCOME_PROMPT_LIMIT, compact, run_episode  # noqa: E402
+from research.minimal_env import repair_breakdown  # noqa: E402
 
 EVALUATION_CONTRACT = "minimal_model_evaluation_v1"
-REFERENCE_GROUPS = ("rule expert solves", "only the truth-built sequence repairs", "neither repairs")
+REFERENCE_GROUPS = repair_breakdown.REFERENCE_GROUPS
 
 
 def load_suite(path: Path) -> list[dict[str, Any]]:
@@ -144,7 +145,11 @@ def _percentile(values: Sequence[float], share: float) -> float | None:
 
 
 def summarize(records: Sequence[Mapping[str, Any]], reference: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
-    """Counts over the evaluated episodes.  ``solved`` is the object-level audit, ``strict_solved`` the old one."""
+    """Counts over the evaluated episodes.  ``solved`` is the object-level audit, ``strict_solved`` the old one.
+
+    ``repairs`` is what lies under ``solved`` (``research.minimal_env.repair_breakdown``): the episodes that
+    repaired every error, some of them or none, the errors repaired by kind, and how the unsolved episodes ended.
+    """
     totals: Counter = Counter()
     by_class: dict[str, Counter] = defaultdict(Counter)
     by_reference: dict[str, Counter] = {name: Counter() for name in REFERENCE_GROUPS}
@@ -207,6 +212,7 @@ def summarize(records: Sequence[Mapping[str, Any]], reference: Mapping[str, Mapp
         "prompt_tokens": {"median": _percentile(prompt_tokens, 0.5), "p95": _percentile(prompt_tokens, 0.95),
                           "max": max(prompt_tokens) if prompt_tokens else None, "steps": len(prompt_tokens)},
         "by_class": {name: dict(sorted(cell.items())) for name, cell in sorted(by_class.items())},
+        "repairs": repair_breakdown.breakdown(records, reference),
     }
     if reference is not None:
         summary["by_reference"] = {name: dict(sorted(cell.items())) for name, cell in by_reference.items()}
@@ -215,7 +221,11 @@ def summarize(records: Sequence[Mapping[str, Any]], reference: Mapping[str, Mapp
 
 def evaluation_payload(records: Sequence[Mapping[str, Any]], *, suite: str, adapter: str, settings: Mapping[str, Any],
                        reference: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
-    """What ``evaluation.json`` holds: the settings, the summary and one line per case."""
+    """What ``evaluation.json`` holds: the settings, the summary and one line per case.
+
+    A case's line carries how far its episode got (errors injected, repaired, healthy objects damaged), so two
+    evaluations can be compared case by case from their ``evaluation.json`` alone.
+    """
     return {
         "contract": EVALUATION_CONTRACT, "suite": str(suite), "adapter": str(adapter), "settings": dict(settings),
         "summary": summarize(records, reference),
@@ -223,7 +233,9 @@ def evaluation_payload(records: Sequence[Mapping[str, Any]], *, suite: str, adap
                       "solved": bool(record["score"]["solved"]), "strict_solved": bool(record["score"]["strict"]["solved"]),
                       "declared": record["score"].get("declared"), "outcome": record.get("outcome"),
                       "actions": [str((step.get("action") or {}).get("tool")) for step in record.get("steps") or []],
-                      "reward": (record.get("reward") or {}).get("total")} for record in records],
+                      "reward": (record.get("reward") or {}).get("total"),
+                      **{key: value for key, value in repair_breakdown.case_counts(record).items() if key != "group"}}
+                     for record in records],
     }
 
 
@@ -294,6 +306,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     summary = payload["summary"]
     _write_json(args.output_dir / "evaluation.json", payload)
     print(json.dumps({**summary["totals"], "mean_actions": summary["mean_actions"], "mean_reward": summary["mean_reward"],
+                      "repairs": summary["repairs"]["episodes"],
                       **({"by_reference": summary["by_reference"]} if reference is not None else {})}, sort_keys=True))
     return 0
 

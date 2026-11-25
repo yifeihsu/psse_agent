@@ -122,6 +122,14 @@ Solving with the whole 16-action budget (0.84) still beats stopping at once (-0.
 a workflow and no keep-or-undo label: a correction is kept or undone by the model's own later action and credited by
 the episode's outcome.
 
+**What lies under `solved`.** Neither `solved` nor the reward credits a partial repair: an episode that repairs two
+of three errors counts and earns the same as one that repairs none. The record is there all the same
+(`physical.errors`, `physical.damage`), and since 2026-11-25 every evaluation summary carries its split
+(`summary["repairs"]`, from `research/minimal_env/repair_breakdown.py`): the episodes that are solved, that repaired
+every error but damaged a healthy object, that repaired some errors, and that repaired none; the errors repaired by
+kind; how the unsolved episodes ended, with the estimator's verdict; and the partial repairs that ended honestly
+(`unresolved` declared, nothing damaged). It is a report: `solved` stays the result and the reward is unchanged.
+
 ## Cost
 
 A correction here is one action where the old interface needed four (context, correction, solve, commit), so action
@@ -175,6 +183,10 @@ python -m research.minimal_env.expert_baseline --suite <suite.json> --episodes <
 python -m research.minimal_env.evaluate --suite <suite.json> --adapter <adapter dir> --output-dir <dir>
 ```
 
+```bash
+python -m research.minimal_env.repair_breakdown <evaluation dir> [<evaluation dir> ...] --reference <reference.json>
+```
+
 `research/minimal_env/train_sft.py` runs the stock `research-train` on these rows (it keeps each row's own six
 tools instead of the old registry), `row_gate.py` runs the trainer's tokenizer gate alone, and `evaluate.py` runs a
 trained adapter on a suite. All three need the model or its tokenizer; the cluster cell that calls them is
@@ -194,6 +206,19 @@ at a later state), the RL driver trains that branch's call on that state's promp
 the truth enters through the reward alone, and nothing after a forced step is trained. An evaluated episode never
 branches. `research/minimal_env/fork_probe.py` runs the forks with no update. The forced call met the model in
 the probe's smoke of 2026-11-22 (4 cases; `research/hpc/minimal_rl_20261122/README.md`, section 9).
+
+`research/minimal_env/repair_breakdown.py` (2026-11-25) reads stored evaluations (an evaluation folder, the rule
+expert's replay, the truth-built sequences), prints the split above side by side, and compares each evaluation with
+the first case by case: solved gained and lost, and the cases where more or fewer errors ended repaired.
+
+`research/minimal_env/candidate_sets.py` (2026-11-25) asks what the model itself holds plausible where an episode
+stops with an error left. At that state it finds, exactly, the corrections the model gives the most probability
+(one call per line and meter the prompt lists, both statuses of every breaker it names), and reads whether the
+objects still wrong are among the 1, 3 and 5 most probable. A state lists 150 to 300 candidate calls; they are laid
+out as a tree of tokens and searched best first, so the most probable ones are found in a few dozen forward passes
+instead of one pass a call, and what is not scored is bounded. The candidates come from the observation alone; the
+truth names which calls are always scored and counts the coverage, and changes no probability. Its cluster cell is
+`research/hpc/minimal_candidates_20261125/`, whose README holds its state.
 
 ## Settings a model run needs
 

@@ -191,9 +191,15 @@ def read_results(directory: Path) -> list[dict[str, Any]]:
     return [json.loads(path.read_text(encoding="utf-8")) for path in sorted(Path(directory).glob("*.json"))]
 
 
-def model_scorer(adapter: str, output_dir: Path, *, model_choice: str, max_length: int, max_input_tokens: int,
-                 table_versions: int, max_actions: int, temperature: float) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
-    """The model the RL update loads, with the policy's renderers: a scorer of one state."""
+def model_parts(adapter: str, output_dir: Path, *, model_choice: str, max_length: int, max_input_tokens: int,
+                table_versions: int, max_actions: int, temperature: float, label: str = "score-actions") -> Any:
+    """The model the RL update loads and the policy's renderers, by name: ``config``, ``model``, ``side_inputs``,
+    ``view``, ``render``, ``prompt_ids``, ``render_target``, ``logprobs`` and ``tokens``.
+
+    ``research.minimal_env.candidate_sets`` reads the same model through the same renderers.
+    """
+    import types
+
     import torch
 
     from psse_env.rl.rows import build_step_row
@@ -213,7 +219,7 @@ def model_scorer(adapter: str, output_dir: Path, *, model_choice: str, max_lengt
                              max_input_tokens=int(max_input_tokens), temperature=float(temperature))
     config.validate()
     limits = apply_prompt_limits(config)
-    print(f"[score-actions] prompt limits {json.dumps(limits, sort_keys=True)}", flush=True)
+    print(f"[{label}] prompt limits {json.dumps(limits, sort_keys=True)}", flush=True)
     model, processor, side_inputs = load_trainable_model(config, str(adapter))
     model.eval()
     render, prompt_ids = prompt_functions(config, str(adapter), processor)
@@ -232,9 +238,19 @@ def model_scorer(adapter: str, output_dir: Path, *, model_choice: str, max_lengt
     def tokens(ids: Sequence[int]) -> list[str]:
         return list(tokenizer.convert_ids_to_tokens([int(value) for value in ids]))
 
+    return types.SimpleNamespace(config=config, model=model, side_inputs=side_inputs, view=model_view, render=render,
+                                 prompt_ids=prompt_ids, render_target=render_target, logprobs=logprobs, tokens=tokens)
+
+
+def model_scorer(adapter: str, output_dir: Path, *, model_choice: str, max_length: int, max_input_tokens: int,
+                 table_versions: int, max_actions: int, temperature: float) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+    """The model the RL update loads, with the policy's renderers: a scorer of one state."""
+    parts = model_parts(adapter, output_dir, model_choice=model_choice, max_length=max_length, max_input_tokens=max_input_tokens,
+                        table_versions=table_versions, max_actions=max_actions, temperature=temperature)
+
     def scorer(item: Mapping[str, Any]) -> dict[str, Any]:
-        return score_state(item, view=model_view, render=render, prompt_ids=prompt_ids, render_target=render_target,
-                           logprobs=logprobs, tokens=tokens)
+        return score_state(item, view=parts.view, render=parts.render, prompt_ids=parts.prompt_ids,
+                           render_target=parts.render_target, logprobs=parts.logprobs, tokens=parts.tokens)
 
     return scorer
 
