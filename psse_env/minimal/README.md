@@ -214,8 +214,9 @@ environment variables (`psse_env/dagger/preliminary_e2b_eval.py`):
   cell (`research/hpc/minimal_rl_20261116/`) ran one iteration of the plain run (2026-11-18) and three of the
   focused run (2026-11-21): both ended at 202 of the 247 cases a truth-built sequence repairs, against the
   supervised model's 198, which this suite cannot tell apart. The next run (65 optimizer steps instead of 3)
-  was submitted on 2026-11-22 and is running: 205 of the 247 after 17 steps (20 gained, 13 lost), 198 after 41
-  (19 gained, 19 lost), the third evaluation due on 2026-11-25. The probe of one-step forks is done: one forced step
+  ran from 2026-11-22 to 2026-11-25: 205 of the 247 after 17 steps (20 gained, 13 lost), 198 after 41 (19
+  gained, 19 lost), 187 after 65 (15 gained, 26 lost). None can be told from the 198; the further steps added
+  tool errors and damaged healthy objects, not repairs. The probe of one-step forks is done: one forced step
   repairs 39 of the 49 unrepaired development cases and 74 of 97 unrepaired training cases, an upper bound
   (`research/hpc/minimal_rl_20261122/`, section 9).
 - A paging mode for large systems. On IEEE 118 one version's meter table alone is about 1,100 rows.

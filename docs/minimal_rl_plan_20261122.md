@@ -7,12 +7,14 @@ done: one forced step repairs 39 of the 49 unrepaired development cases a truth-
 labelled upper bound; 14 of them are repaired after a refused call too). The training probe is done too:
 74 of 97 unrepaired training cases, 42 of them by a breaker step where the model fits a line. Stage A
 finished its first eight-step update on 2026-11-23 at 02:17 UTC (KL to the supervised model 0.063 at the
-seventh step, 2.76 at the eighth through one token). **Read on 2026-11-24 at 17:02 UTC, in iteration 6 of 9:
-the first evaluation (17 steps) solves 205 of the 247 solvable development cases, 20 gained and 13 lost
-against the supervised model's 198; the second (41 steps) solves 198, 19 gained and 19 lost.** The gain is the
-two-breaker classes (15, 26, 22 of 35), by a second `inspect` and a second `correct_topology`, the step the
-fork probe named; the loss is cases solved in few actions, mostly by an added `correct_parameters`. The halving
-rule did not fire; the third evaluation (65 steps) is expected on 2026-11-25 (the cell's README, section 9). After the
+seventh step, 2.76 at the eighth through one token). **Stage A is complete (2026-11-25 at 13:04 UTC, read at 16:00
+UTC): the first evaluation (17 steps) solves 205 of the 247 solvable development cases, 20 gained and 13 lost
+against the supervised model's 198; the second (41 steps) solves 198, 19 gained and 19 lost; the third (65
+steps) solves 187, 15 gained and 26 lost.** None differs from the start by more than the suite can tell (p =
+0.30, 1.0, 0.12). The gain is the two-breaker classes (15, 26, 22, 19 of 35), by a second `inspect` and a second
+`correct_topology`, the step the fork probe named; the loss is cases solved in few actions, by added
+`correct_parameters` and `correct_measurements` calls, and it grows with the steps (13, 19, 26 cases). The
+halving rule did not fire and nothing was cancelled (the cell's README, section 9). After the
 probes the user set `forks.min_gain` to 0.1 for stage B (2026-11-23, "Yes, set 0.1"; in the repository only,
 not deployed). The user approved the build
 ("Yes, build both"), the deploy and the smokes ("Yes, deploy and smoke"), then the redeploy, stage A's run and

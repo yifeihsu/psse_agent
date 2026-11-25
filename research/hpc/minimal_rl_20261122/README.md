@@ -1,14 +1,17 @@
 # The RL plan of 2026-11-22: stage A, stage B and the fork probe
 
-**Status: REDEPLOYED 2026-11-22 at 98e6518; stage A's run and both probes are SUBMITTED** (section 9:
+**Status: REDEPLOYED 2026-11-22 at 98e6518; stage A's run and both probes were submitted and are COMPLETE** (section 9:
 `mrp-steps` 24090332 to 24090338, `mrp-probe-dev` 24090400 to 24090402, `mrp-probe-train` 24090446 to 24090450).
 **Both probes are done: one forced step repairs 39 of the 49 unrepaired development cases and 74 of 97
-unrepaired training cases (section 9).** **Stage A is in iteration 6 of 9 (read 2026-11-24 at 17:02 UTC) and has
-two evaluations (section 9): 205 of the 247 solvable development cases after 17 steps (20 gained, 13 lost
-against the supervised model's 198), then 198 after 41 steps (19 gained, 19 lost).** The gain is the two-breaker
-classes (15, then 26, then 22 of 35); the loss is cases the supervised model solved in few actions, mostly by an
-added line fit. The planned check did not fire and nothing was cancelled; the third evaluation (after 65 steps)
-is expected on 2026-11-25 between about 07:30 and 13:00 UTC.
+unrepaired training cases (section 9).** **Stage A is COMPLETE (2026-11-25 at 13:04 UTC; nine
+iterations, 65 optimizer steps) and has three evaluations (section 9): 205 of the 247 solvable development cases
+after 17 steps (20 gained, 13 lost against the supervised model's 198), 198 after 41 steps (19 gained, 19 lost)
+and 187 after 65 steps (15 gained, 26 lost; 179 strict).** No evaluation differs from the start by more than the
+suite can tell (p = 0.30, 1.0, 0.12). The gain is the two-breaker classes (15, then 26, 22 and 19 of 35); the
+loss is cases the supervised model solved in few actions, by added line fits and meter corrections, and it grows
+with the steps (tool errors 88, 48, 116, 147; episodes with a damaged healthy object 27, 29, 34, 46). The
+planned check did not fire and nothing was cancelled; no `mrp-` job is queued, and every iteration's adapter is
+kept (iteration 2's is the 205).
 Both smokes completed and passed their checks on d6b7cfc. The probe's smoke showed that stage B would have
 picked contradictory rows; how a fork row is picked was changed the same day (section 10) and is in the deployed
 source. The user's word so far: "Yes, deploy and smoke", then "Yes, all three" (the redeploy, stage A's run and
@@ -630,6 +633,137 @@ five steps of iteration 6's update, iterations 7 and 8 and the third evaluation:
 evaluation (after 65 steps) is expected between about 07:30 and 13:00 UTC on 2026-11-25, and the run will have
 used 62 to 68 card-hours against the planned 41 to 55. Each iteration's adapter is kept (iteration 2's is the
 205). A waiter is armed on `out/steps/iteration_008/evaluation.json`.
+
+**Stage A is complete: the third evaluation, read 2026-11-25 at 16:00 UTC.** The second link (24090333) ended
+at 13:04 UTC with `mrp-steps-complete`, after a last stint of 6 h 20 min without a preemption; the five links
+behind it found the run complete and ended at once, and no `mrp-` job is queued. Nine iterations are done (65
+optimizer steps), integrity ok in each, no traceback. The evaluation was written at 13:04 UTC and read three
+hours later: the SSH master had ended between 06:05 and 06:20 UTC, the local waiter for its return died (exit
+code 4), and the user restored the master at 15:57 UTC.
+
+| Development suite, greedy | Supervised model (the start) | After 17 steps (iteration 2) | After 41 steps (iteration 5) | After 65 steps (iteration 8, written 2026-11-25 13:04 UTC) |
+| --- | --- | --- | --- | --- |
+| **Solved of the 247 a truth-built sequence repairs** | **198** | **205** (201 strict) | **198** (198 strict) | **187** (179 strict) |
+| Gained / lost against the start | | 20 / 13 (exact two-sided p = 0.30) | 19 / 19 (p = 1.0) | 15 / 26 (p = 0.12) |
+| Of the 184 the rule expert solves | 161 | 166 | 158 | 150 |
+| Of the 63 only a truth-built sequence repairs | 37 | 39 | 40 | 37 |
+| Against the rule expert's 184: gained / lost | 37 / 23 (p = 0.09) | 39 / 18 (p = 0.008) | 40 / 26 (p = 0.11) | 37 / 34 (p = 0.81) |
+| False claims | 72 | 64 | 72 | 76 |
+| Declared unresolved | 27 | 31 | 27 | 31 |
+| Out of actions | 3 | 0 | 3 | 6 |
+| Episodes with a damaged healthy object (objects) | 27 (51) | 29 (41) | 34 (46) | 46 (75) |
+| Tool errors (unknown object / tool failure) | 88 (30 / 58) | 48 (0 / 48) | 116 (50 / 66) | 147 (73 / 74) |
+| True errors repaired of 643 | 520 | 530 | 522 | 506 |
+| Mean actions an episode | 4.45 | 4.45 | 4.69 | 4.87 |
+| Calls: `inspect` / `correct_topology` / `correct_parameters` / `correct_measurements` / `undo` | 323 / 199 / 355 / 133 / 27 | 357 / 183 / 360 / 112 / 23 | 348 / 223 / 383 / 122 / 34 | 352 / 253 / 376 / 149 / 38 |
+
+From the second evaluation to the third: 10 gained, 21 lost (p = 0.07). Against the start, 12 cases are gained
+in all three evaluations and 25 in at least one; 6 are lost in all three and 39 in at least one. 159 cases are
+solved by all four models and 223 by at least one, so 24 of the 247 are solved by none of them. None of the 53
+cases nothing repairs is solved by any.
+
+Solved by class, of the cases a truth-built sequence repairs:
+
+| Class | Solvable | Start | 17 steps | 41 steps | 65 steps |
+| --- | --- | --- | --- | --- | --- |
+| cb2_dangling | 14 | 6 | 12 | 11 | 8 |
+| cb2_mixed | 11 | 4 | 7 | 4 | 5 |
+| cb2_split | 10 | 5 | 7 | 7 | 6 |
+| control_cb | 12 | 12 | 12 | 10 | 8 |
+| control_meter | 12 | 11 | 7 | 8 | 10 |
+| control_rx | 11 | 11 | 11 | 10 | 9 |
+| meter_on_rx | 16 | 13 | 13 | 12 | 13 |
+| meter_rx2 | 20 | 15 | 16 | 17 | 13 |
+| rx2_adjacent | 26 | 20 | 19 | 21 | 20 |
+| rx2_distant | 24 | 21 | 22 | 22 | 20 |
+| rx_cb_distant | 30 | 26 | 26 | 26 | 27 |
+| rx_cb_meter | 29 | 25 | 24 | 23 | 22 |
+| rx_cb_same_line | 18 | 18 | 18 | 16 | 16 |
+| rx_cb_shared_bus | 14 | 11 | 11 | 11 | 10 |
+| The three two-breaker classes | 35 | 15 | 26 | 22 | 19 |
+| The other eleven | 212 | 183 | 179 | 176 | 168 |
+
+- **The solved count falls with the steps: 205, 198, 187.** The first evaluation is the best of the run. No
+  evaluation differs from the start by more than the suite can tell (p = 0.30, 1.0, 0.12); the third is the
+  nearest to a difference, and it is a loss. Against the rule expert's 184 the third evaluation gains 37 and
+  loses 34 (p = 0.81).
+- **About half of the gain stays.** 12 cases are gained in all three evaluations, 6 of them two-breaker cases;
+  the two-breaker classes go 15, 26, 22, 19 of 35. Of the 49 cases the supervised model leaves unrepaired, 20,
+  19 and 15 are repaired at the three evaluations (25 in at least one); the probe's one forced step repairs 39.
+- **The loss grows: 13, 19, 26 cases.** Of the 26 lost at the third evaluation, 19 have longer episodes than the
+  supervised model's; 12 make more `correct_parameters` calls, 9 more `correct_measurements` calls and 4 more
+  `correct_topology` calls (one of them repeats `correct_topology` until out of actions); 3 keep the tool
+  sequence with other arguments. 15 end in a false claim, 10 declare unresolved, 1 runs out of actions.
+  control_cb, which the supervised model solved 12 of 12 by `inspect`, `correct_topology`, `finish`, is at 8:
+  all four lost cases go on after the breaker correction (a line fit in three, a meter correction and a line
+  fit in one). Only the tools' names were read here, not the calls' arguments.
+- **The model acts more and harms more.** Mean actions an episode 4.45, 4.45, 4.69, 4.87; tool errors 88, 48,
+  116, 147; episodes with a damaged healthy object 27, 29, 34, 46 (objects 51, 41, 46, 75); solved cases that
+  fail the strict audit 0, 4, 0, 8.
+- **The planned check did not fire and the run ended as planned.** Nothing was cancelled. Iteration 2's adapter
+  (the 205) is kept at `out/steps/iteration_002/adapter`, as is every iteration's.
+
+How far the episodes got, from each case's episode file (`evaluation/episodes/`, which holds every injected
+error's `repaired` flag; the evaluation's summary gives only the suite total). "Damage only" is a case with
+every error repaired and a healthy object outside tolerance:
+
+| | Start | 17 steps | 41 steps | 65 steps |
+| --- | --- | --- | --- | --- |
+| All 300: solved / damage only / some errors repaired / none | 198 / 1 / 86 / 15 | 205 / 3 / 78 / 14 | 198 / 7 / 78 / 17 | 187 / 6 / 83 / 24 |
+| The 247: solved / damage only / some / none | 198 / 1 / 38 / 10 | 205 / 3 / 30 / 9 | 198 / 7 / 32 / 10 | 187 / 6 / 39 / 15 |
+| The 53 nothing repairs: some / none | 48 / 5 | 48 / 5 | 46 / 7 | 44 / 9 |
+| Errors repaired: breakers of 188 | 159 | 172 | 162 | 159 |
+| Errors repaired: lines of 346 | 256 | 259 | 262 | 246 |
+| Errors repaired: meters of 109 | 105 | 99 | 98 | 101 |
+| The 247's errors repaired, of 517 | 457 | 466 | 460 | 445 |
+| The 53's errors repaired, of 126 | 63 | 64 | 62 | 61 |
+| The 247: false claims / declared unresolved / out of actions | 27 / 20 / 2 | 20 / 22 / 0 | 28 / 19 / 2 | 31 / 23 / 6 |
+| "Unresolved" declared on a repaired state | 0 | 0 | 0 | 0 |
+
+The training rollouts of iterations 7 and 8 (256 sampled episodes each; other cases every iteration, so a weak
+reading; iteration 8's are sampled by the adapter after 57 steps):
+
+| Iteration | 7 | 8 |
+| --- | --- | --- |
+| Repaired / false claims / declared unresolved / out of actions | 130 / 53 / 70 / 3 | 103 / 103 / 50 / 0 |
+| The 24 unrepaired cases drawn: with a repaired sample | 19 | 14 |
+| Their episodes repaired, of 192 | 78 | 60 |
+| The 8 repaired cases drawn: episodes repaired, of 64 | 52 | 43 |
+| Truth-built examples kept (rows) | 5 (23) | 10 (42) |
+| Rows: policy / for the KL term alone / supervised | 1,568 / 0 / 23 | 1,372 / 9 / 42 |
+| Mean reward of the sampled episodes | 0.200 | 0.004 |
+
+Iteration 8's rollout is the weakest since iteration 1 (95 repaired, 108 false claims); it agrees with the third
+evaluation.
+
+The updates of iterations 6 to 8 (eight steps each, the optimizer carried: 49, 57 and 65 steps after):
+
+| Iteration | 6 | 7 | 8 |
+| --- | --- | --- | --- |
+| KL to the supervised model by step | 0.024, 0.049, 0.042, 0.068, 0.055, 0.073, 0.041, 0.031 | 0.079, 0.086, 0.053, 0.041, 0.060, 0.064, 0.065, 0.073 | 0.029, 0.030, 0.069, 0.062, 0.049, 0.069, 0.092, 0.073 |
+| Mean absolute log-ratio to the sampler on uncertain tokens, first and eighth step | 0.016, 0.097 | 0.035, 0.171 | 0.006, 0.206 |
+| The largest on one token over the eight steps | 2.14 | 4.24 | 4.48 |
+| Largest row gradient norm before the row bound of 1.0 | 50.0 | 32.9 | 87.8 |
+| Most rows the row bound cut in one step | 5 | 8 | 6 |
+| Gradient norm before the clip at 1.0, range | 1.34 to 4.14 | 1.99 to 4.66 | 1.83 to 4.27 |
+| Mean advantage of the batch | -0.060 | -0.051 | -0.046 |
+| Supervised loss, the largest of the eight steps | 0.076 | 0.446 | 0.171 |
+
+The KL to the supervised model stays between 0.02 and 0.09 a step in the last three updates, as in iterations 2
+to 5: by this measure the adapter is as near the start after 65 steps as after 17, and the greedy episodes
+change all the same (39 cases lost in at least one evaluation).
+
+Time and cards, in UTC:
+
+| Iteration | Rollout | Update written | Evaluation |
+| --- | --- | --- | --- |
+| 6 | 11-24 11:57 to 13:31 | 11-24 20:07 | |
+| 7 | 11-24 20:09 to 22:16 | 11-25 06:25 | |
+| 8 | 11-25 06:27 to 07:42 | 11-25 11:59 | 11-25 12:01 to 13:04 |
+
+The run took 69.5 hours (2026-11-22 15:37 to 2026-11-25 13:04 UTC) and 67.3 card-hours against the planned 41
+to 55: 29 preemptions (6 in the first link, 23 in the second) and one 12-hour limit; 17 of the 31 stints ran
+under an hour. Iteration 7's update took 8 h 9 min through six preemptions.
 
 ## 10. What the probe's smoke changed (2026-11-22; deployed at 98e6518 before the probes)
 
