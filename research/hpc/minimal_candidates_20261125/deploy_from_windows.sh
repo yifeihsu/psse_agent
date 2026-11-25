@@ -4,11 +4,11 @@
 #   bash research/hpc/minimal_candidates_20261125/deploy_from_windows.sh <commit40>
 #
 # The cell gets a work directory and a source of its own: the RL cell's source is cloned there (same objects, fast)
-# and never moved.  Then the incremental git bundle goes in through ssh stdin with its checksum verified (wsl scp
-# cannot take a Windows path, and a pipe into wsl ssh hangs: files go in with <), and so do the inputs
-# candidate_sets.py build wrote here: the arm base always, any other arm of cell.env whose file is there.  The
-# adapters are read where they are.  Needs a live WSL SSH master for the torch alias
-# (scripts/start_torch_ssh_master.ps1) and the sources committed on BRANCH.
+# and never moved.  The commit is BRANCH's tip or a commit below it.  Where the clone holds it already it is checked
+# out; otherwise the incremental git bundle goes in through ssh stdin with its checksum verified (wsl scp cannot
+# take a Windows path, and a pipe into wsl ssh hangs: files go in with <).  So do the inputs candidate_sets.py build
+# wrote here: the arm base always, any other arm of cell.env whose file is there.  The adapters are read where they
+# are.  Needs a live WSL SSH master for the torch alias (scripts/start_torch_ssh_master.ps1) and the commit on BRANCH.
 set -euo pipefail
 COMMIT=${1:?40-hex commit to deploy}
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "commit must be 40 hex" >&2; exit 2; }
@@ -29,12 +29,14 @@ BUNDLE_LOCAL=output/deploy_mcs_${SHORT}.bundle
 export MSYS_NO_PATHCONV=1
 
 cd "$REPO"
-[[ "$(git rev-parse "$BRANCH")" == "$COMMIT" ]] || { echo "$BRANCH is not at $COMMIT" >&2; exit 2; }
+# The branch's tip or a commit below it: other sessions commit to this branch too, and the tip may hold work this
+# cell was not tested with.
+git merge-base --is-ancestor "$COMMIT" "$BRANCH" || { echo "$COMMIT is not on $BRANCH" >&2; exit 2; }
 # What goes to torch is the commit, never the working tree: files that differ here are named, not sent.
-modified=$(git status --porcelain --untracked-files=no -- research psse_env scripts tools)
-if [[ -n "$modified" ]]; then
+differing=$(git diff --name-only "$COMMIT" -- research psse_env scripts tools)
+if [[ -n "$differing" ]]; then
   echo "note: these tracked files differ from $SHORT in this checkout; the deploy sends the commit, not them:"
-  echo "$modified" | sed 's/^/    /'
+  echo "$differing" | sed 's/^/    /'
 fi
 for path in "$CELL_REL/cell.env" "$CELL_REL/stage_candidates.sbatch" "$CELL_REL/submit_cell.sh" "$CELL_REL/status_cell.sh" \
             research/minimal_env/candidate_sets.py research/minimal_env/score_actions.py research/minimal_env/repair_breakdown.py \
@@ -74,22 +76,30 @@ wsl -- ssh -o NumberOfPasswordPrompts=0 torch "echo ssh_ok" || { echo "no SSH ma
 queued=$(wsl -- ssh torch "/opt/slurm/bin/squeue -h -u yx3882 -o %j" | grep -c '^mcs-' || true)
 [[ "$queued" == 0 ]] || { echo "$queued job(s) of this cell are queued or running on torch: the source is not moved under them" >&2; exit 2; }
 wsl -- ssh torch "set -e; mkdir -p $WORK/logs $WORK/out $WORK/data; if [ ! -d $WORK/source/.git ]; then git clone -q $SOURCE_CELL/source $WORK/source; fi; echo source_ready"
+# The cell's source on torch, detached at the commit.
+checkout_commit() {
+  wsl -- ssh torch bash -s <<EOF
+set -e
+git -C $WORK/source -c advice.detachedHead=false checkout -q --detach $COMMIT
+test "\$(git -C $WORK/source rev-parse HEAD)" = "$COMMIT"
+echo source_at_$SHORT
+EOF
+}
 REMOTE_HEAD=$(wsl -- ssh torch "git -C $WORK/source rev-parse HEAD")
 if [[ "$REMOTE_HEAD" == "$COMMIT" ]]; then
   echo "source already at $SHORT"
+elif [[ "$(wsl -- ssh torch "git -C $WORK/source cat-file -t $COMMIT 2>/dev/null || true")" == commit ]]; then
+  # The clone holds the commit already (the source it came from has moved past it): nothing to send.
+  echo "torch source is at ${REMOTE_HEAD:0:7} and holds $SHORT"
+  checkout_commit
 else
   git cat-file -e "$REMOTE_HEAD^{commit}" 2>/dev/null || { echo "torch source is at $REMOTE_HEAD, which this repository does not have" >&2; exit 2; }
   mkdir -p "$(dirname "$BUNDLE_LOCAL")"
   git bundle create "$BUNDLE_LOCAL" "$REMOTE_HEAD..$BRANCH"
   echo "bundle $(stat -c %s "$BUNDLE_LOCAL") bytes"
   upload_verified "$BUNDLE_LOCAL" "$WORK/deploy_${SHORT}.bundle"
-  wsl -- ssh torch bash -s <<EOF
-set -e
-git -C $WORK/source fetch -q $WORK/deploy_${SHORT}.bundle $BRANCH
-git -C $WORK/source -c advice.detachedHead=false checkout -q --detach FETCH_HEAD
-test "\$(git -C $WORK/source rev-parse HEAD)" = "$COMMIT"
-echo source_at_$SHORT
-EOF
+  wsl -- ssh torch "git -C $WORK/source fetch -q $WORK/deploy_${SHORT}.bundle $BRANCH && echo bundle_fetched"
+  checkout_commit
 fi
 for arm in "${ARMS_LOCAL[@]}"; do
   upload_verified "$INPUTS_LOCAL/candidate_inputs_dev_$arm.jsonl" "$WORK/data/candidate_inputs_dev_$arm.jsonl"

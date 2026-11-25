@@ -57,7 +57,7 @@ The rule expert's 187 is by this object-level audit; its usual 184 is by the str
 * **The 53 cases no sequence repairs:** the supervised model repairs some errors in 48 and none in 5, the same as
   the truth-built sequences (48 and 5), and 63 of their 126 errors against 66.
 
-## 2. The candidate read-out (built, not run)
+## 2. The candidate read-out (deployed; the arm `base` submitted 2026-11-25)
 
 `research/minimal_env/candidate_sets.py`, three commands: `build` (local), `score` (the model; this cell's job),
 `read` (local).
@@ -108,7 +108,7 @@ with a version or a flip list is counted in the tool's probability and not as a 
 | `stage_candidates.sbatch` | The job of one arm (`ARM`): two processes on a card of 70 GB or more, each with half of the states, then the closing call that scores what is left and writes `summary.json`.  Preemptible and requeued; one file per state. |
 | `submit_cell.sh` | `score <arm>`: submits the arm's job (`mcs-<arm>`); refuses before the arm's adapter or inputs, once its summary is written, and while a job of the name is queued. |
 | `status_cell.sh` | Read-only: inputs, queue, `sacct`, and per arm the states written, the logs' last lines and the coverage. |
-| `deploy_from_windows.sh` | Clones the RL cell's source into a source of this cell's own (never moving that one), applies the incremental bundle, and uploads the inputs of every arm that has them here, checksums verified.  Submits nothing.  It sends the commit: tracked files that differ in the checkout are named and not sent. |
+| `deploy_from_windows.sh` | Clones the RL cell's source into a source of this cell's own (never moving that one), checks the commit out there (where the clone does not hold it, the incremental bundle goes in first), and uploads the inputs of every arm that has them here, checksums verified.  Submits nothing.  The commit is the branch's tip or a commit below it, so another session's later commit on the branch does not come along; tracked files that differ in the checkout are named and not sent. |
 | `test_cell.py` | The scripts parse, name this cell and write nothing of another cell; the stage runs the shards and the closing call for the arm it is given (with a stub scorer). |
 
 ### Arms
@@ -131,7 +131,17 @@ with a version or a flip list is counted in the tool's probability and not as a 
 
 ### State
 
-Built 2026-11-25.  **Not deployed, nothing submitted.**  The cell has no work directory on torch yet.
+Built 2026-11-25 and, on the user's word the same day ("Yes, deploy and run", for the supervised model's stops),
+**deployed at d748912 and the arm `base` submitted: job 24643723 (`mcs-base`), 2026-11-25 23:24 UTC.**  The arm
+`steps17` has its inputs on torch and is not submitted.
+
+* **The commit on torch is d748912**, the one the tests ran on, not the branch's tip: another session had put
+  its stage B commit (600049b) on the branch and redeployed the RL cell at it, so the clone arrived at 600049b
+  and was checked out at d748912.  Below this cell's own files, d748912 is the code stage A ran (98e6518) with
+  the scorer's loader moved into `score_actions.model_parts`.
+* **Before the submit, on the login node with the job's Python** (3.12.13, torch 2.10.0, transformers 5.10.4,
+  peft 0.19.1): the source is clean at d748912, both input files arrived with their checksums (102 states and
+  20,976 candidates for `base`), and the 32 tests of `test_candidate_sets.py` pass there.
 
 Checked on Windows the same day:
 
@@ -159,8 +169,7 @@ Checked on Windows the same day:
   update's forward pass with its last step left out (`position_logprobs`), compared with `completion_logprobs` on a
   small torch model; the loader and the renderers are the ones the job of 2026-11-20 ran.  The job's first states
   are its first run on the model.
-* **On torch, read-only**: both adapters are there, the job environment is there, the source to clone from is at
-  98e6518, and nothing of ours is queued.
+* **On torch, read-only, before the deploy**: both adapters are there and the job environment is there.
 
 **Cost, an estimate.**  A forward pass of these prompts took about 3.2 s with two processes on a card on
 2026-11-20.  At 16 to 40 passes a state the arm `base` is 1.5 to 3.5 card-hours; at the limit of 96 at every state

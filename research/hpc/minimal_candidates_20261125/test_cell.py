@@ -118,6 +118,13 @@ class CellFilesTests(unittest.TestCase):
         # What is sent is the commit: a working tree that differs is named, and the deploy goes on.
         self.assertIn("the deploy sends the commit, not them", deploy)
         self.assertNotIn("commit the sources first", deploy)
+        # The commit is the branch's tip or a commit below it (another session's later commit does not block the
+        # deploy), and the source ends detached at the commit itself, bundle or not.
+        self.assertIn('git merge-base --is-ancestor "$COMMIT" "$BRANCH"', deploy)
+        self.assertIn('git diff --name-only "$COMMIT" -- research psse_env scripts tools', deploy)
+        self.assertIn("checkout -q --detach $COMMIT", deploy)
+        self.assertNotIn("FETCH_HEAD", deploy)
+        self.assertEqual(deploy.count("\n  checkout_commit\n"), 2)
         for line in deploy.splitlines():
             if "wsl -- ssh" in line:
                 self.assertNotIn("\\$(", line, line)
