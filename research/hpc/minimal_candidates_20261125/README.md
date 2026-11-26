@@ -8,7 +8,11 @@ given the same day: a partial repair is a plain failure in the count and in the 
 can be read exactly; the criterion works as a tier reported beside "solved of the 247" under three conditions (a
 reference, not the agent, decides that the evidence is insufficient; the set has a fixed size; credit goes only to
 an honest ending).  Two read-outs were offered and the user said "Yes, build both".  Both are built here.  Neither
-changes the reward, the scorer or a prompt, and no tier is added to the result: that is the user's decision still.
+changes the reward, the scorer or a prompt.
+
+**Decided by the user on 2026-11-26, after the result of the arm `base` in section 2: "Keep it a read-out".**  No
+tier is added.  "Solved of the 247" stays the one result, the breakdown of section 1 stays in every evaluation
+summary, and the candidate read-out of section 2 is a diagnostic that runs when it is asked for.
 
 ## 1. The partial-repair breakdown (local, done)
 
@@ -210,8 +214,17 @@ counted, every object still wrong is either corrected or in the set of 1 / 3 / 5
 reference says no sequence repairs the case at 53 stops.  Every object still wrong is in the set at 26 of them,
 and corrected or in the set at 47.  The model ends 45 of the 53 with `finish resolved` (the estimator's test
 passes at 36 of those), 7 with `finish unresolved` (4 after damaging a healthy object) and 1 out of actions.  Of
-the 47, 3 end with `unresolved` and 2 of those damaged nothing.  The tier counts 47 cases without the condition on
-the ending and 2 with it; whether to have it, and with which conditions, is the user's decision still.
+the 47, 3 end with `unresolved` and 2 of those damaged nothing.  The tier would count 47 cases without the
+condition on the ending and 2 with it.
+
+**The decision (the user, 2026-11-26): no tier; this stays a read-out.**  The recommendation put to the user with
+these numbers was to keep it a read-out, for three reasons.  Without the condition on the ending, a tier credits
+the model for a doubt it does not state: it ends 45 of the 53 with `finish resolved`, and at the 72 stops it ends
+that way all corrections together hold 0.0036 of the probability at the median.  With that condition it counts 2
+cases.  And a count built on the set needs this scoring job, about an hour and a half of one card, for every
+evaluation.  The user's answer was "Keep it a read-out".  Left open, and not decided here: whether the agent
+itself should state the doubt (end `unresolved` where an error is left, ask for the breakers view before it
+stops).  That is a training question, the calibrated-abstention item of the RL work.
 
 **The run.**  1,712 forward passes for the 20,976 candidates: 11 to 29 a state, 17 at the median, 7 to 12 of them
 for the calls that are always scored.  50 to 229 s a state (97 at the median, 5.4 s a pass with two processes on
@@ -264,7 +277,8 @@ close: at 59 of the 101 stops the fifth object is within 0.25 of the best one ou
 Built 2026-11-25 and, on the user's word the same day ("Yes, deploy and run", for the supervised model's stops),
 deployed at d748912 and the arm `base` submitted at 23:24 UTC as job 24643723 (`mcs-base`).  **The arm `base` is
 done: the job ended COMPLETED on 2026-11-26 at 01:00 UTC with all 102 states scored, and its result is above.**
-The arm `steps17` has its inputs on torch and is not submitted: it waits for the user's word.
+The arm `steps17` has its inputs on torch and is not submitted: it waits for the user's word.  **The tier is
+decided: none is added** (the user on 2026-11-26: "Keep it a read-out").
 
 * **The commit on torch is d748912**, the one the tests ran on, not the branch's tip: another session had put
   its stage B commit (600049b) on the branch and redeployed the RL cell at it, so the clone arrived at 600049b
