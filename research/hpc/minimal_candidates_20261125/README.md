@@ -146,22 +146,28 @@ The call on a breaker still wrong gets 0.00005 at the median of the 19 such call
 
 **The kind of error against the tool the model gives the most probability.**
 
-| Errors left at the stop | Stops | `correct_parameters` | `correct_topology` | `correct_measurements` |
-| --- | --- | --- | --- | --- |
-| Breakers only | 23 | 18 | 2 | 3 |
-| A breaker and a line | 3 | 2 | 0 | 1 |
-| Lines only | 71 | 51 | 0 | 20 |
-| A line and a meter | 3 | 1 | 1 | 1 |
-| A meter only | 1 | 0 | 0 | 1 |
+| Errors left at the stop | Stops | `correct_parameters` | `correct_topology` | `correct_measurements` | Two tools equal |
+| --- | --- | --- | --- | --- | --- |
+| Breakers only | 23 | 17 | 2 | 3 | 1 |
+| A breaker and a line | 3 | 2 | 0 | 1 | 0 |
+| Lines only | 71 | 49 | 0 | 20 | 2 |
+| A line and a meter | 3 | 1 | 1 | 1 | 0 |
+| A meter only | 1 | 0 | 0 | 1 | 0 |
+
+At 3 stops the line fit and the meter correction have exactly the same probability (the scores come from
+half-precision logits, where equal values occur); until 2026-11-26 this table counted those three with the line
+fit, 18 and 51 in its first column.  No two objects are equal across the edge of a set, so the coverage tables
+are not touched by it.
 
 At the 23 stops where only breakers are still wrong the line fit holds 0.80 of the correction mass at the median
 and the topology tool 0.011.  At 36 of the 101 stops the prompt names no breaker and no topology call is scored
 (one of the 29 breakers still wrong is at such a stop): that tool's probability is only bounded there by what the
 scored calls leave (0.0007 at the median, 0.12 at most).  The bound decides the most probable tool at 32 of the 36;
 the other 4 stand in the table under the leading tool of the two measured.  Over the 97 decided stops the most
-probable tool is a tool of an error left at 56 (37 of the 65 with all three tools measured, 19 of the 32); a tool
-drawn at random would be at 0.35 of them.  (`read` itself reports the tool only where all three are measured: 37
-of 65.)
+probable tool is a tool of an error left at 54, another tool at 40, and two tools are equal at 3 (35, 27 and 3 of
+the 65 with all three tools measured; 19 and 13 of the 32); a tool drawn at random would be one of an error left
+at 0.35 of them.  (`read` itself reports the tool only where all three are measured and takes the first of two
+equal tools in its own order: 37 of 65.)
 
 **The probabilities are small: at the stop the model is sure of the action it took.**
 
