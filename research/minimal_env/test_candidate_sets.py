@@ -506,6 +506,41 @@ class ReadingTests(unittest.TestCase):
         self.assertEqual(reading["kinds"]["1"], {"any": False, "all": False})
         self.assertEqual(reading["kinds"]["2"], {"any": True, "all": True})
 
+    def test_two_objects_exactly_as_probable_across_a_sets_edge_are_not_decided(self) -> None:
+        # Half-precision logits give equal scores; which of two equal objects stands first is only the order of listing.
+        corrections = [(LINE, {"line": 2}, -3.25), (LINE, {"line": 12}, -3.25), (LINE, {"line": 7}, -5.0),
+                       (METER, {"meters": [3]}, -6.0)]
+        for wrong in ("2", "12"):
+            reading = candidate_sets.state_reading(_result("a", errors_left=[("line", wrong, "never corrected")], corrections=corrections))
+            self.assertIsNone(reading["covered"]["1"]["any"])
+            self.assertEqual(reading["covered"]["3"]["any"], True)
+            self.assertIsNone(reading["top_is_wrong_object"])
+        below = candidate_sets.state_reading(_result("a", errors_left=[("line", "7", "never corrected")], corrections=corrections))
+        self.assertEqual(below["covered"]["1"]["any"], False)      # under the two equal ones for certain
+        self.assertEqual(below["covered"]["3"]["any"], True)
+        self.assertEqual(below["top_is_wrong_object"], False)      # neither of the two equal ones is the object still wrong
+        both = candidate_sets.state_reading(_result("a", errors_left=[("line", "2", "x"), ("line", "12", "x")], corrections=corrections))
+        self.assertEqual(both["top_is_wrong_object"], True)        # whichever of the two leads, it is one still wrong
+        self.assertEqual(both["covered"]["3"], {"any": True, "all": True})
+        # An object that no equal pair stands beside is read as before.
+        fourth = candidate_sets.state_reading(_result("a", errors_left=[("meter", "3", "x")], corrections=corrections))
+        self.assertEqual({size: fourth["covered"][size]["any"] for size in ("1", "3", "5")}, {"1": False, "3": False, "5": True})
+
+    def test_two_tools_exactly_as_probable_leave_the_kind_reading_open(self) -> None:
+        corrections = [(LINE, {"line": 2}, math.log(0.05)), (BREAKER, {"breaker": "CB_1", "status": "open"}, math.log(0.05)),
+                       (METER, {"meters": [3]}, math.log(0.01))]
+        tools = {LINE: 0.05, BREAKER: 0.05, METER: 0.01}
+        tied = candidate_sets.state_reading(_result("a", errors_left=[("breaker", "CB_1", "never corrected")], corrections=corrections, tools=tools))
+        self.assertEqual(tied["kinds"]["1"], {"any": None, "all": None})
+        self.assertEqual(tied["kinds"]["2"], {"any": True, "all": True})
+        other = candidate_sets.state_reading(_result("a", errors_left=[("meter", "3", "never corrected")], corrections=corrections, tools=tools))
+        self.assertEqual(other["kinds"]["1"], {"any": False, "all": False})   # whichever of the two equal tools leads
+        self.assertEqual(other["kinds"]["2"], {"any": False, "all": False})
+        last = {LINE: 0.05, BREAKER: 0.01, METER: 0.01}
+        second = candidate_sets.state_reading(_result("a", errors_left=[("breaker", "CB_1", "never corrected")], corrections=corrections, tools=last))
+        self.assertEqual(second["kinds"]["1"], {"any": False, "all": False})
+        self.assertEqual(second["kinds"]["2"], {"any": None, "all": None})    # second or third only by the order of listing
+
     def test_a_step_of_the_continuation_is_looked_up_among_the_listed_calls_that_go_on(self) -> None:
         undo = _call("undo", {}, math.log(0.06), roles=["repairing"])
         inspect = _call("inspect", {"view": "breakers"}, math.log(0.2))

@@ -543,16 +543,27 @@ def state_reading(result: Mapping[str, Any]) -> dict[str, Any]:
             best[key] = float(call["logprob"])
             ranking.append(key)
     place = {key: number for number, key in enumerate(ranking, start=1)}
+    object_logprobs = [best[key] for key in ranking]
 
-    def in_set(position: int | None, logprob: float | None, size: int) -> bool | None:
-        """Whether a call or object at ``position`` among the scored ones is among the ``size`` most probable of
-        all: ``True`` and ``False`` are certain, ``None`` is not decided (the search stopped at its limit first).
+    def in_set(position: int | None, logprob: float | None, size: int, ordered: Sequence[float]) -> bool | None:
+        """Whether a call or object at ``position`` among the scored ones (``ordered`` holds their log-probabilities,
+        the most probable first) is among the ``size`` most probable of all: ``True`` and ``False`` are certain,
+        ``None`` is not decided.
 
         Something unscored can only stand above a scored one, never below it: a position outside the set is
         outside for certain, and one inside is certain when nothing unscored can exceed it.  Every call the search
         found in order passes that test: a branch left unscored is never more probable than a call found before it.
+        Where the search stopped at its limit first, the rest is not decided.
+
+        Two entries exactly as probable, one on each side of the set's edge, are not decided either.  The scores
+        come from half-precision logits, where equal values occur, and which of the two stands first is then only
+        the order they were listed in.
         """
-        if position is None or position > size:
+        if position is None:
+            return False
+        if len(ordered) > size and ordered[size - 1] == ordered[size] and logprob == ordered[size]:
+            return None
+        if position > size:
             return False
         if highest is None or (logprob is not None and logprob >= float(highest) - 1e-6):
             return True
@@ -568,7 +579,7 @@ def state_reading(result: Mapping[str, Any]) -> dict[str, Any]:
         logprob = best.get(key)
         errors.append({"kind": kind, "object": item, "standing": standing, "listed": key in place,
                        "place": place.get(key), "logprob": logprob,
-                       "in_set": {str(size): in_set(place.get(key), logprob, size) for size in SET_SIZES},
+                       "in_set": {str(size): in_set(place.get(key), logprob, size, object_logprobs) for size in SET_SIZES},
                        "share_of_corrections": (math.exp(logprob) / mass if logprob is not None and mass else None)})
     covered: dict[str, dict[str, bool | None]] = {}
     for size in SET_SIZES:
@@ -584,10 +595,29 @@ def state_reading(result: Mapping[str, Any]) -> dict[str, Any]:
     tool_of = {"line": CORRECT_PARAMETERS, "meter": CORRECT_MEASUREMENTS, "meters": CORRECT_MEASUREMENTS,
                "breaker": CORRECT_TOPOLOGY, "line_status": CORRECT_TOPOLOGY}
     wanted_tools = {tool_of[kind] for kind, _item, _standing in left if kind in tool_of}
+
+    def tool_sets(size: int) -> list[set[str]]:
+        """Every set of the ``size`` most probable tools: more than one where tools exactly as probable stand on
+        the two sides of its edge."""
+        if size >= len(order):
+            return [set(order)]
+        edge = tools[order[size - 1]]
+        above = {tool for tool in order if tools[tool] > edge}  # type: ignore[operator]
+        equal = [tool for tool in order if tools[tool] == edge]
+        return [above | set(chosen) for chosen in itertools.combinations(equal, size - len(above))]
+
+    def one_verdict(verdicts: Iterable[bool]) -> bool | None:
+        found = set(verdicts)
+        return next(iter(found)) if len(found) == 1 else None
+
     kinds: dict[str, dict[str, bool | None]] = {}
     for size in (1, 2):
-        kinds[str(size)] = ({"any": bool(wanted_tools & set(order[:size])), "all": wanted_tools <= set(order[:size])}
-                            if wanted_tools and len(order) == len(CORRECTION_TOOLS) else {"any": None, "all": None})
+        if wanted_tools and len(order) == len(CORRECTION_TOOLS):
+            sets = tool_sets(size)
+            kinds[str(size)] = {"any": one_verdict(bool(wanted_tools & chosen) for chosen in sets),
+                                "all": one_verdict(wanted_tools <= chosen for chosen in sets)}
+        else:
+            kinds[str(size)] = {"any": None, "all": None}
 
     def call_probability(tool: str, arguments: Mapping[str, Any]) -> float | None:
         wanted = signature({"tool": tool, "arguments": arguments})
@@ -597,15 +627,19 @@ def state_reading(result: Mapping[str, Any]) -> dict[str, Any]:
     wrong = {(kind, item) for kind, item, _standing in left}
     going_on = sorted((call for call in calls if call["listed"] and call["kind"] != FINISH), key=lambda call: -call["logprob"])
     has_repairing = any("repairing" in call["roles"] for call in calls)
+    going_on_logprobs = [float(call["logprob"]) for call in going_on]
     next_step: dict[str, bool | None] = {}
     for size in SET_SIZES:
-        verdicts = [in_set(position, call["logprob"], size)
+        verdicts = [in_set(position, call["logprob"], size, going_on_logprobs)
                     for position, call in enumerate(going_on, start=1) if "repairing" in call["roles"]]
         next_step[str(size)] = (None if not has_repairing else True if any(verdict is True for verdict in verdicts)
                                 else False if all(verdict is False for verdict in verdicts) else None)
     truth_mass = sum(math.exp(call["logprob"]) for call in calls if call["kind"] == CORRECTION and (
         "repairing" in call["roles"] or (call["object"] is not None and (str(call["object"][0]), str(call["object"][1])) in wrong)))
     top_object = ranking[0] if ranking else None
+    # Objects exactly as probable as the first share the first place: the reading is decided only when they agree.
+    leading = [key for key in ranking if best[key] == best[ranking[0]]]
+    top_is_wrong = one_verdict(key in wrong for key in leading) if leading and errors else None
     return {
         "key": f"{result['split']}:{result['case']}", "group": f"{result['split']}:{result.get('point') or 'stop'}",
         "case": str(result["case"]), "class": result.get("class"), "complete": bool(result.get("complete")),
@@ -622,7 +656,7 @@ def state_reading(result: Mapping[str, Any]) -> dict[str, Any]:
         "share_on_objects_still_wrong": (truth_mass / mass) if mass else None,
         "top_object": None if top_object is None else list(top_object),
         "top_share": (math.exp(best[top_object]) / mass) if top_object is not None and mass else None,
-        "top_is_wrong_object": None if top_object is None or not errors else top_object in wrong,
+        "top_is_wrong_object": top_is_wrong,
         "declared": truth.get("declared"), "damaged": int(truth.get("damaged") or 0),
         "estimator_passes": bool(truth.get("estimator_passes")),
     }

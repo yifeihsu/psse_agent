@@ -98,7 +98,9 @@ breakers`, of any correction, and the share of the correction mass on the object
 object's share against whether it is one still wrong (is a confident set right more often); and, with
 `--probe-report`, the model's set against the evidence probe's place for the same stop (the probe of 2026-11-20
 places the object first in 37 of 48 solvable stops, in the top three in 43, in the top five in 45, when it is
-given the substation table an `inspect breakers` would show).
+given the substation table an `inspect breakers` would show).  Two objects, calls or tools exactly as probable on
+the two sides of a set's edge are reported as not decided (since 2026-11-26; before, the first in the order of
+listing was taken): the scores come from half-precision logits, where equal values occur.
 
 **Not covered, stated plainly.**  A group of meters is one call the candidates do not list (6 of the 300 cases
 hold two or three bad meters): each meter is a candidate on its own.  The stops of *repaired* episodes are not
@@ -166,8 +168,8 @@ scored calls leave (0.0007 at the median, 0.12 at most).  The bound decides the 
 the other 4 stand in the table under the leading tool of the two measured.  Over the 97 decided stops the most
 probable tool is a tool of an error left at 54, another tool at 40, and two tools are equal at 3 (35, 27 and 3 of
 the 65 with all three tools measured; 19 and 13 of the 32); a tool drawn at random would be one of an error left
-at 0.35 of them.  (`read` itself reports the tool only where all three are measured and takes the first of two
-equal tools in its own order: 37 of 65.)
+at 0.35 of them.  (`read` itself reports the tool only where all three are measured: 35 of 65, with 2 not decided
+where the two equal tools are the right one and another.)
 
 **The probabilities are small: at the stop the model is sure of the action it took.**
 
