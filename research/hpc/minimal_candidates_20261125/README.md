@@ -93,7 +93,8 @@ probable calls that go on; the probability of the model's own last action, of ea
 breakers`, of any correction, and the share of the correction mass on the objects still wrong; the most probable
 object's share against whether it is one still wrong (is a confident set right more often); and, with
 `--probe-report`, the model's set against the evidence probe's place for the same stop (the probe of 2026-11-20
-places the object first in 37 of 48 solvable stops, in the top three in 43, in the top five in 45).
+places the object first in 37 of 48 solvable stops, in the top three in 43, in the top five in 45, when it is
+given the substation table an `inspect breakers` would show).
 
 **Not covered, stated plainly.**  A group of meters is one call the candidates do not list (6 of the 300 cases
 hold two or three bad meters): each meter is a candidate on its own.  The stops of *repaired* episodes are not
@@ -178,17 +179,22 @@ By tool, at the median: `correct_parameters` 0.0045, `correct_measurements` 0.00
 where the most probable object holds 0.9 or more of the correction mass it is one still wrong at 9 of 15 stops,
 between 0.5 and 0.9 at 15 of 46, under 0.5 at 7 of 40.
 
-**Against the evidence probe**, on the 48 solvable stops with an error left (the 22 and the 26 above):
+**Against the evidence probe**, on the 48 solvable stops with an error left (the 22 and the 26 above).  The probe
+has two readings: with the substation table of the current state, which is one `inspect breakers` away (the
+default of `read`, `--probe-reading candidate_inspect`), and with that table only where the prompt shows it
+(`candidate_shown`).
 
-| Set | Probe | Model | Both | Probe only | Model only | Neither |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | 37 | 12 | 10 | 27 | 2 | 9 |
-| 3 | 43 | 16 | 15 | 28 | 1 | 4 |
-| 5 | 45 | 20 | 19 | 26 | 1 | 2 |
+| An object still wrong among the 1 / 3 / 5 first | All 48 | A breaker still wrong (26) | Lines or meters only (22) |
+| --- | --- | --- | --- |
+| Probe, with the breakers view | 37 / 43 / 45 | 22 / 24 / 24 | 15 / 19 / 21 |
+| Probe, on what the prompt shows | 19 / 25 / 26 | 3 / 5 / 6 | 16 / 20 / 20 |
+| The model's set | 12 / 16 / 20 | 0 / 0 / 2 | 12 / 16 / 18 |
 
-The difference is the breakers.  At three objects, of the 26 stops with a breaker still wrong the probe places one
-in 24 and the model in 0; of the 22 with lines or meters only, 19 and 16.  The evidence holds the object; the
-model's next-call distribution does not carry it.
+With the breakers view, model and probe together: both 10 / 15 / 19, the probe only 27 / 28 / 26, the model only
+2 / 1 / 1, neither 9 / 4 / 2.  On lines and meters the model's set is close to the probe's.  The difference is the
+breakers: the breakers view holds the object (24 of 26 at three objects) and without it the probe finds it at 5.
+At those 26 stops the model gives `inspect breakers` 0.0002 at the median (over 0.01 at 4): it neither asks for
+the view nor names the breaker.
 
 **A first step of the truth-built continuation** is the most probable call that goes on (any listed call but
 `finish`) at 15 of the 51 stops that have such a continuation, among the three most probable at 20 and the five at
