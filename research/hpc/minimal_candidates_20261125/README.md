@@ -57,7 +57,7 @@ The rule expert's 187 is by this object-level audit; its usual 184 is by the str
 * **The 53 cases no sequence repairs:** the supervised model repairs some errors in 48 and none in 5, the same as
   the truth-built sequences (48 and 5), and 63 of their 126 errors against 66.
 
-## 2. The candidate read-out (deployed; the arm `base` submitted 2026-11-25)
+## 2. The candidate read-out (the arm `base` done 2026-11-26; the arm `steps17` not submitted)
 
 `research/minimal_env/candidate_sets.py`, three commands: `build` (local), `score` (the model; this cell's job),
 `read` (local).
@@ -100,6 +100,130 @@ hold two or three bad meters): each meter is a candidate on its own.  The stops 
 scored, so the read-out says nothing yet about how much the model would name where nothing is wrong.  `inspect`
 with a version or a flip list is counted in the tool's probability and not as a call.
 
+### Result of the arm `base`: the supervised model's 102 stops
+
+Job 24643723 ran from 2026-11-25 23:32 to 2026-11-26 01:00 UTC and scored all 102 states.  No search stopped at
+its limit, no prompt was cut and no call failed to render: the five most probable objects are exact at every
+state.  The scores are in `output/minimal_candidates_20261125/scores_base/` (local, not committed), the reading in
+`summary_base.json` beside them.  One model, one evaluation, 101 stops: the counts below are small.
+
+**Coverage.**  The set is the model's 1, 3 or 5 most probable correction objects at the stop.  A state lists 142
+to 218 correction objects (20 lines, 122 or 125 meters, 0 to 74 breakers).
+
+| Stops with an error left | Stops | An object still wrong is in the set of 1 / 3 / 5 | Every object still wrong is |
+| --- | --- | --- | --- |
+| All | 101 | 31 / 45 / 52 | 26 / 39 / 44 |
+| Every object still wrong can be named | 90 | 31 / 45 / 51 | 26 / 39 / 44 |
+| Reference: the rule expert solves the case | 22 | 3 / 6 / 6 | 1 / 3 / 3 |
+| Reference: only the truth-built sequence repairs it | 26 | 9 / 10 / 14 | 9 / 10 / 12 |
+| Reference: no sequence repairs it | 53 | 19 / 29 / 32 | 16 / 26 / 29 |
+| The model ended with `finish resolved` | 71 | 24 / 34 / 39 | 23 / 33 / 37 |
+| The model ended with `finish unresolved` | 27 | 6 / 10 / 12 | 3 / 5 / 6 |
+| The model ran out of actions | 3 | 1 / 1 / 1 | 0 / 1 / 1 |
+
+The 102nd stop has no error left: `r0_c2b40c5df2b0` repaired its errors, damaged one healthy object and declared
+`resolved`.
+
+**The set is lines; a breaker still wrong is almost never in it.**  The most probable object is a line at 74 of
+the 102 stops, a meter at 25 and a breaker at 3.
+
+| Errors left | Errors | Can be named | Among the 1 / 3 / 5 most probable objects |
+| --- | --- | --- | --- |
+| Lines | 90 | 90 | 31 / 46 / 52 |
+| Breakers | 29 | 18 | 0 / 0 / 1 |
+| Meters | 4 | 4 | 0 / 1 / 3 |
+| Never corrected in the episode | 87 | 76 | 31 / 44 / 49 |
+| Corrected, the result not within tolerance | 35 | 35 | 0 / 2 / 6 |
+| Corrected, then undone | 1 | 1 | 0 / 1 / 1 |
+
+A line drawn at random among the 20 would be the one still wrong 1 time in 20, and one of five lines 1 time in 4.
+The call on a breaker still wrong gets 0.00005 at the median of the 19 such calls scored and 0.0024 at most.
+
+**The kind of error against the tool the model gives the most probability.**
+
+| Errors left at the stop | Stops | `correct_parameters` | `correct_topology` | `correct_measurements` |
+| --- | --- | --- | --- | --- |
+| Breakers only | 23 | 18 | 2 | 3 |
+| A breaker and a line | 3 | 2 | 0 | 1 |
+| Lines only | 71 | 51 | 0 | 20 |
+| A line and a meter | 3 | 1 | 1 | 1 |
+| A meter only | 1 | 0 | 0 | 1 |
+
+At the 23 stops where only breakers are still wrong the line fit holds 0.80 of the correction mass at the median
+and the topology tool 0.011.  At 36 of the 101 stops the prompt names no breaker and no topology call is scored
+(one of the 29 breakers still wrong is at such a stop): that tool's probability is only bounded there by what the
+scored calls leave (0.0007 at the median, 0.12 at most).  The bound decides the most probable tool at 32 of the 36;
+the other 4 stand in the table under the leading tool of the two measured.  Over the 97 decided stops the most
+probable tool is a tool of an error left at 56 (37 of the 65 with all three tools measured, 19 of the 32); a tool
+drawn at random would be at 0.35 of them.  (`read` itself reports the tool only where all three are measured: 37
+of 65.)
+
+**The probabilities are small: at the stop the model is sure of the action it took.**
+
+| Probability at the stop | 10th | 25th | Median | 75th | 90th |
+| --- | --- | --- | --- | --- | --- |
+| The model's own last action | 0.569 | 0.771 | 0.936 | 0.996 | 0.999 |
+| `finish resolved` | 0.0020 | 0.117 | 0.914 | 0.996 | 0.999 |
+| `finish unresolved` | 0.00001 | 0.00003 | 0.0006 | 0.485 | 0.771 |
+| `inspect breakers` | 0.00001 | 0.00003 | 0.00009 | 0.0003 | 0.0013 |
+| Any correction | 0.0005 | 0.0013 | 0.012 | 0.118 | 0.319 |
+| A correction of an object still wrong (101 stops) | 0.0000004 | 0.00002 | 0.00015 | 0.011 | 0.070 |
+| Share of the correction mass on the objects still wrong (101) | 0.00003 | 0.0012 | 0.028 | 0.414 | 0.876 |
+| Share of the correction mass on the most probable object (101) | 0.251 | 0.381 | 0.610 | 0.828 | 0.933 |
+
+By tool, at the median: `correct_parameters` 0.0045, `correct_measurements` 0.0008, `correct_topology` 0.00005
+(65 stops).  At the 72 stops ending with `finish resolved` that call holds 0.989 at the median and any correction
+0.0036; at the 27 ending with `finish unresolved`, 0.702 and 0.047.  A set is therefore a ranking inside about
+1% of the probability, not a doubt the model states.  The ranking's own confidence does not mark the right sets:
+where the most probable object holds 0.9 or more of the correction mass it is one still wrong at 9 of 15 stops,
+between 0.5 and 0.9 at 15 of 46, under 0.5 at 7 of 40.
+
+**Against the evidence probe**, on the 48 solvable stops with an error left (the 22 and the 26 above):
+
+| Set | Probe | Model | Both | Probe only | Model only | Neither |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 37 | 12 | 10 | 27 | 2 | 9 |
+| 3 | 43 | 16 | 15 | 28 | 1 | 4 |
+| 5 | 45 | 20 | 19 | 26 | 1 | 2 |
+
+The difference is the breakers.  At three objects, of the 26 stops with a breaker still wrong the probe places one
+in 24 and the model in 0; of the 22 with lines or meters only, 19 and 16.  The evidence holds the object; the
+model's next-call distribution does not carry it.
+
+**A first step of the truth-built continuation** is the most probable call that goes on (any listed call but
+`finish`) at 15 of the 51 stops that have such a continuation, among the three most probable at 20 and the five at
+22 (the 49 solvable stops: 15, 19 and 21).
+
+**Counting what the agent already corrected** (a reading added on 2026-11-26, not part of `read`).  35 of the 123
+errors left (34 lines, 1 meter) are objects the agent itself corrected, the result outside the tolerance, and at
+23 stops nothing else is left: a report of its kept corrections names those objects without any set.  With them
+counted, every object still wrong is either corrected or in the set of 1 / 3 / 5 at 52 / 65 / 66 of the 101 stops:
+37 / 47 / 48 of the 53 no sequence repairs, 15 / 18 / 18 of the 48 solvable ones.
+
+**What a tier would count** under the three conditions named at the top, with the set fixed at three.  The
+reference says no sequence repairs the case at 53 stops.  Every object still wrong is in the set at 26 of them,
+and corrected or in the set at 47.  The model ends 45 of the 53 with `finish resolved` (the estimator's test
+passes at 36 of those), 7 with `finish unresolved` (4 after damaging a healthy object) and 1 out of actions.  Of
+the 47, 3 end with `unresolved` and 2 of those damaged nothing.  The tier counts 47 cases without the condition on
+the ending and 2 with it; whether to have it, and with which conditions, is the user's decision still.
+
+**The run.**  1,712 forward passes for the 20,976 candidates: 11 to 29 a state, 17 at the median, 7 to 12 of them
+for the calls that are always scored.  50 to 229 s a state (97 at the median, 5.4 s a pass with two processes on
+one RTX PRO 6000 Blackwell card of 98 GB), 1 h 28 min for the arm.  The prompts are 7,925 to 14,562 tokens: four
+more than the local dry run rendered, at the median and at the maximum, and the same as on 2026-11-20 with this
+model.  The scored calls of a state hold 0.998 of the probability at the median, 0.88 at least and never more
+than 1.
+
+**Checked against the scores of 2026-11-20** (`score_actions.py`, one pass a call): 49 of the 102 stops were
+scored then, with 170 calls in both runs.  The prompt lengths are equal at all 49.  162 calls agree to five
+decimals of the log-probability, and the 97 calls of probability over 0.001 agree to 0.00005.  Four differ by more
+than 0.001, all on calls of probability under 0.0002 (by 0.11 at -9.1, 0.84 at -18.6, 0.03 at -19.4 and 0.001 at
+-61.7), where one step of a half-precision logit (0.03 to 0.25) shows in full.  What moves the last bit there (a
+shared beginning read from the pass over another call, or the card type) was not determined.  It can move a
+coverage count by a few and not more: an object still wrong stands within 0.25 of its set's edge in 8 of the 303
+verdicts of the table's first row (2 at one object, 2 at three, 4 at five).  The fifth place itself is often
+close: at 59 of the 101 stops the fifth object is within 0.25 of the best one outside the set.
+
 ### Files
 
 | File | What it is |
@@ -132,8 +256,9 @@ with a version or a flip list is counted in the tool's probability and not as a 
 ### State
 
 Built 2026-11-25 and, on the user's word the same day ("Yes, deploy and run", for the supervised model's stops),
-**deployed at d748912 and the arm `base` submitted: job 24643723 (`mcs-base`), 2026-11-25 23:24 UTC.**  The arm
-`steps17` has its inputs on torch and is not submitted.
+deployed at d748912 and the arm `base` submitted at 23:24 UTC as job 24643723 (`mcs-base`).  **The arm `base` is
+done: the job ended COMPLETED on 2026-11-26 at 01:00 UTC with all 102 states scored, and its result is above.**
+The arm `steps17` has its inputs on torch and is not submitted: it waits for the user's word.
 
 * **The commit on torch is d748912**, the one the tests ran on, not the branch's tip: another session had put
   its stage B commit (600049b) on the branch and redeployed the RL cell at it, so the clone arrived at 600049b
@@ -168,10 +293,11 @@ Checked on Windows the same day:
 * **The model's side is not run here**: no environment on this machine loads this model family.  It is the RL
   update's forward pass with its last step left out (`position_logprobs`), compared with `completion_logprobs` on a
   small torch model; the loader and the renderers are the ones the job of 2026-11-20 ran.  The job's first states
-  are its first run on the model.
+  were its first run on the model, and they were read before the rest: the calls also scored on 2026-11-20 came
+  out the same (the check above, then on all 49 shared stops).
 * **On torch, read-only, before the deploy**: both adapters are there and the job environment is there.
 
-**Cost, an estimate.**  A forward pass of these prompts took about 3.2 s with two processes on a card on
-2026-11-20.  At 16 to 40 passes a state the arm `base` is 1.5 to 3.5 card-hours; at the limit of 96 at every state
-it is 8.7.  The arm `steps17` has 95 states against 102 and costs about the same.  How peaked the model is decides
-it, and the job's log gives each state's passes.
+**Cost, measured.**  The arm `base` took 1 h 28 min of one card: 5.4 s a forward pass with two processes on the
+card (the estimate before the run was 3.2 s, from 2026-11-20), 17 passes a state at the median and 29 at most, far
+from the limit of 96.  The arm `steps17` has 95 states against 102 and should cost about the same if that model is
+as peaked.
