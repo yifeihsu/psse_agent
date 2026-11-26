@@ -61,7 +61,7 @@ The rule expert's 187 is by this object-level audit; its usual 184 is by the str
 * **The 53 cases no sequence repairs:** the supervised model repairs some errors in 48 and none in 5, the same as
   the truth-built sequences (48 and 5), and 63 of their 126 errors against 66.
 
-## 2. The candidate read-out (the arm `base` done 2026-11-26; the arm `steps17` not submitted)
+## 2. The candidate read-out (the arm `base` done 2026-11-26; the arm `steps17` submitted 2026-11-26)
 
 `research/minimal_env/candidate_sets.py`, three commands: `build` (local), `score` (the model; this cell's job),
 `read` (local).
@@ -277,8 +277,11 @@ close: at 59 of the 101 stops the fifth object is within 0.25 of the best one ou
 Built 2026-11-25 and, on the user's word the same day ("Yes, deploy and run", for the supervised model's stops),
 deployed at d748912 and the arm `base` submitted at 23:24 UTC as job 24643723 (`mcs-base`).  **The arm `base` is
 done: the job ended COMPLETED on 2026-11-26 at 01:00 UTC with all 102 states scored, and its result is above.**
-The arm `steps17` has its inputs on torch and is not submitted: it waits for the user's word.  **The tier is
-decided: none is added** (the user on 2026-11-26: "Keep it a read-out").
+**The tier is decided: none is added** (the user on 2026-11-26: "Keep it a read-out").
+
+**The arm `steps17` is submitted**: on the user's word of 2026-11-26 ("Yes, run it") at 23:19 UTC as job 24782581
+(`mcs-steps17`), from the same source (d748912) and the inputs checked below (95 states, the same checksum here
+and on torch).  Nothing of it is read yet.
 
 * **The commit on torch is d748912**, the one the tests ran on, not the branch's tip: another session had put
   its stage B commit (600049b) on the branch and redeployed the RL cell at it, so the clone arrived at 600049b
