@@ -218,9 +218,9 @@ objects still wrong are among the 1, 3 and 5 most probable. A state lists 150 to
 out as a tree of tokens and searched best first, so the most probable ones are found in a few dozen forward passes
 instead of one pass a call, and what is not scored is bounded. The candidates come from the observation alone; the
 truth names which calls are always scored and counts the coverage, and changes no probability. Its cluster cell is
-`research/hpc/minimal_candidates_20261125/`, whose README holds its state and the result on the supervised model's
-stops. It is a read-out and stays one (the user's decision of 2026-11-26): no result counts a case because its
-error is in the model's set.
+`research/hpc/minimal_candidates_20261125/`, whose README holds its state and the results on the stops of the
+supervised model and of the model after 17 RL steps. It is a read-out and stays one (the user's decision of
+2026-11-26): no result counts a case because its error is in the model's set.
 
 ## Settings a model run needs
 
